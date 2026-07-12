@@ -60,6 +60,7 @@ struct PaycheckEntrySheet: View {
             }
         }
         .presentationDetents([.medium])
+        .presentationBackground(Color.paydaySurface)
     }
 
     private func save() {

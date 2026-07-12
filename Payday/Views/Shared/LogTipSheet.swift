@@ -82,6 +82,7 @@ struct LogTipSheet: View {
         }
         .presentationDetents([.height(420)])
         .presentationDragIndicator(.visible)
+        .presentationBackground(Color.paydaySurface)
     }
 
     private func save() {

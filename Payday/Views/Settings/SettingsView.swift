@@ -63,6 +63,7 @@ struct SettingsView: View {
             .onChange(of: frequency) { _, _ in save() }
             .onChange(of: anchorPayday) { _, _ in save() }
         }
+        .presentationBackground(Color.paydaySurface)
     }
 
     private func save() {

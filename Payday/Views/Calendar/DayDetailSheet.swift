@@ -70,5 +70,6 @@ struct DayDetailSheet: View {
             }
         }
         .presentationDetents([.medium, .large])
+        .presentationBackground(Color.paydaySurface)
     }
 }
