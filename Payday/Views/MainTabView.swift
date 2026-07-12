@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum AppTab: String, CaseIterable, Identifiable {
-    case dashboard, calendar, periods
+    case dashboard, calendar, periods, insights
     var id: String { rawValue }
 }
 
@@ -18,6 +18,9 @@ struct MainTabView: View {
             }
             Tab("Periods", systemImage: "banknote.fill", value: .periods) {
                 PeriodsView()
+            }
+            Tab("Insights", systemImage: "chart.line.uptrend.xyaxis", value: .insights) {
+                InsightsView()
             }
         }
         #if DEBUG

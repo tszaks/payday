@@ -5,6 +5,10 @@ options:
     iOS: "26.0"
   createIntermediateGroups: true
 
+configFiles:
+  Debug: Secrets.local.xcconfig
+  Release: Secrets.local.xcconfig
+
 settings:
   base:
     DEVELOPMENT_TEAM: 3D2B7RVUXV
@@ -38,6 +42,7 @@ targets:
       path: Generated/Payday-Info.plist
       properties:
         ITSAppUsesNonExemptEncryption: false
+        OpenAIAPIKey: $(OPENAI_API_KEY)
 
   PaydayTests:
     type: bundle.unit-test
