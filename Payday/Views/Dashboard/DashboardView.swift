@@ -49,16 +49,19 @@ struct DashboardView: View {
                 } else {
                     Section("Recent entries") {
                         ForEach(periodEntries) { entry in
-                            EntryRow(entry: entry)
-                                .contentShape(Rectangle())
-                                .onTapGesture { sheetTarget = .edit(entry) }
-                                .swipeActions(edge: .trailing) {
-                                    Button(role: .destructive) {
-                                        modelContext.delete(entry)
-                                    } label: {
-                                        Label("Delete", systemImage: "trash")
-                                    }
+                            Button {
+                                sheetTarget = .edit(entry)
+                            } label: {
+                                EntryRow(entry: entry)
+                            }
+                            .buttonStyle(.plain)
+                            .swipeActions(edge: .trailing) {
+                                Button(role: .destructive) {
+                                    modelContext.delete(entry)
+                                } label: {
+                                    Label("Delete", systemImage: "trash")
                                 }
+                            }
                         }
                     }
                 }
@@ -100,7 +103,7 @@ struct DashboardView: View {
                     .font(.system(size: 64, weight: .bold, design: .rounded))
                     .foregroundStyle(.primary)
                     .contentTransition(.numericText())
-                    .animation(.default, value: totalCents)
+                    .animation(.spring(duration: 0.35, bounce: 0.15), value: totalCents)
                     .lineLimit(1)
                     .minimumScaleFactor(0.5)
             }

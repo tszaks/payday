@@ -30,16 +30,19 @@ struct DayDetailSheet: View {
                 } else {
                     Section {
                         ForEach(entries) { entry in
-                            EntryRow(entry: entry)
-                                .contentShape(Rectangle())
-                                .onTapGesture { sheetTarget = .edit(entry) }
-                                .swipeActions(edge: .trailing) {
-                                    Button(role: .destructive) {
-                                        modelContext.delete(entry)
-                                    } label: {
-                                        Label("Delete", systemImage: "trash")
-                                    }
+                            Button {
+                                sheetTarget = .edit(entry)
+                            } label: {
+                                EntryRow(entry: entry)
+                            }
+                            .buttonStyle(.plain)
+                            .swipeActions(edge: .trailing) {
+                                Button(role: .destructive) {
+                                    modelContext.delete(entry)
+                                } label: {
+                                    Label("Delete", systemImage: "trash")
                                 }
+                            }
                         }
                     } header: {
                         Text(date.formatted(.dateTime.weekday(.wide).month(.wide).day()))

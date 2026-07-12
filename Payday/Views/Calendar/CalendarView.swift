@@ -50,17 +50,23 @@ struct CalendarView: View {
 
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 7), spacing: 6) {
                     ForEach(gridDays, id: \.self) { day in
-                        DayCell(
-                            day: day,
-                            totalCents: dailyTotals[day],
-                            isCurrentMonth: calendar.isDate(day, equalTo: displayedMonth, toGranularity: .month),
-                            isToday: calendar.isDateInToday(day),
-                            isInCurrentPeriod: day >= currentPeriod.start && day <= currentPeriod.end
-                        )
-                        .onTapGesture { daySelection = DaySelection(date: day) }
+                        Button {
+                            daySelection = DaySelection(date: day)
+                        } label: {
+                            DayCell(
+                                day: day,
+                                totalCents: dailyTotals[day],
+                                isCurrentMonth: calendar.isDate(day, equalTo: displayedMonth, toGranularity: .month),
+                                isToday: calendar.isDateInToday(day),
+                                isInCurrentPeriod: day >= currentPeriod.start && day <= currentPeriod.end
+                            )
+                        }
+                        .buttonStyle(PressableButtonStyle())
                     }
                 }
                 .padding(.horizontal)
+                .id(displayedMonth)
+                .transition(.opacity)
 
                 Spacer()
             }
@@ -75,7 +81,7 @@ struct CalendarView: View {
     private var monthHeader: some View {
         HStack {
             Button {
-                withAnimation { shiftMonth(by: -1) }
+                withAnimation(.easeOut(duration: 0.22)) { shiftMonth(by: -1) }
             } label: {
                 Image(systemName: "chevron.left")
             }
@@ -84,7 +90,7 @@ struct CalendarView: View {
                 .font(.headline)
             Spacer()
             Button {
-                withAnimation { shiftMonth(by: 1) }
+                withAnimation(.easeOut(duration: 0.22)) { shiftMonth(by: 1) }
             } label: {
                 Image(systemName: "chevron.right")
             }
