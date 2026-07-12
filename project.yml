@@ -1,0 +1,66 @@
+name: Payday
+options:
+  bundleIdPrefix: com.szakacsmedia
+  deploymentTarget:
+    iOS: "26.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    DEVELOPMENT_TEAM: 3D2B7RVUXV
+    CODE_SIGN_STYLE: Automatic
+    SWIFT_VERSION: "6.0"
+    IPHONEOS_DEPLOYMENT_TARGET: "26.0"
+    ENABLE_PREVIEWS: YES
+
+targets:
+  Payday:
+    type: application
+    platform: iOS
+    deploymentTarget: "26.0"
+    sources:
+      - path: Payday
+    settings:
+      base:
+        PRODUCT_NAME: Payday
+        PRODUCT_BUNDLE_IDENTIFIER: com.szakacsmedia.payday
+        TARGETED_DEVICE_FAMILY: "1"
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Payday
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
+    info:
+      path: Generated/Payday-Info.plist
+      properties:
+        ITSAppUsesNonExemptEncryption: false
+
+  PaydayTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "26.0"
+    sources:
+      - path: PaydayTests
+    dependencies:
+      - target: Payday
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.szakacsmedia.payday.tests
+        GENERATE_INFOPLIST_FILE: YES
+
+schemes:
+  Payday:
+    build:
+      targets:
+        Payday: all
+        PaydayTests: [test]
+    test:
+      config: Debug
+      targets:
+        - PaydayTests
+    run:
+      config: Debug
