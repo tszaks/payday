@@ -20,5 +20,14 @@ struct MainTabView: View {
                 PeriodsView()
             }
         }
+        #if DEBUG
+        .onAppear {
+            let args = ProcessInfo.processInfo.arguments
+            if let index = args.firstIndex(of: "-InitialTab"), args.count > index + 1,
+               let tab = AppTab(rawValue: args[index + 1]) {
+                selectedTab = tab
+            }
+        }
+        #endif
     }
 }

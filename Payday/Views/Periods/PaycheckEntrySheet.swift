@@ -37,7 +37,7 @@ struct PaycheckEntrySheet: View {
                         .multilineTextAlignment(.trailing)
                 }
                 .padding()
-                .background(Color(.systemBackground))
+                .background(Color.paydaySurface)
                 .clipShape(RoundedRectangle(cornerRadius: 16))
                 .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Color.primary.opacity(0.08)))
                 .padding(.horizontal)
@@ -45,7 +45,7 @@ struct PaycheckEntrySheet: View {
                 Spacer()
             }
             .padding(.top, 16)
-            .background(Color(.systemBackground))
+            .background(Color.paydaySurface)
             .navigationTitle("Paycheck")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

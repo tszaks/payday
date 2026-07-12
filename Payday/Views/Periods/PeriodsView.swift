@@ -41,8 +41,10 @@ struct PeriodsView: View {
         paycheckRecords.first { $0.periodStart == period.start && $0.periodEnd == period.end }
     }
 
+    @State private var path = NavigationPath()
+
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             List(periods.indices, id: \.self) { index in
                 let period = periods[index]
                 NavigationLink(value: period) {
@@ -56,6 +58,14 @@ struct PeriodsView: View {
             }
             .listStyle(.plain)
             .navigationTitle("Periods")
+            #if DEBUG
+            .onAppear {
+                if ProcessInfo.processInfo.arguments.contains("-OpenPeriodWithPaycheck"), path.isEmpty,
+                   let periodWithPaycheck = periods.first(where: { paycheck(for: $0) != nil }) {
+                    path.append(periodWithPaycheck)
+                }
+            }
+            #endif
             .navigationDestination(for: PayPeriod.self) { period in
                 PeriodDetailView(period: period)
             }

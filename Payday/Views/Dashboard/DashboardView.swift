@@ -77,6 +77,13 @@ struct DashboardView: View {
             .sheet(item: $sheetTarget) { target in
                 LogTipSheet(target: target)
             }
+            #if DEBUG
+            .onAppear {
+                if ProcessInfo.processInfo.arguments.contains("-OpenLogSheet") {
+                    sheetTarget = .new(defaultDate: .now)
+                }
+            }
+            #endif
             .sheet(isPresented: $showSettings) {
                 SettingsView(schedule: scheduleStore.schedule!)
             }
@@ -124,7 +131,7 @@ struct DashboardView: View {
         }
         .padding(20)
         .frame(maxWidth: .infinity)
-        .background(Color(.systemBackground))
+        .background(Color.paydaySurface)
     }
 
     private var emptyState: some View {

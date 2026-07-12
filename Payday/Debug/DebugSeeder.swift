@@ -17,6 +17,11 @@ enum DebugSeeder {
         guard let container = try? ModelContainer(for: TipEntry.self, PaycheckRecord.self) else { return }
         let context = container.mainContext
 
+        // Idempotent: reseeding always starts from a clean slate instead of
+        // stacking duplicate entries on top of whatever was already there.
+        try? context.delete(model: TipEntry.self)
+        try? context.delete(model: PaycheckRecord.self)
+
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: .now)
 

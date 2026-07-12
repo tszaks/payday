@@ -55,15 +55,13 @@ struct LogTipSheet: View {
                     }
                     .padding()
                 }
-                .background(Color(.systemBackground))
+                .background(Color.paydaySurface)
                 .clipShape(RoundedRectangle(cornerRadius: 16))
                 .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Color.primary.opacity(0.08)))
                 .padding(.horizontal)
-
-                Spacer()
             }
-            .padding(.bottom)
-            .background(Color(.systemBackground))
+            .padding(.bottom, 32)
+            .background(Color.paydaySurface)
             .navigationTitle(isEditing ? "Edit Tips" : "Log Tips")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -82,7 +80,7 @@ struct LogTipSheet: View {
                 }
             }
         }
-        .presentationDetents([.medium, .large])
+        .presentationDetents([.height(420)])
         .presentationDragIndicator(.visible)
     }
 

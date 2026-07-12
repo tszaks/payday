@@ -33,22 +33,25 @@ struct FirstRunSetupView: View {
                         .pickerStyle(.inline)
                         .labelsHidden()
                     }
+                    .listRowBackground(Color.paydaySurface)
 
                     Section("When was your most recent payday?") {
                         DatePicker("Payday", selection: $anchorPayday, in: ...Date.now, displayedComponents: .date)
                             .datePickerStyle(.graphical)
                     }
+                    .listRowBackground(Color.paydaySurface)
 
                     if frequency == .twiceMonthly {
                         Text("Paydays fall on the 15th and the last day of every month.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
+                            .listRowBackground(Color.paydaySurface)
                     }
                 }
                 .scrollContentBackground(.hidden)
-                .background(Color(.systemBackground))
+                .background(Color.paydaySurface)
             }
-            .background(Color(.systemBackground))
+            .background(Color.paydaySurface)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { save() }

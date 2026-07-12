@@ -25,15 +25,18 @@ struct SettingsView: View {
                         }
                     }
                 }
+                .listRowBackground(Color.paydaySurface)
 
                 Section("Most recent payday") {
                     DatePicker("Payday", selection: $anchorPayday, in: ...Date.now, displayedComponents: .date)
                 }
+                .listRowBackground(Color.paydaySurface)
 
                 if frequency == .twiceMonthly {
                     Text("Paydays fall on the 15th and the last day of every month.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
+                        .listRowBackground(Color.paydaySurface)
                 }
 
                 #if DEBUG
@@ -45,10 +48,11 @@ struct SettingsView: View {
                         DebugSeeder.clearAll(scheduleStore: scheduleStore)
                     }
                 }
+                .listRowBackground(Color.paydaySurface)
                 #endif
             }
             .scrollContentBackground(.hidden)
-            .background(Color(.systemBackground))
+            .background(Color.paydaySurface)
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
