@@ -5,6 +5,7 @@ import SwiftUI
 /// entries live everywhere else in the app. Entries themselves never change.
 struct SettingsView: View {
     @Environment(PayScheduleStore.self) private var scheduleStore
+    @Environment(InsightsStore.self) private var insightsStore
     @Environment(\.dismiss) private var dismiss
 
     @State private var frequency: PayFrequency
@@ -42,10 +43,10 @@ struct SettingsView: View {
                 #if DEBUG
                 Section("Developer") {
                     Button("Seed sample data") {
-                        DebugSeeder.seedSampleData(scheduleStore: scheduleStore)
+                        DebugSeeder.seedSampleData(scheduleStore: scheduleStore, insightsStore: insightsStore)
                     }
                     Button("Clear all data", role: .destructive) {
-                        DebugSeeder.clearAll(scheduleStore: scheduleStore)
+                        DebugSeeder.clearAll(scheduleStore: scheduleStore, insightsStore: insightsStore)
                     }
                 }
                 .listRowBackground(Color.paydaySurface)

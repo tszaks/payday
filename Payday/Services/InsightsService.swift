@@ -9,7 +9,7 @@ struct TipEntrySnapshot: Sendable {
 }
 
 /// One labeled block in the Insights screen, e.g. "Top Earning Days" + body.
-struct InsightSection: Decodable, Identifiable, Sendable {
+struct InsightSection: Codable, Identifiable, Sendable {
     let title: String
     let body: String
     var id: String { title }

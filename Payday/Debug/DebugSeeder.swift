@@ -7,13 +7,13 @@ import SwiftData
 /// or on demand from the Settings > Developer section.
 enum DebugSeeder {
     @MainActor
-    static func seedIfRequested(scheduleStore: PayScheduleStore) {
+    static func seedIfRequested(scheduleStore: PayScheduleStore, insightsStore: InsightsStore) {
         guard ProcessInfo.processInfo.arguments.contains("-SeedSampleData") else { return }
-        seedSampleData(scheduleStore: scheduleStore)
+        seedSampleData(scheduleStore: scheduleStore, insightsStore: insightsStore)
     }
 
     @MainActor
-    static func seedSampleData(scheduleStore: PayScheduleStore) {
+    static func seedSampleData(scheduleStore: PayScheduleStore, insightsStore: InsightsStore) {
         guard let container = try? ModelContainer(for: TipEntry.self, PaycheckRecord.self) else { return }
         let context = container.mainContext
 
@@ -21,6 +21,7 @@ enum DebugSeeder {
         // stacking duplicate entries on top of whatever was already there.
         try? context.delete(model: TipEntry.self)
         try? context.delete(model: PaycheckRecord.self)
+        insightsStore.snapshot = nil
 
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: .now)
@@ -74,13 +75,14 @@ enum DebugSeeder {
     }
 
     @MainActor
-    static func clearAll(scheduleStore: PayScheduleStore) {
+    static func clearAll(scheduleStore: PayScheduleStore, insightsStore: InsightsStore) {
         guard let container = try? ModelContainer(for: TipEntry.self, PaycheckRecord.self) else { return }
         let context = container.mainContext
         try? context.delete(model: TipEntry.self)
         try? context.delete(model: PaycheckRecord.self)
         try? context.save()
         scheduleStore.schedule = nil
+        insightsStore.snapshot = nil
     }
 }
 #endif

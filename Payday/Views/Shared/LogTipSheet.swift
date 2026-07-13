@@ -59,6 +59,11 @@ struct LogTipSheet: View {
                 .clipShape(RoundedRectangle(cornerRadius: 16))
                 .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Color.primary.opacity(0.08)))
                 .padding(.horizontal)
+
+                if isEditing {
+                    Button("Delete Entry", role: .destructive) { delete() }
+                        .padding(.top, 4)
+                }
             }
             .padding(.bottom, 32)
             .background(Color.paydaySurface)
@@ -72,11 +77,6 @@ struct LogTipSheet: View {
                     Button("Save") { save() }
                         .buttonStyle(.glassProminent)
                         .disabled(amountCents == 0)
-                }
-                if isEditing {
-                    ToolbarItem(placement: .destructiveAction) {
-                        Button("Delete", role: .destructive) { delete() }
-                    }
                 }
             }
         }

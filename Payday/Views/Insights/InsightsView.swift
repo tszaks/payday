@@ -2,12 +2,14 @@ import SwiftUI
 import SwiftData
 
 /// The one screen in the app that reaches the network, and only when the
-/// user explicitly taps the button below — never automatically.
+/// user explicitly taps the button below — never automatically. The last
+/// result is cached in InsightsStore so it survives app relaunch instead
+/// of re-running on every open.
 struct InsightsView: View {
     @Environment(PayScheduleStore.self) private var scheduleStore
+    @Environment(InsightsStore.self) private var insightsStore
     @Query(sort: \TipEntry.date, order: .reverse) private var allEntries: [TipEntry]
 
-    @State private var sections: [InsightSection] = []
     @State private var isLoading = false
     @State private var errorMessage: String?
 
@@ -17,27 +19,14 @@ struct InsightsView: View {
                 if isLoading {
                     ProgressView("Analyzing your tips…")
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if sections.isEmpty {
+                } else if let snapshot = insightsStore.snapshot {
+                    resultList(snapshot)
+                } else {
                     ScrollView {
                         emptyState
                             .frame(maxWidth: .infinity)
                             .padding()
                     }
-                } else {
-                    List {
-                        ForEach(sections) { section in
-                            Section(section.title) {
-                                Text(section.body)
-                                    .padding(.vertical, 4)
-                            }
-                        }
-                        Section {
-                            Button("Analyze Again") {
-                                Task { await analyze() }
-                            }
-                        }
-                    }
-                    .listStyle(.plain)
                 }
             }
             .navigationTitle("Insights")
@@ -49,6 +38,25 @@ struct InsightsView: View {
             }
             #endif
         }
+    }
+
+    private func resultList(_ snapshot: InsightsSnapshot) -> some View {
+        List {
+            ForEach(snapshot.sections) { section in
+                Section(section.title) {
+                    Text(section.body)
+                        .padding(.vertical, 4)
+                }
+            }
+            Section {
+                Button("Analyze Again") {
+                    Task { await analyze() }
+                }
+            } footer: {
+                Text("Last updated \(snapshot.generatedAt.formatted(.dateTime.month(.abbreviated).day().hour().minute()))")
+            }
+        }
+        .listStyle(.plain)
     }
 
     private var emptyState: some View {
@@ -84,7 +92,8 @@ struct InsightsView: View {
         let snapshots = allEntries.map { TipEntrySnapshot(date: $0.date, amountCents: $0.amountCents, note: $0.note) }
         let frequency = scheduleStore.schedule?.frequency ?? .biweekly
         do {
-            sections = try await InsightsService.analyze(entries: snapshots, scheduleFrequency: frequency)
+            let sections = try await InsightsService.analyze(entries: snapshots, scheduleFrequency: frequency)
+            insightsStore.snapshot = InsightsSnapshot(sections: sections, generatedAt: .now)
         } catch {
             errorMessage = error.localizedDescription
         }

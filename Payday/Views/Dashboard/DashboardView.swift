@@ -84,6 +84,8 @@ struct DashboardView: View {
             .onAppear {
                 if ProcessInfo.processInfo.arguments.contains("-OpenLogSheet") {
                     sheetTarget = .new(defaultDate: .now)
+                } else if ProcessInfo.processInfo.arguments.contains("-OpenEditSheet"), let first = periodEntries.first {
+                    sheetTarget = .edit(first)
                 }
             }
             #endif
