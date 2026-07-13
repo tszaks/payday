@@ -8,6 +8,17 @@ struct TipEntrySnapshot: Sendable {
     let note: String?
 }
 
+/// One labeled block in the Insights screen, e.g. "Top Earning Days" + body.
+struct InsightSection: Decodable, Identifiable, Sendable {
+    let title: String
+    let body: String
+    var id: String { title }
+}
+
+private struct InsightsPayload: Decodable {
+    let sections: [InsightSection]
+}
+
 enum InsightsError: LocalizedError {
     case missingAPIKey
     case notEnoughData
@@ -39,7 +50,7 @@ enum InsightsService {
         return key
     }
 
-    static func analyze(entries: [TipEntrySnapshot], scheduleFrequency: PayFrequency) async throws -> String {
+    static func analyze(entries: [TipEntrySnapshot], scheduleFrequency: PayFrequency) async throws -> [InsightSection] {
         guard let apiKey else {
             throw InsightsError.missingAPIKey
         }
@@ -71,9 +82,15 @@ enum InsightsService {
         let systemPrompt = """
         You are a data analyst helping a restaurant server understand their tip income patterns. \
         You will receive their logged tip entries as JSON (date, weekday, amount in dollars, optional note). \
-        Identify concrete patterns: which days of the week or dates in the month earn the most, any trend \
-        over time, and one practical, specific observation they could act on. Be concise: 3 to 5 short \
-        paragraphs or bullet points, plain language, no fluff, no disclaimers about being an AI.
+
+        Respond with JSON only, matching exactly this shape:
+        {"sections": [{"title": "...", "body": "..."}]}
+
+        Produce 3 to 5 sections. Each title is 2 to 4 words (e.g. "Top Earning Days", "Weekday Patterns", \
+        "Trend Over Time", "What To Try Next"). Each body is 2 to 4 short sentences, plain language, \
+        no markdown formatting, no bullet characters, no disclaimers about being an AI. Base every claim \
+        on the actual data given — cite specific dates or amounts where it strengthens the point. The last \
+        section should always be one concrete, actionable suggestion.
         """
 
         var request = URLRequest(url: URL(string: "https://api.openai.com/v1/chat/completions")!)
@@ -86,7 +103,8 @@ enum InsightsService {
                 ["role": "system", "content": systemPrompt],
                 ["role": "user", "content": payloadString]
             ],
-            "temperature": 0.3
+            "temperature": 0.3,
+            "response_format": ["type": "json_object"]
         ])
 
         let data: Data
@@ -111,10 +129,15 @@ enum InsightsService {
               let choices = json["choices"] as? [[String: Any]],
               let first = choices.first,
               let message = first["message"] as? [String: Any],
-              let content = message["content"] as? String
+              let content = message["content"] as? String,
+              let contentData = content.data(using: .utf8)
         else {
             throw InsightsError.api("Couldn't read the response.")
         }
-        return content.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard let parsed = try? JSONDecoder().decode(InsightsPayload.self, from: contentData), !parsed.sections.isEmpty else {
+            throw InsightsError.api("Couldn't parse the analysis.")
+        }
+        return parsed.sections
     }
 }

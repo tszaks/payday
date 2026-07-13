@@ -7,25 +7,38 @@ struct InsightsView: View {
     @Environment(PayScheduleStore.self) private var scheduleStore
     @Query(sort: \TipEntry.date, order: .reverse) private var allEntries: [TipEntry]
 
-    @State private var result: String?
+    @State private var sections: [InsightSection] = []
     @State private var isLoading = false
     @State private var errorMessage: String?
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(spacing: 24) {
-                    if isLoading {
-                        ProgressView("Analyzing your tips…")
-                            .padding(.top, 60)
-                    } else if let result {
-                        resultView(result)
-                    } else {
+            Group {
+                if isLoading {
+                    ProgressView("Analyzing your tips…")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if sections.isEmpty {
+                    ScrollView {
                         emptyState
+                            .frame(maxWidth: .infinity)
+                            .padding()
                     }
+                } else {
+                    List {
+                        ForEach(sections) { section in
+                            Section(section.title) {
+                                Text(section.body)
+                                    .padding(.vertical, 4)
+                            }
+                        }
+                        Section {
+                            Button("Analyze Again") {
+                                Task { await analyze() }
+                            }
+                        }
+                    }
+                    .listStyle(.plain)
                 }
-                .padding()
-                .frame(maxWidth: .infinity)
             }
             .navigationTitle("Insights")
             #if DEBUG
@@ -64,21 +77,6 @@ struct InsightsView: View {
         .padding(.top, 40)
     }
 
-    private func resultView(_ text: String) -> some View {
-        VStack(alignment: .leading, spacing: 20) {
-            if let attributed = try? AttributedString(markdown: text) {
-                Text(attributed)
-            } else {
-                Text(text)
-            }
-            Button("Analyze Again") {
-                Task { await analyze() }
-            }
-            .buttonStyle(.glass)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
     private func analyze() async {
         errorMessage = nil
         isLoading = true
@@ -86,7 +84,7 @@ struct InsightsView: View {
         let snapshots = allEntries.map { TipEntrySnapshot(date: $0.date, amountCents: $0.amountCents, note: $0.note) }
         let frequency = scheduleStore.schedule?.frequency ?? .biweekly
         do {
-            result = try await InsightsService.analyze(entries: snapshots, scheduleFrequency: frequency)
+            sections = try await InsightsService.analyze(entries: snapshots, scheduleFrequency: frequency)
         } catch {
             errorMessage = error.localizedDescription
         }
