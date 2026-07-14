@@ -28,6 +28,7 @@ struct LogTipSheet: View {
     // Shared
     @State private var date: Date
     @State private var note: String
+    @State private var isDouble: Bool
 
     init(target: TipEntrySheetTarget) {
         self.target = target
@@ -35,11 +36,13 @@ struct LogTipSheet: View {
         case .new(let defaultDate):
             _date = State(initialValue: defaultDate)
             _note = State(initialValue: "")
+            _isDouble = State(initialValue: false)
         case .edit(let entry):
             _amountCents = State(initialValue: entry.amountCents)
             _kind = State(initialValue: entry.kind)
             _date = State(initialValue: entry.date)
             _note = State(initialValue: entry.note ?? "")
+            _isDouble = State(initialValue: entry.isDouble)
         }
     }
 
@@ -64,8 +67,14 @@ struct LogTipSheet: View {
                 detailsCard
 
                 if isEditing {
-                    Button("Delete Entry", role: .destructive) { delete() }
-                        .padding(.top, 4)
+                    Button(role: .destructive) { delete() } label: {
+                        Text("Delete Tip")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.glassProminent)
+                    .tint(PaydayColor.error)
+                    .padding(.horizontal)
+                    .padding(.top, 4)
                 }
             }
             .padding(.top, 20)
@@ -94,6 +103,7 @@ struct LogTipSheet: View {
             .onChange(of: kind) { _, _ in liveSaveEdit() }
             .onChange(of: date) { _, _ in liveSaveEdit() }
             .onChange(of: note) { _, _ in liveSaveEdit() }
+            .onChange(of: isDouble) { _, _ in liveSaveEdit() }
         }
         // Fixed height for the common case, plus .large as an escape hatch so
         // content is never clipped on smaller iPhones with the keypad up.
@@ -163,13 +173,16 @@ struct LogTipSheet: View {
                     .multilineTextAlignment(.trailing)
             }
             .padding()
+            Divider()
+            Toggle("Double shift", isOn: $isDouble)
+                .padding()
         }
     }
 
     private func card<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
         VStack(spacing: 0) { content() }
             .background(PaydayColor.fieldBackground)
-            .clipShape(RoundedRectangle(cornerRadius: 16))
+            .clipShape(RoundedRectangle(cornerRadius: PaydayRadius.lg))
             .padding(.horizontal)
     }
 
@@ -186,10 +199,10 @@ struct LogTipSheet: View {
         let recordedAt = Date.now
 
         if cashCents > 0 {
-            modelContext.insert(TipEntry(date: normalizedDate, amountCents: cashCents, kind: .cash, note: trimmedNote, recordedAt: recordedAt))
+            modelContext.insert(TipEntry(date: normalizedDate, amountCents: cashCents, kind: .cash, note: trimmedNote, recordedAt: recordedAt, isDouble: isDouble))
         }
         if creditCents > 0 {
-            modelContext.insert(TipEntry(date: normalizedDate, amountCents: creditCents, kind: .credit, note: trimmedNote, recordedAt: recordedAt))
+            modelContext.insert(TipEntry(date: normalizedDate, amountCents: creditCents, kind: .credit, note: trimmedNote, recordedAt: recordedAt, isDouble: isDouble))
         }
         PaydayHaptics.success()
         dismiss()
@@ -203,6 +216,7 @@ struct LogTipSheet: View {
         entry.amountCents = amountCents
         entry.kind = kind
         entry.note = note.isEmpty ? nil : note
+        entry.isDouble = isDouble
     }
 
     private func delete() {

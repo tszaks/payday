@@ -52,6 +52,7 @@ struct DayDetailSheet: View {
                                 .monospacedDigit()
                         }
                     }
+                    .listRowBackground(PaydayColor.background)
                 }
             }
             .listStyle(.plain)

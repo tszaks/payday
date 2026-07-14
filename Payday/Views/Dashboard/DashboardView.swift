@@ -3,11 +3,23 @@ import SwiftData
 
 struct DashboardView: View {
     @Environment(PayScheduleStore.self) private var scheduleStore
+    @Environment(TabRouter.self) private var tabRouter
+    @Environment(UserPreferencesStore.self) private var preferencesStore
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \TipEntry.date, order: .reverse) private var allEntries: [TipEntry]
 
     @State private var sheetTarget: TipEntrySheetTarget?
     @State private var showSettings = false
+
+    private var greeting: String {
+        let timeOfDay = switch Calendar.current.component(.hour, from: .now) {
+        case 5..<12: "Good morning"
+        case 12..<17: "Good afternoon"
+        default: "Good evening"
+        }
+        guard let firstName = preferencesStore.firstName, !firstName.isEmpty else { return timeOfDay }
+        return "\(timeOfDay), \(firstName)"
+    }
 
     private var calculator: PayPeriodCalculator {
         // Fallback keeps a transient render safe if the schedule is cleared
@@ -83,9 +95,10 @@ struct DashboardView: View {
             .scrollContentBackground(.hidden)
             .background(PaydayColor.background)
             .contentMargins(.bottom, 88, for: .scrollContent) // clear the floating + button
-            .navigationTitle("Payday")
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
+                ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         showSettings = true
                     } label: {
@@ -101,6 +114,9 @@ struct DashboardView: View {
                 if ProcessInfo.processInfo.arguments.contains("-OpenEditSheet"), let first = periodEntries.first {
                     sheetTarget = .edit(first)
                 }
+                if ProcessInfo.processInfo.arguments.contains("-OpenSettings") {
+                    showSettings = true
+                }
             }
             #endif
             .sheet(isPresented: $showSettings) {
@@ -110,7 +126,12 @@ struct DashboardView: View {
     }
 
     private var heroCard: some View {
-        VStack(spacing: 20) {
+        VStack(spacing: 24) {
+            Text(greeting)
+                .font(PaydayFont.displayMediumBlack)
+                .foregroundStyle(PaydayColor.textPrimary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
             VStack(spacing: 6) {
                 Text("This pay period")
                     .font(PaydayFont.subheadline)
@@ -125,28 +146,35 @@ struct DashboardView: View {
                     .minimumScaleFactor(0.5)
             }
 
-            HStack(spacing: 12) {
+            HStack(spacing: 0) {
                 MoneyTile(label: "Cash", cents: breakdown.cashCents)
+                Divider().frame(height: 36)
                 MoneyTile(label: "Credit", cents: breakdown.creditCents)
             }
 
-            HStack(spacing: 12) {
-                StatChip(
-                    value: daysRemaining == 0 ? "Today" : "\(daysRemaining)",
-                    label: daysRemaining == 0 ? "Payday" : (daysRemaining == 1 ? "day left" : "days left")
-                )
+            Divider()
+
+            HStack(spacing: 0) {
+                Button {
+                    tabRouter.selected = .calendar
+                } label: {
+                    StatChip(
+                        value: daysRemaining == 0 ? "Today" : "\(daysRemaining)",
+                        label: daysRemaining == 0 ? "Payday" : (daysRemaining == 1 ? "day left" : "days left")
+                    )
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("Opens Calendar")
+
+                Divider().frame(height: 36)
+
                 StatChip(
                     value: "\(shiftCount)",
                     label: shiftCount == 1 ? "shift logged" : "shifts logged"
                 )
             }
         }
-        .padding(20)
-        .frame(maxWidth: .infinity)
-        .background(PaydayColor.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: PaydayRadius.lg, style: .continuous))
-        .paydayPremiumShadow()
-        .padding(.horizontal)
+        .padding(.horizontal, PaydaySpacing.p20)
         .padding(.top, 8)
     }
 
@@ -179,8 +207,7 @@ private struct MoneyTile: View {
                 .minimumScaleFactor(0.6)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 12)
-        .background(PaydayColor.fieldBackground, in: RoundedRectangle(cornerRadius: PaydayRadius.md))
+        .padding(.vertical, 8)
     }
 }
 
@@ -199,8 +226,7 @@ private struct StatChip: View {
                 .foregroundStyle(PaydayColor.textSecondary)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 12)
-        .background(PaydayColor.fieldBackground, in: RoundedRectangle(cornerRadius: PaydayRadius.md))
+        .padding(.vertical, 8)
     }
 }
 
@@ -217,6 +243,9 @@ struct EntryRow: View {
         // the recorded time isn't the shift time, so we don't imply it is.
         if recordedSameDay, let recordedAt = entry.recordedAt {
             parts.append(recordedAt.formatted(date: .omitted, time: .shortened))
+        }
+        if entry.isDouble {
+            parts.append("double")
         }
         if let note = entry.note, !note.isEmpty {
             parts.append(note)

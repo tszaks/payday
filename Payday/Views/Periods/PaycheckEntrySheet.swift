@@ -39,12 +39,18 @@ struct PaycheckEntrySheet: View {
                 }
                 .padding()
                 .background(PaydayColor.fieldBackground)
-                .clipShape(RoundedRectangle(cornerRadius: 16))
+                .clipShape(RoundedRectangle(cornerRadius: PaydayRadius.lg))
                 .padding(.horizontal)
 
                 if existing != nil {
-                    Button("Remove paycheck", role: .destructive) { delete() }
-                        .padding(.top, 4)
+                    Button(role: .destructive) { delete() } label: {
+                        Text("Remove Paycheck")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.glassProminent)
+                    .tint(PaydayColor.error)
+                    .padding(.horizontal)
+                    .padding(.top, 4)
                 }
 
                 Spacer()

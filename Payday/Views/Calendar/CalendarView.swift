@@ -34,6 +34,12 @@ struct CalendarView: View {
             .mapValues { entries in entries.reduce(0) { $0 + $1.amountCents } }
     }
 
+    private var monthTotalCents: Int {
+        allEntries
+            .filter { calendar.isDate($0.date, equalTo: displayedMonth, toGranularity: .month) }
+            .reduce(0) { $0 + $1.amountCents }
+    }
+
     private var gridDays: [Date] {
         guard let monthInterval = calendar.dateInterval(of: .month, for: displayedMonth) else { return [] }
         let firstWeekday = calendar.component(.weekday, from: monthInterval.start)
@@ -51,6 +57,11 @@ struct CalendarView: View {
         NavigationStack {
             VStack(spacing: 16) {
                 monthHeader
+
+                Text("Month total: \(Money.string(fromCents: monthTotalCents))")
+                    .font(PaydayFont.subheadline)
+                    .foregroundStyle(PaydayColor.textSecondary)
+                    .monospacedDigit()
 
                 weekdayHeader
 
@@ -82,6 +93,13 @@ struct CalendarView: View {
             .sheet(item: $daySelection) { selection in
                 DayDetailSheet(date: selection.date)
             }
+            #if DEBUG
+            .onAppear {
+                if ProcessInfo.processInfo.arguments.contains("-OpenDaySheet") {
+                    daySelection = DaySelection(date: .now)
+                }
+            }
+            #endif
         }
     }
 
@@ -153,7 +171,7 @@ private struct DayCell: View {
                 .fontWeight(isToday ? .bold : .regular)
                 .foregroundStyle(PaydayColor.textPrimary)
             if hasTips, let totalCents {
-                Text(Money.string(fromCents: totalCents))
+                Text(Money.wholeDollarString(fromCents: totalCents))
                     .font(PaydayFont.caption3)
                     .monospacedDigit()
                     .foregroundStyle(PaydayColor.textPrimary)
@@ -162,9 +180,9 @@ private struct DayCell: View {
             }
         }
         .frame(maxWidth: .infinity, minHeight: 46)
-        .background(cellFill, in: RoundedRectangle(cornerRadius: 10))
+        .background(cellFill, in: RoundedRectangle(cornerRadius: PaydayRadius.sm))
         .overlay(
-            RoundedRectangle(cornerRadius: 10)
+            RoundedRectangle(cornerRadius: PaydayRadius.sm)
                 .strokeBorder(isToday ? Color.accentColor : Color.clear, lineWidth: 1.5)
         )
         .opacity(isCurrentMonth ? 1 : 0.3)

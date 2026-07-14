@@ -41,9 +41,9 @@ struct CurrencyAmountRow: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 18)
-        .background(PaydayColor.fieldBackground, in: RoundedRectangle(cornerRadius: 16))
+        .background(PaydayColor.fieldBackground, in: RoundedRectangle(cornerRadius: PaydayRadius.md))
         .overlay(
-            RoundedRectangle(cornerRadius: 16)
+            RoundedRectangle(cornerRadius: PaydayRadius.md)
                 .strokeBorder(
                     isFocused ? PaydayColor.primary : PaydayColor.textPrimary.opacity(0.08),
                     lineWidth: isFocused ? 2 : 1

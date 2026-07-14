@@ -8,6 +8,7 @@ struct TipEntrySnapshot: Sendable {
     let kind: TipKind
     let note: String?
     let recordedAt: Date?
+    let isDouble: Bool
 }
 
 /// One labeled block in the Insights screen, e.g. "Top Earning Days" + body.
@@ -74,7 +75,8 @@ enum InsightsService {
                 "weekday": calendar.weekdaySymbols[weekday - 1],
                 "amount": Double(entry.amountCents) / 100,
                 "type": entry.kind.rawValue,
-                "note": entry.note ?? ""
+                "note": entry.note ?? "",
+                "double_shift": entry.isDouble
             ]
             // Recorded time as a lunch-vs-dinner proxy — but ONLY when the tip
             // was logged the same day it was earned. For backfilled entries the
@@ -90,28 +92,35 @@ enum InsightsService {
 
         let payload: [String: Any] = [
             "pay_frequency": scheduleFrequency.displayName,
-            "entries": rows
+            "shifts": rows
         ]
         let payloadData = try JSONSerialization.data(withJSONObject: payload)
         let payloadString = String(data: payloadData, encoding: .utf8) ?? "{}"
 
         let systemPrompt = """
-        You are a data analyst helping a restaurant server understand their tip income patterns. \
-        You will receive their logged tip entries as JSON (date, weekday, amount in dollars, type of \
-        either "cash" or "credit", optional note, and logged_time in 24-hour HH:mm when available). \
-        logged_time is roughly when the shift's tips were entered — treat times before ~16:00 as \
-        lunch/daytime and later times as dinner/evening. Some older entries may have no logged_time; \
-        just skip those for the time-of-day read. \
+        You are texting a restaurant server a quick, friendly read on their tip money. \
+        You will receive their logged tips as JSON (date, weekday, amount in dollars, type of \
+        either "cash" or "credit", optional note, double_shift true/false, and logged_time in \
+        24-hour HH:mm when available). logged_time is roughly when that shift's tips were entered \
+        — treat times before ~16:00 as lunch/daytime and later times as dinner/evening. Some older \
+        shifts may have no logged_time; just skip those for the time-of-day read. \
 
         Respond with JSON only, matching exactly this shape:
         {"sections": [{"title": "...", "body": "..."}]}
 
-        Produce 4 to 5 sections. Each title is 2 to 4 words (e.g. "Top Earning Days", "Cash vs Credit", \
-        "Lunch vs Dinner", "What To Try Next"). Each body is 2 to 4 short sentences, plain language, \
-        no markdown formatting, no bullet characters, no disclaimers about being an AI. Base every claim \
+        Produce 4 to 6 sections. Each title is 2 to 4 words (e.g. "Top Earning Days", "Cash vs Credit", \
+        "Lunch vs Dinner", "Doubles vs Solo", "What To Try Next"). Each body is 2 to 4 short sentences, \
+        plain language, no markdown formatting, no bullet characters, no disclaimers about being an AI. \
+
+        Talk like a person, not a spreadsheet. Never say "entries," "data points," "dataset," or \
+        "logged" — if you need to name the unit, say "shifts" or "days," but usually you don't need \
+        to name it at all: just talk about the money. Say "you made $488 from credit tips versus \
+        $288 from cash" instead of "credit tips totaled $488 across five entries." Base every claim \
         on the actual data given — cite specific dates or amounts where it strengthens the point. Include \
-        one section comparing cash vs credit, and one on lunch vs dinner earnings if logged_time data \
-        exists. The last section should always be one concrete, actionable suggestion.
+        one section comparing cash vs credit, one on lunch vs dinner earnings if logged_time data \
+        exists, and one comparing double shifts against solo shifts (e.g. average per double vs average \
+        per solo shift) only if the data actually contains at least one double_shift true and one false. \
+        The last section should always be one concrete, actionable suggestion.
         """
 
         var request = URLRequest(url: URL(string: "https://api.openai.com/v1/chat/completions")!)

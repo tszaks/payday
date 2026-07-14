@@ -46,6 +46,37 @@ struct InsightsView: View {
 
     private func resultList(_ snapshot: InsightsSnapshot) -> some View {
         List {
+            Section {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Last updated \(snapshot.generatedAt.formatted(.dateTime.month(.abbreviated).day().hour().minute()))")
+                        .font(PaydayFont.caption)
+                        .foregroundStyle(PaydayColor.textSecondary)
+
+                    if isLoading {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                            Text("Analyzing your tips…")
+                                .font(PaydayFont.subheadline)
+                                .foregroundStyle(PaydayColor.textSecondary)
+                        }
+                    } else {
+                        Button("Analyze Again") {
+                            Task { await analyze() }
+                        }
+                        .buttonStyle(.glassProminent)
+                        .tint(.accentColor)
+
+                        if let errorMessage {
+                            Text(errorMessage)
+                                .font(PaydayFont.caption)
+                                .foregroundStyle(PaydayColor.error)
+                        }
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+            .listRowBackground(PaydayColor.background)
+
             ForEach(snapshot.sections) { section in
                 Section(section.title) {
                     Text(section.body)
@@ -55,28 +86,6 @@ struct InsightsView: View {
                 }
                 .listRowBackground(PaydayColor.background)
             }
-            Section {
-                if isLoading {
-                    HStack(spacing: 8) {
-                        ProgressView()
-                        Text("Analyzing your tips…")
-                            .font(PaydayFont.subheadline)
-                            .foregroundStyle(PaydayColor.textSecondary)
-                    }
-                } else {
-                    Button("Analyze Again") {
-                        Task { await analyze() }
-                    }
-                    if let errorMessage {
-                        Text(errorMessage)
-                            .font(PaydayFont.caption)
-                            .foregroundStyle(PaydayColor.error)
-                    }
-                }
-            } footer: {
-                Text("Last updated \(snapshot.generatedAt.formatted(.dateTime.month(.abbreviated).day().hour().minute()))")
-            }
-            .listRowBackground(PaydayColor.background)
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
@@ -90,7 +99,7 @@ struct InsightsView: View {
             Text("See where and when you earn the most.")
                 .font(PaydayFont.headline)
                 .foregroundStyle(PaydayColor.textPrimary)
-            Text("Sends your logged tips — dates, amounts, cash/credit type, and any notes — to OpenAI for analysis. Nothing else leaves your phone.")
+            Text("Sends your logged tips — dates, amounts, cash/credit type, double-shift flag, and any notes — to OpenAI for analysis. Nothing else leaves your phone.")
                 .font(PaydayFont.caption)
                 .foregroundStyle(PaydayColor.textSecondary)
                 .multilineTextAlignment(.center)
@@ -113,7 +122,7 @@ struct InsightsView: View {
         errorMessage = nil
         isLoading = true
         defer { isLoading = false }
-        let snapshots = allEntries.map { TipEntrySnapshot(date: $0.date, amountCents: $0.amountCents, kind: $0.kind, note: $0.note, recordedAt: $0.recordedAt) }
+        let snapshots = allEntries.map { TipEntrySnapshot(date: $0.date, amountCents: $0.amountCents, kind: $0.kind, note: $0.note, recordedAt: $0.recordedAt, isDouble: $0.isDouble) }
         let frequency = scheduleStore.schedule?.frequency ?? .biweekly
         do {
             let sections = try await InsightsService.analyze(entries: snapshots, scheduleFrequency: frequency)
