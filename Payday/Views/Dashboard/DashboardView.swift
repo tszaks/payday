@@ -95,8 +95,7 @@ struct DashboardView: View {
             .scrollContentBackground(.hidden)
             .background(PaydayColor.background)
             .contentMargins(.bottom, 88, for: .scrollContent) // clear the floating + button
-            .navigationTitle("")
-            .navigationBarTitleDisplayMode(.inline)
+            .navigationTitle(greeting)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
@@ -127,11 +126,6 @@ struct DashboardView: View {
 
     private var heroCard: some View {
         VStack(spacing: 24) {
-            Text(greeting)
-                .font(PaydayFont.displayMediumBlack)
-                .foregroundStyle(PaydayColor.textPrimary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-
             VStack(spacing: 6) {
                 Text("This pay period")
                     .font(PaydayFont.subheadline)
