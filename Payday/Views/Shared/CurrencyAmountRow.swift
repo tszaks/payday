@@ -39,7 +39,7 @@ struct CurrencyAmountRow: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 18)
-        .background(Color.paydaySurface, in: RoundedRectangle(cornerRadius: 16))
+        .background(PaydayColor.fieldBackground, in: RoundedRectangle(cornerRadius: 16))
         .overlay(
             RoundedRectangle(cornerRadius: 16)
                 .strokeBorder(

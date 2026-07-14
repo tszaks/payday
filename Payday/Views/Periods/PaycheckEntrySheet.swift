@@ -37,9 +37,8 @@ struct PaycheckEntrySheet: View {
                         .multilineTextAlignment(.trailing)
                 }
                 .padding()
-                .background(Color.paydaySurface)
+                .background(PaydayColor.fieldBackground)
                 .clipShape(RoundedRectangle(cornerRadius: 16))
-                .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Color.primary.opacity(0.08)))
                 .padding(.horizontal)
 
                 if existing != nil {
@@ -50,7 +49,7 @@ struct PaycheckEntrySheet: View {
                 Spacer()
             }
             .padding(.top, 16)
-            .background(Color.paydaySurface)
+            .background(PaydayColor.background)
             .navigationTitle("Paycheck")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -65,7 +64,7 @@ struct PaycheckEntrySheet: View {
             }
         }
         .presentationDetents([.medium])
-        .presentationBackground(Color.paydaySurface)
+        .presentationBackground(PaydayColor.background)
     }
 
     private func save() {
@@ -81,7 +80,7 @@ struct PaycheckEntrySheet: View {
             )
             modelContext.insert(record)
         }
-        Haptics.success()
+        PaydayHaptics.success()
         dismiss()
     }
 
@@ -89,7 +88,7 @@ struct PaycheckEntrySheet: View {
         if let existing {
             modelContext.delete(existing)
         }
-        Haptics.success()
+        PaydayHaptics.success()
         dismiss()
     }
 }

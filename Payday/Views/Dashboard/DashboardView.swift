@@ -141,7 +141,7 @@ struct DashboardView: View {
         }
         .padding(20)
         .frame(maxWidth: .infinity)
-        .background(Color.paydaySurface)
+        .background(PaydayColor.cardBackground)
     }
 
     private var emptyState: some View {

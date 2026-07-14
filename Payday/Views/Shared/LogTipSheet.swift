@@ -66,7 +66,7 @@ struct LogTipSheet: View {
             }
             .padding(.top, 20)
             .padding(.bottom, 32)
-            .background(Color.paydaySurface)
+            .background(PaydayColor.background)
             .navigationTitle(isEditing ? "Edit Tips" : "Log Tips")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -84,7 +84,7 @@ struct LogTipSheet: View {
         // content is never clipped on smaller iPhones with the keypad up.
         .presentationDetents([.height(isEditing ? 480 : 520), .large])
         .presentationDragIndicator(.visible)
-        .presentationBackground(Color.paydaySurface)
+        .presentationBackground(PaydayColor.background)
     }
 
     // MARK: New log — cash + credit together
@@ -152,9 +152,8 @@ struct LogTipSheet: View {
 
     private func card<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
         VStack(spacing: 0) { content() }
-            .background(Color.paydaySurface)
+            .background(PaydayColor.fieldBackground)
             .clipShape(RoundedRectangle(cornerRadius: 16))
-            .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Color.primary.opacity(0.08)))
             .padding(.horizontal)
     }
 
@@ -182,7 +181,7 @@ struct LogTipSheet: View {
             entry.kind = kind
             entry.note = trimmedNote
         }
-        Haptics.success()
+        PaydayHaptics.success()
         dismiss()
     }
 

@@ -30,7 +30,7 @@ struct SettingsView: View {
                         }
                     }
                 }
-                .listRowBackground(Color.paydaySurface)
+                .listRowBackground(PaydayColor.fieldBackground)
 
                 Section {
                     DatePicker("Payday", selection: $anchorPayday, in: ...Date.now, displayedComponents: .date)
@@ -39,13 +39,13 @@ struct SettingsView: View {
                 } footer: {
                     Text("Set this to the last day of your most recent pay period. Everything is grouped around it.")
                 }
-                .listRowBackground(Color.paydaySurface)
+                .listRowBackground(PaydayColor.fieldBackground)
 
                 if frequency == .twiceMonthly {
                     Text("Paydays fall on the 15th and the last day of every month.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
-                        .listRowBackground(Color.paydaySurface)
+                        .listRowBackground(PaydayColor.fieldBackground)
                 }
 
                 Section {
@@ -59,7 +59,7 @@ struct SettingsView: View {
                 } footer: {
                     Text("Sets which day the calendar grid begins on.")
                 }
-                .listRowBackground(Color.paydaySurface)
+                .listRowBackground(PaydayColor.fieldBackground)
 
                 #if DEBUG
                 Section("Developer") {
@@ -70,11 +70,11 @@ struct SettingsView: View {
                         DebugSeeder.clearAll(scheduleStore: scheduleStore, insightsStore: insightsStore)
                     }
                 }
-                .listRowBackground(Color.paydaySurface)
+                .listRowBackground(PaydayColor.fieldBackground)
                 #endif
             }
             .scrollContentBackground(.hidden)
-            .background(Color.paydaySurface)
+            .background(PaydayColor.background)
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -86,7 +86,7 @@ struct SettingsView: View {
             .onChange(of: anchorPayday) { _, _ in save() }
             .onChange(of: firstWeekday) { _, _ in save() }
         }
-        .presentationBackground(Color.paydaySurface)
+        .presentationBackground(PaydayColor.background)
     }
 
     private func save() {
