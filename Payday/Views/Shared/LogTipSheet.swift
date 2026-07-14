@@ -14,6 +14,8 @@ import SwiftData
 struct LogTipSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
+    @Environment(PayScheduleStore.self) private var scheduleStore
+    @Query(sort: \TipEntry.date, order: .reverse) private var allEntries: [TipEntry]
 
     let target: TipEntrySheetTarget
 
@@ -30,6 +32,7 @@ struct LogTipSheet: View {
     @State private var note: String
     @State private var isDouble: Bool
     @State private var showDeleteConfirmation = false
+    @State private var revealResult: RevealResult?
 
     init(target: TipEntrySheetTarget) {
         self.target = target
@@ -58,48 +61,56 @@ struct LogTipSheet: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 24) {
-                if isEditing {
-                    editContent
+            Group {
+                if let revealResult {
+                    RevealCardView(result: revealResult, onDismiss: { dismiss() })
                 } else {
-                    logContent
-                }
+                    VStack(spacing: 24) {
+                        if isEditing {
+                            editContent
+                        } else {
+                            logContent
+                        }
 
-                detailsCard
+                        detailsCard
 
-                if isEditing {
-                    Button(role: .destructive) { showDeleteConfirmation = true } label: {
-                        Text("Delete Tip")
-                            .frame(maxWidth: .infinity)
+                        if isEditing {
+                            Button(role: .destructive) { showDeleteConfirmation = true } label: {
+                                Text("Delete Tip")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.glassProminent)
+                            .tint(PaydayColor.error)
+                            .padding(.horizontal)
+                            .padding(.top, 4)
+                            .confirmationDialog("Delete this tip?", isPresented: $showDeleteConfirmation, titleVisibility: .visible) {
+                                Button("Delete Tip", role: .destructive) { delete() }
+                            }
+                        }
                     }
-                    .buttonStyle(.glassProminent)
-                    .tint(PaydayColor.error)
-                    .padding(.horizontal)
-                    .padding(.top, 4)
-                    .confirmationDialog("Delete this tip?", isPresented: $showDeleteConfirmation, titleVisibility: .visible) {
-                        Button("Delete Tip", role: .destructive) { delete() }
-                    }
+                    .padding(.top, 20)
+                    .padding(.bottom, 32)
                 }
             }
-            .padding(.top, 20)
-            .padding(.bottom, 32)
             .background(PaydayColor.background)
-            .navigationTitle(isEditing ? "Edit Tips" : "Log Tips")
+            .navigationTitle(revealResult != nil ? "" : (isEditing ? "Edit Tips" : "Log Tips"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                if isEditing {
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("Done") { dismiss() }
-                            .buttonStyle(.glassProminent)
-                    }
-                } else {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Cancel") { dismiss() }
-                    }
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("Save") { saveNew() }
-                            .buttonStyle(.glassProminent)
-                            .disabled(!canSave)
+                if revealResult == nil {
+                    if isEditing {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") { dismiss() }
+                                .buttonStyle(.glassProminent)
+                        }
+                    } else {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Cancel") { dismiss() }
+                        }
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Save") { saveNew() }
+                                .buttonStyle(.glassProminent)
+                                .disabled(!canSave)
+                        }
                     }
                 }
             }
@@ -114,6 +125,16 @@ struct LogTipSheet: View {
         .presentationDetents([.height(isEditing ? 480 : 520), .large])
         .presentationDragIndicator(.visible)
         .presentationBackground(PaydayColor.background)
+        #if DEBUG
+        .onAppear {
+            let args = ProcessInfo.processInfo.arguments
+            if !isEditing, let index = args.firstIndex(of: "-DebugTriggerReveal"), args.count > index + 1,
+               let cents = Int(args[index + 1]) {
+                cashCents = cents
+                saveNew()
+            }
+        }
+        #endif
     }
 
     // MARK: New log — cash + credit together
@@ -192,8 +213,10 @@ struct LogTipSheet: View {
 
     // MARK: Actions
 
-    /// Creation flow only: writes the entries and haptics-confirms once, on
-    /// explicit Save.
+    /// Creation flow only: writes the entries, then shows the post-log
+    /// reveal instead of dismissing immediately. Stats are computed from
+    /// history BEFORE the insert (the engine's `excluding` parameters exist
+    /// exactly so callers can pass tonight's history and total separately).
     private func saveNew() {
         guard case .new = target else { return }
         // Clamp to today: the picker already blocks future dates, but never
@@ -201,6 +224,12 @@ struct LogTipSheet: View {
         let normalizedDate = Calendar.current.startOfDay(for: min(date, .now))
         let trimmedNote = note.isEmpty ? nil : note
         let recordedAt = Date.now
+        let totalCents = cashCents + creditCents
+
+        let statsEngine = StatsEngine(records: allEntries.map(TipRecord.init))
+        let calculator = PayPeriodCalculator(schedule: scheduleStore.schedule ?? .fallback)
+        let period = calculator.period(containing: normalizedDate)
+        let reveal = statsEngine.reveal(forNightAt: normalizedDate, cents: totalCents, period: period)
 
         if cashCents > 0 {
             modelContext.insert(TipEntry(date: normalizedDate, amountCents: cashCents, kind: .cash, note: trimmedNote, recordedAt: recordedAt, isDouble: isDouble))
@@ -208,8 +237,7 @@ struct LogTipSheet: View {
         if creditCents > 0 {
             modelContext.insert(TipEntry(date: normalizedDate, amountCents: creditCents, kind: .credit, note: trimmedNote, recordedAt: recordedAt, isDouble: isDouble))
         }
-        PaydayHaptics.success()
-        dismiss()
+        revealResult = reveal
     }
 
     /// Edit flow: every field change writes straight through to the entry.
@@ -228,5 +256,46 @@ struct LogTipSheet: View {
             modelContext.delete(entry)
         }
         dismiss()
+    }
+}
+
+/// The post-log reveal: one beat (~2s, tappable to skip) showing tonight's
+/// total and the one most interesting true thing about it. Record nights
+/// get the single earned flourish — the amount sweeps to green, once, paired
+/// with the save's success haptic. No confetti, no looping animation.
+private struct RevealCardView: View {
+    let result: RevealResult
+    let onDismiss: () -> Void
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isRevealed = false
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Text(RevealCopy.headline(cents: result.cents))
+                .font(PaydayFont.displayXL)
+                .monospacedDigit()
+                .foregroundStyle(result.isRecord && isRevealed ? PaydayColor.primary : PaydayColor.textPrimary)
+            Text(RevealCopy.comparison(for: result.comparison))
+                .font(PaydayFont.subheadline)
+                .foregroundStyle(PaydayColor.textSecondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 40)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .contentShape(Rectangle())
+        .onTapGesture { onDismiss() }
+        .task {
+            PaydayHaptics.success()
+            if result.isRecord {
+                if reduceMotion {
+                    isRevealed = true
+                } else {
+                    withAnimation(PaydayAnimation.premiumSpring) { isRevealed = true }
+                }
+            }
+            try? await Task.sleep(for: .seconds(2))
+            onDismiss()
+        }
     }
 }

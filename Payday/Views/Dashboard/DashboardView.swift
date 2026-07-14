@@ -54,6 +54,20 @@ struct DashboardView: View {
         Set(periodEntries.map { Calendar.current.startOfDay(for: $0.date) }).count
     }
 
+    private var priorPeriod: PayPeriod {
+        let previousDay = Calendar.current.date(byAdding: .day, value: -1, to: currentPeriod.start) ?? currentPeriod.start
+        return calculator.period(containing: previousDay)
+    }
+
+    /// Hidden until there's real history to compare against — a brand-new
+    /// user's first period has no "last period" worth being ahead of.
+    private var paceLineText: String? {
+        guard allEntries.contains(where: { $0.date >= priorPeriod.start && $0.date <= priorPeriod.end }) else { return nil }
+        let engine = StatsEngine(records: allEntries.map(TipRecord.init))
+        let delta = engine.paceDelta(currentPeriod: currentPeriod, priorPeriod: priorPeriod, asOf: .now) ?? 0
+        return RevealCopy.paceLine(deltaCents: delta)
+    }
+
     var body: some View {
         NavigationStack {
             List {
@@ -149,6 +163,12 @@ struct DashboardView: View {
                     .animation(PaydayAnimation.premiumSpring, value: totalCents)
                     .lineLimit(1)
                     .minimumScaleFactor(0.5)
+                if let paceLineText {
+                    Text(paceLineText)
+                        .font(PaydayFont.caption)
+                        .foregroundStyle(PaydayColor.textSecondary)
+                        .monospacedDigit()
+                }
             }
 
             HStack(spacing: 0) {
