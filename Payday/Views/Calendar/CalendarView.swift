@@ -55,39 +55,50 @@ struct CalendarView: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 16) {
-                monthHeader
+            ScrollView {
+                VStack(spacing: PaydaySpacing.p16) {
+                    VStack(spacing: PaydaySpacing.p16) {
+                        monthHeader
 
-                Text("Month total: \(Money.string(fromCents: monthTotalCents))")
-                    .font(PaydayFont.subheadline)
-                    .foregroundStyle(PaydayColor.textSecondary)
-                    .monospacedDigit()
-
-                weekdayHeader
-
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 7), spacing: 6) {
-                    ForEach(gridDays, id: \.self) { day in
-                        Button {
-                            daySelection = DaySelection(date: day)
-                        } label: {
-                            DayCell(
-                                day: day,
-                                totalCents: dailyTotals[day],
-                                isCurrentMonth: calendar.isDate(day, equalTo: displayedMonth, toGranularity: .month),
-                                isToday: calendar.isDateInToday(day),
-                                isInCurrentPeriod: day >= currentPeriod.start && day <= currentPeriod.end
-                            )
+                        VStack(spacing: 2) {
+                            Text(Money.string(fromCents: monthTotalCents))
+                                .font(PaydayFont.displayLarge)
+                                .monospacedDigit()
+                                .foregroundStyle(PaydayColor.textPrimary)
+                                .contentTransition(.numericText())
+                                .animation(PaydayAnimation.premiumSpring, value: monthTotalCents)
+                            Text("this month")
+                                .font(PaydayFont.caption)
+                                .foregroundStyle(PaydayColor.textSecondary)
                         }
-                        .buttonStyle(PressableButtonStyle())
-                    }
-                }
-                .padding(.horizontal)
-                .id(displayedMonth)
-                .transition(.opacity)
 
-                Spacer()
+                        weekdayHeader
+
+                        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 7), spacing: 6) {
+                            ForEach(gridDays, id: \.self) { day in
+                                Button {
+                                    daySelection = DaySelection(date: day)
+                                } label: {
+                                    DayCell(
+                                        day: day,
+                                        totalCents: dailyTotals[day],
+                                        isCurrentMonth: calendar.isDate(day, equalTo: displayedMonth, toGranularity: .month),
+                                        isToday: calendar.isDateInToday(day),
+                                        isInCurrentPeriod: day >= currentPeriod.start && day <= currentPeriod.end
+                                    )
+                                }
+                                .buttonStyle(PressableButtonStyle())
+                            }
+                        }
+                        .id(displayedMonth)
+                        .transition(.opacity)
+                    }
+                    .paydayCard(padding: PaydaySpacing.p20)
+                }
+                .padding(.horizontal, PaydaySpacing.p16)
+                .padding(.top, PaydaySpacing.p8)
             }
-            .padding(.top, 8)
+            .contentMargins(.bottom, 88, for: .scrollContent)
             .background(PaydayColor.background)
             .navigationTitle("Calendar")
             .sheet(item: $daySelection) { selection in
@@ -121,7 +132,7 @@ struct CalendarView: View {
                 Image(systemName: "chevron.right")
             }
         }
-        .padding(.horizontal, 24)
+        .tint(PaydayColor.primary)
     }
 
     private var weekdayHeader: some View {

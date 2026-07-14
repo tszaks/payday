@@ -187,6 +187,19 @@ extension View {
         self.modifier(PaydayPremiumShadowModifier())
     }
 
+    /// THE lifted card surface for the whole app. Every content card — the
+    /// dashboard hero, an Insights block, a Periods row, the calendar — routes
+    /// through this one modifier so they are literally identical, not merely
+    /// similar. White that lifts off the alabaster page with the 3-layer
+    /// shadow; the shadow (never a border) is the depth cue.
+    func paydayCard(padding: CGFloat = PaydaySpacing.p20, cornerRadius: CGFloat = PaydayRadius.xl) -> some View {
+        self
+            .padding(padding)
+            .frame(maxWidth: .infinity)
+            .background(PaydayColor.cardBackground, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .paydayPremiumShadow()
+    }
+
     /// Premium spring animation curve — Apple's .smooth preset.
     func paydaySpring() -> Animation {
         .smooth
