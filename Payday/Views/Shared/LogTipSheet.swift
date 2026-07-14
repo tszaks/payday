@@ -29,6 +29,7 @@ struct LogTipSheet: View {
     @State private var date: Date
     @State private var note: String
     @State private var isDouble: Bool
+    @State private var showDeleteConfirmation = false
 
     init(target: TipEntrySheetTarget) {
         self.target = target
@@ -67,7 +68,7 @@ struct LogTipSheet: View {
                 detailsCard
 
                 if isEditing {
-                    Button(role: .destructive) { delete() } label: {
+                    Button(role: .destructive) { showDeleteConfirmation = true } label: {
                         Text("Delete Tip")
                             .frame(maxWidth: .infinity)
                     }
@@ -75,6 +76,9 @@ struct LogTipSheet: View {
                     .tint(PaydayColor.error)
                     .padding(.horizontal)
                     .padding(.top, 4)
+                    .confirmationDialog("Delete this tip?", isPresented: $showDeleteConfirmation, titleVisibility: .visible) {
+                        Button("Delete Tip", role: .destructive) { delete() }
+                    }
                 }
             }
             .padding(.top, 20)

@@ -8,6 +8,7 @@ struct DayDetailSheet: View {
 
     let date: Date
     @State private var sheetTarget: TipEntrySheetTarget?
+    @State private var pendingDeleteEntry: TipEntry?
 
     private var entries: [TipEntry] {
         let day = Calendar.current.startOfDay(for: date)
@@ -38,7 +39,7 @@ struct DayDetailSheet: View {
                             .buttonStyle(.plain)
                             .swipeActions(edge: .trailing) {
                                 Button(role: .destructive) {
-                                    modelContext.delete(entry)
+                                    pendingDeleteEntry = entry
                                 } label: {
                                     Label("Delete", systemImage: "trash")
                                 }
@@ -53,6 +54,16 @@ struct DayDetailSheet: View {
                         }
                     }
                     .listRowBackground(PaydayColor.background)
+                }
+            }
+            .confirmationDialog(
+                "Delete this tip?",
+                isPresented: Binding(get: { pendingDeleteEntry != nil }, set: { if !$0 { pendingDeleteEntry = nil } }),
+                titleVisibility: .visible
+            ) {
+                Button("Delete", role: .destructive) {
+                    if let entry = pendingDeleteEntry { modelContext.delete(entry) }
+                    pendingDeleteEntry = nil
                 }
             }
             .listStyle(.plain)

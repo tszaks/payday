@@ -10,6 +10,7 @@ struct DashboardView: View {
 
     @State private var sheetTarget: TipEntrySheetTarget?
     @State private var showSettings = false
+    @State private var pendingDeleteEntry: TipEntry?
 
     private var greeting: String {
         let timeOfDay = switch Calendar.current.component(.hour, from: .now) {
@@ -82,13 +83,23 @@ struct DashboardView: View {
                             .listRowBackground(PaydayColor.background)
                             .swipeActions(edge: .trailing) {
                                 Button(role: .destructive) {
-                                    modelContext.delete(entry)
+                                    pendingDeleteEntry = entry
                                 } label: {
                                     Label("Delete", systemImage: "trash")
                                 }
                             }
                         }
                     }
+                }
+            }
+            .confirmationDialog(
+                "Delete this tip?",
+                isPresented: Binding(get: { pendingDeleteEntry != nil }, set: { if !$0 { pendingDeleteEntry = nil } }),
+                titleVisibility: .visible
+            ) {
+                Button("Delete", role: .destructive) {
+                    if let entry = pendingDeleteEntry { modelContext.delete(entry) }
+                    pendingDeleteEntry = nil
                 }
             }
             .listStyle(.plain)

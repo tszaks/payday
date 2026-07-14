@@ -10,6 +10,7 @@ struct PaycheckEntrySheet: View {
 
     @State private var amountCents: Int
     @State private var note: String
+    @State private var showDeleteConfirmation = false
 
     init(period: PayPeriod, existing: PaycheckRecord?) {
         self.period = period
@@ -43,7 +44,7 @@ struct PaycheckEntrySheet: View {
                 .padding(.horizontal)
 
                 if existing != nil {
-                    Button(role: .destructive) { delete() } label: {
+                    Button(role: .destructive) { showDeleteConfirmation = true } label: {
                         Text("Remove Paycheck")
                             .frame(maxWidth: .infinity)
                     }
@@ -51,6 +52,9 @@ struct PaycheckEntrySheet: View {
                     .tint(PaydayColor.error)
                     .padding(.horizontal)
                     .padding(.top, 4)
+                    .confirmationDialog("Remove this paycheck?", isPresented: $showDeleteConfirmation, titleVisibility: .visible) {
+                        Button("Remove Paycheck", role: .destructive) { delete() }
+                    }
                 }
 
                 Spacer()
