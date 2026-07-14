@@ -11,6 +11,7 @@ struct SettingsView: View {
 
     @State private var firstName: String
     @State private var appearance: AppAppearance
+    @State private var isFaceIDLockEnabled: Bool = false
     @State private var frequency: PayFrequency
     @State private var mostRecentPayday: Date
     @State private var periodEndDate: Date
@@ -44,6 +45,13 @@ struct SettingsView: View {
                         }
                     }
                     .pickerStyle(.segmented)
+                }
+                .listRowBackground(PaydayColor.fieldBackground)
+
+                Section {
+                    Toggle("Require Face ID", isOn: $isFaceIDLockEnabled)
+                } footer: {
+                    Text("Locks Payday when it's in the background. Uses your device passcode as a fallback.")
                 }
                 .listRowBackground(PaydayColor.fieldBackground)
 
@@ -129,9 +137,13 @@ struct SettingsView: View {
             .onChange(of: appearance) { _, newValue in
                 preferencesStore.appearance = newValue
             }
+            .onChange(of: isFaceIDLockEnabled) { _, newValue in
+                preferencesStore.isFaceIDLockEnabled = newValue
+            }
             .onAppear {
                 firstName = preferencesStore.firstName ?? ""
                 appearance = preferencesStore.appearance
+                isFaceIDLockEnabled = preferencesStore.isFaceIDLockEnabled
             }
         }
         .presentationBackground(PaydayColor.background)

@@ -137,10 +137,25 @@ One set of App Intents, five surfaces. In priority order:
 - TipKit for the two teachable concepts: paycheck verification, double toggle.
 - `.sensoryFeedback` for haptics (route through PaydayHaptics).
 - iCloud sync via SwiftData + CloudKit and a Face ID lock (LocalAuthentication),
-  like Notes. NOTE: CloudKit requires all properties optional or defaulted;
-  `TipEntry.id/date/amountCents` are currently neither. Do this schema pass
-  BEFORE the first App Store build so the store never needs a breaking
-  migration after real users exist.
+  like Notes. DONE: schema pass gave `TipEntry.id/date/amountCents` and
+  `PaycheckRecord.id/periodStart/periodEnd/paidTipsCents` defaults (tested
+  against an existing on-device store first — opened clean, no data loss).
+  `SharedModelContainer`'s ModelConfiguration now passes
+  `cloudKitDatabase: .private("iCloud.com.szakacsmedia.payday")` in the app
+  process and `.none` in the widget extension (`WIDGET_EXTENSION` compile
+  flag) — only one process should stand up CloudKit's sync engine against
+  the same App-Group-shared file. Face ID lock is `AppLockController` +
+  `LockGateView`, off by default, toggled in Settings, `.deviceOwnerAuthentication`
+  (passcode fallback, like Notes) rather than biometrics-only, and fails
+  open with no enrolled passcode at all rather than stranding someone
+  outside their own tips.
+  **Deviation / blocked on a portal click:** the iCloud and App Groups
+  (from item 4) capabilities aren't registered on the App ID yet. Simulator
+  builds succeed (they don't enforce provisioning-profile capabilities),
+  but a real-device build fails signing with "doesn't include the iCloud
+  capability" / "doesn't include the App Groups capability." This needs an
+  interactive Xcode signing session or Developer Portal visit — see the
+  final summary for exactly what to click.
 - Full pass: Dynamic Type (hero amounts get scale factors already; verify at
   AX sizes), VoiceOver labels on day cells/tiles, Reduce Motion on every
   animation including the reveal.

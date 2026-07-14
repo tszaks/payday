@@ -6,5 +6,15 @@
 	<array>
 		<string>group.com.szakacsmedia.payday</string>
 	</array>
+	<key>com.apple.developer.icloud-services</key>
+	<array>
+		<string>CloudKit</string>
+	</array>
+	<key>com.apple.developer.icloud-container-identifiers</key>
+	<array>
+		<string>iCloud.com.szakacsmedia.payday</string>
+	</array>
+	<key>com.apple.developer.icloud-container-environment</key>
+	<string>Development</string>
 </dict>
 </plist>

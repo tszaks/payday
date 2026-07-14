@@ -27,6 +27,7 @@ enum AppAppearance: String, CaseIterable, Identifiable {
 final class UserPreferencesStore {
     private static let nameKey = "com.szakacsmedia.payday.firstName"
     private static let appearanceKey = "com.szakacsmedia.payday.appearance"
+    private static let faceIDLockKey = "com.szakacsmedia.payday.faceIDLock"
     private let defaults: UserDefaults
 
     var firstName: String? {
@@ -37,11 +38,18 @@ final class UserPreferencesStore {
         didSet { persistAppearance() }
     }
 
+    /// Off by default, like Notes — a lock nobody asked for is a lockout
+    /// waiting to happen, not a feature.
+    var isFaceIDLockEnabled: Bool {
+        didSet { defaults.set(isFaceIDLockEnabled, forKey: Self.faceIDLockKey) }
+    }
+
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         self.firstName = defaults.string(forKey: Self.nameKey)
         self.appearance = defaults.string(forKey: Self.appearanceKey)
             .flatMap(AppAppearance.init(rawValue:)) ?? .system
+        self.isFaceIDLockEnabled = defaults.bool(forKey: Self.faceIDLockKey)
     }
 
     private func persistName() {
