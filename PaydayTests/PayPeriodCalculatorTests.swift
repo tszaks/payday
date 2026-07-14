@@ -183,3 +183,28 @@ struct RegroupingTests {
         #expect(monthlyPeriod.end == date(2026, 2, 2))
     }
 }
+
+@Suite("Week start setting")
+struct WeekStartTests {
+    @Test("explicit first weekday is used")
+    func explicit() {
+        let schedule = PaySchedule(frequency: .biweekly, anchorPayday: date(2026, 1, 4), firstWeekday: 2)
+        #expect(schedule.resolvedFirstWeekday == 2) // Monday
+    }
+
+    @Test("missing first weekday falls back to the locale default")
+    func fallback() {
+        let schedule = PaySchedule(frequency: .biweekly, anchorPayday: date(2026, 1, 4))
+        #expect(schedule.resolvedFirstWeekday == Calendar.current.firstWeekday)
+    }
+
+    @Test("a Sunday biweekly anchor yields a Monday-to-Sunday period")
+    func mondayToSundayPeriod() {
+        // Jul 12 2026 is a Sunday.
+        let schedule = PaySchedule(frequency: .biweekly, anchorPayday: date(2026, 7, 12))
+        let calculator = PayPeriodCalculator(schedule: schedule)
+        let period = calculator.period(containing: date(2026, 7, 14)) // a Tuesday
+        #expect(period.start == date(2026, 7, 13)) // Monday
+        #expect(period.end == date(2026, 7, 26))   // Sunday, 14 days
+    }
+}

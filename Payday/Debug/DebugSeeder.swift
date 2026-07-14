@@ -28,7 +28,8 @@ enum DebugSeeder {
 
         let schedule = PaySchedule(
             frequency: .biweekly,
-            anchorPayday: calendar.date(byAdding: .day, value: -4, to: today) ?? today
+            anchorPayday: calendar.date(byAdding: .day, value: -4, to: today) ?? today,
+            firstWeekday: 2 // Monday, matching a Mon–Sun pay period
         )
         scheduleStore.schedule = schedule
         let calculator = PayPeriodCalculator(schedule: schedule)

@@ -21,6 +21,15 @@ enum PayFrequency: String, CaseIterable, Identifiable, Hashable, Codable {
 struct PaySchedule: Codable, Equatable {
     var frequency: PayFrequency
     var anchorPayday: Date
+    /// Which weekday the calendar grid starts on (Gregorian: 1 = Sunday …
+    /// 7 = Saturday). Optional so schedules saved before this existed decode
+    /// to nil and fall back to the device locale's default.
+    var firstWeekday: Int?
+
+    /// Resolved calendar week-start, defaulting to the device locale.
+    var resolvedFirstWeekday: Int {
+        firstWeekday ?? Calendar.current.firstWeekday
+    }
 }
 
 struct PayPeriod: Hashable {

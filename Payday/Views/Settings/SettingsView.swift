@@ -10,10 +10,14 @@ struct SettingsView: View {
 
     @State private var frequency: PayFrequency
     @State private var anchorPayday: Date
+    @State private var firstWeekday: Int
+
+    private let weekdaySymbols = Calendar.current.weekdaySymbols // [Sunday…Saturday]
 
     init(schedule: PaySchedule) {
         _frequency = State(initialValue: schedule.frequency)
         _anchorPayday = State(initialValue: schedule.anchorPayday)
+        _firstWeekday = State(initialValue: schedule.resolvedFirstWeekday)
     }
 
     var body: some View {
@@ -28,8 +32,12 @@ struct SettingsView: View {
                 }
                 .listRowBackground(Color.paydaySurface)
 
-                Section("Most recent payday") {
+                Section {
                     DatePicker("Payday", selection: $anchorPayday, in: ...Date.now, displayedComponents: .date)
+                } header: {
+                    Text("Most recent payday")
+                } footer: {
+                    Text("Set this to the last day of your most recent pay period. Everything is grouped around it.")
                 }
                 .listRowBackground(Color.paydaySurface)
 
@@ -39,6 +47,19 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                         .listRowBackground(Color.paydaySurface)
                 }
+
+                Section {
+                    Picker("First day", selection: $firstWeekday) {
+                        ForEach(1...7, id: \.self) { day in
+                            Text(weekdaySymbols[day - 1]).tag(day)
+                        }
+                    }
+                } header: {
+                    Text("Week starts on")
+                } footer: {
+                    Text("Sets which day the calendar grid begins on.")
+                }
+                .listRowBackground(Color.paydaySurface)
 
                 #if DEBUG
                 Section("Developer") {
@@ -63,6 +84,7 @@ struct SettingsView: View {
             }
             .onChange(of: frequency) { _, _ in save() }
             .onChange(of: anchorPayday) { _, _ in save() }
+            .onChange(of: firstWeekday) { _, _ in save() }
         }
         .presentationBackground(Color.paydaySurface)
     }
@@ -70,7 +92,8 @@ struct SettingsView: View {
     private func save() {
         scheduleStore.schedule = PaySchedule(
             frequency: frequency,
-            anchorPayday: Calendar.current.startOfDay(for: anchorPayday)
+            anchorPayday: Calendar.current.startOfDay(for: anchorPayday),
+            firstWeekday: firstWeekday
         )
     }
 }

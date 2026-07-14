@@ -13,7 +13,13 @@ struct CalendarView: View {
     @State private var displayedMonth: Date = Calendar.current.startOfDay(for: .now)
     @State private var daySelection: DaySelection?
 
-    private let calendar = Calendar.current
+    /// Honors the user's chosen week-start; the grid layout and weekday header
+    /// both key off calendar.firstWeekday, so setting it here is enough.
+    private var calendar: Calendar {
+        var c = Calendar.current
+        c.firstWeekday = scheduleStore.schedule?.resolvedFirstWeekday ?? c.firstWeekday
+        return c
+    }
 
     private var calculator: PayPeriodCalculator {
         PayPeriodCalculator(schedule: scheduleStore.schedule!)
