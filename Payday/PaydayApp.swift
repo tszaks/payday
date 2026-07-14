@@ -1,11 +1,16 @@
 import SwiftUI
 import SwiftData
+import TipKit
 
 @main
 struct PaydayApp: App {
     @State private var scheduleStore = PayScheduleStore()
     @State private var insightsStore = InsightsStore()
     @State private var preferencesStore = UserPreferencesStore()
+
+    init() {
+        try? Tips.configure([.displayFrequency(.immediate), .datastoreLocation(.applicationDefault)])
+    }
 
     var body: some Scene {
         WindowGroup {

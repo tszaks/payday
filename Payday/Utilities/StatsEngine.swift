@@ -78,6 +78,12 @@ struct StatsEngine {
         nights(excluding: excludedDate).max { $0.cents < $1.cents }
     }
 
+    func bestNight(in period: PayPeriod) -> (date: Date, cents: Int)? {
+        nightlyTotals()
+            .filter { $0.date >= period.start && $0.date <= period.end }
+            .max { $0.cents < $1.cents }
+    }
+
     func bestNight(forWeekday weekday: Int, excluding excludedDate: Date? = nil) -> (date: Date, cents: Int)? {
         nights(excluding: excludedDate)
             .filter { calendar.component(.weekday, from: $0.date) == weekday }

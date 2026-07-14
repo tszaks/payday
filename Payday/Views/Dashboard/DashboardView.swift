@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import TipKit
 
 struct DashboardView: View {
     @Environment(PayScheduleStore.self) private var scheduleStore
@@ -63,10 +64,60 @@ struct DashboardView: View {
     /// user's first period has no "last period" worth being ahead of.
     private var paceLineText: String? {
         guard allEntries.contains(where: { $0.date >= priorPeriod.start && $0.date <= priorPeriod.end }) else { return nil }
-        let engine = StatsEngine(records: allEntries.map(TipRecord.init))
-        let delta = engine.paceDelta(currentPeriod: currentPeriod, priorPeriod: priorPeriod, asOf: .now) ?? 0
+        let delta = statsEngine.paceDelta(currentPeriod: currentPeriod, priorPeriod: priorPeriod, asOf: .now) ?? 0
         return RevealCopy.paceLine(deltaCents: delta)
     }
+
+    private var statsEngine: StatsEngine {
+        StatsEngine(records: allEntries.map(TipRecord.init))
+    }
+
+    /// The app is named after this moment: the last day of a pay period,
+    /// when there's a verdict to deliver and a paycheck to predict. Not the
+    /// same day money actually lands (see PayPeriodCalculator.payDate) -
+    /// this is "your work here is done," not "you got paid today."
+    private var isPaydayMoment: Bool {
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-DebugForcePaydayMoment") { return true }
+        #endif
+        return daysRemaining == 0 && totalCents > 0
+    }
+
+    private var bestNightThisPeriod: (date: Date, cents: Int)? {
+        statsEngine.bestNight(in: currentPeriod)
+    }
+
+    /// Only claims "best period yet" when there's at least one completed
+    /// period in history to actually beat — a brand-new user's first
+    /// period has nothing to be the best of.
+    private var isBestPeriodEver: Bool {
+        guard let earliestEntryDate = allEntries.map(\.date).min() else { return false }
+        var cursor = currentPeriod
+        var comparedAny = false
+        for _ in 0..<24 {
+            guard let previousEnd = Calendar.current.date(byAdding: .day, value: -1, to: cursor.start),
+                  previousEnd >= earliestEntryDate
+            else { break }
+            cursor = calculator.period(containing: previousEnd)
+            comparedAny = true
+            if statsEngine.periodToDateTotal(period: cursor, asOf: cursor.end) >= totalCents {
+                return false
+            }
+        }
+        return comparedAny
+    }
+
+    /// Credit tips are what land on a stub; cash never does. Same fallback
+    /// PaycheckComparisonView uses for legacy all-cash periods.
+    private var predictedPaycheckCents: Int {
+        breakdown.creditCents > 0 ? breakdown.creditCents : totalCents
+    }
+
+    private var predictedPayDate: Date {
+        calculator.payDate(for: currentPeriod)
+    }
+
+    private let paydayVerificationTip = PaydayVerificationTip()
 
     var body: some View {
         NavigationStack {
@@ -198,9 +249,49 @@ struct DashboardView: View {
                     label: shiftCount == 1 ? "shift logged" : "shifts logged"
                 )
             }
+
+            if isPaydayMoment {
+                Divider()
+                paydayMomentSection
+            }
         }
         .padding(.horizontal, PaydaySpacing.p20)
         .padding(.top, 8)
+    }
+
+    private var paydayMomentSection: some View {
+        VStack(spacing: 16) {
+            VStack(spacing: 4) {
+                Text("Period complete")
+                    .font(PaydayFont.subheadline)
+                    .foregroundStyle(PaydayColor.textSecondary)
+                if let bestNightThisPeriod {
+                    Text("Best night: \(Money.string(fromCents: bestNightThisPeriod.cents)) on \(bestNightThisPeriod.date.formatted(.dateTime.month(.abbreviated).day()))")
+                        .font(PaydayFont.footnote)
+                        .foregroundStyle(PaydayColor.textSecondary)
+                        .monospacedDigit()
+                }
+                if isBestPeriodEver {
+                    Text("Your best period yet")
+                        .font(PaydayFont.subheadline)
+                        .foregroundStyle(PaydayColor.primary)
+                }
+            }
+
+            VStack(spacing: 4) {
+                Text("Predicted paycheck")
+                    .font(PaydayFont.caption)
+                    .foregroundStyle(PaydayColor.textSecondary)
+                Text(Money.string(fromCents: predictedPaycheckCents))
+                    .font(PaydayFont.displayLarge)
+                    .monospacedDigit()
+                    .foregroundStyle(PaydayColor.textPrimary)
+                Text("Expect it around \(predictedPayDate.formatted(.dateTime.month(.abbreviated).day()))")
+                    .font(PaydayFont.caption2)
+                    .foregroundStyle(PaydayColor.textSecondary)
+            }
+            .popoverTip(paydayVerificationTip)
+        }
     }
 
     private var emptyState: some View {
@@ -252,6 +343,22 @@ private struct StatChip: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 8)
+    }
+}
+
+/// One-time education, shown the first time the payday moment appears:
+/// TipKit tracks "seen" state itself, so this never repeats once dismissed.
+private struct PaydayVerificationTip: Tip {
+    var title: Text {
+        Text("Verify your paycheck")
+    }
+
+    var message: Text? {
+        Text("When your check lands, enter the tips line from your stub and Payday will check it against this.")
+    }
+
+    var image: Image? {
+        Image(systemName: "checkmark.seal")
     }
 }
 

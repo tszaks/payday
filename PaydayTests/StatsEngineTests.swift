@@ -59,6 +59,26 @@ struct RecordsTests {
         #expect(engine.bestNightEver() == nil)
     }
 
+    @Test("best night in a period only considers nights inside it")
+    func bestNightInPeriod() {
+        let period = PayPeriod(start: date(2026, 7, 6), end: date(2026, 7, 19))
+        let records = [
+            record(2026, 7, 8, cents: 5000),
+            record(2026, 7, 12, cents: 9000),
+            record(2026, 6, 30, cents: 20000) // outside the period, must not win
+        ]
+        let engine = StatsEngine(records: records)
+        let best = engine.bestNight(in: period)
+        #expect(best?.cents == 9000)
+    }
+
+    @Test("best night in a period is nil when nothing was logged in it")
+    func bestNightInPeriodNilWhenEmpty() {
+        let period = PayPeriod(start: date(2026, 7, 6), end: date(2026, 7, 19))
+        let engine = StatsEngine(records: [record(2026, 6, 30, cents: 20000)])
+        #expect(engine.bestNight(in: period) == nil)
+    }
+
     @Test("best night for a weekday only considers that weekday")
     func bestForWeekday() {
         // July 1 2026 is a Wednesday, July 8 is also a Wednesday, July 3 is a Friday.
