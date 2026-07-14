@@ -13,7 +13,7 @@ final class PayScheduleStore {
         didSet { persist() }
     }
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = AppGroup.defaults) {
         self.defaults = defaults
         self.schedule = Self.load(from: defaults)
     }

@@ -19,7 +19,7 @@ struct PaydayApp: App {
                 .environment(insightsStore)
                 .environment(preferencesStore)
                 .preferredColorScheme(preferencesStore.appearance.colorScheme)
-                .modelContainer(for: [TipEntry.self, PaycheckRecord.self])
+                .modelContainer(SharedModelContainer.shared)
                 .task {
                     #if DEBUG
                     DebugSeeder.seedIfRequested(scheduleStore: scheduleStore, insightsStore: insightsStore)
