@@ -35,6 +35,11 @@ final class TipEntry {
     /// time and are skipped by the time-of-day analytics.
     var recordedAt: Date?
 
+    /// User-declared, never inferred: whether this was a double (worked two
+    /// shifts that day). A Bool with a default lightweight-migrates cleanly,
+    /// unlike the enum trick above — legacy rows just read false.
+    var isDouble: Bool = false
+
     /// Non-optional view of the tip kind; legacy entries with no stored
     /// value read as cash.
     var kind: TipKind {
@@ -42,12 +47,13 @@ final class TipEntry {
         set { kindRaw = newValue.rawValue }
     }
 
-    init(id: UUID = UUID(), date: Date, amountCents: Int, kind: TipKind = .cash, note: String? = nil, recordedAt: Date? = nil) {
+    init(id: UUID = UUID(), date: Date, amountCents: Int, kind: TipKind = .cash, note: String? = nil, recordedAt: Date? = nil, isDouble: Bool = false) {
         self.id = id
         self.date = date
         self.amountCents = amountCents
         self.kindRaw = kind.rawValue
         self.note = note
         self.recordedAt = recordedAt
+        self.isDouble = isDouble
     }
 }

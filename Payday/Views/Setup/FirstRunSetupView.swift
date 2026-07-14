@@ -4,7 +4,9 @@ import SwiftUI
 /// Both are editable later from Settings.
 struct FirstRunSetupView: View {
     @Environment(PayScheduleStore.self) private var scheduleStore
+    @Environment(UserPreferencesStore.self) private var preferencesStore
 
+    @State private var firstName: String = ""
     @State private var frequency: PayFrequency = .biweekly
     @State private var anchorPayday: Date = .now
 
@@ -15,7 +17,7 @@ struct FirstRunSetupView: View {
                     Text("Welcome to Payday")
                         .font(PaydayFont.largeTitle)
                         .foregroundStyle(PaydayColor.textPrimary)
-                    Text("Two quick questions and you're set.")
+                    Text("A few quick questions and you're set.")
                         .font(PaydayFont.subheadline)
                         .foregroundStyle(PaydayColor.textSecondary)
                 }
@@ -25,6 +27,13 @@ struct FirstRunSetupView: View {
                 .padding(.bottom, 8)
 
                 Form {
+                    Section("What's your first name?") {
+                        TextField("First name", text: $firstName)
+                            .textInputAutocapitalization(.words)
+                            .autocorrectionDisabled()
+                    }
+                    .listRowBackground(PaydayColor.fieldBackground)
+
                     Section("How often do you get paid?") {
                         Picker("Pay frequency", selection: $frequency) {
                             ForEach(PayFrequency.allCases) { freq in
@@ -64,6 +73,8 @@ struct FirstRunSetupView: View {
     }
 
     private func save() {
+        let trimmedName = firstName.trimmingCharacters(in: .whitespaces)
+        preferencesStore.firstName = trimmedName.isEmpty ? nil : trimmedName
         scheduleStore.schedule = PaySchedule(
             frequency: frequency,
             anchorPayday: Calendar.current.startOfDay(for: anchorPayday)

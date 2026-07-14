@@ -6,8 +6,11 @@ import SwiftUI
 struct SettingsView: View {
     @Environment(PayScheduleStore.self) private var scheduleStore
     @Environment(InsightsStore.self) private var insightsStore
+    @Environment(UserPreferencesStore.self) private var preferencesStore
     @Environment(\.dismiss) private var dismiss
 
+    @State private var firstName: String
+    @State private var appearance: AppAppearance
     @State private var frequency: PayFrequency
     @State private var anchorPayday: Date
     @State private var firstWeekday: Int
@@ -18,11 +21,30 @@ struct SettingsView: View {
         _frequency = State(initialValue: schedule.frequency)
         _anchorPayday = State(initialValue: schedule.anchorPayday)
         _firstWeekday = State(initialValue: schedule.resolvedFirstWeekday)
+        _firstName = State(initialValue: "")
+        _appearance = State(initialValue: .system)
     }
 
     var body: some View {
         NavigationStack {
             Form {
+                Section("Your name") {
+                    TextField("First name", text: $firstName)
+                        .textInputAutocapitalization(.words)
+                        .autocorrectionDisabled()
+                }
+                .listRowBackground(PaydayColor.fieldBackground)
+
+                Section("Appearance") {
+                    Picker("Appearance", selection: $appearance) {
+                        ForEach(AppAppearance.allCases) { option in
+                            Text(option.displayName).tag(option)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                }
+                .listRowBackground(PaydayColor.fieldBackground)
+
                 Section("Pay frequency") {
                     Picker("Frequency", selection: $frequency) {
                         ForEach(PayFrequency.allCases) { freq in
@@ -85,6 +107,17 @@ struct SettingsView: View {
             .onChange(of: frequency) { _, _ in save() }
             .onChange(of: anchorPayday) { _, _ in save() }
             .onChange(of: firstWeekday) { _, _ in save() }
+            .onChange(of: firstName) { _, newValue in
+                let trimmed = newValue.trimmingCharacters(in: .whitespaces)
+                preferencesStore.firstName = trimmed.isEmpty ? nil : trimmed
+            }
+            .onChange(of: appearance) { _, newValue in
+                preferencesStore.appearance = newValue
+            }
+            .onAppear {
+                firstName = preferencesStore.firstName ?? ""
+                appearance = preferencesStore.appearance
+            }
         }
         .presentationBackground(PaydayColor.background)
     }
