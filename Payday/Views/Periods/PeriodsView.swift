@@ -7,7 +7,7 @@ struct PeriodsView: View {
     @Query private var paycheckRecords: [PaycheckRecord]
 
     private var calculator: PayPeriodCalculator {
-        PayPeriodCalculator(schedule: scheduleStore.schedule!)
+        PayPeriodCalculator(schedule: scheduleStore.schedule ?? .fallback)
     }
 
     /// Current period plus history, walking backward until we run out of
@@ -36,7 +36,9 @@ struct PeriodsView: View {
     }
 
     private func paycheck(for period: PayPeriod) -> PaycheckRecord? {
-        paycheckRecords.first { $0.periodStart == period.start && $0.periodEnd == period.end }
+        // Containment match (see PeriodDetailView) so paychecks survive a
+        // schedule change instead of orphaning on exact-boundary equality.
+        paycheckRecords.first { $0.periodEnd >= period.start && $0.periodEnd <= period.end }
     }
 
     @State private var path = NavigationPath()

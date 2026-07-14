@@ -30,6 +30,11 @@ struct PaySchedule: Codable, Equatable {
     var resolvedFirstWeekday: Int {
         firstWeekday ?? Calendar.current.firstWeekday
     }
+
+    /// Harmless stand-in used only for a transient render if the schedule is
+    /// nil while a period-driven view is briefly still mounted (e.g. DEBUG
+    /// clear-all). RootView switches to first-run setup on the next update.
+    static let fallback = PaySchedule(frequency: .biweekly, anchorPayday: .now)
 }
 
 struct PayPeriod: Hashable {

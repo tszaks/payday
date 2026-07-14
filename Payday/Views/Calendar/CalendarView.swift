@@ -22,7 +22,7 @@ struct CalendarView: View {
     }
 
     private var calculator: PayPeriodCalculator {
-        PayPeriodCalculator(schedule: scheduleStore.schedule!)
+        PayPeriodCalculator(schedule: scheduleStore.schedule ?? .fallback)
     }
 
     private var currentPeriod: PayPeriod {

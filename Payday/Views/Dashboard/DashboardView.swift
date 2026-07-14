@@ -10,7 +10,9 @@ struct DashboardView: View {
     @State private var showSettings = false
 
     private var calculator: PayPeriodCalculator {
-        PayPeriodCalculator(schedule: scheduleStore.schedule!)
+        // Fallback keeps a transient render safe if the schedule is cleared
+        // while this view is still mounted; RootView swaps to setup next tick.
+        PayPeriodCalculator(schedule: scheduleStore.schedule ?? .fallback)
     }
 
     private var currentPeriod: PayPeriod {
@@ -100,7 +102,7 @@ struct DashboardView: View {
             }
             #endif
             .sheet(isPresented: $showSettings) {
-                SettingsView(schedule: scheduleStore.schedule!)
+                SettingsView(schedule: scheduleStore.schedule ?? .fallback)
             }
         }
     }
@@ -222,12 +224,21 @@ struct EntryRow: View {
     let entry: TipEntry
 
     private var subtitle: String {
+        let calendar = Calendar.current
+        let recordedSameDay = entry.recordedAt.map { calendar.isDate($0, inSameDayAs: entry.date) } ?? false
+
         var parts = [entry.kind.displayName]
-        if let recordedAt = entry.recordedAt {
+        // Only show the clock time when the tip was recorded the same day it
+        // was earned — then it reads as roughly when you worked. For backfills
+        // the recorded time isn't the shift time, so we don't imply it is.
+        if recordedSameDay, let recordedAt = entry.recordedAt {
             parts.append(recordedAt.formatted(date: .omitted, time: .shortened))
         }
         if let note = entry.note, !note.isEmpty {
             parts.append(note)
+        }
+        if !recordedSameDay, let recordedAt = entry.recordedAt {
+            parts.append("logged \(recordedAt.formatted(.dateTime.month(.abbreviated).day()))")
         }
         return parts.joined(separator: " · ")
     }

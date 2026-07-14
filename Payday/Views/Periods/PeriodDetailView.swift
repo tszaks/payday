@@ -25,7 +25,10 @@ struct PeriodDetailView: View {
     }
 
     private var paycheck: PaycheckRecord? {
-        paycheckRecords.first { $0.periodStart == period.start && $0.periodEnd == period.end }
+        // Match by the paycheck's end date landing inside this period rather
+        // than exact boundary equality, so paychecks re-home to the right
+        // period after a schedule change instead of silently orphaning.
+        paycheckRecords.first { $0.periodEnd >= period.start && $0.periodEnd <= period.end }
     }
 
     var body: some View {

@@ -42,6 +42,11 @@ struct PaycheckEntrySheet: View {
                 .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Color.primary.opacity(0.08)))
                 .padding(.horizontal)
 
+                if existing != nil {
+                    Button("Remove paycheck", role: .destructive) { delete() }
+                        .padding(.top, 4)
+                }
+
                 Spacer()
             }
             .padding(.top, 16)
@@ -75,6 +80,14 @@ struct PaycheckEntrySheet: View {
                 note: note.isEmpty ? nil : note
             )
             modelContext.insert(record)
+        }
+        Haptics.success()
+        dismiss()
+    }
+
+    private func delete() {
+        if let existing {
+            modelContext.delete(existing)
         }
         Haptics.success()
         dismiss()

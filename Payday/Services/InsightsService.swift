@@ -44,6 +44,7 @@ enum InsightsError: LocalizedError {
 enum InsightsService {
     private static let recentWindowDays = 180
     private static let minimumEntries = 5
+    private static let model = "gpt-5.6-luna"
 
     private static var apiKey: String? {
         guard let key = Bundle.main.object(forInfoDictionaryKey: "OpenAIAPIKey") as? String,
@@ -75,8 +76,10 @@ enum InsightsService {
                 "type": entry.kind.rawValue,
                 "note": entry.note ?? ""
             ]
-            // Time the tip was recorded (HH:mm), a lunch-vs-dinner proxy.
-            if let recordedAt = entry.recordedAt {
+            // Recorded time as a lunch-vs-dinner proxy — but ONLY when the tip
+            // was logged the same day it was earned. For backfilled entries the
+            // recorded time isn't the shift time, so we omit it rather than lie.
+            if let recordedAt = entry.recordedAt, calendar.isDate(recordedAt, inSameDayAs: entry.date) {
                 let comps = calendar.dateComponents([.hour, .minute], from: recordedAt)
                 if let h = comps.hour, let m = comps.minute {
                     row["logged_time"] = String(format: "%02d:%02d", h, m)
@@ -116,7 +119,7 @@ enum InsightsService {
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: [
-            "model": "gpt-4o-mini",
+            "model": model,
             "messages": [
                 ["role": "system", "content": systemPrompt],
                 ["role": "user", "content": payloadString]
