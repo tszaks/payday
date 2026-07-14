@@ -222,10 +222,14 @@ struct EntryRow: View {
     let entry: TipEntry
 
     private var subtitle: String {
-        if let note = entry.note, !note.isEmpty {
-            return "\(entry.kind.displayName) · \(note)"
+        var parts = [entry.kind.displayName]
+        if let recordedAt = entry.recordedAt {
+            parts.append(recordedAt.formatted(date: .omitted, time: .shortened))
         }
-        return entry.kind.displayName
+        if let note = entry.note, !note.isEmpty {
+            parts.append(note)
+        }
+        return parts.joined(separator: " · ")
     }
 
     var body: some View {

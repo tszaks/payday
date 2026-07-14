@@ -7,6 +7,7 @@ struct TipEntrySnapshot: Sendable {
     let amountCents: Int
     let kind: TipKind
     let note: String?
+    let recordedAt: Date?
 }
 
 /// One labeled block in the Insights screen, e.g. "Top Earning Days" + body.
@@ -67,13 +68,21 @@ enum InsightsService {
 
         let rows: [[String: Any]] = recent.map { entry in
             let weekday = calendar.component(.weekday, from: entry.date)
-            return [
+            var row: [String: Any] = [
                 "date": entry.date.formatted(.iso8601.year().month().day()),
                 "weekday": calendar.weekdaySymbols[weekday - 1],
                 "amount": Double(entry.amountCents) / 100,
                 "type": entry.kind.rawValue,
                 "note": entry.note ?? ""
             ]
+            // Time the tip was recorded (HH:mm), a lunch-vs-dinner proxy.
+            if let recordedAt = entry.recordedAt {
+                let comps = calendar.dateComponents([.hour, .minute], from: recordedAt)
+                if let h = comps.hour, let m = comps.minute {
+                    row["logged_time"] = String(format: "%02d:%02d", h, m)
+                }
+            }
+            return row
         }
 
         let payload: [String: Any] = [
@@ -86,17 +95,20 @@ enum InsightsService {
         let systemPrompt = """
         You are a data analyst helping a restaurant server understand their tip income patterns. \
         You will receive their logged tip entries as JSON (date, weekday, amount in dollars, type of \
-        either "cash" or "credit", optional note). \
+        either "cash" or "credit", optional note, and logged_time in 24-hour HH:mm when available). \
+        logged_time is roughly when the shift's tips were entered — treat times before ~16:00 as \
+        lunch/daytime and later times as dinner/evening. Some older entries may have no logged_time; \
+        just skip those for the time-of-day read. \
 
         Respond with JSON only, matching exactly this shape:
         {"sections": [{"title": "...", "body": "..."}]}
 
-        Produce 3 to 5 sections. Each title is 2 to 4 words (e.g. "Top Earning Days", "Cash vs Credit", \
-        "Trend Over Time", "What To Try Next"). Each body is 2 to 4 short sentences, plain language, \
+        Produce 4 to 5 sections. Each title is 2 to 4 words (e.g. "Top Earning Days", "Cash vs Credit", \
+        "Lunch vs Dinner", "What To Try Next"). Each body is 2 to 4 short sentences, plain language, \
         no markdown formatting, no bullet characters, no disclaimers about being an AI. Base every claim \
         on the actual data given — cite specific dates or amounts where it strengthens the point. Include \
-        one section on how their cash and credit tips compare. The last section should always be one \
-        concrete, actionable suggestion.
+        one section comparing cash vs credit, and one on lunch vs dinner earnings if logged_time data \
+        exists. The last section should always be one concrete, actionable suggestion.
         """
 
         var request = URLRequest(url: URL(string: "https://api.openai.com/v1/chat/completions")!)

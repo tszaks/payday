@@ -30,6 +30,11 @@ final class TipEntry {
     // whereas a non-optional enum would crash trying to cast nil to TipKind.
     private var kindRaw: String?
 
+    /// Wall-clock moment the tip was logged (used as a lunch-vs-dinner proxy).
+    /// Optional so legacy rows migrate cleanly to nil — they simply show no
+    /// time and are skipped by the time-of-day analytics.
+    var recordedAt: Date?
+
     /// Non-optional view of the tip kind; legacy entries with no stored
     /// value read as cash.
     var kind: TipKind {
@@ -37,11 +42,12 @@ final class TipEntry {
         set { kindRaw = newValue.rawValue }
     }
 
-    init(id: UUID = UUID(), date: Date, amountCents: Int, kind: TipKind = .cash, note: String? = nil) {
+    init(id: UUID = UUID(), date: Date, amountCents: Int, kind: TipKind = .cash, note: String? = nil, recordedAt: Date? = nil) {
         self.id = id
         self.date = date
         self.amountCents = amountCents
         self.kindRaw = kind.rawValue
         self.note = note
+        self.recordedAt = recordedAt
     }
 }

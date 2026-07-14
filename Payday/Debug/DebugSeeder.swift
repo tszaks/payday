@@ -33,36 +33,45 @@ enum DebugSeeder {
         scheduleStore.schedule = schedule
         let calculator = PayPeriodCalculator(schedule: schedule)
 
+        // hour = when the tip was recorded; dinner shifts (higher hours) tend
+        // to earn more than lunch here so the time-of-day analysis has a signal.
+        func recorded(daysAgo: Int, from anchor: Date, hour: Int, minute: Int) -> (day: Date, at: Date)? {
+            guard let day = calendar.date(byAdding: .day, value: -daysAgo, to: anchor) else { return nil }
+            let start = calendar.startOfDay(for: day)
+            let at = calendar.date(bySettingHour: hour, minute: minute, second: 0, of: start) ?? start
+            return (start, at)
+        }
+
         let currentPeriod = calculator.period(containing: today)
-        let sampleOffsets: [(daysAgo: Int, cents: Int, kind: TipKind, note: String?)] = [
-            (0, 8600, .credit, nil),
-            (0, 3200, .cash, nil),
-            (1, 11200, .credit, "double"),
-            (3, 6400, .cash, nil),
-            (4, 9800, .credit, "lunch"),
-            (6, 7300, .cash, nil)
+        let sampleOffsets: [(daysAgo: Int, cents: Int, kind: TipKind, note: String?, hour: Int, minute: Int)] = [
+            (0, 8600, .credit, nil, 19, 20),
+            (0, 3200, .cash, nil, 19, 25),
+            (1, 11200, .credit, "double", 20, 5),
+            (3, 6400, .cash, nil, 13, 10),
+            (4, 9800, .credit, "lunch", 12, 45),
+            (6, 7300, .cash, nil, 18, 40)
         ]
         for sample in sampleOffsets {
-            guard let date = calendar.date(byAdding: .day, value: -sample.daysAgo, to: today),
-                  date >= currentPeriod.start else { continue }
-            context.insert(TipEntry(date: calendar.startOfDay(for: date), amountCents: sample.cents, kind: sample.kind, note: sample.note))
+            guard let r = recorded(daysAgo: sample.daysAgo, from: today, hour: sample.hour, minute: sample.minute),
+                  r.day >= currentPeriod.start else { continue }
+            context.insert(TipEntry(date: r.day, amountCents: sample.cents, kind: sample.kind, note: sample.note, recordedAt: r.at))
         }
 
         if let priorPeriodEnd = calendar.date(byAdding: .day, value: -1, to: currentPeriod.start) {
             let priorPeriod = calculator.period(containing: priorPeriodEnd)
-            let priorOffsets: [(daysAgo: Int, cents: Int, kind: TipKind, note: String?)] = [
-                (2, 9100, .credit, nil),
-                (4, 12300, .credit, "double"),
-                (6, 8800, .cash, nil),
-                (8, 7600, .credit, "lunch"),
-                (10, 10400, .cash, nil)
+            let priorOffsets: [(daysAgo: Int, cents: Int, kind: TipKind, note: String?, hour: Int, minute: Int)] = [
+                (2, 9100, .credit, nil, 19, 15),
+                (4, 12300, .credit, "double", 20, 30),
+                (6, 8800, .cash, nil, 18, 50),
+                (8, 7600, .credit, "lunch", 12, 30),
+                (10, 10400, .cash, nil, 13, 20)
             ]
             var loggedCreditTotal = 0
             for sample in priorOffsets {
-                guard let date = calendar.date(byAdding: .day, value: -sample.daysAgo, to: priorPeriod.end),
-                      date >= priorPeriod.start, date <= priorPeriod.end else { continue }
+                guard let r = recorded(daysAgo: sample.daysAgo, from: priorPeriod.end, hour: sample.hour, minute: sample.minute),
+                      r.day >= priorPeriod.start, r.day <= priorPeriod.end else { continue }
                 if sample.kind == .credit { loggedCreditTotal += sample.cents }
-                context.insert(TipEntry(date: calendar.startOfDay(for: date), amountCents: sample.cents, kind: sample.kind, note: sample.note))
+                context.insert(TipEntry(date: r.day, amountCents: sample.cents, kind: sample.kind, note: sample.note, recordedAt: r.at))
             }
             // Paycheck reflects credit tips only (cash is walked nightly),
             // a hair under what was logged — a realistic small discrepancy.

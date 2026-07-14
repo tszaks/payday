@@ -94,7 +94,7 @@ struct InsightsView: View {
         errorMessage = nil
         isLoading = true
         defer { isLoading = false }
-        let snapshots = allEntries.map { TipEntrySnapshot(date: $0.date, amountCents: $0.amountCents, kind: $0.kind, note: $0.note) }
+        let snapshots = allEntries.map { TipEntrySnapshot(date: $0.date, amountCents: $0.amountCents, kind: $0.kind, note: $0.note, recordedAt: $0.recordedAt) }
         let frequency = scheduleStore.schedule?.frequency ?? .biweekly
         do {
             let sections = try await InsightsService.analyze(entries: snapshots, scheduleFrequency: frequency)

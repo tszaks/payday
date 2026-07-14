@@ -169,11 +169,12 @@ struct LogTipSheet: View {
 
         switch target {
         case .new:
+            let recordedAt = Date.now
             if cashCents > 0 {
-                modelContext.insert(TipEntry(date: normalizedDate, amountCents: cashCents, kind: .cash, note: trimmedNote))
+                modelContext.insert(TipEntry(date: normalizedDate, amountCents: cashCents, kind: .cash, note: trimmedNote, recordedAt: recordedAt))
             }
             if creditCents > 0 {
-                modelContext.insert(TipEntry(date: normalizedDate, amountCents: creditCents, kind: .credit, note: trimmedNote))
+                modelContext.insert(TipEntry(date: normalizedDate, amountCents: creditCents, kind: .credit, note: trimmedNote, recordedAt: recordedAt))
             }
         case .edit(let entry):
             entry.date = normalizedDate
