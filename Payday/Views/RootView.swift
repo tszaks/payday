@@ -1,10 +1,12 @@
 import SwiftUI
+import SwiftData
 
 struct RootView: View {
     @Environment(PayScheduleStore.self) private var scheduleStore
     @Environment(UserPreferencesStore.self) private var preferencesStore
     @Environment(\.scenePhase) private var scenePhase
     @State private var lockController = AppLockController()
+    @Query private var allEntries: [TipEntry]
 
     var body: some View {
         Group {
@@ -18,8 +20,13 @@ struct RootView: View {
             LockGateView(lockController: lockController)
         }
         .onChange(of: scenePhase) { _, newPhase in
-            if newPhase == .background {
+            switch newPhase {
+            case .background:
                 lockController.armIfEnabled(preferencesStore)
+            case .active:
+                SmartNudgeScheduler.reschedule(preferencesStore: preferencesStore, allEntries: allEntries)
+            default:
+                break
             }
         }
         #if DEBUG

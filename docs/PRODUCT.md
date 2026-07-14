@@ -113,17 +113,35 @@ One set of App Intents, five surfaces. In priority order:
    above are already covered without it. Worth a follow-up once entries need
    their own deep link for other reasons.
 
-## Pillar 6: Quiet Intelligence (learned, never configured)
+## Pillar 6: Quiet Intelligence (learned, never configured) — DONE
 
-- Learn work rhythm from history (which weekdays, typical log time). No
-  settings for any of this.
-- One smart nudge: if it is a usual work night and nothing is logged by ~45min
-  past their usual time, one local notification: "How was tonight?" →
-  deep-links to the log sheet. Never more than one per day; silence is a
-  valid answer; easy off-switch in Settings.
-- Smart defaults: credit-only loggers get credit focused first; an amount
-  ~2x the user's average offers the double toggle; date defaults are already
-  right.
+- Learn work rhythm from history: `StatsEngine.workRhythm(referenceDate:)`.
+  A weekday is "usual" once worked at least twice AND on at least half its
+  actual occurrences since the first logged night (so one Sunday pickup
+  shift doesn't get treated like an every-Friday routine). Typical log
+  hour is the median of same-day-logged hours (backfills excluded, same
+  honesty rule as Insights' lunch-vs-dinner split). No settings for either.
+- One smart nudge: `SmartNudgeScheduler` reschedules a single pending
+  local notification ("How was tonight?", stable identifier so there's
+  never more than one) whenever there's a natural moment to re-check — app
+  foreground, and right after every tip log from any entry point (sheet or
+  Siri). Fires today at typical-hour+45min if today's a usual night, the
+  time hasn't passed, and nothing's logged yet; otherwise the next usual
+  night that qualifies. Tapping it deep-links to the log sheet. Permission
+  is requested contextually (first real usual-night detection), never
+  upfront. On by default with an off-switch in Settings ("Remind me to
+  log") — the opposite default from the Face ID lock, since this is a
+  built-in behavior you can turn off, not an opt-in.
+- Smart defaults in LogTipSheet: a server with zero cash history and
+  ≥3 credit entries gets the credit field focused first instead of cash
+  (and the keyboard's "Next" button now goes whichever direction isn't
+  focused, not just cash→credit, so it still makes sense for them). An
+  amount ≥2x the user's average per-shift auto-enables the double toggle —
+  a default, not a lock: touching the toggle yourself always wins from
+  then on. Date defaults were already right, per the original note.
+
+7/7 items complete. See the final summary for commit hashes and every
+deviation across the whole roadmap.
 
 ## Pillar 7: Native Behaviors (act like Apple)
 

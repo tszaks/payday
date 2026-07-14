@@ -28,6 +28,7 @@ final class UserPreferencesStore {
     private static let nameKey = "com.szakacsmedia.payday.firstName"
     private static let appearanceKey = "com.szakacsmedia.payday.appearance"
     private static let faceIDLockKey = "com.szakacsmedia.payday.faceIDLock"
+    private static let smartNudgeKey = "com.szakacsmedia.payday.smartNudge"
     private let defaults: UserDefaults
 
     var firstName: String? {
@@ -44,12 +45,21 @@ final class UserPreferencesStore {
         didSet { defaults.set(isFaceIDLockEnabled, forKey: Self.faceIDLockKey) }
     }
 
+    /// On by default (unlike the lock) — this is a built-in behavior with
+    /// an easy off-switch, not an opt-in. UserDefaults has no way to
+    /// distinguish "never set" from "explicitly false," so a missing key
+    /// reads as true rather than the usual Bool absence default of false.
+    var isSmartNudgeEnabled: Bool {
+        didSet { defaults.set(isSmartNudgeEnabled, forKey: Self.smartNudgeKey) }
+    }
+
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         self.firstName = defaults.string(forKey: Self.nameKey)
         self.appearance = defaults.string(forKey: Self.appearanceKey)
             .flatMap(AppAppearance.init(rawValue:)) ?? .system
         self.isFaceIDLockEnabled = defaults.bool(forKey: Self.faceIDLockKey)
+        self.isSmartNudgeEnabled = defaults.object(forKey: Self.smartNudgeKey) == nil ? true : defaults.bool(forKey: Self.smartNudgeKey)
     }
 
     private func persistName() {

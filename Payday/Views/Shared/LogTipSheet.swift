@@ -15,6 +15,7 @@ struct LogTipSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
     @Environment(PayScheduleStore.self) private var scheduleStore
+    @Environment(UserPreferencesStore.self) private var preferencesStore
     @Query(sort: \TipEntry.date, order: .reverse) private var allEntries: [TipEntry]
 
     let target: TipEntrySheetTarget
@@ -32,6 +33,7 @@ struct LogTipSheet: View {
     @State private var date: Date
     @State private var note: String
     @State private var isDouble: Bool
+    @State private var isDoubleManuallySet = false
     @State private var showDeleteConfirmation = false
     @State private var revealResult: RevealResult?
 
@@ -58,6 +60,30 @@ struct LogTipSheet: View {
 
     private var canSave: Bool {
         cashCents > 0 || creditCents > 0
+    }
+
+    /// A server who's never once logged cash and has enough credit history
+    /// to call it a pattern gets the credit field focused first instead of
+    /// the usual cash-first default.
+    private var prefersCreditFirst: Bool {
+        let hasCash = allEntries.contains { $0.kind == .cash }
+        let creditCount = allEntries.filter { $0.kind == .credit }.count
+        return !hasCash && creditCount >= 3
+    }
+
+    private var averagePerShiftCents: Int? {
+        let nights = StatsEngine(records: allEntries.map(TipRecord.init)).nightlyTotals()
+        guard !nights.isEmpty else { return nil }
+        return nights.reduce(0) { $0 + $1.cents } / nights.count
+    }
+
+    /// A default, not a lock: only suggests the toggle until the user has
+    /// touched it themselves, at which point their choice always wins.
+    private func maybeSuggestDouble() {
+        guard !isDoubleManuallySet, let average = averagePerShiftCents, average > 0 else { return }
+        if cashCents + creditCents >= average * 2 {
+            isDouble = true
+        }
     }
 
     var body: some View {
@@ -120,6 +146,8 @@ struct LogTipSheet: View {
             .onChange(of: date) { _, _ in liveSaveEdit() }
             .onChange(of: note) { _, _ in liveSaveEdit() }
             .onChange(of: isDouble) { _, _ in liveSaveEdit() }
+            .onChange(of: cashCents) { _, _ in maybeSuggestDouble() }
+            .onChange(of: creditCents) { _, _ in maybeSuggestDouble() }
         }
         // Fixed height for the common case, plus .large as an escape hatch so
         // content is never clipped on smaller iPhones with the keypad up.
@@ -157,16 +185,18 @@ struct LogTipSheet: View {
             }
 
             VStack(spacing: 12) {
-                CurrencyAmountRow(label: "Cash", cents: $cashCents, field: .cash, focusedField: $focusedCurrencyField, autoFocus: true)
-                CurrencyAmountRow(label: "Credit", cents: $creditCents, field: .credit, focusedField: $focusedCurrencyField)
+                CurrencyAmountRow(label: "Cash", cents: $cashCents, field: .cash, focusedField: $focusedCurrencyField, autoFocus: !prefersCreditFirst)
+                CurrencyAmountRow(label: "Credit", cents: $creditCents, field: .credit, focusedField: $focusedCurrencyField, autoFocus: prefersCreditFirst)
             }
             .padding(.horizontal)
         }
         .toolbar {
-            if focusedCurrencyField == .cash {
+            if let focusedCurrencyField {
                 ToolbarItemGroup(placement: .keyboard) {
                     Spacer()
-                    Button("Next") { focusedCurrencyField = .credit }
+                    Button("Next") {
+                        self.focusedCurrencyField = focusedCurrencyField == .cash ? .credit : .cash
+                    }
                 }
             }
         }
@@ -208,8 +238,11 @@ struct LogTipSheet: View {
             }
             .padding()
             Divider()
-            Toggle("Double shift", isOn: $isDouble)
-                .padding()
+            Toggle("Double shift", isOn: Binding(
+                get: { isDouble },
+                set: { isDouble = $0; isDoubleManuallySet = true }
+            ))
+            .padding()
         }
     }
 
@@ -240,13 +273,23 @@ struct LogTipSheet: View {
         let period = calculator.period(containing: normalizedDate)
         let reveal = statsEngine.reveal(forNightAt: normalizedDate, cents: totalCents, period: period)
 
+        var newEntries: [TipEntry] = []
         if cashCents > 0 {
-            modelContext.insert(TipEntry(date: normalizedDate, amountCents: cashCents, kind: .cash, note: trimmedNote, recordedAt: recordedAt, isDouble: isDouble))
+            let entry = TipEntry(date: normalizedDate, amountCents: cashCents, kind: .cash, note: trimmedNote, recordedAt: recordedAt, isDouble: isDouble)
+            modelContext.insert(entry)
+            newEntries.append(entry)
         }
         if creditCents > 0 {
-            modelContext.insert(TipEntry(date: normalizedDate, amountCents: creditCents, kind: .credit, note: trimmedNote, recordedAt: recordedAt, isDouble: isDouble))
+            let entry = TipEntry(date: normalizedDate, amountCents: creditCents, kind: .credit, note: trimmedNote, recordedAt: recordedAt, isDouble: isDouble)
+            modelContext.insert(entry)
+            newEntries.append(entry)
         }
         revealResult = reveal
+        // Tonight is logged — cancel tonight's nudge and queue the next
+        // usual night's instead. allEntries' @Query hasn't necessarily
+        // refreshed within this same call, so the just-inserted entries
+        // are appended explicitly rather than relied on to already be in it.
+        SmartNudgeScheduler.reschedule(preferencesStore: preferencesStore, allEntries: allEntries + newEntries)
     }
 
     /// Edit flow: every field change writes straight through to the entry.

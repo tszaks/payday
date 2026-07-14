@@ -154,6 +154,87 @@ struct PaceTests {
     }
 }
 
+@Suite("Work rhythm")
+struct WorkRhythmTests {
+    @Test("a weekday worked most of its occurrences counts as usual")
+    func routineWeekdayIsUsual() {
+        // Same weekday every 7 days: worked day 3, 10, 17; referenceDate on
+        // day 24 (a 4th occurrence never worked) - 3/4 occurrences, well
+        // past both the count and frequency floors.
+        let records = [
+            record(2026, 7, 3, cents: 5000),
+            record(2026, 7, 10, cents: 5000),
+            record(2026, 7, 17, cents: 5000)
+        ]
+        let engine = StatsEngine(records: records)
+        let rhythm = engine.workRhythm(referenceDate: date(2026, 7, 24))
+        let workedWeekday = Calendar.current.component(.weekday, from: date(2026, 7, 3))
+        #expect(rhythm.usualWeekdays.contains(workedWeekday))
+    }
+
+    @Test("a single one-off shift never counts as usual, no matter the frequency")
+    func oneOffShiftIsNotUsual() {
+        let records = [record(2026, 7, 3, cents: 5000)]
+        let engine = StatsEngine(records: records)
+        let rhythm = engine.workRhythm(referenceDate: date(2026, 7, 3))
+        #expect(rhythm.usualWeekdays.isEmpty)
+    }
+
+    @Test("occasional pickup shifts on a weekday stay below the frequency floor")
+    func occasionalPickupIsNotUsual() {
+        // Worked 2 of 5 occurrences (40%) - clears the count floor but not
+        // the 50% frequency floor.
+        let records = [
+            record(2026, 7, 3, cents: 5000),
+            record(2026, 7, 24, cents: 5000)
+        ]
+        let engine = StatsEngine(records: records)
+        let rhythm = engine.workRhythm(referenceDate: date(2026, 7, 31))
+        let weekday = Calendar.current.component(.weekday, from: date(2026, 7, 3))
+        #expect(!rhythm.usualWeekdays.contains(weekday))
+    }
+
+    @Test("typical log hour is the median of same-day-logged hours")
+    func typicalLogHourIsMedian() {
+        let records = [
+            record(2026, 7, 1, cents: 5000, recordedHour: 17),
+            record(2026, 7, 2, cents: 5000, recordedHour: 18),
+            record(2026, 7, 3, cents: 5000, recordedHour: 19)
+        ]
+        let engine = StatsEngine(records: records)
+        #expect(engine.workRhythm(referenceDate: date(2026, 7, 3)).typicalLogHour == 18)
+    }
+
+    @Test("backfilled entries never contribute to typical log hour, even with enough of them")
+    func backfilledEntriesExcludedFromTypicalHour() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone.current
+        let backfilled = TipRecord(
+            date: date(2026, 7, 1),
+            amountCents: 5000,
+            kind: .cash,
+            isDouble: false,
+            recordedAt: calendar.date(bySettingHour: 12, minute: 0, second: 0, of: date(2026, 7, 5))
+        )
+        let records = [
+            backfilled, backfilled, backfilled, backfilled,
+            record(2026, 7, 2, cents: 5000, recordedHour: 18),
+            record(2026, 7, 3, cents: 5000, recordedHour: 18)
+        ]
+        let engine = StatsEngine(records: records)
+        // Only 2 genuine same-day-logged records - below the minimum of 3.
+        #expect(engine.workRhythm(referenceDate: date(2026, 7, 5)).typicalLogHour == nil)
+    }
+
+    @Test("no history yet means no usual weekdays and no typical hour")
+    func noHistoryYieldsEmptyRhythm() {
+        let engine = StatsEngine(records: [])
+        let rhythm = engine.workRhythm(referenceDate: date(2026, 7, 3))
+        #expect(rhythm.usualWeekdays.isEmpty)
+        #expect(rhythm.typicalLogHour == nil)
+    }
+}
+
 @Suite("Anomalies")
 struct AnomalyTests {
     @Test("first shift of a period has no prior entries in that period")
