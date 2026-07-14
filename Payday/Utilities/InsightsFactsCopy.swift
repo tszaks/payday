@@ -7,7 +7,7 @@ import Foundation
 /// same spirit as RevealCopy.
 ///
 /// Kept out of StatsEngine.swift (App-target only, unlike that file) since
-/// it depends on InsightSection, which lives next to the FoundationModels
+/// it depends on InsightSection, which lives next to the OpenAI-calling
 /// code in InsightsService.swift — the widget extension shares the engine
 /// but never needs Insights.
 enum InsightsFactsCopy {
