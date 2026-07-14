@@ -1,11 +1,12 @@
 import SwiftUI
 import SwiftData
 
-/// The one screen in the app that reaches the network. MainTabView also
-/// triggers a silent auto-refresh roughly once a week (see its
-/// autoAnalyzeIfDue) — this view's own "Analyze Again" is the manual path,
-/// rate-limited below to protect the baked-in API key from being spammed.
-/// The last result is cached in InsightsStore so it survives app relaunch.
+/// Insights runs entirely on-device: the stats engine computes the facts,
+/// and (when supported) Foundation Models narrates them — no network call,
+/// no API key, nothing ever leaves the phone. Regeneration is driven by
+/// .task(id:) re-firing whenever the underlying facts actually change, not
+/// a manual rate limit or a time-based schedule — on-device generation is
+/// cheap enough that "always current" is just the default.
 struct InsightsView: View {
     @Environment(PayScheduleStore.self) private var scheduleStore
     @Environment(InsightsStore.self) private var insightsStore
@@ -13,33 +14,21 @@ struct InsightsView: View {
 
     @State private var isLoading = false
     @State private var errorMessage: String?
-    @State private var now = Date.now
 
-    /// Manual re-analysis is throttled independently of the weekly auto-run
-    /// — this guards against someone tapping the button repeatedly, not
-    /// against the scheduled refresh.
-    private static let minimumManualInterval: TimeInterval = 60 * 60
-
-    private var nextManualAnalysisAllowedAt: Date? {
-        insightsStore.snapshot?.generatedAt.addingTimeInterval(Self.minimumManualInterval)
+    private var facts: InsightsFacts? {
+        StatsEngine(records: allEntries.map(TipRecord.init)).insightsFacts()
     }
 
-    private var canAnalyzeManually: Bool {
-        guard let nextAllowed = nextManualAnalysisAllowedAt else { return true }
-        return now >= nextAllowed
+    private var isModelAvailable: Bool {
+        if case .available = InsightsService.availability { return true }
+        return false
     }
 
     var body: some View {
         NavigationStack {
             Group {
-                if let snapshot = insightsStore.snapshot {
-                    // Calm over noisy: re-analyzing never evicts what's already
-                    // on screen. Progress shows inline in the footer instead.
-                    resultList(snapshot)
-                } else if isLoading {
-                    // Nothing to preserve on a first-ever analysis.
-                    ProgressView("Analyzing your tips…")
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                if let facts {
+                    resultList(facts)
                 } else {
                     ScrollView {
                         emptyState
@@ -50,27 +39,22 @@ struct InsightsView: View {
             }
             .background(PaydayColor.background)
             .navigationTitle("Insights")
-            .onAppear { now = .now }
-            #if DEBUG
-            .onAppear {
-                if ProcessInfo.processInfo.arguments.contains("-RunInsightsAnalysis") {
-                    Task { await analyze() }
-                }
+            .task(id: facts) {
+                guard isModelAvailable, let facts, facts != insightsStore.snapshot?.facts else { return }
+                await analyze(facts: facts)
             }
-            #endif
         }
     }
 
-    private func resultList(_ snapshot: InsightsSnapshot) -> some View {
+    private func resultList(_ facts: InsightsFacts) -> some View {
         List {
-            Section {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Last updated \(snapshot.generatedAt.formatted(.dateTime.month(.abbreviated).day().hour().minute()))")
-                        .font(PaydayFont.caption)
-                        .foregroundStyle(PaydayColor.textSecondary)
-                    Text("Refreshes automatically about once a week — tap below for a fresh read anytime.")
-                        .font(PaydayFont.caption2)
-                        .foregroundStyle(PaydayColor.textSecondary)
+            if isModelAvailable {
+                Section {
+                    if let generatedAt = insightsStore.snapshot?.generatedAt {
+                        Text("Last updated \(generatedAt.formatted(.dateTime.month(.abbreviated).day().hour().minute()))")
+                            .font(PaydayFont.caption)
+                            .foregroundStyle(PaydayColor.textSecondary)
+                    }
 
                     if isLoading {
                         HStack(spacing: 8) {
@@ -81,17 +65,10 @@ struct InsightsView: View {
                         }
                     } else {
                         Button("Analyze Again") {
-                            Task { await analyze() }
+                            Task { await analyze(facts: facts) }
                         }
                         .buttonStyle(.glassProminent)
                         .tint(.accentColor)
-                        .disabled(!canAnalyzeManually)
-
-                        if !canAnalyzeManually, let nextAllowed = nextManualAnalysisAllowedAt {
-                            Text("You can analyze again at \(nextAllowed.formatted(date: .omitted, time: .shortened)).")
-                                .font(PaydayFont.caption2)
-                                .foregroundStyle(PaydayColor.textSecondary)
-                        }
 
                         if let errorMessage {
                             Text(errorMessage)
@@ -100,11 +77,10 @@ struct InsightsView: View {
                         }
                     }
                 }
-                .padding(.vertical, 4)
+                .listRowBackground(PaydayColor.background)
             }
-            .listRowBackground(PaydayColor.background)
 
-            ForEach(snapshot.sections) { section in
+            ForEach(sections(for: facts)) { section in
                 Section(section.title) {
                     Text(section.body)
                         .font(PaydayFont.bodyRegular)
@@ -113,9 +89,28 @@ struct InsightsView: View {
                 }
                 .listRowBackground(PaydayColor.background)
             }
+
+            if !isModelAvailable {
+                Section {
+                    Text("On-device analysis needs Apple Intelligence. These are your exact numbers, just not narrated.")
+                        .font(PaydayFont.caption2)
+                        .foregroundStyle(PaydayColor.textSecondary)
+                }
+                .listRowBackground(PaydayColor.background)
+            }
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
+    }
+
+    /// The narrated sections when the cached narration still matches
+    /// tonight's facts; the deterministic facts-only sections otherwise
+    /// (covers both "unsupported hardware" and "narration still pending").
+    private func sections(for facts: InsightsFacts) -> [InsightSection] {
+        if let snapshot = insightsStore.snapshot, snapshot.facts == facts {
+            return snapshot.sections
+        }
+        return InsightsFactsCopy.sections(for: facts)
     }
 
     private var emptyState: some View {
@@ -126,43 +121,22 @@ struct InsightsView: View {
             Text("See where and when you earn the most.")
                 .font(PaydayFont.headline)
                 .foregroundStyle(PaydayColor.textPrimary)
-            Text("Sends your logged tips — dates, amounts, cash/credit type, double-shift flag, and any notes — to OpenAI for analysis. Nothing else leaves your phone.")
+            Text("Log \(StatsEngine.minimumShiftsForInsights) shifts to unlock this. Everything is computed right on your phone — nothing ever leaves it.")
                 .font(PaydayFont.caption)
                 .foregroundStyle(PaydayColor.textSecondary)
                 .multilineTextAlignment(.center)
-            Text("Once you've got enough logged, this refreshes automatically about once a week.")
-                .font(PaydayFont.caption2)
-                .foregroundStyle(PaydayColor.textSecondary)
-                .multilineTextAlignment(.center)
-            if let errorMessage {
-                Text(errorMessage)
-                    .font(PaydayFont.caption)
-                    .foregroundStyle(PaydayColor.error)
-                    .multilineTextAlignment(.center)
-            }
-            Button("Analyze My Tips") {
-                Task { await analyze() }
-            }
-            .buttonStyle(.glassProminent)
-            .tint(.accentColor)
         }
         .padding(.top, 40)
     }
 
-    /// The cooldown check has to live here, not just on the button's
-    /// .disabled(), or any caller that skips the button (the debug launch
-    /// flag did exactly this) can still hit the network on every launch.
-    private func analyze() async {
-        now = .now
-        guard canAnalyzeManually else { return }
+    private func analyze(facts: InsightsFacts) async {
         errorMessage = nil
         isLoading = true
         defer { isLoading = false }
-        let snapshots = allEntries.map { TipEntrySnapshot(date: $0.date, amountCents: $0.amountCents, kind: $0.kind, note: $0.note, recordedAt: $0.recordedAt, isDouble: $0.isDouble) }
         let frequency = scheduleStore.schedule?.frequency ?? .biweekly
         do {
-            let sections = try await InsightsService.analyze(entries: snapshots, scheduleFrequency: frequency)
-            insightsStore.snapshot = InsightsSnapshot(sections: sections, generatedAt: .now)
+            let sections = try await InsightsService.narrate(facts: facts, scheduleFrequency: frequency)
+            insightsStore.snapshot = InsightsSnapshot(sections: sections, generatedAt: .now, facts: facts)
         } catch {
             errorMessage = error.localizedDescription
         }

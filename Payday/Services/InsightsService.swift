@@ -1,174 +1,111 @@
 import Foundation
-
-/// Plain, Sendable snapshot of a TipEntry — SwiftData model objects aren't
-/// Sendable, so this is what actually crosses the await boundary below.
-struct TipEntrySnapshot: Sendable {
-    let date: Date
-    let amountCents: Int
-    let kind: TipKind
-    let note: String?
-    let recordedAt: Date?
-    let isDouble: Bool
-}
+import FoundationModels
 
 /// One labeled block in the Insights screen, e.g. "Top Earning Days" + body.
-struct InsightSection: Codable, Identifiable, Sendable {
+/// @Generable so Foundation Models can produce this shape directly via
+/// guided generation — no hand-parsed JSON, no schema drift risk.
+@Generable
+struct InsightSection: Codable, Identifiable, Equatable, Sendable {
     let title: String
     let body: String
     var id: String { title }
 }
 
-private struct InsightsPayload: Decodable {
+@Generable
+private struct InsightsNarration: Equatable, Sendable {
     let sections: [InsightSection]
 }
 
 enum InsightsError: LocalizedError {
-    case missingAPIKey
     case notEnoughData
-    case network(String)
-    case api(String)
+    case generationFailed(String)
 
     var errorDescription: String? {
         switch self {
-        case .missingAPIKey: "Insights isn't configured for this build."
         case .notEnoughData: "Log a few more shifts before analyzing patterns."
-        case .network(let message): "Network error: \(message)"
-        case .api(let message): message
+        case .generationFailed(let message): message
         }
     }
 }
 
-/// The one place in the app that talks to the network. Opt-in only — this
-/// runs solely when the user taps "Analyze My Tips," never automatically.
-/// Uses a single app-wide key baked in at build time (see Secrets.local.xcconfig,
-/// gitignored) — there is no per-user "bring your own key" option.
+/// Narrates facts the stats engine already computed — never does arithmetic
+/// itself, never sees raw entries. Runs entirely on-device via Apple's
+/// Foundation Models framework: no network call, no API key, nothing
+/// leaves the phone. Unsupported hardware is handled by the caller
+/// (InsightsView shows InsightsFactsCopy's deterministic sections instead
+/// of calling this at all — the facts "must stand alone anyway").
 enum InsightsService {
-    private static let recentWindowDays = 180
-    private static let minimumEntries = 5
-    private static let model = "gpt-5.6-luna"
-
-    private static var apiKey: String? {
-        guard let key = Bundle.main.object(forInfoDictionaryKey: "OpenAIAPIKey") as? String,
-              !key.isEmpty
-        else { return nil }
-        return key
+    static var availability: SystemLanguageModel.Availability {
+        SystemLanguageModel.default.availability
     }
 
-    static func analyze(entries: [TipEntrySnapshot], scheduleFrequency: PayFrequency) async throws -> [InsightSection] {
-        guard let apiKey else {
-            throw InsightsError.missingAPIKey
+    static func narrate(facts: InsightsFacts, scheduleFrequency: PayFrequency) async throws -> [InsightSection] {
+        let session = LanguageModelSession {
+            """
+            You are a calm, precise analyst summarizing a restaurant server's tip data for them in \
+            plain conversational sentences - not a cheerleader, not a hype coach. Flat, neutral, \
+            matter-of-fact delivery, the way a bank statement summary reads, just in plain English \
+            instead of financial jargon. \
+
+            Absolute rule, no exceptions: never use an exclamation point. Never say "great job," \
+            "nice work," "solid," "awesome," or express excitement or praise of any kind. State \
+            each fact plainly and move on. If you catch yourself about to end a sentence with "!", \
+            end it with "." instead. \
+
+            You'll be given tip facts already computed - dates, dollar amounts, and counts. Never \
+            invent a number that wasn't given to you, and never do any math of your own; just \
+            narrate the facts you're handed. \
+
+            You'll always get an OVERALL fact and a CASH VS CREDIT fact - always turn each into \
+            its own section. TOP EARNING DAYS, LUNCH VS DINNER, and DOUBLES VS SOLO facts are only \
+            included when there's real data for them - turn each into its own section only when \
+            present, in the order given. Ignore the pay frequency line entirely when deciding what \
+            sections to write - it's background context for your own understanding, never a topic \
+            of its own. After all given facts are covered, add exactly one final section that's a \
+            concrete, actionable suggestion based on them - practical, not motivational. \
+
+            Each title is 2 to 4 words (e.g. "Overall Snapshot", "Top Earning Days", "Cash vs \
+            Credit", "Lunch vs Dinner", "Doubles vs Solo", "What To Try Next"). Each body is 2 to \
+            4 short sentences, no markdown formatting, no bullet characters, no disclaimers about \
+            being an AI. \
+
+            Never say "entries," "data points," "dataset," or "logged" - if you need to name the \
+            unit, say "shifts" or "days," but usually you don't need to name it at all: just talk \
+            about the money. Say "you made $488 from credit tips versus $288 from cash" instead of \
+            "credit tips totaled $488 across five entries."
+            """
         }
-        let calendar = Calendar.current
-        let cutoff = calendar.date(byAdding: .day, value: -recentWindowDays, to: .now) ?? .distantPast
-        let recent = entries.filter { $0.date >= cutoff }.sorted { $0.date < $1.date }
 
-        // Guard on the entries we'll actually send — checking the raw count
-        // before filtering would let an all-old dataset send an empty payload.
-        guard recent.count >= minimumEntries else {
-            throw InsightsError.notEnoughData
-        }
-
-        let rows: [[String: Any]] = recent.map { entry in
-            let weekday = calendar.component(.weekday, from: entry.date)
-            var row: [String: Any] = [
-                "date": entry.date.formatted(.iso8601.year().month().day()),
-                "weekday": calendar.weekdaySymbols[weekday - 1],
-                "amount": Double(entry.amountCents) / 100,
-                "type": entry.kind.rawValue,
-                "note": entry.note ?? "",
-                "double_shift": entry.isDouble
-            ]
-            // Recorded time as a lunch-vs-dinner proxy — but ONLY when the tip
-            // was logged the same day it was earned. For backfilled entries the
-            // recorded time isn't the shift time, so we omit it rather than lie.
-            if let recordedAt = entry.recordedAt, calendar.isDate(recordedAt, inSameDayAs: entry.date) {
-                let comps = calendar.dateComponents([.hour, .minute], from: recordedAt)
-                if let h = comps.hour, let m = comps.minute {
-                    row["logged_time"] = String(format: "%02d:%02d", h, m)
-                }
-            }
-            return row
-        }
-
-        let payload: [String: Any] = [
-            "pay_frequency": scheduleFrequency.displayName,
-            "shifts": rows
-        ]
-        let payloadData = try JSONSerialization.data(withJSONObject: payload)
-        let payloadString = String(data: payloadData, encoding: .utf8) ?? "{}"
-
-        let systemPrompt = """
-        You are texting a restaurant server a quick, friendly read on their tip money. \
-        You will receive their logged tips as JSON (date, weekday, amount in dollars, type of \
-        either "cash" or "credit", optional note, double_shift true/false, and logged_time in \
-        24-hour HH:mm when available). logged_time is roughly when that shift's tips were entered \
-        — treat times before ~16:00 as lunch/daytime and later times as dinner/evening. Some older \
-        shifts may have no logged_time; just skip those for the time-of-day read. \
-
-        Respond with JSON only, matching exactly this shape:
-        {"sections": [{"title": "...", "body": "..."}]}
-
-        Produce 4 to 6 sections. Each title is 2 to 4 words (e.g. "Top Earning Days", "Cash vs Credit", \
-        "Lunch vs Dinner", "Doubles vs Solo", "What To Try Next"). Each body is 2 to 4 short sentences, \
-        plain language, no markdown formatting, no bullet characters, no disclaimers about being an AI. \
-
-        Talk like a person, not a spreadsheet. Never say "entries," "data points," "dataset," or \
-        "logged" — if you need to name the unit, say "shifts" or "days," but usually you don't need \
-        to name it at all: just talk about the money. Say "you made $488 from credit tips versus \
-        $288 from cash" instead of "credit tips totaled $488 across five entries." Base every claim \
-        on the actual data given — cite specific dates or amounts where it strengthens the point. Include \
-        one section comparing cash vs credit, one on lunch vs dinner earnings if logged_time data \
-        exists, and one comparing double shifts against solo shifts (e.g. average per double vs average \
-        per solo shift) only if the data actually contains at least one double_shift true and one false. \
-        The last section should always be one concrete, actionable suggestion.
-        """
-
-        var request = URLRequest(url: URL(string: "https://api.openai.com/v1/chat/completions")!)
-        request.httpMethod = "POST"
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: [
-            "model": model,
-            "messages": [
-                ["role": "system", "content": systemPrompt],
-                ["role": "user", "content": payloadString]
-            ],
-            // gpt-5.6-luna only supports the default temperature (1) — omit
-            // the parameter entirely rather than send an unsupported value.
-            "response_format": ["type": "json_object"]
-        ])
-
-        let data: Data
-        let response: URLResponse
+        let prompt = promptDescription(for: facts, scheduleFrequency: scheduleFrequency)
         do {
-            (data, response) = try await URLSession.shared.data(for: request)
+            let response = try await session.respond(to: prompt, generating: InsightsNarration.self)
+            guard !response.content.sections.isEmpty else {
+                throw InsightsError.generationFailed("Couldn't read the analysis.")
+            }
+            return response.content.sections
+        } catch let error as InsightsError {
+            throw error
         } catch {
-            throw InsightsError.network(error.localizedDescription)
+            throw InsightsError.generationFailed(error.localizedDescription)
         }
+    }
 
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw InsightsError.network("No response from server.")
+    private static func promptDescription(for facts: InsightsFacts, scheduleFrequency: PayFrequency) -> String {
+        var lines = [
+            "BACKGROUND CONTEXT, NOT A SECTION - pay frequency: \(scheduleFrequency.displayName).",
+            "OVERALL: \(Money.string(fromCents: facts.totalCents)) across \(facts.shiftCount) shifts, averaging \(Money.string(fromCents: facts.averagePerShiftCents)) per shift.",
+        ]
+        if !facts.topDays.isEmpty {
+            let days = facts.topDays.map { "\(Money.string(fromCents: $0.cents)) on \($0.date.formatted(.dateTime.month(.wide).day()))" }
+            lines.append("TOP EARNING DAYS: " + days.joined(separator: ", ") + ".")
         }
-        guard httpResponse.statusCode == 200 else {
-            let message = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])
-                .flatMap { $0["error"] as? [String: Any] }
-                .flatMap { $0["message"] as? String } ?? "Request failed (\(httpResponse.statusCode))."
-            throw InsightsError.api(message)
+        lines.append("CASH VS CREDIT: \(Money.string(fromCents: facts.cashCents)) cash, \(Money.string(fromCents: facts.creditCents)) credit.")
+        if let lunchDinner = facts.lunchDinner {
+            lines.append("LUNCH VS DINNER: lunch \(Money.string(fromCents: lunchDinner.lunchCents)) across \(lunchDinner.lunchShiftCount) shifts, dinner \(Money.string(fromCents: lunchDinner.dinnerCents)) across \(lunchDinner.dinnerShiftCount) shifts.")
         }
-
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let choices = json["choices"] as? [[String: Any]],
-              let first = choices.first,
-              let message = first["message"] as? [String: Any],
-              let content = message["content"] as? String,
-              let contentData = content.data(using: .utf8)
-        else {
-            throw InsightsError.api("Couldn't read the response.")
+        if let doublesSolo = facts.doublesSolo {
+            lines.append("DOUBLES VS SOLO: doubles averaged \(Money.string(fromCents: doublesSolo.doubleAverageCents)) across \(doublesSolo.doubleCount) shifts, solo averaged \(Money.string(fromCents: doublesSolo.soloAverageCents)) across \(doublesSolo.soloCount) shifts.")
         }
-
-        guard let parsed = try? JSONDecoder().decode(InsightsPayload.self, from: contentData), !parsed.sections.isEmpty else {
-            throw InsightsError.api("Couldn't parse the analysis.")
-        }
-        return parsed.sections
+        return lines.joined(separator: "\n")
     }
 }

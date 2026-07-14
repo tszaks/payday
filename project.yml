@@ -46,7 +46,6 @@ targets:
       path: Generated/Payday-Info.plist
       properties:
         ITSAppUsesNonExemptEncryption: false
-        OpenAIAPIKey: $(OPENAI_API_KEY)
 
   PaydayTests:
     type: bundle.unit-test

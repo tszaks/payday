@@ -8,11 +8,22 @@ struct TipRecord: Sendable, Hashable {
     let amountCents: Int
     let kind: TipKind
     let isDouble: Bool
+    /// When this was logged — used only as a lunch-vs-dinner proxy, and only
+    /// on the same calendar day it was earned (see InsightsFacts).
+    let recordedAt: Date?
+
+    init(date: Date, amountCents: Int, kind: TipKind, isDouble: Bool, recordedAt: Date? = nil) {
+        self.date = date
+        self.amountCents = amountCents
+        self.kind = kind
+        self.isDouble = isDouble
+        self.recordedAt = recordedAt
+    }
 }
 
 extension TipRecord {
     init(entry: TipEntry) {
-        self.init(date: entry.date, amountCents: entry.amountCents, kind: entry.kind, isDouble: entry.isDouble)
+        self.init(date: entry.date, amountCents: entry.amountCents, kind: entry.kind, isDouble: entry.isDouble, recordedAt: entry.recordedAt)
     }
 }
 
@@ -166,6 +177,115 @@ struct StatsEngine {
         let priorComparable = priorPeriodComparableTotal(currentPeriod: currentPeriod, priorPeriod: priorPeriod, asOf: date)
         return currentTotal - priorComparable
     }
+
+    // MARK: Insights facts
+
+    static let minimumShiftsForInsights = 5
+    static let insightsRecentWindowDays = 180
+
+    /// Every number Insights is allowed to talk about — computed here, not
+    /// by the model. "The stats engine computes facts; the model narrates
+    /// them. Never let the model do arithmetic." Nil when there isn't
+    /// enough recent history yet.
+    func insightsFacts(referenceDate: Date = .now) -> InsightsFacts? {
+        let cutoff = calendar.date(byAdding: .day, value: -Self.insightsRecentWindowDays, to: referenceDate) ?? .distantPast
+        let recent = records.filter { $0.date >= cutoff }
+        let nights = Dictionary(grouping: recent) { calendar.startOfDay(for: $0.date) }
+            .map { (date: $0.key, cents: $0.value.reduce(0) { $0 + $1.amountCents }) }
+            .sorted { $0.date < $1.date }
+
+        guard nights.count >= Self.minimumShiftsForInsights else { return nil }
+
+        let totalCents = nights.reduce(0) { $0 + $1.cents }
+        let topDays = nights.sorted { $0.cents > $1.cents }.prefix(3).map { InsightsFacts.DayAmount(date: $0.date, cents: $0.cents) }
+        let cashCents = recent.filter { $0.kind == .cash }.reduce(0) { $0 + $1.amountCents }
+        let creditCents = recent.filter { $0.kind == .credit }.reduce(0) { $0 + $1.amountCents }
+
+        return InsightsFacts(
+            totalCents: totalCents,
+            shiftCount: nights.count,
+            averagePerShiftCents: totalCents / nights.count,
+            topDays: Array(topDays),
+            cashCents: cashCents,
+            creditCents: creditCents,
+            lunchDinner: lunchDinnerFacts(from: recent),
+            doublesSolo: doublesSoloFacts(from: nights, records: recent)
+        )
+    }
+
+    /// Same honesty rule the reveal and old Insights both used: a logged
+    /// time only means something as a lunch-vs-dinner proxy when the tip
+    /// was recorded the same day it was earned — a backfilled entry's
+    /// logged time isn't the shift time, so it's excluded rather than lied
+    /// about.
+    private func lunchDinnerFacts(from recent: [TipRecord]) -> LunchDinnerFacts? {
+        let sameDayLogged = recent.filter { record in
+            guard let recordedAt = record.recordedAt else { return false }
+            return calendar.isDate(recordedAt, inSameDayAs: record.date)
+        }
+        guard sameDayLogged.count >= Self.minimumShiftsForInsights else { return nil }
+
+        var lunchCents = 0, lunchCount = 0, dinnerCents = 0, dinnerCount = 0
+        for record in sameDayLogged {
+            let hour = calendar.component(.hour, from: record.recordedAt!)
+            if hour < 16 {
+                lunchCents += record.amountCents
+                lunchCount += 1
+            } else {
+                dinnerCents += record.amountCents
+                dinnerCount += 1
+            }
+        }
+        guard lunchCount > 0, dinnerCount > 0 else { return nil }
+        return LunchDinnerFacts(lunchCents: lunchCents, lunchShiftCount: lunchCount, dinnerCents: dinnerCents, dinnerShiftCount: dinnerCount)
+    }
+
+    private func doublesSoloFacts(from nights: [(date: Date, cents: Int)], records: [TipRecord]) -> DoublesSoloFacts? {
+        let doubleDates = Set(records.filter(\.isDouble).map { calendar.startOfDay(for: $0.date) })
+        guard !doubleDates.isEmpty else { return nil }
+        let doubleNights = nights.filter { doubleDates.contains($0.date) }
+        let soloNights = nights.filter { !doubleDates.contains($0.date) }
+        guard !doubleNights.isEmpty, !soloNights.isEmpty else { return nil }
+
+        let doubleTotal = doubleNights.reduce(0) { $0 + $1.cents }
+        let soloTotal = soloNights.reduce(0) { $0 + $1.cents }
+        return DoublesSoloFacts(
+            doubleAverageCents: doubleTotal / doubleNights.count,
+            doubleCount: doubleNights.count,
+            soloAverageCents: soloTotal / soloNights.count,
+            soloCount: soloNights.count
+        )
+    }
+}
+
+struct InsightsFacts: Equatable, Codable, Sendable {
+    struct DayAmount: Equatable, Codable, Sendable {
+        let date: Date
+        let cents: Int
+    }
+
+    let totalCents: Int
+    let shiftCount: Int
+    let averagePerShiftCents: Int
+    let topDays: [DayAmount]
+    let cashCents: Int
+    let creditCents: Int
+    let lunchDinner: LunchDinnerFacts?
+    let doublesSolo: DoublesSoloFacts?
+}
+
+struct LunchDinnerFacts: Equatable, Codable, Sendable {
+    let lunchCents: Int
+    let lunchShiftCount: Int
+    let dinnerCents: Int
+    let dinnerShiftCount: Int
+}
+
+struct DoublesSoloFacts: Equatable, Codable, Sendable {
+    let doubleAverageCents: Int
+    let doubleCount: Int
+    let soloAverageCents: Int
+    let soloCount: Int
 }
 
 /// Turns the engine's plain facts into the exact calm, specific copy the
@@ -224,5 +344,49 @@ enum RevealCopy {
         if deltaCents == 0 { return "Even with last period at this point." }
         let direction = deltaCents > 0 ? "ahead of" : "behind"
         return "\(Money.string(fromCents: abs(deltaCents))) \(direction) last period at this point."
+    }
+}
+
+/// Turns InsightsFacts straight into sections with zero AI involvement —
+/// the fallback for hardware that can't run Foundation Models. Per
+/// PRODUCT.md: "Insights shows the stats-engine facts without narration
+/// (which must stand alone anyway)." Deterministic and fully testable,
+/// same spirit as RevealCopy.
+enum InsightsFactsCopy {
+    static func sections(for facts: InsightsFacts) -> [InsightSection] {
+        var sections: [InsightSection] = [overallSnapshot(facts), topEarningDays(facts), cashVsCredit(facts)]
+        if let lunchDinner = facts.lunchDinner {
+            sections.append(lunchVsDinner(lunchDinner))
+        }
+        if let doublesSolo = facts.doublesSolo {
+            sections.append(doublesVsSolo(doublesSolo))
+        }
+        return sections
+    }
+
+    private static func overallSnapshot(_ facts: InsightsFacts) -> InsightSection {
+        let body = "You made \(Money.string(fromCents: facts.totalCents)) across \(facts.shiftCount) shifts, averaging \(Money.string(fromCents: facts.averagePerShiftCents)) per shift."
+        return InsightSection(title: "Overall Snapshot", body: body)
+    }
+
+    private static func topEarningDays(_ facts: InsightsFacts) -> InsightSection {
+        let lines = facts.topDays.map { "\(Money.string(fromCents: $0.cents)) on \($0.date.formatted(.dateTime.month(.wide).day()))" }
+        let body = lines.isEmpty ? "Not enough shifts yet to call out a top day." : "Your best days: " + lines.joined(separator: ", ") + "."
+        return InsightSection(title: "Top Earning Days", body: body)
+    }
+
+    private static func cashVsCredit(_ facts: InsightsFacts) -> InsightSection {
+        let body = "You made \(Money.string(fromCents: facts.creditCents)) from credit tips versus \(Money.string(fromCents: facts.cashCents)) from cash."
+        return InsightSection(title: "Cash vs Credit", body: body)
+    }
+
+    private static func lunchVsDinner(_ facts: LunchDinnerFacts) -> InsightSection {
+        let body = "Dinner shifts brought in \(Money.string(fromCents: facts.dinnerCents)) across \(facts.dinnerShiftCount) shifts. Lunch shifts brought in \(Money.string(fromCents: facts.lunchCents)) across \(facts.lunchShiftCount) shifts."
+        return InsightSection(title: "Lunch vs Dinner", body: body)
+    }
+
+    private static func doublesVsSolo(_ facts: DoublesSoloFacts) -> InsightSection {
+        let body = "Double shifts averaged \(Money.string(fromCents: facts.doubleAverageCents)) across \(facts.doubleCount) shifts. Solo shifts averaged \(Money.string(fromCents: facts.soloAverageCents)) across \(facts.soloCount) shifts."
+        return InsightSection(title: "Doubles vs Solo", body: body)
     }
 }

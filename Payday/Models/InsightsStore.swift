@@ -3,6 +3,12 @@ import Foundation
 struct InsightsSnapshot: Codable {
     let sections: [InsightSection]
     let generatedAt: Date
+    /// The facts this narration was generated from — lets the caller
+    /// detect "the underlying numbers changed since last time" and
+    /// regenerate, instead of a time-based schedule. Optional so a
+    /// pre-existing persisted snapshot (from before this field existed)
+    /// still decodes; it just always looks stale once, which self-heals.
+    let facts: InsightsFacts?
 }
 
 /// Caches the last Insights analysis so it survives app relaunch — the

@@ -11,8 +11,14 @@ private func date(_ year: Int, _ month: Int, _ day: Int) -> Date {
     return calendar.date(from: DateComponents(year: year, month: month, day: day))!
 }
 
-private func record(_ year: Int, _ month: Int, _ day: Int, cents: Int, kind: TipKind = .cash, isDouble: Bool = false) -> TipRecord {
-    TipRecord(date: date(year, month, day), amountCents: cents, kind: kind, isDouble: isDouble)
+private func record(_ year: Int, _ month: Int, _ day: Int, cents: Int, kind: TipKind = .cash, isDouble: Bool = false, recordedHour: Int? = nil) -> TipRecord {
+    let shiftDate = date(year, month, day)
+    let recordedAt = recordedHour.flatMap { hour in
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone.current
+        return calendar.date(bySettingHour: hour, minute: 0, second: 0, of: shiftDate)
+    }
+    return TipRecord(date: shiftDate, amountCents: cents, kind: kind, isDouble: isDouble, recordedAt: recordedAt)
 }
 
 @Suite("Nightly totals")
@@ -268,5 +274,124 @@ struct RevealCopyTests {
         #expect(RevealCopy.paceLine(deltaCents: 12000).contains("ahead of"))
         #expect(RevealCopy.paceLine(deltaCents: -5000).contains("behind"))
         #expect(RevealCopy.paceLine(deltaCents: 0) == "Even with last period at this point.")
+    }
+}
+
+@Suite("Insights facts")
+struct InsightsFactsTests {
+    @Test("nil without enough shifts")
+    func notEnoughShifts() {
+        let engine = StatsEngine(records: [record(2026, 7, 1, cents: 1000)])
+        #expect(engine.insightsFacts(referenceDate: date(2026, 7, 10)) == nil)
+    }
+
+    @Test("computes totals, average, top days, and the cash/credit split")
+    func basicFacts() {
+        let records = [
+            record(2026, 7, 1, cents: 1000, kind: .cash),
+            record(2026, 7, 2, cents: 2000, kind: .credit),
+            record(2026, 7, 3, cents: 5000, kind: .cash),
+            record(2026, 7, 4, cents: 3000, kind: .credit),
+            record(2026, 7, 5, cents: 4000, kind: .cash)
+        ]
+        let engine = StatsEngine(records: records)
+        guard let facts = engine.insightsFacts(referenceDate: date(2026, 7, 10)) else {
+            Issue.record("expected facts")
+            return
+        }
+        #expect(facts.totalCents == 15000)
+        #expect(facts.shiftCount == 5)
+        #expect(facts.averagePerShiftCents == 3000)
+        #expect(facts.topDays.count == 3)
+        #expect(facts.topDays[0].cents == 5000)
+        #expect(facts.cashCents == 10000)
+        #expect(facts.creditCents == 5000)
+        #expect(facts.lunchDinner == nil)
+        #expect(facts.doublesSolo == nil)
+    }
+
+    @Test("only considers the recent window")
+    func recentWindowOnly() {
+        var records = (1...5).map { record(2026, 7, $0, cents: 1000) }
+        records.append(record(2025, 1, 1, cents: 99999))
+        let engine = StatsEngine(records: records)
+        #expect(engine.insightsFacts(referenceDate: date(2026, 7, 10))?.shiftCount == 5)
+    }
+
+    @Test("lunch vs dinner splits at 4pm and excludes backfilled entries recorded on a different day")
+    func lunchDinnerHonestyRule() {
+        // 5 same-day-recorded shifts (meets the minimum before making a
+        // lunch/dinner claim) plus 1 backfilled shift recorded days later,
+        // which must be excluded from the lunch/dinner totals entirely.
+        let backfilled = TipRecord(date: date(2026, 7, 1), amountCents: 9999, kind: .cash, isDouble: false, recordedAt: date(2026, 7, 8))
+        let records = [backfilled] + [
+            record(2026, 7, 2, cents: 1000, recordedHour: 12),
+            record(2026, 7, 3, cents: 2000, recordedHour: 13),
+            record(2026, 7, 4, cents: 3000, recordedHour: 19),
+            record(2026, 7, 5, cents: 4000, recordedHour: 20),
+            record(2026, 7, 6, cents: 5000, recordedHour: 21)
+        ]
+        let engine = StatsEngine(records: records)
+        let facts = engine.insightsFacts(referenceDate: date(2026, 7, 10))
+        #expect(facts?.shiftCount == 6)
+        #expect(facts?.lunchDinner?.lunchShiftCount == 2)
+        #expect(facts?.lunchDinner?.lunchCents == 3000)
+        #expect(facts?.lunchDinner?.dinnerShiftCount == 3)
+        #expect(facts?.lunchDinner?.dinnerCents == 12000)
+    }
+
+    @Test("doubles vs solo compares average per double against average per solo shift")
+    func doublesSoloSplit() {
+        let records = [
+            record(2026, 7, 1, cents: 10000, isDouble: true),
+            record(2026, 7, 2, cents: 14000, isDouble: true),
+            record(2026, 7, 3, cents: 3000, isDouble: false),
+            record(2026, 7, 4, cents: 5000, isDouble: false),
+            record(2026, 7, 5, cents: 4000, isDouble: false)
+        ]
+        let engine = StatsEngine(records: records)
+        let facts = engine.insightsFacts(referenceDate: date(2026, 7, 10))
+        #expect(facts?.doublesSolo?.doubleAverageCents == 12000)
+        #expect(facts?.doublesSolo?.doubleCount == 2)
+        #expect(facts?.doublesSolo?.soloAverageCents == 4000)
+        #expect(facts?.doublesSolo?.soloCount == 3)
+    }
+
+    @Test("doubles vs solo is nil when there are no doubles at all")
+    func doublesSoloNilWithoutDoubles() {
+        let records = (1...5).map { record(2026, 7, $0, cents: 1000) }
+        let engine = StatsEngine(records: records)
+        #expect(engine.insightsFacts(referenceDate: date(2026, 7, 10))?.doublesSolo == nil)
+    }
+}
+
+@Suite("Insights facts copy (no-AI fallback)")
+struct InsightsFactsCopyTests {
+    @Test("always includes overall, top days, and cash vs credit, in order")
+    func alwaysIncludedSections() {
+        let facts = InsightsFacts(totalCents: 10000, shiftCount: 5, averagePerShiftCents: 2000, topDays: [], cashCents: 4000, creditCents: 6000, lunchDinner: nil, doublesSolo: nil)
+        let titles = InsightsFactsCopy.sections(for: facts).map(\.title)
+        #expect(titles == ["Overall Snapshot", "Top Earning Days", "Cash vs Credit"])
+    }
+
+    @Test("lunch vs dinner and doubles vs solo sections only appear when their facts exist")
+    func conditionalSections() {
+        let facts = InsightsFacts(
+            totalCents: 10000, shiftCount: 5, averagePerShiftCents: 2000,
+            topDays: [], cashCents: 4000, creditCents: 6000,
+            lunchDinner: LunchDinnerFacts(lunchCents: 1000, lunchShiftCount: 1, dinnerCents: 2000, dinnerShiftCount: 1),
+            doublesSolo: DoublesSoloFacts(doubleAverageCents: 5000, doubleCount: 1, soloAverageCents: 3000, soloCount: 2)
+        )
+        let titles = InsightsFactsCopy.sections(for: facts).map(\.title)
+        #expect(titles.contains("Lunch vs Dinner"))
+        #expect(titles.contains("Doubles vs Solo"))
+    }
+
+    @Test("copy never uses technical jargon like entries")
+    func noJargonInCopy() {
+        let facts = InsightsFacts(totalCents: 10000, shiftCount: 5, averagePerShiftCents: 2000, topDays: [], cashCents: 4000, creditCents: 6000, lunchDinner: nil, doublesSolo: nil)
+        for section in InsightsFactsCopy.sections(for: facts) {
+            #expect(!section.body.lowercased().contains("entries"))
+        }
     }
 }
