@@ -5,14 +5,22 @@ enum AppTab: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+/// Lets any tab's content switch the selected tab (e.g. Dashboard's "days
+/// left" tile jumping to Calendar) without MainTabView needing to know about
+/// every screen that wants to do that.
+@Observable
+final class TabRouter {
+    var selected: AppTab = .dashboard
+}
+
 struct MainTabView: View {
-    @State private var selectedTab: AppTab = .dashboard
+    @State private var tabRouter = TabRouter()
     @State private var previousTab: AppTab = .dashboard
     @State private var isRestoringTabAfterLog = false
     @State private var logTarget: TipEntrySheetTarget?
 
     var body: some View {
-        TabView(selection: $selectedTab) {
+        TabView(selection: $tabRouter.selected) {
             Tab("Dashboard", systemImage: "house.fill", value: .dashboard) {
                 DashboardView()
             }
@@ -35,7 +43,8 @@ struct MainTabView: View {
                 Color.clear
             }
         }
-        .onChange(of: selectedTab) { oldTab, newTab in
+        .environment(tabRouter)
+        .onChange(of: tabRouter.selected) { oldTab, newTab in
             handleTabSelection(from: oldTab, to: newTab)
         }
         // Shell-level so logging works from any tab; each screen keeps its own
@@ -48,7 +57,7 @@ struct MainTabView: View {
             let args = ProcessInfo.processInfo.arguments
             if let index = args.firstIndex(of: "-InitialTab"), args.count > index + 1,
                let tab = AppTab(rawValue: args[index + 1]) {
-                selectedTab = tab
+                tabRouter.selected = tab
             }
             if args.contains("-OpenLogSheet") {
                 logTarget = .new(defaultDate: .now)
@@ -69,7 +78,7 @@ struct MainTabView: View {
             logTarget = .new(defaultDate: .now)
             isRestoringTabAfterLog = true
             DispatchQueue.main.async {
-                selectedTab = previousTab
+                tabRouter.selected = previousTab
             }
             return
         }
