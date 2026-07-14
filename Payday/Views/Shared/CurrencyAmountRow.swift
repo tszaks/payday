@@ -1,16 +1,26 @@
 import SwiftUI
 
+/// Which currency row the keypad is driving — owned by the parent (LogTipSheet)
+/// so a keyboard toolbar "Next" button can move focus from one row to another;
+/// a numberPad has no built-in Next/Return key of its own.
+enum CurrencyRowField: Hashable {
+    case cash
+    case credit
+}
+
 /// A labeled, cents-based currency entry as a self-contained rounded field
 /// (label left, digit-shift amount right). Same input behavior as
-/// CurrencyAmountField. The active field is ringed in the accent color so
+/// CurrencyRowField. The active field is ringed in the accent color so
 /// it's obvious which one the keypad is driving.
 struct CurrencyAmountRow: View {
     let label: String
     @Binding var cents: Int
+    let field: CurrencyRowField
+    var focusedField: FocusState<CurrencyRowField?>.Binding
     var autoFocus: Bool = false
 
-    @FocusState private var isFocused: Bool
     @State private var digitsText: String = ""
+    private var isFocused: Bool { focusedField.wrappedValue == field }
 
     private static let maxDigits = 7 // caps at $99,999.99
 
@@ -32,7 +42,7 @@ struct CurrencyAmountRow: View {
 
                 TextField("", text: $digitsText)
                     .keyboardType(.numberPad)
-                    .focused($isFocused)
+                    .focused(focusedField, equals: field)
                     .opacity(0.01)
                     .frame(maxWidth: 180, alignment: .trailing)
                     .accessibilityLabel("\(label) tips")
@@ -50,10 +60,10 @@ struct CurrencyAmountRow: View {
                 )
         )
         .contentShape(Rectangle())
-        .onTapGesture { isFocused = true }
+        .onTapGesture { focusedField.wrappedValue = field }
         .onAppear {
             digitsText = cents == 0 ? "" : String(cents)
-            if autoFocus { isFocused = true }
+            if autoFocus { focusedField.wrappedValue = field }
         }
         .onChange(of: digitsText) { _, newValue in
             let filtered = String(newValue.filter(\.isNumber).prefix(Self.maxDigits))

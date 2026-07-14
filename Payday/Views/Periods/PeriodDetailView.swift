@@ -10,7 +10,7 @@ struct PeriodDetailView: View {
     let period: PayPeriod
     @State private var sheetTarget: TipEntrySheetTarget?
     @State private var showPaycheckSheet = false
-    @State private var pendingDeleteEntry: TipEntry?
+    @State private var undoState = UndoDeleteToastState()
 
     private var payDate: Date {
         PayPeriodCalculator(schedule: scheduleStore.schedule ?? .fallback).payDate(for: period)
@@ -28,6 +28,10 @@ struct PeriodDetailView: View {
 
     private var loggedCents: Int {
         breakdown.totalCents
+    }
+
+    private var nightsInPeriod: [(date: Date, cents: Int)] {
+        StatsEngine(records: entries.map(TipRecord.init)).nightlyTotals()
     }
 
     private var paycheck: PaycheckRecord? {
@@ -67,6 +71,14 @@ struct PeriodDetailView: View {
             .listRowBackground(Color.clear)
             .listRowSeparator(.hidden)
 
+            if !nightsInPeriod.isEmpty {
+                Section {
+                    NightlyEarningsChart(nights: nightsInPeriod)
+                        .padding(.vertical, 4)
+                }
+                .listRowBackground(PaydayColor.background)
+            }
+
             Section("Paycheck") {
                 if let paycheck {
                     PaycheckComparisonView(breakdown: breakdown, paycheck: paycheck)
@@ -100,24 +112,15 @@ struct PeriodDetailView: View {
                         .buttonStyle(.plain)
                         .swipeActions(edge: .trailing) {
                             Button(role: .destructive) {
-                                pendingDeleteEntry = entry
+                                undoState.delete(entry, in: modelContext)
                             } label: {
                                 Label("Delete", systemImage: "trash")
                             }
                         }
+                        .entryContextMenu(entry, sheetTarget: $sheetTarget, undoState: undoState, context: modelContext)
                     }
                 }
                 .listRowBackground(PaydayColor.background)
-            }
-        }
-        .confirmationDialog(
-            "Delete this tip?",
-            isPresented: Binding(get: { pendingDeleteEntry != nil }, set: { if !$0 { pendingDeleteEntry = nil } }),
-            titleVisibility: .visible
-        ) {
-            Button("Delete", role: .destructive) {
-                if let entry = pendingDeleteEntry { modelContext.delete(entry) }
-                pendingDeleteEntry = nil
             }
         }
         .listStyle(.plain)
@@ -131,6 +134,7 @@ struct PeriodDetailView: View {
         .sheet(isPresented: $showPaycheckSheet) {
             PaycheckEntrySheet(period: period, existing: paycheck)
         }
+        .undoDeleteToast(undoState, context: modelContext)
     }
 
     private var dateRangeString: String {

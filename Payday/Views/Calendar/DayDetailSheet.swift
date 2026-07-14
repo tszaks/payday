@@ -8,7 +8,7 @@ struct DayDetailSheet: View {
 
     let date: Date
     @State private var sheetTarget: TipEntrySheetTarget?
-    @State private var pendingDeleteEntry: TipEntry?
+    @State private var undoState = UndoDeleteToastState()
 
     private var entries: [TipEntry] {
         let day = Calendar.current.startOfDay(for: date)
@@ -39,11 +39,12 @@ struct DayDetailSheet: View {
                             .buttonStyle(.plain)
                             .swipeActions(edge: .trailing) {
                                 Button(role: .destructive) {
-                                    pendingDeleteEntry = entry
+                                    undoState.delete(entry, in: modelContext)
                                 } label: {
                                     Label("Delete", systemImage: "trash")
                                 }
                             }
+                            .entryContextMenu(entry, sheetTarget: $sheetTarget, undoState: undoState, context: modelContext)
                         }
                     } header: {
                         Text(date.formatted(.dateTime.weekday(.wide).month(.wide).day()))
@@ -54,16 +55,6 @@ struct DayDetailSheet: View {
                         }
                     }
                     .listRowBackground(PaydayColor.background)
-                }
-            }
-            .confirmationDialog(
-                "Delete this tip?",
-                isPresented: Binding(get: { pendingDeleteEntry != nil }, set: { if !$0 { pendingDeleteEntry = nil } }),
-                titleVisibility: .visible
-            ) {
-                Button("Delete", role: .destructive) {
-                    if let entry = pendingDeleteEntry { modelContext.delete(entry) }
-                    pendingDeleteEntry = nil
                 }
             }
             .listStyle(.plain)
@@ -87,6 +78,7 @@ struct DayDetailSheet: View {
                 LogTipSheet(target: target)
             }
         }
+        .undoDeleteToast(undoState, context: modelContext)
         .presentationDetents([.medium, .large])
         .presentationBackground(PaydayColor.background)
     }
