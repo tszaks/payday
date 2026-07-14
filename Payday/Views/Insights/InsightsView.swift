@@ -107,7 +107,7 @@ struct InsightsView: View {
             ForEach(snapshot.sections) { section in
                 Section(section.title) {
                     Text(section.body)
-                        .font(PaydayFont.body)
+                        .font(PaydayFont.bodyRegular)
                         .foregroundStyle(PaydayColor.textPrimary)
                         .padding(.vertical, 4)
                 }

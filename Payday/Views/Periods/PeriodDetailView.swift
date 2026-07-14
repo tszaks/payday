@@ -61,6 +61,8 @@ struct PeriodDetailView: View {
             Section("Paycheck") {
                 if let paycheck {
                     PaycheckComparisonView(breakdown: breakdown, paycheck: paycheck)
+                        .listRowInsets(EdgeInsets())
+                        .listRowBackground(Color.clear)
                     Button("Edit paycheck amount") { showPaycheckSheet = true }
                 } else {
                     Button {
@@ -157,6 +159,12 @@ struct PaycheckComparisonView: View {
                     .foregroundStyle(PaydayColor.textSecondary)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding()
+        .background(PaydayColor.cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: PaydayRadius.lg, style: .continuous))
+        .paydayPremiumShadow()
+        .padding(.horizontal)
         .padding(.vertical, 4)
     }
 

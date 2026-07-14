@@ -127,6 +127,10 @@ enum PaydayFont {
     static let headlineBold = Font.headline.weight(.heavy)
     static let body = Font.body.weight(.semibold)
     static let bodySemibold = Font.body.weight(.bold)
+    /// Every other body-ish token here is semibold or bolder — this is the
+    /// one true regular weight, for paragraph copy (e.g. Insights) where
+    /// stacking multiple semibold paragraphs reads as a wall of bold text.
+    static let bodyRegular = Font.body
     static let callout = Font.callout.weight(.semibold)
     static let subheadline = Font.subheadline.weight(.semibold)
     static let subheadlineSemibold = Font.subheadline.weight(.bold)

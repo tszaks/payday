@@ -51,6 +51,11 @@ struct MainTabView: View {
             // the same trick Vero uses for its chat tab. Never actually
             // navigated to: selecting it opens the sheet and snaps straight
             // back to whichever tab was showing.
+            //
+            // Tinted green unlike Vero's own (neutral) search tab: Vero's
+            // opens a secondary feature (chat); this one IS the app's core
+            // action; a neutral glass circle undersells the one button a
+            // tired, one-handed, post-shift user needs to find instantly.
             Tab("Log Tips", systemImage: "plus", value: .logTips, role: .search) {
                 Color.clear
             }
