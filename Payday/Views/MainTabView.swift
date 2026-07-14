@@ -1,4 +1,5 @@
 import SwiftUI
+import SwiftData
 
 enum AppTab: String, CaseIterable, Identifiable {
     case dashboard, calendar, periods, insights, logTips
@@ -14,10 +15,21 @@ final class TabRouter {
 }
 
 struct MainTabView: View {
+    @Environment(PayScheduleStore.self) private var scheduleStore
+    @Environment(InsightsStore.self) private var insightsStore
+    @Query(sort: \TipEntry.date, order: .reverse) private var allEntries: [TipEntry]
+
     @State private var tabRouter = TabRouter()
     @State private var previousTab: AppTab = .dashboard
     @State private var isRestoringTabAfterLog = false
     @State private var logTarget: TipEntrySheetTarget?
+
+    /// iOS has no way to guarantee code runs at an exact wall-clock time
+    /// without a server to push it — there's no true "every Monday at 9am"
+    /// here. This is the honest local approximation: whenever the app is
+    /// opened and it's been a week or more since the last analysis, refresh
+    /// it quietly in the background.
+    private static let autoRefreshInterval: TimeInterval = 7 * 24 * 60 * 60
 
     var body: some View {
         TabView(selection: $tabRouter.selected) {
@@ -52,6 +64,7 @@ struct MainTabView: View {
         .sheet(item: $logTarget) { target in
             LogTipSheet(target: target)
         }
+        .task { await autoAnalyzeIfDue() }
         #if DEBUG
         .onAppear {
             let args = ProcessInfo.processInfo.arguments
@@ -84,5 +97,22 @@ struct MainTabView: View {
         }
 
         previousTab = newTab
+    }
+
+    /// Silent by design: this is a background refresh, not a user action,
+    /// so a failure (no network, not enough data yet) just means we try
+    /// again next time the app opens rather than surfacing an error.
+    private func autoAnalyzeIfDue() async {
+        let isStale = insightsStore.snapshot.map {
+            Date.now.timeIntervalSince($0.generatedAt) >= Self.autoRefreshInterval
+        } ?? true
+        guard isStale else { return }
+
+        let snapshots = allEntries.map {
+            TipEntrySnapshot(date: $0.date, amountCents: $0.amountCents, kind: $0.kind, note: $0.note, recordedAt: $0.recordedAt, isDouble: $0.isDouble)
+        }
+        let frequency = scheduleStore.schedule?.frequency ?? .biweekly
+        guard let sections = try? await InsightsService.analyze(entries: snapshots, scheduleFrequency: frequency) else { return }
+        insightsStore.snapshot = InsightsSnapshot(sections: sections, generatedAt: .now)
     }
 }
