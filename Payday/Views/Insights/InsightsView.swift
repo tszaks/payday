@@ -1,12 +1,14 @@
 import SwiftUI
 import SwiftData
 
-/// Insights runs entirely on-device: the stats engine computes the facts,
-/// and (when supported) Foundation Models narrates them — no network call,
-/// no API key, nothing ever leaves the phone. Regeneration is driven by
-/// .task(id:) re-firing whenever the underlying facts actually change, not
-/// a manual rate limit or a time-based schedule — on-device generation is
-/// cheap enough that "always current" is just the default.
+/// The stats engine computes the facts; OpenAI's gpt-5.6-terra narrates
+/// them over the network. This is autonomous, not on-demand — there is
+/// deliberately no "Analyze Now" control anywhere. A refresh only happens
+/// when it's actually due (see minimumRefreshInterval below) and there's
+/// something new to say; visiting this tab can trigger that check, but
+/// never a person's tap. Each refresh amends the previous narration rather
+/// than rewriting it from scratch, so wording should settle down and
+/// change less over time as patterns stabilize, not reshuffle every visit.
 struct InsightsView: View {
     @Environment(PayScheduleStore.self) private var scheduleStore
     @Environment(InsightsStore.self) private var insightsStore
@@ -14,6 +16,11 @@ struct InsightsView: View {
 
     @State private var isLoading = false
     @State private var errorMessage: String?
+
+    /// Upper bound on refresh cadence — "maybe weekly, twice a week at
+    /// most." A visit to this tab checks whether this much time has passed
+    /// since the last refresh; it never forces one sooner.
+    private static let minimumRefreshInterval: TimeInterval = 3.5 * 24 * 3600
 
     private var statsEngine: StatsEngine {
         StatsEngine(records: allEntries.map(TipRecord.init))
@@ -31,8 +38,16 @@ struct InsightsView: View {
     }
 
     private var isModelAvailable: Bool {
-        if case .available = InsightsService.availability { return true }
-        return false
+        InsightsService.isConfigured
+    }
+
+    /// Due only when enough real time has passed AND the facts actually
+    /// changed since the last refresh — nothing new logged means nothing
+    /// new to say, so there's no reason to spend a call on it.
+    private func isRefreshDue(facts: InsightsFacts) -> Bool {
+        guard let snapshot = insightsStore.snapshot else { return true }
+        guard facts != snapshot.facts else { return false }
+        return Date.now.timeIntervalSince(snapshot.generatedAt) >= Self.minimumRefreshInterval
     }
 
     var body: some View {
@@ -51,8 +66,8 @@ struct InsightsView: View {
             .background(PaydayColor.background)
             .navigationTitle("Insights")
             .task(id: facts) {
-                guard isModelAvailable, let facts, facts != insightsStore.snapshot?.facts else { return }
-                await analyze(facts: facts)
+                guard isModelAvailable, let facts, isRefreshDue(facts: facts) else { return }
+                await refresh(facts: facts)
             }
         }
     }
@@ -76,22 +91,14 @@ struct InsightsView: View {
                     if isLoading {
                         HStack(spacing: 8) {
                             ProgressView()
-                            Text("Analyzing your tips…")
+                            Text("Updating your analysis…")
                                 .font(PaydayFont.subheadline)
                                 .foregroundStyle(PaydayColor.textSecondary)
                         }
-                    } else {
-                        Button("Analyze Again") {
-                            Task { await analyze(facts: facts) }
-                        }
-                        .buttonStyle(.glassProminent)
-                        .tint(.accentColor)
-
-                        if let errorMessage {
-                            Text(errorMessage)
-                                .font(PaydayFont.caption)
-                                .foregroundStyle(PaydayColor.error)
-                        }
+                    } else if let errorMessage {
+                        Text(errorMessage)
+                            .font(PaydayFont.caption)
+                            .foregroundStyle(PaydayColor.error)
                     }
                 }
                 .listRowBackground(PaydayColor.background)
@@ -109,7 +116,7 @@ struct InsightsView: View {
 
             if !isModelAvailable {
                 Section {
-                    Text("On-device analysis needs Apple Intelligence. These are your exact numbers, just not narrated.")
+                    Text("Analysis isn't configured right now. These are your exact numbers, just not narrated.")
                         .font(PaydayFont.caption2)
                         .foregroundStyle(PaydayColor.textSecondary)
                 }
@@ -122,7 +129,7 @@ struct InsightsView: View {
 
     /// The narrated sections when the cached narration still matches
     /// tonight's facts; the deterministic facts-only sections otherwise
-    /// (covers both "unsupported hardware" and "narration still pending").
+    /// (covers both "not configured" and "refresh still pending").
     private func sections(for facts: InsightsFacts) -> [InsightSection] {
         if let snapshot = insightsStore.snapshot, snapshot.facts == facts {
             return snapshot.sections
@@ -138,7 +145,7 @@ struct InsightsView: View {
             Text("See where and when you earn the most.")
                 .font(PaydayFont.headline)
                 .foregroundStyle(PaydayColor.textPrimary)
-            Text("Log \(StatsEngine.minimumShiftsForInsights) shifts to unlock this. Everything is computed right on your phone — nothing ever leaves it.")
+            Text("Log \(StatsEngine.minimumShiftsForInsights) shifts to unlock this.")
                 .font(PaydayFont.caption)
                 .foregroundStyle(PaydayColor.textSecondary)
                 .multilineTextAlignment(.center)
@@ -146,13 +153,17 @@ struct InsightsView: View {
         .padding(.top, 40)
     }
 
-    private func analyze(facts: InsightsFacts) async {
+    private func refresh(facts: InsightsFacts) async {
         errorMessage = nil
         isLoading = true
         defer { isLoading = false }
         let frequency = scheduleStore.schedule?.frequency ?? .biweekly
         do {
-            let sections = try await InsightsService.narrate(facts: facts, scheduleFrequency: frequency)
+            let sections = try await InsightsService.narrate(
+                facts: facts,
+                scheduleFrequency: frequency,
+                previousSections: insightsStore.snapshot?.sections
+            )
             insightsStore.snapshot = InsightsSnapshot(sections: sections, generatedAt: .now, facts: facts)
         } catch {
             errorMessage = error.localizedDescription

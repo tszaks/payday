@@ -63,22 +63,44 @@ A small pure module (like `PayPeriodCalculator`: testable, no I/O) computing:
 Surfaces: the reveal (Pillar 1), a single pace line under the dashboard hero
 ("$120 ahead of last period at this point"), the payday moment, and Insights.
 
-## Pillar 4: Apple Intelligence, literally (replaces OpenAI)
+## Pillar 4: Insights narration — REVERSED back to OpenAI (2026-07-14)
 
-Replace the OpenAI integration with Apple's on-device **Foundation Models
-framework** (iOS 26, `import FoundationModels`, `LanguageModelSession`,
-`@Generable` guided generation for typed sections output).
+Originally built on Apple's on-device Foundation Models framework, then
+reversed: Apple Intelligence's hardware floor (iPhone 15 Pro+, opt-in
+enabled) is too narrow this early to build a feature around — most phones
+this app will actually run on can't use it. Insights narration now calls
+**OpenAI's `gpt-5.6-terra`** (Responses API, structured JSON output) instead.
 
-- The stats engine computes facts; the model narrates them. Never let the
-  model do arithmetic: pass computed stats in, get calm sentences out.
-- Regenerate after data changes (cheap + local), so Insights is always current.
-- Delete: the OpenAI key from Secrets.local.xcconfig + project.yml + Info.plist,
-  the network code, the rate limiter, the weekly auto-refresh, and the
-  "sends your data to OpenAI" disclosure. Nothing leaves the phone, say so.
-- Gate gracefully: Foundation Models requires Apple Intelligence-capable
-  hardware. If unavailable, Insights shows the stats-engine facts without
-  narration (which must stand alone anyway).
-- This deletes the P0 key-in-bundle security issue permanently.
+- The stats engine still computes every fact; the model still only
+  narrates them, never does arithmetic. That discipline doesn't change
+  just because the model moved off-device.
+- Autonomous, not on-demand: no "Analyze Now" button anywhere. A refresh
+  only happens on a visit to Insights, and only if it's actually due —
+  facts changed AND at least ~3.5 days since the last refresh ("maybe
+  weekly, twice a week at most"). Users see a "last updated" timestamp
+  with no control to force it sooner.
+- Amend, don't rewrite: each refresh is given the previous narration and
+  told to keep every sentence that's still accurate, touching only what
+  actually changed. As history builds up, the underlying facts should
+  swing less week to week, and the narration should visibly settle down
+  right along with them instead of reshuffling on every call.
+  **Deviation:** the on-device Foundation Models gate (`isModelAvailable`
+  checking hardware support) is gone; the new gate is
+  `InsightsService.isConfigured` (an API key present), and the fallback
+  path (InsightsFactsCopy's deterministic sections, no narration) now
+  covers "not configured" or "network/API call failed" instead of
+  "unsupported hardware."
+- **Key storage, explicit tradeoff:** the OpenAI key lives in
+  `Secrets.local.xcconfig` (gitignored) → `OpenAIAPIKey` in Info.plist —
+  the exact "key baked into the shipped binary" pattern this pillar
+  originally existed to delete. Reintroduced deliberately, fine for local
+  builds only under the standing "no App Store submission" boundary. This
+  MUST move behind a backend proxy (so the key never ships in the app
+  bundle) before any real release — do not skip this before distributing
+  the app to anyone.
+- No more "nothing leaves the phone" messaging anywhere (app or site,
+  Tyler's call, 2026-07-14) — it's no longer true, and even when it was,
+  it wasn't a claim worth building marketing around.
 
 ## Pillar 5: Woven into the OS (App Intents everywhere)
 
