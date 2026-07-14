@@ -55,13 +55,15 @@ enum InsightsService {
         guard let apiKey else {
             throw InsightsError.missingAPIKey
         }
-        guard entries.count >= minimumEntries else {
-            throw InsightsError.notEnoughData
-        }
-
         let calendar = Calendar.current
         let cutoff = calendar.date(byAdding: .day, value: -recentWindowDays, to: .now) ?? .distantPast
         let recent = entries.filter { $0.date >= cutoff }.sorted { $0.date < $1.date }
+
+        // Guard on the entries we'll actually send — checking the raw count
+        // before filtering would let an all-old dataset send an empty payload.
+        guard recent.count >= minimumEntries else {
+            throw InsightsError.notEnoughData
+        }
 
         let rows: [[String: Any]] = recent.map { entry in
             let weekday = calendar.component(.weekday, from: entry.date)

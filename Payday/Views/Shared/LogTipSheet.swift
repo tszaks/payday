@@ -80,7 +80,9 @@ struct LogTipSheet: View {
                 }
             }
         }
-        .presentationDetents([.height(isEditing ? 480 : 520)])
+        // Fixed height for the common case, plus .large as an escape hatch so
+        // content is never clipped on smaller iPhones with the keypad up.
+        .presentationDetents([.height(isEditing ? 480 : 520), .large])
         .presentationDragIndicator(.visible)
         .presentationBackground(Color.paydaySurface)
     }
@@ -159,7 +161,10 @@ struct LogTipSheet: View {
     // MARK: Actions
 
     private func save() {
-        let normalizedDate = Calendar.current.startOfDay(for: date)
+        // Clamp to today: the picker already blocks future dates, but never
+        // trust the initial/bound value to enforce it.
+        let clampedDate = min(date, .now)
+        let normalizedDate = Calendar.current.startOfDay(for: clampedDate)
         let trimmedNote = note.isEmpty ? nil : note
 
         switch target {

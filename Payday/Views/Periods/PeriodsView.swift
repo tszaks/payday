@@ -101,7 +101,10 @@ private struct PeriodRow: View {
             }
             Spacer()
             if let paycheck {
-                let delta = paycheck.paidTipsCents - loggedCreditCents
+                // Match PaycheckComparisonView: credit if any, else fall back
+                // to total (legacy all-cash periods have no credit to compare).
+                let comparedCents = loggedCreditCents > 0 ? loggedCreditCents : loggedCents
+                let delta = paycheck.paidTipsCents - comparedCents
                 VStack(alignment: .trailing, spacing: 2) {
                     Text(deltaString(delta))
                         .font(.system(.subheadline, design: .rounded, weight: .semibold))

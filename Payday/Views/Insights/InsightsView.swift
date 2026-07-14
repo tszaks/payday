@@ -52,6 +52,11 @@ struct InsightsView: View {
                 Button("Analyze Again") {
                     Task { await analyze() }
                 }
+                if let errorMessage {
+                    Text(errorMessage)
+                        .font(.caption)
+                        .foregroundStyle(Color.red)
+                }
             } footer: {
                 Text("Last updated \(snapshot.generatedAt.formatted(.dateTime.month(.abbreviated).day().hour().minute()))")
             }
@@ -66,7 +71,7 @@ struct InsightsView: View {
                 .foregroundStyle(.secondary)
             Text("See where and when you earn the most.")
                 .font(.headline)
-            Text("Sends your logged tip dates and amounts to OpenAI for analysis. Nothing else leaves your phone.")
+            Text("Sends your logged tips — dates, amounts, cash/credit type, and any notes — to OpenAI for analysis. Nothing else leaves your phone.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)

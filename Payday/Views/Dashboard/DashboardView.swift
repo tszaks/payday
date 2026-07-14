@@ -33,6 +33,12 @@ struct DashboardView: View {
         calculator.daysRemaining(from: .now)
     }
 
+    /// A shift is a day worked, not a row: logging one night now writes up to
+    /// two entries (cash + credit), so count distinct days, not entries.
+    private var shiftCount: Int {
+        Set(periodEntries.map { Calendar.current.startOfDay(for: $0.date) }).count
+    }
+
     var body: some View {
         NavigationStack {
             List {
@@ -127,8 +133,8 @@ struct DashboardView: View {
                 )
                 StatChip(
                     icon: "briefcase.fill",
-                    value: "\(periodEntries.count)",
-                    label: periodEntries.count == 1 ? "shift logged" : "shifts logged"
+                    value: "\(shiftCount)",
+                    label: shiftCount == 1 ? "shift logged" : "shifts logged"
                 )
             }
 

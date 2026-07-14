@@ -54,7 +54,7 @@ struct PeriodDetailView: View {
 
             Section("Paycheck") {
                 if let paycheck {
-                    PaycheckComparisonView(loggedCreditCents: breakdown.creditCents, paycheck: paycheck)
+                    PaycheckComparisonView(breakdown: breakdown, paycheck: paycheck)
                     Button("Edit paycheck amount") { showPaycheckSheet = true }
                 } else {
                     Button {
@@ -107,15 +107,22 @@ struct PeriodDetailView: View {
 }
 
 struct PaycheckComparisonView: View {
-    let loggedCreditCents: Int
+    let breakdown: TipBreakdown
     let paycheck: PaycheckRecord
 
-    private var deltaCents: Int { paycheck.paidTipsCents - loggedCreditCents }
+    /// Credit tips are what land on the stub. But entries logged before
+    /// cash/credit tracking existed all read as cash, so a period with a
+    /// paycheck but zero credit is almost certainly legacy data — fall back
+    /// to comparing the total rather than showing a nonsense full-overpay.
+    private var usesCreditOnly: Bool { breakdown.creditCents > 0 }
+    private var comparedCents: Int { usesCreditOnly ? breakdown.creditCents : breakdown.totalCents }
+
+    private var deltaCents: Int { paycheck.paidTipsCents - comparedCents }
     private var isShort: Bool { deltaCents < 0 }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("You logged \(Money.string(fromCents: loggedCreditCents)) in credit tips / Check paid \(Money.string(fromCents: paycheck.paidTipsCents))")
+            Text(comparisonLine)
                 .font(.subheadline)
 
             HStack(spacing: 6) {
@@ -126,7 +133,7 @@ struct PaycheckComparisonView: View {
                     .foregroundStyle(isShort ? Color.red : Color.accentColor)
             }
 
-            Text("Cash tips aren't on your stub, so this compares your credit tips against the tips line.")
+            Text(caption)
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
@@ -137,6 +144,22 @@ struct PaycheckComparisonView: View {
             }
         }
         .padding(.vertical, 4)
+    }
+
+    private var comparisonLine: String {
+        let logged = Money.string(fromCents: comparedCents)
+        let paid = Money.string(fromCents: paycheck.paidTipsCents)
+        if usesCreditOnly {
+            return "You logged \(logged) in credit tips / Check paid \(paid)"
+        }
+        return "You logged \(logged) / Check paid \(paid)"
+    }
+
+    private var caption: String {
+        if usesCreditOnly {
+            return "Cash tips aren't on your stub, so this compares your credit tips against the tips line."
+        }
+        return "This period has no credit tips logged, so it compares your total against the tips line."
     }
 
     private var deltaString: String {
