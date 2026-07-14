@@ -184,6 +184,58 @@ struct StatsEngine {
         return currentTotal - priorComparable
     }
 
+    // MARK: Work rhythm
+
+    static let minimumNightsForRhythm = 2
+    static let minimumSameDayLoggedForTypicalHour = 3
+
+    /// Learned, never configured: which weekdays this person usually
+    /// works, and roughly when they log — the smart nudge's entire basis.
+    /// A weekday counts as "usual" once it's been worked at least
+    /// `minimumNightsForRhythm` times AND on at least half of its actual
+    /// occurrences since the first logged night (so an occasional Sunday
+    /// pickup shift doesn't get treated the same as every-Friday routine).
+    func workRhythm(referenceDate: Date = .now) -> WorkRhythm {
+        let allNights = nightlyTotals()
+        guard let earliest = allNights.first?.date else {
+            return WorkRhythm(usualWeekdays: [], typicalLogHour: nil)
+        }
+
+        var occurrences: [Int: Int] = [:]
+        var worked: [Int: Int] = [:]
+        var cursor = startOfDay(earliest)
+        let end = startOfDay(referenceDate)
+        while cursor <= end {
+            let weekday = calendar.component(.weekday, from: cursor)
+            occurrences[weekday, default: 0] += 1
+            cursor = calendar.date(byAdding: .day, value: 1, to: cursor) ?? end.addingTimeInterval(1)
+        }
+        for night in allNights {
+            let weekday = calendar.component(.weekday, from: night.date)
+            worked[weekday, default: 0] += 1
+        }
+
+        let usualWeekdays = Set((1...7).filter { weekday in
+            let workedCount = worked[weekday] ?? 0
+            let occurrenceCount = occurrences[weekday] ?? 0
+            guard workedCount >= Self.minimumNightsForRhythm, occurrenceCount > 0 else { return false }
+            return Double(workedCount) / Double(occurrenceCount) >= 0.5
+        })
+
+        let sameDayLoggedHours = records.compactMap { record -> Int? in
+            guard let recordedAt = record.recordedAt, calendar.isDate(recordedAt, inSameDayAs: record.date) else { return nil }
+            return calendar.component(.hour, from: recordedAt)
+        }.sorted()
+
+        let typicalLogHour = sameDayLoggedHours.count >= Self.minimumSameDayLoggedForTypicalHour
+            ? sameDayLoggedHours[sameDayLoggedHours.count / 2]
+            : nil
+
+        return WorkRhythm(usualWeekdays: usualWeekdays, typicalLogHour: typicalLogHour)
+    }
+
+    private func startOfDay(_ date: Date) -> Date { calendar.startOfDay(for: date) }
+
     // MARK: Insights facts
 
     static let minimumShiftsForInsights = 5
@@ -262,6 +314,16 @@ struct StatsEngine {
             soloCount: soloNights.count
         )
     }
+}
+
+/// The smart nudge's entire basis — see StatsEngine.workRhythm(referenceDate:).
+struct WorkRhythm: Equatable {
+    /// Weekdays (Gregorian: 1=Sunday…7=Saturday) worked often enough to
+    /// call "usual." Empty means not enough history yet, not "never works."
+    let usualWeekdays: Set<Int>
+    /// Typical hour-of-day (0–23) tips get logged, from same-day-logged
+    /// records only. Nil without enough signal.
+    let typicalLogHour: Int?
 }
 
 struct InsightsFacts: Equatable, Codable, Sendable {

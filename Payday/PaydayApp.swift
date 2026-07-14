@@ -1,6 +1,7 @@
 import SwiftUI
 import SwiftData
 import TipKit
+import UserNotifications
 
 @main
 struct PaydayApp: App {
@@ -10,6 +11,7 @@ struct PaydayApp: App {
 
     init() {
         try? Tips.configure([.displayFrequency(.immediate), .datastoreLocation(.applicationDefault)])
+        UNUserNotificationCenter.current().delegate = NotificationDelegate.shared
     }
 
     var body: some Scene {

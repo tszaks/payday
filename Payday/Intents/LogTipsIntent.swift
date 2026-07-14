@@ -57,6 +57,10 @@ struct LogTipsIntent: AppIntent {
         let context = SharedModelContainer.shared.mainContext
         context.insert(entry)
         try context.save()
+
+        let allEntries = try context.fetch(FetchDescriptor<TipEntry>())
+        SmartNudgeScheduler.reschedule(preferencesStore: UserPreferencesStore(), allEntries: allEntries)
+
         return .result(dialog: IntentDialog("Logged \(Money.string(fromCents: cents)) in \(kind.tipKind.displayName.lowercased()) tips."))
     }
 }

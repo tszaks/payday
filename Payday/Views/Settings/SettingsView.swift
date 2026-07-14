@@ -12,6 +12,7 @@ struct SettingsView: View {
     @State private var firstName: String
     @State private var appearance: AppAppearance
     @State private var isFaceIDLockEnabled: Bool = false
+    @State private var isSmartNudgeEnabled: Bool = true
     @State private var frequency: PayFrequency
     @State private var mostRecentPayday: Date
     @State private var periodEndDate: Date
@@ -52,6 +53,13 @@ struct SettingsView: View {
                     Toggle("Require Face ID", isOn: $isFaceIDLockEnabled)
                 } footer: {
                     Text("Locks Payday when it's in the background. Uses your device passcode as a fallback.")
+                }
+                .listRowBackground(PaydayColor.fieldBackground)
+
+                Section {
+                    Toggle("Remind me to log", isOn: $isSmartNudgeEnabled)
+                } footer: {
+                    Text("A single \"How was tonight?\" notification on a usual work night, only if nothing's logged yet.")
                 }
                 .listRowBackground(PaydayColor.fieldBackground)
 
@@ -140,10 +148,14 @@ struct SettingsView: View {
             .onChange(of: isFaceIDLockEnabled) { _, newValue in
                 preferencesStore.isFaceIDLockEnabled = newValue
             }
+            .onChange(of: isSmartNudgeEnabled) { _, newValue in
+                preferencesStore.isSmartNudgeEnabled = newValue
+            }
             .onAppear {
                 firstName = preferencesStore.firstName ?? ""
                 appearance = preferencesStore.appearance
                 isFaceIDLockEnabled = preferencesStore.isFaceIDLockEnabled
+                isSmartNudgeEnabled = preferencesStore.isSmartNudgeEnabled
             }
         }
         .presentationBackground(PaydayColor.background)
