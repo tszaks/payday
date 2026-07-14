@@ -16,8 +16,12 @@ struct PeriodDetailView: View {
             .sorted { $0.date > $1.date }
     }
 
+    private var breakdown: TipBreakdown {
+        TipBreakdown.total(of: entries)
+    }
+
     private var loggedCents: Int {
-        entries.reduce(0) { $0 + $1.amountCents }
+        breakdown.totalCents
     }
 
     private var paycheck: PaycheckRecord? {
@@ -27,12 +31,19 @@ struct PeriodDetailView: View {
     var body: some View {
         List {
             Section {
-                VStack(spacing: 6) {
+                VStack(spacing: 10) {
                     Text(dateRangeString)
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                     Text(Money.string(fromCents: loggedCents))
                         .font(.system(size: 44, weight: .bold, design: .rounded))
+                    HStack(spacing: 6) {
+                        Text("Cash \(Money.string(fromCents: breakdown.cashCents))")
+                        Text("·").foregroundStyle(.secondary)
+                        Text("Credit \(Money.string(fromCents: breakdown.creditCents))")
+                    }
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 12)
@@ -43,7 +54,7 @@ struct PeriodDetailView: View {
 
             Section("Paycheck") {
                 if let paycheck {
-                    PaycheckComparisonView(loggedCents: loggedCents, paycheck: paycheck)
+                    PaycheckComparisonView(loggedCreditCents: breakdown.creditCents, paycheck: paycheck)
                     Button("Edit paycheck amount") { showPaycheckSheet = true }
                 } else {
                     Button {
@@ -96,15 +107,15 @@ struct PeriodDetailView: View {
 }
 
 struct PaycheckComparisonView: View {
-    let loggedCents: Int
+    let loggedCreditCents: Int
     let paycheck: PaycheckRecord
 
-    private var deltaCents: Int { paycheck.paidTipsCents - loggedCents }
+    private var deltaCents: Int { paycheck.paidTipsCents - loggedCreditCents }
     private var isShort: Bool { deltaCents < 0 }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("You logged \(Money.string(fromCents: loggedCents)) / Check paid \(Money.string(fromCents: paycheck.paidTipsCents))")
+            Text("You logged \(Money.string(fromCents: loggedCreditCents)) in credit tips / Check paid \(Money.string(fromCents: paycheck.paidTipsCents))")
                 .font(.subheadline)
 
             HStack(spacing: 6) {
@@ -115,7 +126,7 @@ struct PaycheckComparisonView: View {
                     .foregroundStyle(isShort ? Color.red : Color.accentColor)
             }
 
-            Text("Compare against the tips line on your stub, not the check total.")
+            Text("Cash tips aren't on your stub, so this compares your credit tips against the tips line.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 

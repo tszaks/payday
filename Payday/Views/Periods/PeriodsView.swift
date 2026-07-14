@@ -31,10 +31,8 @@ struct PeriodsView: View {
         return result
     }
 
-    private func total(for period: PayPeriod) -> Int {
-        allEntries
-            .filter { $0.date >= period.start && $0.date <= period.end }
-            .reduce(0) { $0 + $1.amountCents }
+    private func breakdown(for period: PayPeriod) -> TipBreakdown {
+        TipBreakdown.total(of: allEntries.filter { $0.date >= period.start && $0.date <= period.end })
     }
 
     private func paycheck(for period: PayPeriod) -> PaycheckRecord? {
@@ -47,11 +45,13 @@ struct PeriodsView: View {
         NavigationStack(path: $path) {
             List(periods.indices, id: \.self) { index in
                 let period = periods[index]
+                let periodBreakdown = breakdown(for: period)
                 NavigationLink(value: period) {
                     PeriodRow(
                         period: period,
                         isCurrent: index == 0,
-                        loggedCents: total(for: period),
+                        loggedCents: periodBreakdown.totalCents,
+                        loggedCreditCents: periodBreakdown.creditCents,
                         paycheck: paycheck(for: period)
                     )
                 }
@@ -77,6 +77,7 @@ private struct PeriodRow: View {
     let period: PayPeriod
     let isCurrent: Bool
     let loggedCents: Int
+    let loggedCreditCents: Int
     let paycheck: PaycheckRecord?
 
     var body: some View {
@@ -100,7 +101,7 @@ private struct PeriodRow: View {
             }
             Spacer()
             if let paycheck {
-                let delta = paycheck.paidTipsCents - loggedCents
+                let delta = paycheck.paidTipsCents - loggedCreditCents
                 VStack(alignment: .trailing, spacing: 2) {
                     Text(deltaString(delta))
                         .font(.system(.subheadline, design: .rounded, weight: .semibold))

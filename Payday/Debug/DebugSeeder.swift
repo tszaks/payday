@@ -34,39 +34,42 @@ enum DebugSeeder {
         let calculator = PayPeriodCalculator(schedule: schedule)
 
         let currentPeriod = calculator.period(containing: today)
-        let sampleOffsets: [(daysAgo: Int, cents: Int, note: String?)] = [
-            (0, 8600, nil),
-            (1, 11200, "double"),
-            (3, 6400, nil),
-            (4, 9800, "lunch"),
-            (6, 7300, nil)
+        let sampleOffsets: [(daysAgo: Int, cents: Int, kind: TipKind, note: String?)] = [
+            (0, 8600, .credit, nil),
+            (0, 3200, .cash, nil),
+            (1, 11200, .credit, "double"),
+            (3, 6400, .cash, nil),
+            (4, 9800, .credit, "lunch"),
+            (6, 7300, .cash, nil)
         ]
         for sample in sampleOffsets {
             guard let date = calendar.date(byAdding: .day, value: -sample.daysAgo, to: today),
                   date >= currentPeriod.start else { continue }
-            context.insert(TipEntry(date: calendar.startOfDay(for: date), amountCents: sample.cents, note: sample.note))
+            context.insert(TipEntry(date: calendar.startOfDay(for: date), amountCents: sample.cents, kind: sample.kind, note: sample.note))
         }
 
         if let priorPeriodEnd = calendar.date(byAdding: .day, value: -1, to: currentPeriod.start) {
             let priorPeriod = calculator.period(containing: priorPeriodEnd)
-            let priorOffsets: [(daysAgo: Int, cents: Int, note: String?)] = [
-                (2, 9100, nil),
-                (4, 12300, "double"),
-                (6, 8800, nil),
-                (8, 7600, "lunch"),
-                (10, 10400, nil)
+            let priorOffsets: [(daysAgo: Int, cents: Int, kind: TipKind, note: String?)] = [
+                (2, 9100, .credit, nil),
+                (4, 12300, .credit, "double"),
+                (6, 8800, .cash, nil),
+                (8, 7600, .credit, "lunch"),
+                (10, 10400, .cash, nil)
             ]
-            var loggedTotal = 0
+            var loggedCreditTotal = 0
             for sample in priorOffsets {
                 guard let date = calendar.date(byAdding: .day, value: -sample.daysAgo, to: priorPeriod.end),
                       date >= priorPeriod.start, date <= priorPeriod.end else { continue }
-                loggedTotal += sample.cents
-                context.insert(TipEntry(date: calendar.startOfDay(for: date), amountCents: sample.cents, note: sample.note))
+                if sample.kind == .credit { loggedCreditTotal += sample.cents }
+                context.insert(TipEntry(date: calendar.startOfDay(for: date), amountCents: sample.cents, kind: sample.kind, note: sample.note))
             }
+            // Paycheck reflects credit tips only (cash is walked nightly),
+            // a hair under what was logged — a realistic small discrepancy.
             context.insert(PaycheckRecord(
                 periodStart: priorPeriod.start,
                 periodEnd: priorPeriod.end,
-                paidTipsCents: loggedTotal - 350,
+                paidTipsCents: loggedCreditTotal - 350,
                 note: "Direct deposit"
             ))
         }

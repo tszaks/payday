@@ -5,6 +5,7 @@ import Foundation
 struct TipEntrySnapshot: Sendable {
     let date: Date
     let amountCents: Int
+    let kind: TipKind
     let note: String?
 }
 
@@ -68,6 +69,7 @@ enum InsightsService {
                 "date": entry.date.formatted(.iso8601.year().month().day()),
                 "weekday": calendar.weekdaySymbols[weekday - 1],
                 "amount": Double(entry.amountCents) / 100,
+                "type": entry.kind.rawValue,
                 "note": entry.note ?? ""
             ]
         }
@@ -81,16 +83,18 @@ enum InsightsService {
 
         let systemPrompt = """
         You are a data analyst helping a restaurant server understand their tip income patterns. \
-        You will receive their logged tip entries as JSON (date, weekday, amount in dollars, optional note). \
+        You will receive their logged tip entries as JSON (date, weekday, amount in dollars, type of \
+        either "cash" or "credit", optional note). \
 
         Respond with JSON only, matching exactly this shape:
         {"sections": [{"title": "...", "body": "..."}]}
 
-        Produce 3 to 5 sections. Each title is 2 to 4 words (e.g. "Top Earning Days", "Weekday Patterns", \
+        Produce 3 to 5 sections. Each title is 2 to 4 words (e.g. "Top Earning Days", "Cash vs Credit", \
         "Trend Over Time", "What To Try Next"). Each body is 2 to 4 short sentences, plain language, \
         no markdown formatting, no bullet characters, no disclaimers about being an AI. Base every claim \
-        on the actual data given — cite specific dates or amounts where it strengthens the point. The last \
-        section should always be one concrete, actionable suggestion.
+        on the actual data given — cite specific dates or amounts where it strengthens the point. Include \
+        one section on how their cash and credit tips compare. The last section should always be one \
+        concrete, actionable suggestion.
         """
 
         var request = URLRequest(url: URL(string: "https://api.openai.com/v1/chat/completions")!)

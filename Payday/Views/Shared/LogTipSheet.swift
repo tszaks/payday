@@ -12,6 +12,7 @@ struct LogTipSheet: View {
     @State private var amountCents: Int
     @State private var date: Date
     @State private var note: String
+    @State private var kind: TipKind
 
     init(target: TipEntrySheetTarget) {
         self.target = target
@@ -20,10 +21,12 @@ struct LogTipSheet: View {
             _amountCents = State(initialValue: 0)
             _date = State(initialValue: defaultDate)
             _note = State(initialValue: "")
+            _kind = State(initialValue: .cash)
         case .edit(let entry):
             _amountCents = State(initialValue: entry.amountCents)
             _date = State(initialValue: entry.date)
             _note = State(initialValue: entry.note ?? "")
+            _kind = State(initialValue: entry.kind)
         }
     }
 
@@ -37,6 +40,14 @@ struct LogTipSheet: View {
             VStack(spacing: 28) {
                 CurrencyAmountField(cents: $amountCents)
                     .padding(.top, 24)
+
+                Picker("Tip type", selection: $kind) {
+                    ForEach(TipKind.allCases) { kind in
+                        Text(kind.displayName).tag(kind)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal)
 
                 VStack(spacing: 0) {
                     HStack {
@@ -80,7 +91,7 @@ struct LogTipSheet: View {
                 }
             }
         }
-        .presentationDetents([.height(420)])
+        .presentationDetents([.height(480)])
         .presentationDragIndicator(.visible)
         .presentationBackground(Color.paydaySurface)
     }
@@ -89,11 +100,12 @@ struct LogTipSheet: View {
         let normalizedDate = Calendar.current.startOfDay(for: date)
         switch target {
         case .new:
-            let entry = TipEntry(date: normalizedDate, amountCents: amountCents, note: note.isEmpty ? nil : note)
+            let entry = TipEntry(date: normalizedDate, amountCents: amountCents, kind: kind, note: note.isEmpty ? nil : note)
             modelContext.insert(entry)
         case .edit(let entry):
             entry.date = normalizedDate
             entry.amountCents = amountCents
+            entry.kind = kind
             entry.note = note.isEmpty ? nil : note
         }
         Haptics.success()

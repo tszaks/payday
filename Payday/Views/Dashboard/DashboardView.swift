@@ -21,8 +21,12 @@ struct DashboardView: View {
         allEntries.filter { $0.date >= currentPeriod.start && $0.date <= currentPeriod.end }
     }
 
+    private var breakdown: TipBreakdown {
+        TipBreakdown.total(of: periodEntries)
+    }
+
     private var totalCents: Int {
-        periodEntries.reduce(0) { $0 + $1.amountCents }
+        breakdown.totalCents
     }
 
     private var daysRemaining: Int {
@@ -111,6 +115,11 @@ struct DashboardView: View {
             }
 
             HStack(spacing: 12) {
+                MoneyTile(label: "Cash", cents: breakdown.cashCents)
+                MoneyTile(label: "Credit", cents: breakdown.creditCents)
+            }
+
+            HStack(spacing: 12) {
                 StatChip(
                     icon: "calendar",
                     value: daysRemaining == 0 ? "Today" : "\(daysRemaining)",
@@ -157,6 +166,29 @@ struct DashboardView: View {
     }
 }
 
+private struct MoneyTile: View {
+    let label: String
+    let cents: Int
+
+    var body: some View {
+        VStack(spacing: 4) {
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text(Money.string(fromCents: cents))
+                .font(.system(.title3, design: .rounded, weight: .semibold))
+                .foregroundStyle(cents == 0 ? Color.secondary : Color.primary)
+                .contentTransition(.numericText())
+                .animation(.spring(duration: 0.35, bounce: 0.15), value: cents)
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 12)
+        .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 14))
+    }
+}
+
 private struct StatChip: View {
     let icon: String
     let value: String
@@ -183,16 +215,21 @@ private struct StatChip: View {
 struct EntryRow: View {
     let entry: TipEntry
 
+    private var subtitle: String {
+        if let note = entry.note, !note.isEmpty {
+            return "\(entry.kind.displayName) · \(note)"
+        }
+        return entry.kind.displayName
+    }
+
     var body: some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
                 Text(entry.date.formatted(.dateTime.month(.abbreviated).day().year()))
                     .font(.body)
-                if let note = entry.note, !note.isEmpty {
-                    Text(note)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             Spacer()
             Text(Money.string(fromCents: entry.amountCents))
