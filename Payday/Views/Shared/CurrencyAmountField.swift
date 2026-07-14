@@ -15,8 +15,9 @@ struct CurrencyAmountField: View {
     var body: some View {
         ZStack {
             Text(Money.string(fromCents: cents))
-                .font(.system(size: 56, weight: .bold, design: .rounded))
-                .foregroundStyle(cents == 0 ? Color.secondary : Color.primary)
+                .font(PaydayFont.displayHero)
+                .monospacedDigit()
+                .foregroundStyle(cents == 0 ? PaydayColor.textSecondary : PaydayColor.textPrimary)
                 .contentTransition(.numericText())
                 .lineLimit(1)
                 .minimumScaleFactor(0.5)

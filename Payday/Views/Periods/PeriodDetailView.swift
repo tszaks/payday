@@ -36,17 +36,20 @@ struct PeriodDetailView: View {
             Section {
                 VStack(spacing: 10) {
                     Text(dateRangeString)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .font(PaydayFont.subheadline)
+                        .foregroundStyle(PaydayColor.textSecondary)
                     Text(Money.string(fromCents: loggedCents))
-                        .font(.system(size: 44, weight: .bold, design: .rounded))
+                        .font(PaydayFont.displayXL)
+                        .monospacedDigit()
+                        .foregroundStyle(PaydayColor.textPrimary)
                     HStack(spacing: 6) {
                         Text("Cash \(Money.string(fromCents: breakdown.cashCents))")
-                        Text("·").foregroundStyle(.secondary)
+                        Text("·").foregroundStyle(PaydayColor.textSecondary)
                         Text("Credit \(Money.string(fromCents: breakdown.creditCents))")
                     }
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .font(PaydayFont.footnote)
+                    .monospacedDigit()
+                    .foregroundStyle(PaydayColor.textSecondary)
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 12)
@@ -67,12 +70,14 @@ struct PeriodDetailView: View {
                     }
                 }
             }
+            .listRowBackground(PaydayColor.background)
 
             if entries.isEmpty {
                 Section {
                     Text("No entries in this period.")
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(PaydayColor.textSecondary)
                 }
+                .listRowBackground(PaydayColor.background)
             } else {
                 Section("Entries") {
                     ForEach(entries) { entry in
@@ -91,9 +96,12 @@ struct PeriodDetailView: View {
                         }
                     }
                 }
+                .listRowBackground(PaydayColor.background)
             }
         }
         .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+        .background(PaydayColor.background)
         .navigationTitle("Period")
         .navigationBarTitleDisplayMode(.inline)
         .sheet(item: $sheetTarget) { target in
@@ -126,24 +134,27 @@ struct PaycheckComparisonView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(comparisonLine)
-                .font(.subheadline)
+                .font(PaydayFont.subheadline)
+                .monospacedDigit()
+                .foregroundStyle(PaydayColor.textPrimary)
 
             HStack(spacing: 6) {
                 Image(systemName: isShort ? "arrow.down.circle.fill" : "checkmark.circle.fill")
-                    .foregroundStyle(isShort ? Color.red : Color.accentColor)
+                    .foregroundStyle(isShort ? PaydayColor.error : PaydayColor.primary)
                 Text(deltaString)
-                    .font(.system(.headline, design: .rounded))
-                    .foregroundStyle(isShort ? Color.red : Color.accentColor)
+                    .font(PaydayFont.displayCompact)
+                    .monospacedDigit()
+                    .foregroundStyle(isShort ? PaydayColor.error : PaydayColor.primary)
             }
 
             Text(caption)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(PaydayFont.caption)
+                .foregroundStyle(PaydayColor.textSecondary)
 
             if let note = paycheck.note, !note.isEmpty {
                 Text(note)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(PaydayFont.caption)
+                    .foregroundStyle(PaydayColor.textSecondary)
             }
         }
         .padding(.vertical, 4)

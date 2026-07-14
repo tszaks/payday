@@ -57,8 +57,11 @@ struct PeriodsView: View {
                         paycheck: paycheck(for: period)
                     )
                 }
+                .listRowBackground(PaydayColor.background)
             }
             .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .background(PaydayColor.background)
             .navigationTitle("Periods")
             #if DEBUG
             .onAppear {
@@ -87,19 +90,21 @@ private struct PeriodRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(dateRangeString)
-                        .font(.body)
+                        .font(PaydayFont.body)
+                        .foregroundStyle(PaydayColor.textPrimary)
                     if isCurrent {
                         Text("Current")
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(Color.accentColor)
+                            .font(PaydayFont.caption2)
+                            .foregroundStyle(PaydayColor.primary)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
-                            .background(Color.accentColor.opacity(0.15), in: Capsule())
+                            .background(PaydayColor.primary.opacity(0.15), in: Capsule())
                     }
                 }
                 Text(Money.string(fromCents: loggedCents))
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .font(PaydayFont.subheadline)
+                    .monospacedDigit()
+                    .foregroundStyle(PaydayColor.textSecondary)
             }
             Spacer()
             if let paycheck {
@@ -109,11 +114,12 @@ private struct PeriodRow: View {
                 let delta = paycheck.paidTipsCents - comparedCents
                 VStack(alignment: .trailing, spacing: 2) {
                     Text(deltaString(delta))
-                        .font(.system(.subheadline, design: .rounded, weight: .semibold))
-                        .foregroundStyle(delta < 0 ? Color.red : Color.accentColor)
+                        .font(PaydayFont.displaySmall)
+                        .monospacedDigit()
+                        .foregroundStyle(delta < 0 ? PaydayColor.error : PaydayColor.primary)
                     Text("checked")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+                        .font(PaydayFont.caption2)
+                        .foregroundStyle(PaydayColor.textSecondary)
                 }
             }
         }

@@ -22,8 +22,8 @@ struct PaycheckEntrySheet: View {
         NavigationStack {
             VStack(spacing: 24) {
                 Text("Enter the tips amount from the pay stub — not the check total.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .font(PaydayFont.footnote)
+                    .foregroundStyle(PaydayColor.textSecondary)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal)
 
@@ -32,6 +32,7 @@ struct PaycheckEntrySheet: View {
 
                 HStack {
                     Text("Note")
+                        .foregroundStyle(PaydayColor.textPrimary)
                     Spacer()
                     TextField("Optional", text: $note)
                         .multilineTextAlignment(.trailing)
@@ -88,7 +89,6 @@ struct PaycheckEntrySheet: View {
         if let existing {
             modelContext.delete(existing)
         }
-        PaydayHaptics.success()
         dismiss()
     }
 }

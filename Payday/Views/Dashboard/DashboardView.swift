@@ -67,6 +67,7 @@ struct DashboardView: View {
                                 EntryRow(entry: entry)
                             }
                             .buttonStyle(.plain)
+                            .listRowBackground(PaydayColor.background)
                             .swipeActions(edge: .trailing) {
                                 Button(role: .destructive) {
                                     modelContext.delete(entry)
@@ -79,6 +80,8 @@ struct DashboardView: View {
                 }
             }
             .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .background(PaydayColor.background)
             .contentMargins(.bottom, 88, for: .scrollContent) // clear the floating + button
             .navigationTitle("Payday")
             .toolbar {
@@ -110,13 +113,14 @@ struct DashboardView: View {
         VStack(spacing: 20) {
             VStack(spacing: 6) {
                 Text("This pay period")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .font(PaydayFont.subheadline)
+                    .foregroundStyle(PaydayColor.textSecondary)
                 Text(Money.string(fromCents: totalCents))
-                    .font(.system(size: 64, weight: .bold, design: .rounded))
-                    .foregroundStyle(.primary)
+                    .font(PaydayFont.displayXXL)
+                    .monospacedDigit()
+                    .foregroundStyle(PaydayColor.textPrimary)
                     .contentTransition(.numericText())
-                    .animation(.spring(duration: 0.35, bounce: 0.15), value: totalCents)
+                    .animation(PaydayAnimation.premiumSpring, value: totalCents)
                     .lineLimit(1)
                     .minimumScaleFactor(0.5)
             }
@@ -128,12 +132,10 @@ struct DashboardView: View {
 
             HStack(spacing: 12) {
                 StatChip(
-                    icon: "calendar",
                     value: daysRemaining == 0 ? "Today" : "\(daysRemaining)",
                     label: daysRemaining == 0 ? "Payday" : (daysRemaining == 1 ? "day left" : "days left")
                 )
                 StatChip(
-                    icon: "briefcase.fill",
                     value: "\(shiftCount)",
                     label: shiftCount == 1 ? "shift logged" : "shifts logged"
                 )
@@ -142,23 +144,19 @@ struct DashboardView: View {
         .padding(20)
         .frame(maxWidth: .infinity)
         .background(PaydayColor.cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: PaydayRadius.lg, style: .continuous))
+        .paydayPremiumShadow()
+        .padding(.horizontal)
+        .padding(.top, 8)
     }
 
     private var emptyState: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "moon.stars")
-                .font(.system(size: 32))
-                .foregroundStyle(.secondary)
-            Text("Nothing logged yet this period")
-                .font(.headline)
-            Text("Log tonight's tips and watch the total build toward payday.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 32)
-        .padding(.horizontal, 24)
+        ContentUnavailableView(
+            "Nothing logged yet this period",
+            systemImage: "tray",
+            description: Text("Log tonight's tips and watch the total build toward payday.")
+        )
+        .padding(.vertical, 16)
     }
 }
 
@@ -169,42 +167,40 @@ private struct MoneyTile: View {
     var body: some View {
         VStack(spacing: 4) {
             Text(label)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(PaydayFont.caption)
+                .foregroundStyle(PaydayColor.textSecondary)
             Text(Money.string(fromCents: cents))
-                .font(.system(.title3, design: .rounded, weight: .semibold))
-                .foregroundStyle(cents == 0 ? Color.secondary : Color.primary)
+                .font(PaydayFont.displaySmall)
+                .monospacedDigit()
+                .foregroundStyle(cents == 0 ? PaydayColor.textSecondary : PaydayColor.textPrimary)
                 .contentTransition(.numericText())
-                .animation(.spring(duration: 0.35, bounce: 0.15), value: cents)
+                .animation(PaydayAnimation.premiumSpring, value: cents)
                 .lineLimit(1)
                 .minimumScaleFactor(0.6)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 12)
-        .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 14))
+        .background(PaydayColor.fieldBackground, in: RoundedRectangle(cornerRadius: PaydayRadius.md))
     }
 }
 
 private struct StatChip: View {
-    let icon: String
     let value: String
     let label: String
 
     var body: some View {
         VStack(spacing: 4) {
-            HStack(spacing: 6) {
-                Image(systemName: icon)
-                    .foregroundStyle(Color.accentColor)
-                Text(value)
-                    .font(.system(.title3, design: .rounded, weight: .semibold))
-            }
+            Text(value)
+                .font(PaydayFont.displaySmall)
+                .monospacedDigit()
+                .foregroundStyle(PaydayColor.textPrimary)
             Text(label)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(PaydayFont.caption)
+                .foregroundStyle(PaydayColor.textSecondary)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 12)
-        .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 14))
+        .background(PaydayColor.fieldBackground, in: RoundedRectangle(cornerRadius: PaydayRadius.md))
     }
 }
 
@@ -235,14 +231,18 @@ struct EntryRow: View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
                 Text(entry.date.formatted(.dateTime.month(.abbreviated).day().year()))
-                    .font(.body)
+                    .font(PaydayFont.body)
+                    .foregroundStyle(PaydayColor.textPrimary)
                 Text(subtitle)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(PaydayFont.caption)
+                    .foregroundStyle(PaydayColor.textSecondary)
+                    .monospacedDigit()
             }
             Spacer()
             Text(Money.string(fromCents: entry.amountCents))
-                .font(.system(.body, design: .rounded, weight: .semibold))
+                .font(PaydayFont.displaySmall)
+                .monospacedDigit()
+                .foregroundStyle(PaydayColor.textPrimary)
         }
         .padding(.vertical, 4)
     }

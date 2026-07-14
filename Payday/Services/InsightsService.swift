@@ -124,7 +124,8 @@ enum InsightsService {
                 ["role": "system", "content": systemPrompt],
                 ["role": "user", "content": payloadString]
             ],
-            "temperature": 0.3,
+            // gpt-5.6-luna only supports the default temperature (1) — omit
+            // the parameter entirely rather than send an unsupported value.
             "response_format": ["type": "json_object"]
         ])
 

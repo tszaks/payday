@@ -13,10 +13,11 @@ struct FirstRunSetupView: View {
             VStack(spacing: 0) {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Welcome to Payday")
-                        .font(.largeTitle.bold())
+                        .font(PaydayFont.largeTitle)
+                        .foregroundStyle(PaydayColor.textPrimary)
                     Text("Two quick questions and you're set.")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .font(PaydayFont.subheadline)
+                        .foregroundStyle(PaydayColor.textSecondary)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal)
@@ -43,8 +44,8 @@ struct FirstRunSetupView: View {
 
                     if frequency == .twiceMonthly {
                         Text("Paydays fall on the 15th and the last day of every month.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
+                            .font(PaydayFont.footnote)
+                            .foregroundStyle(PaydayColor.textSecondary)
                             .listRowBackground(PaydayColor.fieldBackground)
                     }
                 }

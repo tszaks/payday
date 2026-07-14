@@ -5,8 +5,12 @@ import SwiftData
 ///
 /// Logging a new shift captures cash AND credit together (the two numbers a
 /// server actually walks out with), saving one TipEntry per non-zero amount.
-/// Editing an existing entry stays single-amount with a kind toggle, since
-/// an entry is one specific cash-or-credit record.
+/// This is a creation flow, so it stays Cancel + explicit Save.
+///
+/// Editing an existing entry stays single-amount with a kind toggle, since an
+/// entry is one specific cash-or-credit record — but per the Vero sheet
+/// standard, edit flows live-save: every field change writes straight to the
+/// entry, and the toolbar is a single Done.
 struct LogTipSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
@@ -45,7 +49,7 @@ struct LogTipSheet: View {
     }
 
     private var canSave: Bool {
-        isEditing ? amountCents > 0 : (cashCents > 0 || creditCents > 0)
+        cashCents > 0 || creditCents > 0
     }
 
     var body: some View {
@@ -70,15 +74,26 @@ struct LogTipSheet: View {
             .navigationTitle(isEditing ? "Edit Tips" : "Log Tips")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") { save() }
-                        .buttonStyle(.glassProminent)
-                        .disabled(!canSave)
+                if isEditing {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { dismiss() }
+                            .buttonStyle(.glassProminent)
+                    }
+                } else {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") { dismiss() }
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Save") { saveNew() }
+                            .buttonStyle(.glassProminent)
+                            .disabled(!canSave)
+                    }
                 }
             }
+            .onChange(of: amountCents) { _, _ in liveSaveEdit() }
+            .onChange(of: kind) { _, _ in liveSaveEdit() }
+            .onChange(of: date) { _, _ in liveSaveEdit() }
+            .onChange(of: note) { _, _ in liveSaveEdit() }
         }
         // Fixed height for the common case, plus .large as an escape hatch so
         // content is never clipped on smaller iPhones with the keypad up.
@@ -93,13 +108,14 @@ struct LogTipSheet: View {
         VStack(spacing: 16) {
             VStack(spacing: 4) {
                 Text("Shift total")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .font(PaydayFont.subheadline)
+                    .foregroundStyle(PaydayColor.textSecondary)
                 Text(Money.string(fromCents: cashCents + creditCents))
-                    .font(.system(size: 44, weight: .bold, design: .rounded))
-                    .foregroundStyle(cashCents + creditCents == 0 ? Color.secondary : Color.primary)
+                    .font(PaydayFont.displayXL)
+                    .monospacedDigit()
+                    .foregroundStyle(cashCents + creditCents == 0 ? PaydayColor.textSecondary : PaydayColor.textPrimary)
                     .contentTransition(.numericText())
-                    .animation(.spring(duration: 0.3, bounce: 0.15), value: cashCents + creditCents)
+                    .animation(PaydayAnimation.premiumSpring, value: cashCents + creditCents)
                     .lineLimit(1)
                     .minimumScaleFactor(0.5)
             }
@@ -159,30 +175,34 @@ struct LogTipSheet: View {
 
     // MARK: Actions
 
-    private func save() {
+    /// Creation flow only: writes the entries and haptics-confirms once, on
+    /// explicit Save.
+    private func saveNew() {
+        guard case .new = target else { return }
         // Clamp to today: the picker already blocks future dates, but never
         // trust the initial/bound value to enforce it.
-        let clampedDate = min(date, .now)
-        let normalizedDate = Calendar.current.startOfDay(for: clampedDate)
+        let normalizedDate = Calendar.current.startOfDay(for: min(date, .now))
         let trimmedNote = note.isEmpty ? nil : note
+        let recordedAt = Date.now
 
-        switch target {
-        case .new:
-            let recordedAt = Date.now
-            if cashCents > 0 {
-                modelContext.insert(TipEntry(date: normalizedDate, amountCents: cashCents, kind: .cash, note: trimmedNote, recordedAt: recordedAt))
-            }
-            if creditCents > 0 {
-                modelContext.insert(TipEntry(date: normalizedDate, amountCents: creditCents, kind: .credit, note: trimmedNote, recordedAt: recordedAt))
-            }
-        case .edit(let entry):
-            entry.date = normalizedDate
-            entry.amountCents = amountCents
-            entry.kind = kind
-            entry.note = trimmedNote
+        if cashCents > 0 {
+            modelContext.insert(TipEntry(date: normalizedDate, amountCents: cashCents, kind: .cash, note: trimmedNote, recordedAt: recordedAt))
+        }
+        if creditCents > 0 {
+            modelContext.insert(TipEntry(date: normalizedDate, amountCents: creditCents, kind: .credit, note: trimmedNote, recordedAt: recordedAt))
         }
         PaydayHaptics.success()
         dismiss()
+    }
+
+    /// Edit flow: every field change writes straight through to the entry.
+    /// Routine, reversible edits stay silent — no haptic on every keystroke.
+    private func liveSaveEdit() {
+        guard case .edit(let entry) = target else { return }
+        entry.date = Calendar.current.startOfDay(for: min(date, .now))
+        entry.amountCents = amountCents
+        entry.kind = kind
+        entry.note = note.isEmpty ? nil : note
     }
 
     private func delete() {

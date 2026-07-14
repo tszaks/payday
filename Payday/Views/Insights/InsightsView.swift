@@ -16,11 +16,14 @@ struct InsightsView: View {
     var body: some View {
         NavigationStack {
             Group {
-                if isLoading {
+                if let snapshot = insightsStore.snapshot {
+                    // Calm over noisy: re-analyzing never evicts what's already
+                    // on screen. Progress shows inline in the footer instead.
+                    resultList(snapshot)
+                } else if isLoading {
+                    // Nothing to preserve on a first-ever analysis.
                     ProgressView("Analyzing your tips…")
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if let snapshot = insightsStore.snapshot {
-                    resultList(snapshot)
                 } else {
                     ScrollView {
                         emptyState
@@ -29,6 +32,7 @@ struct InsightsView: View {
                     }
                 }
             }
+            .background(PaydayColor.background)
             .navigationTitle("Insights")
             #if DEBUG
             .onAppear {
@@ -45,40 +49,55 @@ struct InsightsView: View {
             ForEach(snapshot.sections) { section in
                 Section(section.title) {
                     Text(section.body)
+                        .font(PaydayFont.body)
+                        .foregroundStyle(PaydayColor.textPrimary)
                         .padding(.vertical, 4)
                 }
+                .listRowBackground(PaydayColor.background)
             }
             Section {
-                Button("Analyze Again") {
-                    Task { await analyze() }
-                }
-                if let errorMessage {
-                    Text(errorMessage)
-                        .font(.caption)
-                        .foregroundStyle(Color.red)
+                if isLoading {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                        Text("Analyzing your tips…")
+                            .font(PaydayFont.subheadline)
+                            .foregroundStyle(PaydayColor.textSecondary)
+                    }
+                } else {
+                    Button("Analyze Again") {
+                        Task { await analyze() }
+                    }
+                    if let errorMessage {
+                        Text(errorMessage)
+                            .font(PaydayFont.caption)
+                            .foregroundStyle(PaydayColor.error)
+                    }
                 }
             } footer: {
                 Text("Last updated \(snapshot.generatedAt.formatted(.dateTime.month(.abbreviated).day().hour().minute()))")
             }
+            .listRowBackground(PaydayColor.background)
         }
         .listStyle(.plain)
+        .scrollContentBackground(.hidden)
     }
 
     private var emptyState: some View {
         VStack(spacing: 16) {
             Image(systemName: "chart.line.uptrend.xyaxis")
-                .font(.system(size: 32))
-                .foregroundStyle(.secondary)
+                .font(PaydayFont.iconXL)
+                .foregroundStyle(PaydayColor.textSecondary)
             Text("See where and when you earn the most.")
-                .font(.headline)
+                .font(PaydayFont.headline)
+                .foregroundStyle(PaydayColor.textPrimary)
             Text("Sends your logged tips — dates, amounts, cash/credit type, and any notes — to OpenAI for analysis. Nothing else leaves your phone.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(PaydayFont.caption)
+                .foregroundStyle(PaydayColor.textSecondary)
                 .multilineTextAlignment(.center)
             if let errorMessage {
                 Text(errorMessage)
-                    .font(.caption)
-                    .foregroundStyle(Color.red)
+                    .font(PaydayFont.caption)
+                    .foregroundStyle(PaydayColor.error)
                     .multilineTextAlignment(.center)
             }
             Button("Analyze My Tips") {

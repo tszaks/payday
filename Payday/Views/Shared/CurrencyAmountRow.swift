@@ -17,12 +17,14 @@ struct CurrencyAmountRow: View {
     var body: some View {
         HStack {
             Text(label)
-                .font(.body)
+                .font(PaydayFont.body)
+                .foregroundStyle(PaydayColor.textPrimary)
             Spacer()
             ZStack(alignment: .trailing) {
                 Text(Money.string(fromCents: cents))
-                    .font(.system(size: 30, weight: .semibold, design: .rounded))
-                    .foregroundStyle(cents == 0 ? Color.secondary : Color.primary)
+                    .font(PaydayFont.displayMediumBlack)
+                    .monospacedDigit()
+                    .foregroundStyle(cents == 0 ? PaydayColor.textSecondary : PaydayColor.textPrimary)
                     .contentTransition(.numericText())
                     .lineLimit(1)
                     .minimumScaleFactor(0.5)
@@ -43,7 +45,7 @@ struct CurrencyAmountRow: View {
         .overlay(
             RoundedRectangle(cornerRadius: 16)
                 .strokeBorder(
-                    isFocused ? Color.accentColor : Color.primary.opacity(0.08),
+                    isFocused ? PaydayColor.primary : PaydayColor.textPrimary.opacity(0.08),
                     lineWidth: isFocused ? 2 : 1
                 )
         )

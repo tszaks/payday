@@ -25,7 +25,7 @@ struct DayDetailSheet: View {
             List {
                 if entries.isEmpty {
                     Text("No tips logged this day.")
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(PaydayColor.textSecondary)
                         .listRowSeparator(.hidden)
                 } else {
                     Section {
@@ -49,11 +49,14 @@ struct DayDetailSheet: View {
                     } footer: {
                         if entries.count > 1 {
                             Text("Total: \(Money.string(fromCents: totalCents))")
+                                .monospacedDigit()
                         }
                     }
                 }
             }
             .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .background(PaydayColor.background)
             .navigationTitle(date.formatted(.dateTime.month(.abbreviated).day()))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

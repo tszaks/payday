@@ -77,6 +77,7 @@ struct CalendarView: View {
                 Spacer()
             }
             .padding(.top, 8)
+            .background(PaydayColor.background)
             .navigationTitle("Calendar")
             .sheet(item: $daySelection) { selection in
                 DayDetailSheet(date: selection.date)
@@ -87,16 +88,17 @@ struct CalendarView: View {
     private var monthHeader: some View {
         HStack {
             Button {
-                withAnimation(.easeOut(duration: 0.22)) { shiftMonth(by: -1) }
+                withAnimation(.easeOut(duration: PaydayAnimation.standardDuration)) { shiftMonth(by: -1) }
             } label: {
                 Image(systemName: "chevron.left")
             }
             Spacer()
             Text(displayedMonth.formatted(.dateTime.month(.wide).year()))
-                .font(.headline)
+                .font(PaydayFont.headline)
+                .foregroundStyle(PaydayColor.textPrimary)
             Spacer()
             Button {
-                withAnimation(.easeOut(duration: 0.22)) { shiftMonth(by: 1) }
+                withAnimation(.easeOut(duration: PaydayAnimation.standardDuration)) { shiftMonth(by: 1) }
             } label: {
                 Image(systemName: "chevron.right")
             }
@@ -108,8 +110,8 @@ struct CalendarView: View {
         HStack {
             ForEach(orderedWeekdaySymbols, id: \.self) { symbol in
                 Text(symbol)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(PaydayFont.caption)
+                    .foregroundStyle(PaydayColor.textSecondary)
                     .frame(maxWidth: .infinity)
             }
         }
@@ -149,9 +151,12 @@ private struct DayCell: View {
             Text("\(dayNumber)")
                 .font(.system(.callout, design: .rounded))
                 .fontWeight(isToday ? .bold : .regular)
+                .foregroundStyle(PaydayColor.textPrimary)
             if hasTips, let totalCents {
                 Text(Money.string(fromCents: totalCents))
-                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+                    .font(PaydayFont.caption3)
+                    .monospacedDigit()
+                    .foregroundStyle(PaydayColor.textPrimary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.6)
             }
@@ -164,6 +169,14 @@ private struct DayCell: View {
         )
         .opacity(isCurrentMonth ? 1 : 0.3)
         .contentShape(Rectangle())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilityLabel)
+    }
+
+    private var accessibilityLabel: String {
+        let dateText = day.formatted(.dateTime.month(.wide).day())
+        guard hasTips, let totalCents else { return dateText }
+        return "\(dateText), \(Money.string(fromCents: totalCents)) logged"
     }
 
     /// Days with tips read strongest; the rest of the current pay period gets

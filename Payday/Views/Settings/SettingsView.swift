@@ -43,8 +43,8 @@ struct SettingsView: View {
 
                 if frequency == .twiceMonthly {
                     Text("Paydays fall on the 15th and the last day of every month.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .font(PaydayFont.footnote)
+                        .foregroundStyle(PaydayColor.textSecondary)
                         .listRowBackground(PaydayColor.fieldBackground)
                 }
 
