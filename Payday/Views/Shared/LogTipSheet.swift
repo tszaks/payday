@@ -102,11 +102,11 @@ struct LogTipSheet: View {
                     .minimumScaleFactor(0.5)
             }
 
-            card {
+            VStack(spacing: 12) {
                 CurrencyAmountRow(label: "Cash", cents: $cashCents, autoFocus: true)
-                Divider()
                 CurrencyAmountRow(label: "Credit", cents: $creditCents)
             }
+            .padding(.horizontal)
         }
     }
 
