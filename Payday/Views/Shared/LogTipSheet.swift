@@ -90,7 +90,7 @@ struct LogTipSheet: View {
     private var logContent: some View {
         VStack(spacing: 16) {
             VStack(spacing: 4) {
-                Text("Tonight's total")
+                Text("Shift total")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                 Text(Money.string(fromCents: cashCents + creditCents))
