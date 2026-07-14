@@ -11,21 +11,33 @@ struct InsightsSnapshot: Codable {
     let facts: InsightsFacts?
 }
 
-/// Caches the last Insights analysis so it survives app relaunch — the
-/// network call only happens again when the user explicitly taps
-/// "Analyze Again," never automatically on open.
+/// Caches the last Insights analysis so it survives app relaunch. The
+/// refresh itself is autonomous (InsightsView decides when it's due) —
+/// this store just persists the result and whether the last attempt
+/// failed, so a failed call can retry on the next visit instead of
+/// waiting out the full interval with no recourse.
 @Observable
 final class InsightsStore {
     private static let key = "com.szakacsmedia.payday.insightsSnapshot"
+    private static let lastAttemptFailedKey = "com.szakacsmedia.payday.insightsLastAttemptFailed"
     private let defaults: UserDefaults
 
     var snapshot: InsightsSnapshot? {
-        didSet { persist() }
+        didSet { persistSnapshot() }
+    }
+
+    /// Set on a failed refresh, cleared on the next success. While true,
+    /// the next visit retries immediately, bypassing the normal interval
+    /// gate — a network hiccup shouldn't lock someone out of a refresh
+    /// for days with no "Analyze Again" button to fall back on.
+    var lastAttemptFailed: Bool {
+        didSet { defaults.set(lastAttemptFailed, forKey: Self.lastAttemptFailedKey) }
     }
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         self.snapshot = Self.load(from: defaults)
+        self.lastAttemptFailed = defaults.bool(forKey: Self.lastAttemptFailedKey)
     }
 
     private static func load(from defaults: UserDefaults) -> InsightsSnapshot? {
@@ -33,7 +45,7 @@ final class InsightsStore {
         return try? JSONDecoder().decode(InsightsSnapshot.self, from: data)
     }
 
-    private func persist() {
+    private func persistSnapshot() {
         guard let snapshot else {
             defaults.removeObject(forKey: Self.key)
             return
