@@ -84,18 +84,34 @@ framework** (iOS 26, `import FoundationModels`, `LanguageModelSession`,
 
 One set of App Intents, five surfaces. In priority order:
 
-1. `LogTipsIntent` (parameters: cash, credit, note, double) → Siri ("log
-   ninety dollars in tips"), Shortcuts, Spotlight, Action Button, Control
-   Center control. The Control Center + Action Button path is the hero:
-   post-shift logging without finding the app.
+1. `LogTipsIntent` (parameters: amount, kind) → Siri ("log tips in Payday" —
+   Siri then asks "how much?" itself via `requestValueDialog`, no app
+   launch), Shortcuts. **Deviation from the original four-parameter plan
+   (cash, credit, note, double):** a single amount + kind is what a spoken
+   flow can actually carry cleanly — asking Siri to collect four slots by
+   voice fights the ten-second, thumb-only acceptance test rather than
+   serving it. Note and double stay app-only, on the full log sheet.
+   `OpenLogSheetIntent` (no parameters, opens the app straight to a blank log
+   sheet) covers the case that needs a keyboard: the widget's interactive "+"
+   button.
 2. `PeriodTotalIntent` → "How much have I made this period?" via Siri and
-   Shortcuts, returns the total + days left as a dialog + snippet.
-3. WidgetKit suite: Home Screen small (period total + days left), Lock Screen
-   circular (payday countdown) + inline (total), StandBy. Interactive button
-   on the widget opens the log sheet directly.
-4. Smart Stack relevance: donate relevance around the user's learned typical
-   logging time so iOS surfaces the widget at shift end.
-5. CoreSpotlight: index entries ("tips friday" finds the app).
+   Shortcuts, returns the total as a dialog, computed from the same shared
+   store and stats engine as the app and the widget.
+3. WidgetKit suite: Home Screen small (period total + pace/days left,
+   interactive "+" button), Lock Screen circular (total) + rectangular
+   (total + pace) + inline (total), StandBy (reuses the accessory families
+   automatically — no separate code).
+4. Smart Stack relevance: `TimelineEntryRelevance` scored higher during the
+   evening shift window and highest on the payday moment itself.
+5. Siri, Shortcuts, Spotlight, the Action Button picker, and the Control
+   Center shortcut picker are all surfaced by ONE `AppShortcutsProvider`
+   declaration (`PaydayShortcuts`) — Apple's own mechanism covers all five
+   from a single spot, not five separate integrations.
+   **Deviation:** per-entry CoreSpotlight content indexing ("tips friday"
+   finds that specific logged entry) was not built — it needs a
+   deep-link-by-entry-ID route that doesn't exist yet, and the five surfaces
+   above are already covered without it. Worth a follow-up once entries need
+   their own deep link for other reasons.
 
 ## Pillar 6: Quiet Intelligence (learned, never configured)
 

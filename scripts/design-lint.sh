@@ -12,8 +12,8 @@ cd "$ROOT"
 
 FAIL=0
 
-# grep over app sources only; tests/build excluded
-SRC=(Payday)
+# grep over app + widget extension sources; tests/build excluded
+SRC=(Payday PaydayWidget)
 
 run_check() {
   local name="$1" pattern="$2" exclude_re="$3" hint="$4"
@@ -82,10 +82,14 @@ run_check \
   "Use the SF Pro Rounded display tokens (PaydayFont.display*)"
 
 # 7. No raw font(.system(size:)) for UI text — every size routes through PaydayFont.
+# PaydayWidgetAccessoryViews.swift is exempt: Lock Screen/StandBy accessory
+# widgets are rendered by the system in its own monochrome tint, ignoring
+# any PaydayColor set there, and Apple's own guidance is plain system fonts
+# to match other Lock Screen widgets rather than the app's brand type scale.
 run_check \
   "No raw .font(.system(size:)) outside DesignSystem" \
   '\.font\(\.system\(size:' \
-  'Design/DesignSystem\.swift' \
+  'Design/DesignSystem\.swift|PaydayWidgetAccessoryViews\.swift' \
   "Use a PaydayFont display or semantic token instead of a raw point size"
 
 # 8. Authentic Apple glass ONLY. Raw materials are never a Payday content surface.

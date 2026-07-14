@@ -14,8 +14,7 @@ enum DebugSeeder {
 
     @MainActor
     static func seedSampleData(scheduleStore: PayScheduleStore, insightsStore: InsightsStore) {
-        guard let container = try? ModelContainer(for: TipEntry.self, PaycheckRecord.self) else { return }
-        let context = container.mainContext
+        let context = SharedModelContainer.shared.mainContext
 
         // Idempotent: reseeding always starts from a clean slate instead of
         // stacking duplicate entries on top of whatever was already there.
@@ -94,8 +93,7 @@ enum DebugSeeder {
 
     @MainActor
     static func clearAll(scheduleStore: PayScheduleStore, insightsStore: InsightsStore) {
-        guard let container = try? ModelContainer(for: TipEntry.self, PaycheckRecord.self) else { return }
-        let context = container.mainContext
+        let context = SharedModelContainer.shared.mainContext
         try? context.delete(model: TipEntry.self)
         try? context.delete(model: PaycheckRecord.self)
         try? context.save()

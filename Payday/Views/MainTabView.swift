@@ -17,7 +17,10 @@ struct MainTabView: View {
     @State private var tabRouter = TabRouter()
     @State private var previousTab: AppTab = .dashboard
     @State private var isRestoringTabAfterLog = false
-    @State private var logTarget: TipEntrySheetTarget?
+    // Single source of truth for "what log sheet should be showing" —
+    // shared with App Intents (Siri, Shortcuts, the widget's "+" button),
+    // none of which can reach a plain @State here directly.
+    @Bindable private var deepLink = DeepLinkCoordinator.shared
 
     var body: some View {
         TabView(selection: $tabRouter.selected) {
@@ -54,7 +57,7 @@ struct MainTabView: View {
         }
         // Shell-level so logging works from any tab; each screen keeps its own
         // sheet only for editing an existing entry.
-        .sheet(item: $logTarget) { target in
+        .sheet(item: $deepLink.pendingLogTarget) { target in
             LogTipSheet(target: target)
         }
         #if DEBUG
@@ -65,7 +68,7 @@ struct MainTabView: View {
                 tabRouter.selected = tab
             }
             if args.contains("-OpenLogSheet") {
-                logTarget = .new(defaultDate: .now)
+                deepLink.pendingLogTarget = .new(defaultDate: .now)
             }
         }
         #endif
@@ -80,7 +83,7 @@ struct MainTabView: View {
         }
 
         if newTab == .logTips {
-            logTarget = .new(defaultDate: .now)
+            deepLink.pendingLogTarget = .new(defaultDate: .now)
             isRestoringTabAfterLog = true
             DispatchQueue.main.async {
                 tabRouter.selected = previousTab

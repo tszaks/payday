@@ -42,10 +42,50 @@ targets:
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
         INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
+        CODE_SIGN_ENTITLEMENTS: Payday/Payday.entitlements
     info:
       path: Generated/Payday-Info.plist
       properties:
         ITSAppUsesNonExemptEncryption: false
+    dependencies:
+      - target: PaydayWidget
+        embed: true
+
+  PaydayWidget:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "26.0"
+    sources:
+      - path: PaydayWidget
+      - path: Payday/Models/TipEntry.swift
+      - path: Payday/Models/PaycheckRecord.swift
+      - path: Payday/Models/PayScheduleStore.swift
+      - path: Payday/Utilities/PayPeriod.swift
+      - path: Payday/Utilities/Money.swift
+      - path: Payday/Utilities/TipBreakdown.swift
+      - path: Payday/Utilities/StatsEngine.swift
+      - path: Payday/Utilities/AppGroup.swift
+      - path: Payday/Utilities/SharedModelContainer.swift
+      - path: Payday/Utilities/DeepLinkCoordinator.swift
+      - path: Payday/Design/DesignSystem.swift
+      - path: Payday/Views/Shared/TipEntrySheetTarget.swift
+      - path: Payday/Intents/OpenLogSheetIntent.swift
+    settings:
+      base:
+        PRODUCT_NAME: PaydayWidget
+        PRODUCT_BUNDLE_IDENTIFIER: com.szakacsmedia.payday.widget
+        TARGETED_DEVICE_FAMILY: "1"
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Payday
+        CODE_SIGN_ENTITLEMENTS: PaydayWidget/PaydayWidget.entitlements
+    info:
+      path: Generated/PaydayWidget-Info.plist
+      properties:
+        CFBundleDisplayName: Payday
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
 
   PaydayTests:
     type: bundle.unit-test
@@ -65,6 +105,7 @@ schemes:
     build:
       targets:
         Payday: all
+        PaydayWidget: all
         PaydayTests: [test]
     test:
       config: Debug
