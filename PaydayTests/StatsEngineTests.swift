@@ -320,6 +320,26 @@ struct RevealTests {
         #expect(result.isRecord)
     }
 
+    @Test("a weekday with no prior history reveals as a first-weekday callout, never a self-compared $0.00 average")
+    func firstWeekdayLoggedNeverSelfCompares() {
+        let period = PayPeriod(start: date(2026, 7, 6), end: date(2026, 7, 19))
+        let tuesday = date(2026, 7, 7)
+        // June 20 (a Saturday, outside the period) sets an all-time best
+        // higher than tonight, so tonight isn't a record. July 6 (a Monday,
+        // inside the period, before tonight) rules out "first shift of the
+        // period." Neither is a Tuesday, so tonight is the first Tuesday
+        // ever logged - averageForWeekday(tuesday) is nil. The old code's
+        // `?? Double(cents)` fallback compared tonight against itself,
+        // always producing a nonsense "$0.00 above your Tuesday average."
+        let engine = StatsEngine(records: [
+            record(2026, 6, 20, cents: 8000),
+            record(2026, 7, 6, cents: 1000)
+        ])
+        let result = engine.reveal(forNightAt: tuesday, cents: 5000, period: period)
+        #expect(result.comparison == .firstWeekdayLogged(weekday: Calendar.current.component(.weekday, from: tuesday)))
+        #expect(!result.isRecord)
+    }
+
     @Test("default case falls back to the weekday-average comparison with a period rank")
     func defaultWeekdayAverageWithRank() {
         let period = PayPeriod(start: date(2026, 7, 6), end: date(2026, 7, 19))
@@ -354,6 +374,14 @@ struct RevealCopyTests {
         let text = RevealCopy.comparison(for: .allTimeRecord(previousBestCents: 5000))
         #expect(text.contains("Best night ever"))
         #expect(text.contains("$50.00"))
+    }
+
+    @Test("first weekday logged copy never claims a $0.00 average")
+    func firstWeekdayLoggedCopy() {
+        let text = RevealCopy.comparison(for: .firstWeekdayLogged(weekday: 3))
+        #expect(text.contains("first logged"))
+        #expect(!text.contains("$0.00"))
+        #expect(!text.contains("average"))
     }
 
     @Test("weekday average copy includes a period rank clincher only when it qualifies")
