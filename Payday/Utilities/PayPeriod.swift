@@ -94,6 +94,17 @@ struct PayPeriodCalculator {
         addDays(schedule.resolvedPayDelayDays, to: period.end)
     }
 
+    /// How far through the period a date is, day-granular, in 0...1.
+    /// The first day already shows visible progress (1/n, never 0) and the
+    /// last day is exactly 1 — the Dashboard's progress track renders this,
+    /// so "payday is today" must read as a full bar, not an almost-full one.
+    func progress(through date: Date, in period: PayPeriod) -> Double {
+        let totalDays = (calendar.dateComponents([.day], from: period.start, to: period.end).day ?? 0) + 1
+        guard totalDays > 0 else { return 1 }
+        let elapsed = (calendar.dateComponents([.day], from: period.start, to: startOfDay(date)).day ?? 0) + 1
+        return Double(min(max(elapsed, 0), totalDays)) / Double(totalDays)
+    }
+
     /// Whole days remaining from `date` until the end of the period containing it.
     func daysRemaining(from date: Date) -> Int {
         let d = startOfDay(date)
