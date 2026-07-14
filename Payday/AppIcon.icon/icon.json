@@ -19,6 +19,9 @@
     {
       "layers" : [
         {
+          "fill" : {
+            "solid" : "srgb:0.00000,0.53333,0.00000,1.00000"
+          },
           "image-name" : "payday_icon_transparent 2.png",
           "name" : "payday_icon_transparent 2",
           "position" : {
