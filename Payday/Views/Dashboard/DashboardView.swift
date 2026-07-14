@@ -79,6 +79,7 @@ struct DashboardView: View {
                 }
             }
             .listStyle(.plain)
+            .contentMargins(.bottom, 88, for: .scrollContent) // clear the floating + button
             .navigationTitle("Payday")
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -94,9 +95,7 @@ struct DashboardView: View {
             }
             #if DEBUG
             .onAppear {
-                if ProcessInfo.processInfo.arguments.contains("-OpenLogSheet") {
-                    sheetTarget = .new(defaultDate: .now)
-                } else if ProcessInfo.processInfo.arguments.contains("-OpenEditSheet"), let first = periodEntries.first {
+                if ProcessInfo.processInfo.arguments.contains("-OpenEditSheet"), let first = periodEntries.first {
                     sheetTarget = .edit(first)
                 }
             }
@@ -139,17 +138,6 @@ struct DashboardView: View {
                     label: shiftCount == 1 ? "shift logged" : "shifts logged"
                 )
             }
-
-            Button {
-                sheetTarget = .new(defaultDate: .now)
-            } label: {
-                Label("Log Tips", systemImage: "plus.circle.fill")
-                    .font(.headline)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 6)
-            }
-            .buttonStyle(.glassProminent)
-            .tint(.accentColor)
         }
         .padding(20)
         .frame(maxWidth: .infinity)
