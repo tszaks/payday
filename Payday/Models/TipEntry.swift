@@ -20,9 +20,14 @@ enum TipKind: String, Codable, CaseIterable, Identifiable, Sendable {
 
 @Model
 final class TipEntry {
-    var id: UUID
-    var date: Date
-    var amountCents: Int
+    // CloudKit requires every attribute to be optional or have a default —
+    // its record model has no concept of a required field. These three
+    // were always required in practice (the init below still sets them on
+    // every real insert); the defaults only matter for CloudKit's schema
+    // validation and for synthesizing a value if a sync ever raced a write.
+    var id: UUID = UUID()
+    var date: Date = Date.now
+    var amountCents: Int = 0
     var note: String?
     // Stored as an OPTIONAL raw string, not a defaulted enum: existing
     // on-device rows created before this field have no value, and SwiftData

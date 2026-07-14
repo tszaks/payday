@@ -47,6 +47,9 @@ targets:
       path: Generated/Payday-Info.plist
       properties:
         ITSAppUsesNonExemptEncryption: false
+        UIBackgroundModes:
+          - remote-notification
+        NSFaceIDUsageDescription: Payday can lock itself with Face ID when you turn that on in Settings.
     dependencies:
       - target: PaydayWidget
         embed: true
@@ -80,6 +83,11 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_CFBundleDisplayName: Payday
         CODE_SIGN_ENTITLEMENTS: PaydayWidget/PaydayWidget.entitlements
+        # The widget reads the same App-Group-shared store the app keeps in
+        # sync with CloudKit — it must NOT also try to stand up its own
+        # CloudKit sync engine in the extension process. SharedModelContainer
+        # branches on this flag to pass cloudKitDatabase: .none there.
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: WIDGET_EXTENSION
     info:
       path: Generated/PaydayWidget-Info.plist
       properties:
