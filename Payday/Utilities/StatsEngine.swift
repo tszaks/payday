@@ -36,6 +36,7 @@ enum RevealComparison: Equatable {
     case allTimeRecord(previousBestCents: Int)
     case firstShiftOfPeriod
     case weekdayRecord(weekday: Int, previousBestCents: Int)
+    case firstWeekdayLogged(weekday: Int)
     case slowestRecently
     case weekdayAverage(weekday: Int, deltaCents: Int, periodRank: Int?, periodNightCount: Int)
 }
@@ -163,7 +164,13 @@ struct StatsEngine {
         if isSlowestRecently(date: date, cents: cents, lookbackShifts: 8) {
             return RevealResult(cents: cents, comparison: .slowestRecently, isRecord: false)
         }
-        let average = averageForWeekday(weekday, excluding: date) ?? Double(cents)
+        // No prior history for this weekday to average against — falling
+        // back to "compare tonight against tonight" would always read as
+        // "$0.00 above your ‹weekday› average," a self-referential
+        // non-comparison. Say plainly that this is the first one instead.
+        guard let average = averageForWeekday(weekday, excluding: date) else {
+            return RevealResult(cents: cents, comparison: .firstWeekdayLogged(weekday: weekday), isRecord: false)
+        }
         let deltaCents = cents - Int(average.rounded())
         let periodNights = nightlyTotals().filter { $0.date >= period.start && $0.date <= period.end }
         let rank = periodNights.filter { $0.cents > cents }.count + 1
@@ -379,6 +386,8 @@ enum RevealCopy {
             return "First shift of the period."
         case .weekdayRecord(let weekday, let previousBestCents):
             return weekdayRecordText(weekday: weekday, previousBestCents: previousBestCents)
+        case .firstWeekdayLogged(let weekday):
+            return "Your first logged \(weekdayName(weekday))."
         case .slowestRecently:
             return "Your quietest night in a while."
         case .weekdayAverage(let weekday, let deltaCents, let periodRank, let periodNightCount):
