@@ -151,21 +151,21 @@ private struct DayCell: View {
             }
         }
         .frame(maxWidth: .infinity, minHeight: 46)
-        .background(hasTips ? Color.accentColor.opacity(0.16) : Color.clear, in: RoundedRectangle(cornerRadius: 10))
+        .background(cellFill, in: RoundedRectangle(cornerRadius: 10))
         .overlay(
             RoundedRectangle(cornerRadius: 10)
                 .strokeBorder(isToday ? Color.accentColor : Color.clear, lineWidth: 1.5)
         )
-        .overlay(alignment: .bottom) {
-            if isInCurrentPeriod {
-                RoundedRectangle(cornerRadius: 1)
-                    .fill(Color.accentColor.opacity(0.5))
-                    .frame(height: 2)
-                    .padding(.horizontal, 6)
-                    .padding(.bottom, 2)
-            }
-        }
         .opacity(isCurrentMonth ? 1 : 0.3)
         .contentShape(Rectangle())
+    }
+
+    /// Days with tips read strongest; the rest of the current pay period gets
+    /// a soft wash so the range shows as a continuous band of tinted tiles
+    /// instead of disconnected underlines.
+    private var cellFill: Color {
+        if hasTips { return Color.accentColor.opacity(0.18) }
+        if isInCurrentPeriod { return Color.accentColor.opacity(0.07) }
+        return .clear
     }
 }

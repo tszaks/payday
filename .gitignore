@@ -7,3 +7,4 @@ xcuserdata/
 *.xcuserstate
 Generated/
 Secrets.local.xcconfig
+.pallium/
