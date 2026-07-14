@@ -54,6 +54,7 @@ struct PeriodsView: View {
                         isCurrent: index == 0,
                         loggedCents: periodBreakdown.totalCents,
                         loggedCreditCents: periodBreakdown.creditCents,
+                        payDate: calculator.payDate(for: period),
                         paycheck: paycheck(for: period)
                     )
                 }
@@ -83,6 +84,7 @@ private struct PeriodRow: View {
     let isCurrent: Bool
     let loggedCents: Int
     let loggedCreditCents: Int
+    let payDate: Date
     let paycheck: PaycheckRecord?
 
     var body: some View {
@@ -104,6 +106,9 @@ private struct PeriodRow: View {
                 Text(Money.string(fromCents: loggedCents))
                     .font(PaydayFont.subheadline)
                     .monospacedDigit()
+                    .foregroundStyle(PaydayColor.textSecondary)
+                Text("Paid \(payDate.formatted(.dateTime.month(.abbreviated).day()))")
+                    .font(PaydayFont.caption2)
                     .foregroundStyle(PaydayColor.textSecondary)
             }
             Spacer()

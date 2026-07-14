@@ -165,7 +165,7 @@ struct DashboardView: View {
                 } label: {
                     StatChip(
                         value: daysRemaining == 0 ? "Today" : "\(daysRemaining)",
-                        label: daysRemaining == 0 ? "Payday" : (daysRemaining == 1 ? "day left" : "days left")
+                        label: daysRemaining == 0 ? "Last day" : (daysRemaining == 1 ? "day left" : "days left")
                     )
                 }
                 .buttonStyle(.plain)

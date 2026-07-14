@@ -28,7 +28,12 @@ enum DebugSeeder {
 
         let schedule = PaySchedule(
             frequency: .biweekly,
-            anchorPayday: calendar.date(byAdding: .day, value: -4, to: today) ?? today,
+            // Period ended 9 days ago, paid 5 days later — same "most recent
+            // payday" reference point as before (4 days ago) but now modeled
+            // with a real lag, matching Tyler's actual schedule instead of
+            // the old lag-unaware assumption.
+            anchorPeriodEnd: calendar.date(byAdding: .day, value: -9, to: today) ?? today,
+            payDelayDays: 5,
             firstWeekday: 2 // Monday, matching a Mon–Sun pay period
         )
         scheduleStore.schedule = schedule

@@ -1,14 +1,19 @@
 import SwiftUI
 
-/// Asks exactly two things: pay frequency and the most recent payday.
-/// Both are editable later from Settings.
+/// Asks for pay frequency plus two dates the user can read straight off a
+/// pay stub — no mental math required. Most payroll pays a few days after a
+/// period actually ends; asking for the payday and the period-end
+/// separately lets the app work out that lag itself instead of assuming
+/// zero (which silently misplaces every period boundary for anyone paid on
+/// a delay). Both dates and the frequency are editable later from Settings.
 struct FirstRunSetupView: View {
     @Environment(PayScheduleStore.self) private var scheduleStore
     @Environment(UserPreferencesStore.self) private var preferencesStore
 
     @State private var firstName: String = ""
     @State private var frequency: PayFrequency = .biweekly
-    @State private var anchorPayday: Date = .now
+    @State private var mostRecentPayday: Date = .now
+    @State private var periodEndDate: Date = .now
 
     var body: some View {
         NavigationStack {
@@ -45,14 +50,35 @@ struct FirstRunSetupView: View {
                     }
                     .listRowBackground(PaydayColor.fieldBackground)
 
-                    Section("When was your most recent payday?") {
-                        DatePicker("Payday", selection: $anchorPayday, in: ...Date.now, displayedComponents: .date)
-                            .datePickerStyle(.graphical)
+                    Section {
+                        HStack {
+                            Text("Most recent payday")
+                            Spacer()
+                            DatePicker("", selection: $mostRecentPayday, in: ...Date.now, displayedComponents: .date)
+                                .labelsHidden()
+                        }
+                    } footer: {
+                        Text("The day that paycheck actually landed in your account.")
+                    }
+                    .listRowBackground(PaydayColor.fieldBackground)
+                    .onChange(of: mostRecentPayday) { _, newValue in
+                        if periodEndDate > newValue { periodEndDate = newValue }
+                    }
+
+                    Section {
+                        HStack {
+                            Text("Last day it covered")
+                            Spacer()
+                            DatePicker("", selection: $periodEndDate, in: ...mostRecentPayday, displayedComponents: .date)
+                                .labelsHidden()
+                        }
+                    } footer: {
+                        Text("The last day of work that paycheck paid you for — if it landed a few days after your last shift, that's normal, this is how Payday learns the gap.")
                     }
                     .listRowBackground(PaydayColor.fieldBackground)
 
                     if frequency == .twiceMonthly {
-                        Text("Paydays fall on the 15th and the last day of every month.")
+                        Text("Periods run the 1st–15th and 16th–end of every month.")
                             .font(PaydayFont.footnote)
                             .foregroundStyle(PaydayColor.textSecondary)
                             .listRowBackground(PaydayColor.fieldBackground)
@@ -75,9 +101,16 @@ struct FirstRunSetupView: View {
     private func save() {
         let trimmedName = firstName.trimmingCharacters(in: .whitespaces)
         preferencesStore.firstName = trimmedName.isEmpty ? nil : trimmedName
+
+        let calendar = Calendar.current
+        let normalizedPayday = calendar.startOfDay(for: mostRecentPayday)
+        let normalizedPeriodEnd = calendar.startOfDay(for: min(periodEndDate, mostRecentPayday))
+        let delayDays = max(0, calendar.dateComponents([.day], from: normalizedPeriodEnd, to: normalizedPayday).day ?? 0)
+
         scheduleStore.schedule = PaySchedule(
             frequency: frequency,
-            anchorPayday: Calendar.current.startOfDay(for: anchorPayday)
+            anchorPeriodEnd: normalizedPeriodEnd,
+            payDelayDays: delayDays
         )
     }
 }

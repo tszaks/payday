@@ -12,14 +12,16 @@ struct SettingsView: View {
     @State private var firstName: String
     @State private var appearance: AppAppearance
     @State private var frequency: PayFrequency
-    @State private var anchorPayday: Date
+    @State private var mostRecentPayday: Date
+    @State private var periodEndDate: Date
     @State private var firstWeekday: Int
 
     private let weekdaySymbols = Calendar.current.weekdaySymbols // [Sunday…Saturday]
 
     init(schedule: PaySchedule) {
         _frequency = State(initialValue: schedule.frequency)
-        _anchorPayday = State(initialValue: schedule.anchorPayday)
+        _periodEndDate = State(initialValue: schedule.anchorPeriodEnd)
+        _mostRecentPayday = State(initialValue: Calendar.current.date(byAdding: .day, value: schedule.resolvedPayDelayDays, to: schedule.anchorPeriodEnd) ?? schedule.anchorPeriodEnd)
         _firstWeekday = State(initialValue: schedule.resolvedFirstWeekday)
         _firstName = State(initialValue: "")
         _appearance = State(initialValue: .system)
@@ -55,16 +57,28 @@ struct SettingsView: View {
                 .listRowBackground(PaydayColor.fieldBackground)
 
                 Section {
-                    DatePicker("Payday", selection: $anchorPayday, in: ...Date.now, displayedComponents: .date)
+                    DatePicker("Payday", selection: $mostRecentPayday, in: ...Date.now, displayedComponents: .date)
                 } header: {
                     Text("Most recent payday")
                 } footer: {
-                    Text("Set this to the last day of your most recent pay period. Everything is grouped around it.")
+                    Text("The day that paycheck actually landed in your account.")
+                }
+                .listRowBackground(PaydayColor.fieldBackground)
+                .onChange(of: mostRecentPayday) { _, newValue in
+                    if periodEndDate > newValue { periodEndDate = newValue }
+                }
+
+                Section {
+                    DatePicker("Last day covered", selection: $periodEndDate, in: ...mostRecentPayday, displayedComponents: .date)
+                } header: {
+                    Text("What that check paid you for")
+                } footer: {
+                    Text("The last day of work that paycheck covered. Everything is grouped around this, not the payday itself.")
                 }
                 .listRowBackground(PaydayColor.fieldBackground)
 
                 if frequency == .twiceMonthly {
-                    Text("Paydays fall on the 15th and the last day of every month.")
+                    Text("Periods run the 1st–15th and 16th–end of every month.")
                         .font(PaydayFont.footnote)
                         .foregroundStyle(PaydayColor.textSecondary)
                         .listRowBackground(PaydayColor.fieldBackground)
@@ -105,7 +119,8 @@ struct SettingsView: View {
                 }
             }
             .onChange(of: frequency) { _, _ in save() }
-            .onChange(of: anchorPayday) { _, _ in save() }
+            .onChange(of: mostRecentPayday) { _, _ in save() }
+            .onChange(of: periodEndDate) { _, _ in save() }
             .onChange(of: firstWeekday) { _, _ in save() }
             .onChange(of: firstName) { _, newValue in
                 let trimmed = newValue.trimmingCharacters(in: .whitespaces)
@@ -123,9 +138,15 @@ struct SettingsView: View {
     }
 
     private func save() {
+        let calendar = Calendar.current
+        let normalizedPayday = calendar.startOfDay(for: mostRecentPayday)
+        let normalizedPeriodEnd = calendar.startOfDay(for: min(periodEndDate, mostRecentPayday))
+        let delayDays = max(0, calendar.dateComponents([.day], from: normalizedPeriodEnd, to: normalizedPayday).day ?? 0)
+
         scheduleStore.schedule = PaySchedule(
             frequency: frequency,
-            anchorPayday: Calendar.current.startOfDay(for: anchorPayday),
+            anchorPeriodEnd: normalizedPeriodEnd,
+            payDelayDays: delayDays,
             firstWeekday: firstWeekday
         )
     }

@@ -20,7 +20,16 @@ enum PayFrequency: String, CaseIterable, Identifiable, Hashable, Codable {
 
 struct PaySchedule: Codable, Equatable {
     var frequency: PayFrequency
-    var anchorPayday: Date
+    /// The last DAY OF WORK in a known pay period — not the day the paycheck
+    /// arrives. Most payroll has a lag between the two (e.g. a period ending
+    /// Sunday might not get paid until the following Friday); anchoring
+    /// period math on the payday itself would silently misplace every period
+    /// boundary by that same lag. See payDelayDays.
+    var anchorPeriodEnd: Date
+    /// Days between a period's last day of work and the paycheck for it
+    /// landing. Optional so schedules saved before this existed decode to a
+    /// safe 0 (the old, lag-unaware behavior) rather than failing to decode.
+    var payDelayDays: Int?
     /// Which weekday the calendar grid starts on (Gregorian: 1 = Sunday …
     /// 7 = Saturday). Optional so schedules saved before this existed decode
     /// to nil and fall back to the device locale's default.
@@ -31,10 +40,15 @@ struct PaySchedule: Codable, Equatable {
         firstWeekday ?? Calendar.current.firstWeekday
     }
 
+    /// Resolved pay delay, defaulting to 0 (paid the same day the period ends).
+    var resolvedPayDelayDays: Int {
+        payDelayDays ?? 0
+    }
+
     /// Harmless stand-in used only for a transient render if the schedule is
     /// nil while a period-driven view is briefly still mounted (e.g. DEBUG
     /// clear-all). RootView switches to first-run setup on the next update.
-    static let fallback = PaySchedule(frequency: .biweekly, anchorPayday: .now)
+    static let fallback = PaySchedule(frequency: .biweekly, anchorPeriodEnd: .now)
 }
 
 struct PayPeriod: Hashable {
@@ -59,17 +73,25 @@ struct PayPeriodCalculator {
     // MARK: Public API
 
     /// The pay period that a given date falls inside: the day after the
-    /// preceding payday through the next payday, inclusive of both ends.
+    /// preceding period's last day through this period's last day, inclusive
+    /// of both ends.
     func period(containing date: Date) -> PayPeriod {
-        let end = payday(onOrAfter: date)
-        let previous = payday(strictlyBefore: end)
+        let end = periodEnd(onOrAfter: date)
+        let previous = periodEnd(strictlyBefore: end)
         let start = addDays(1, to: previous)
         return PayPeriod(start: startOfDay(start), end: startOfDay(end))
     }
 
-    /// The next payday strictly after the given date.
-    func nextPayday(after date: Date) -> Date {
-        payday(onOrAfter: addDays(1, to: startOfDay(date)))
+    /// The next period-end boundary strictly after the given date.
+    func nextPeriodEnd(after date: Date) -> Date {
+        periodEnd(onOrAfter: addDays(1, to: startOfDay(date)))
+    }
+
+    /// When the paycheck for this period actually lands — the period's last
+    /// day of work plus the payroll lag. Distinct from `period.end` itself:
+    /// that's the last day worked, not the day the money arrives.
+    func payDate(for period: PayPeriod) -> Date {
+        addDays(schedule.resolvedPayDelayDays, to: period.end)
     }
 
     /// Whole days remaining from `date` until the end of the period containing it.
@@ -79,39 +101,39 @@ struct PayPeriodCalculator {
         return calendar.dateComponents([.day], from: d, to: end).day ?? 0
     }
 
-    // MARK: Payday lookup, dispatched by frequency
+    // MARK: Period-end lookup, dispatched by frequency
 
-    private func payday(onOrAfter date: Date) -> Date {
+    private func periodEnd(onOrAfter date: Date) -> Date {
         let d = startOfDay(date)
         switch schedule.frequency {
-        case .weekly: return periodicPayday(onOrAfter: d, stepDays: 7)
-        case .biweekly: return periodicPayday(onOrAfter: d, stepDays: 14)
-        case .monthly: return monthlyPayday(onOrAfter: d)
-        case .twiceMonthly: return twiceMonthlyPayday(onOrAfter: d)
+        case .weekly: return periodicBoundary(onOrAfter: d, stepDays: 7)
+        case .biweekly: return periodicBoundary(onOrAfter: d, stepDays: 14)
+        case .monthly: return monthlyBoundary(onOrAfter: d)
+        case .twiceMonthly: return twiceMonthlyBoundary(onOrAfter: d)
         }
     }
 
-    private func payday(strictlyBefore date: Date) -> Date {
+    private func periodEnd(strictlyBefore date: Date) -> Date {
         let d = addDays(-1, to: startOfDay(date))
         switch schedule.frequency {
-        case .weekly: return periodicPayday(onOrBefore: d, stepDays: 7)
-        case .biweekly: return periodicPayday(onOrBefore: d, stepDays: 14)
-        case .monthly: return monthlyPayday(onOrBefore: d)
-        case .twiceMonthly: return twiceMonthlyPayday(onOrBefore: d)
+        case .weekly: return periodicBoundary(onOrBefore: d, stepDays: 7)
+        case .biweekly: return periodicBoundary(onOrBefore: d, stepDays: 14)
+        case .monthly: return monthlyBoundary(onOrBefore: d)
+        case .twiceMonthly: return twiceMonthlyBoundary(onOrBefore: d)
         }
     }
 
-    // MARK: Weekly / biweekly — fixed interval anchored on schedule.anchorPayday
+    // MARK: Weekly / biweekly — fixed interval anchored on schedule.anchorPeriodEnd
 
-    private func periodicPayday(onOrAfter date: Date, stepDays: Int) -> Date {
-        let anchor = startOfDay(schedule.anchorPayday)
+    private func periodicBoundary(onOrAfter date: Date, stepDays: Int) -> Date {
+        let anchor = startOfDay(schedule.anchorPeriodEnd)
         let diff = daysBetween(anchor, date)
         let n = ceilDiv(diff, stepDays)
         return addDays(n * stepDays, to: anchor)
     }
 
-    private func periodicPayday(onOrBefore date: Date, stepDays: Int) -> Date {
-        let anchor = startOfDay(schedule.anchorPayday)
+    private func periodicBoundary(onOrBefore date: Date, stepDays: Int) -> Date {
+        let anchor = startOfDay(schedule.anchorPeriodEnd)
         let diff = daysBetween(anchor, date)
         let n = floorDiv(diff, stepDays)
         return addDays(n * stepDays, to: anchor)
@@ -121,23 +143,23 @@ struct PayPeriodCalculator {
     // Calendar's own byAdding(.month) does NOT clamp (Jan 31 + 1 month rolls
     // into March), so month-end clamping is done by hand here.
 
-    private func monthlyPayday(onOrAfter date: Date) -> Date {
-        let anchorDay = calendar.component(.day, from: startOfDay(schedule.anchorPayday))
+    private func monthlyBoundary(onOrAfter date: Date) -> Date {
+        let anchorDay = calendar.component(.day, from: startOfDay(schedule.anchorPeriodEnd))
         let candidate = clampedDay(anchorDay, inMonthOf: date)
         if candidate >= date { return candidate }
         return clampedDay(anchorDay, inMonthOf: addMonths(1, to: date))
     }
 
-    private func monthlyPayday(onOrBefore date: Date) -> Date {
-        let anchorDay = calendar.component(.day, from: startOfDay(schedule.anchorPayday))
+    private func monthlyBoundary(onOrBefore date: Date) -> Date {
+        let anchorDay = calendar.component(.day, from: startOfDay(schedule.anchorPeriodEnd))
         let candidate = clampedDay(anchorDay, inMonthOf: date)
         if candidate <= date { return candidate }
         return clampedDay(anchorDay, inMonthOf: addMonths(-1, to: date))
     }
 
-    // MARK: Twice monthly — fixed paydays on the 15th and the last day of every month.
+    // MARK: Twice monthly — fixed period ends on the 15th and the last day of every month.
 
-    private func twiceMonthlyPayday(onOrAfter date: Date) -> Date {
+    private func twiceMonthlyBoundary(onOrAfter date: Date) -> Date {
         let fifteenth = clampedDay(15, inMonthOf: date)
         if date <= fifteenth { return fifteenth }
         let lastDay = lastDayOfMonth(containing: date)
@@ -145,7 +167,7 @@ struct PayPeriodCalculator {
         return clampedDay(15, inMonthOf: addMonths(1, to: date))
     }
 
-    private func twiceMonthlyPayday(onOrBefore date: Date) -> Date {
+    private func twiceMonthlyBoundary(onOrBefore date: Date) -> Date {
         let lastDay = lastDayOfMonth(containing: date)
         if date >= lastDay { return lastDay }
         let fifteenth = clampedDay(15, inMonthOf: date)

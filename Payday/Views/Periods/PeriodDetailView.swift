@@ -3,6 +3,7 @@ import SwiftData
 
 struct PeriodDetailView: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(PayScheduleStore.self) private var scheduleStore
     @Query private var allEntries: [TipEntry]
     @Query private var paycheckRecords: [PaycheckRecord]
 
@@ -10,6 +11,10 @@ struct PeriodDetailView: View {
     @State private var sheetTarget: TipEntrySheetTarget?
     @State private var showPaycheckSheet = false
     @State private var pendingDeleteEntry: TipEntry?
+
+    private var payDate: Date {
+        PayPeriodCalculator(schedule: scheduleStore.schedule ?? .fallback).payDate(for: period)
+    }
 
     private var entries: [TipEntry] {
         allEntries
@@ -51,6 +56,9 @@ struct PeriodDetailView: View {
                     .font(PaydayFont.footnote)
                     .monospacedDigit()
                     .foregroundStyle(PaydayColor.textSecondary)
+                    Text("Paid \(payDate.formatted(.dateTime.month(.wide).day()))")
+                        .font(PaydayFont.caption)
+                        .foregroundStyle(PaydayColor.textSecondary)
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 12)
