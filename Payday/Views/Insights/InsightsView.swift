@@ -15,8 +15,19 @@ struct InsightsView: View {
     @State private var isLoading = false
     @State private var errorMessage: String?
 
+    private var statsEngine: StatsEngine {
+        StatsEngine(records: allEntries.map(TipRecord.init))
+    }
+
     private var facts: InsightsFacts? {
-        StatsEngine(records: allEntries.map(TipRecord.init)).insightsFacts()
+        statsEngine.insightsFacts()
+    }
+
+    /// Most recent 30 nights only — legible on a compact chart width, and
+    /// matches Insights' own "recent patterns" framing rather than dumping
+    /// the user's entire history into one bar chart.
+    private var recentNights: [(date: Date, cents: Int)] {
+        Array(statsEngine.nightlyTotals().suffix(30))
     }
 
     private var isModelAvailable: Bool {
@@ -48,6 +59,12 @@ struct InsightsView: View {
 
     private func resultList(_ facts: InsightsFacts) -> some View {
         List {
+            Section {
+                NightlyEarningsChart(nights: recentNights)
+                    .padding(.vertical, 4)
+            }
+            .listRowBackground(PaydayColor.background)
+
             if isModelAvailable {
                 Section {
                     if let generatedAt = insightsStore.snapshot?.generatedAt {

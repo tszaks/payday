@@ -11,7 +11,7 @@ struct DashboardView: View {
 
     @State private var sheetTarget: TipEntrySheetTarget?
     @State private var showSettings = false
-    @State private var pendingDeleteEntry: TipEntry?
+    @State private var undoState = UndoDeleteToastState()
 
     private var greeting: String {
         let timeOfDay = switch Calendar.current.component(.hour, from: .now) {
@@ -148,23 +148,14 @@ struct DashboardView: View {
                             .listRowBackground(PaydayColor.background)
                             .swipeActions(edge: .trailing) {
                                 Button(role: .destructive) {
-                                    pendingDeleteEntry = entry
+                                    undoState.delete(entry, in: modelContext)
                                 } label: {
                                     Label("Delete", systemImage: "trash")
                                 }
                             }
+                            .entryContextMenu(entry, sheetTarget: $sheetTarget, undoState: undoState, context: modelContext)
                         }
                     }
-                }
-            }
-            .confirmationDialog(
-                "Delete this tip?",
-                isPresented: Binding(get: { pendingDeleteEntry != nil }, set: { if !$0 { pendingDeleteEntry = nil } }),
-                titleVisibility: .visible
-            ) {
-                Button("Delete", role: .destructive) {
-                    if let entry = pendingDeleteEntry { modelContext.delete(entry) }
-                    pendingDeleteEntry = nil
                 }
             }
             .listStyle(.plain)
@@ -198,6 +189,7 @@ struct DashboardView: View {
                 SettingsView(schedule: scheduleStore.schedule ?? .fallback)
             }
         }
+        .undoDeleteToast(undoState, context: modelContext)
     }
 
     private var heroCard: some View {

@@ -22,6 +22,7 @@ struct LogTipSheet: View {
     // New-log state (dual amount)
     @State private var cashCents: Int = 0
     @State private var creditCents: Int = 0
+    @FocusState private var focusedCurrencyField: CurrencyRowField?
 
     // Edit state (single amount + kind)
     @State private var amountCents: Int = 0
@@ -156,10 +157,18 @@ struct LogTipSheet: View {
             }
 
             VStack(spacing: 12) {
-                CurrencyAmountRow(label: "Cash", cents: $cashCents, autoFocus: true)
-                CurrencyAmountRow(label: "Credit", cents: $creditCents)
+                CurrencyAmountRow(label: "Cash", cents: $cashCents, field: .cash, focusedField: $focusedCurrencyField, autoFocus: true)
+                CurrencyAmountRow(label: "Credit", cents: $creditCents, field: .credit, focusedField: $focusedCurrencyField)
             }
             .padding(.horizontal)
+        }
+        .toolbar {
+            if focusedCurrencyField == .cash {
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Next") { focusedCurrencyField = .credit }
+                }
+            }
         }
     }
 
