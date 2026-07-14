@@ -264,10 +264,7 @@ struct DashboardView: View {
                 paydayMomentSection
             }
         }
-        .padding(PaydaySpacing.p24)
-        .frame(maxWidth: .infinity)
-        .background(PaydayColor.cardBackground, in: RoundedRectangle(cornerRadius: PaydayRadius.xl, style: .continuous))
-        .paydayPremiumShadow()
+        .paydayCard(padding: PaydaySpacing.p24)
     }
 
     /// The period itself, drawn: fills as days pass, ends at payday. This

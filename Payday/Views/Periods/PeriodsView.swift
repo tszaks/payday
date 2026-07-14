@@ -45,23 +45,28 @@ struct PeriodsView: View {
 
     var body: some View {
         NavigationStack(path: $path) {
-            List(periods.indices, id: \.self) { index in
-                let period = periods[index]
-                let periodBreakdown = breakdown(for: period)
-                NavigationLink(value: period) {
-                    PeriodRow(
-                        period: period,
-                        isCurrent: index == 0,
-                        loggedCents: periodBreakdown.totalCents,
-                        loggedCreditCents: periodBreakdown.creditCents,
-                        payDate: calculator.payDate(for: period),
-                        paycheck: paycheck(for: period)
-                    )
+            ScrollView {
+                LazyVStack(spacing: PaydaySpacing.p12) {
+                    ForEach(periods.indices, id: \.self) { index in
+                        let period = periods[index]
+                        let periodBreakdown = breakdown(for: period)
+                        NavigationLink(value: period) {
+                            PeriodRow(
+                                period: period,
+                                isCurrent: index == 0,
+                                loggedCents: periodBreakdown.totalCents,
+                                loggedCreditCents: periodBreakdown.creditCents,
+                                payDate: calculator.payDate(for: period),
+                                paycheck: paycheck(for: period)
+                            )
+                        }
+                        .buttonStyle(PressableButtonStyle())
+                    }
                 }
-                .listRowBackground(PaydayColor.background)
+                .padding(.horizontal, PaydaySpacing.p16)
+                .padding(.top, PaydaySpacing.p8)
             }
-            .listStyle(.plain)
-            .scrollContentBackground(.hidden)
+            .contentMargins(.bottom, 88, for: .scrollContent)
             .background(PaydayColor.background)
             .navigationTitle("Periods")
             #if DEBUG
@@ -88,17 +93,17 @@ private struct PeriodRow: View {
     let paycheck: PaycheckRecord?
 
     var body: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 2) {
+        HStack(alignment: .center, spacing: PaydaySpacing.p12) {
+            VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     Text(dateRangeString)
-                        .font(PaydayFont.body)
+                        .font(PaydayFont.headline)
                         .foregroundStyle(PaydayColor.textPrimary)
                     if isCurrent {
                         Text("Current")
                             .font(PaydayFont.caption2)
                             .foregroundStyle(PaydayColor.primary)
-                            .padding(.horizontal, 6)
+                            .padding(.horizontal, 7)
                             .padding(.vertical, 2)
                             .background(PaydayColor.primary.opacity(0.15), in: Capsule())
                     }
@@ -109,9 +114,9 @@ private struct PeriodRow: View {
                     .foregroundStyle(PaydayColor.textSecondary)
                 Text("Paid \(payDate.formatted(.dateTime.month(.abbreviated).day()))")
                     .font(PaydayFont.caption2)
-                    .foregroundStyle(PaydayColor.textSecondary)
+                    .foregroundStyle(PaydayColor.textTertiary)
             }
-            Spacer()
+            Spacer(minLength: 0)
             if let paycheck {
                 // Match PaycheckComparisonView: credit if any, else fall back
                 // to total (legacy all-cash periods have no credit to compare).
@@ -124,11 +129,15 @@ private struct PeriodRow: View {
                         .foregroundStyle(delta < 0 ? PaydayColor.error : PaydayColor.primary)
                     Text("checked")
                         .font(PaydayFont.caption2)
-                        .foregroundStyle(PaydayColor.textSecondary)
+                        .foregroundStyle(PaydayColor.textTertiary)
                 }
+            } else {
+                Image(systemName: "chevron.right")
+                    .font(PaydayFont.caption)
+                    .foregroundStyle(PaydayColor.textTertiary)
             }
         }
-        .padding(.vertical, 4)
+        .paydayCard()
     }
 
     private var dateRangeString: String {
