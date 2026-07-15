@@ -422,5 +422,13 @@ enum RevealCopy {
         let direction = deltaCents > 0 ? "ahead of" : "behind"
         return "\(Money.string(fromCents: abs(deltaCents))) \(direction) last period at this point."
     }
+
+    /// Same fact as paceLine, sized for the widget's systemSmall family —
+    /// the full sentence overflows a caption2 line in that little space.
+    static func compactPaceLine(deltaCents: Int) -> String {
+        if deltaCents == 0 { return "Even vs last period" }
+        let sign = deltaCents > 0 ? "+" : "-"
+        return "\(sign)\(Money.string(fromCents: abs(deltaCents))) vs last period"
+    }
 }
 

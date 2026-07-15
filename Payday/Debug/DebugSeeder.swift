@@ -89,6 +89,7 @@ enum DebugSeeder {
         }
 
         try? context.save()
+        PaydayWidgetRefresh.request()
     }
 
     @MainActor
@@ -97,6 +98,7 @@ enum DebugSeeder {
         try? context.delete(model: TipEntry.self)
         try? context.delete(model: PaycheckRecord.self)
         try? context.save()
+        PaydayWidgetRefresh.request()
         scheduleStore.schedule = nil
         insightsStore.snapshot = nil
     }
