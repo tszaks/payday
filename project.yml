@@ -50,7 +50,6 @@ targets:
         UIBackgroundModes:
           - remote-notification
         NSFaceIDUsageDescription: Payday can lock itself with Face ID when you turn that on in Settings.
-        OpenAIAPIKey: $(OPENAI_API_KEY)
     dependencies:
       - target: PaydayWidget
         embed: true

@@ -105,18 +105,30 @@ this app will actually run on can't use it. Insights narration now calls
   of the footnote entirely now. The underlying fact (computed totals go to
   OpenAI, never raw entries/notes) is still true and still governs what
   the app is allowed to send; it's just not surfaced as UI copy anymore.
-- **Key storage, explicit tradeoff, hard release gate:** the OpenAI key
-  lives in `Secrets.local.xcconfig` (gitignored) → `OpenAIAPIKey` in
-  Info.plist — the exact "key baked into the shipped binary" pattern this
-  pillar originally existed to delete. Reintroduced deliberately, fine for
-  local builds only. **This app is headed to the App Store** (Tyler,
-  2026-07-14 — "not right now, but soon"), which makes this a real,
-  time-bounded gate, not a hypothetical: the key MUST move behind a
-  backend proxy (so it never ships inside the app bundle) AND be rotated
-  (it has already sat in plaintext across multiple chat sessions, so
-  treat the current value as burned) before any TestFlight or App Store
-  build — not "before any real release" as a vague someday, before that
-  specific next step.
+- **Key storage, explicit tradeoff, hard release gate — CLEARED (2026-07-15):**
+  the OpenAI key used to live in `Secrets.local.xcconfig` (gitignored) →
+  `OpenAIAPIKey` in Info.plist for every configuration, Debug and Release
+  alike — the exact "key baked into the shipped binary" pattern this
+  pillar originally existed to delete. The gate held: build 71526 (first
+  TestFlight upload) shipped with `Secrets.release.xcconfig` (committed,
+  empty `OPENAI_API_KEY`) as the Release configFile, so the archive
+  carries no secret — verified via `PlistBuddy` (empty `OpenAIAPIKey`) and
+  `strings` (no `sk-` anywhere in the app or widget binary). Insights
+  falls back to its deterministic facts sections with beta copy
+  ("Narrated summaries are coming soon.") in that build; narration comes
+  back once the proxy below is live.
+  `InsightsService.swift` now drops the bundle-key path entirely — no more
+  `Bundle.main` lookup, no more `OpenAIAPIKey` Info.plist property. It
+  calls a small serverless proxy instead (`payday-website`'s
+  `app/api/insights-narrate`, already committed there, same "app holds
+  zero provider secrets" pattern Vero uses) — the proxy owns the model,
+  instructions, and response schema; the app just sends the same facts
+  payload it always built. `isConfigured` is keyed off a `proxyHost`
+  constant left empty on purpose: the proxy hasn't been deployed with a
+  rotated key yet, so this stays inert (same graceful fallback as no key)
+  until that host is filled in post-deploy. The old, already-exposed key
+  in `Secrets.local.xcconfig` is still burned and still needs rotating
+  before the proxy goes live with a real key.
 
 ## Pillar 5: Woven into the OS (App Intents everywhere)
 
