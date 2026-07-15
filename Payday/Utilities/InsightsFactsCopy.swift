@@ -59,20 +59,24 @@ enum InsightsFactsCopy {
         return InsightSection(title: "Doubles vs Solo", body: body)
     }
 
+    private static func nightsPhrase(_ count: Int) -> String {
+        count == 1 ? "1 night" : "\(count) nights"
+    }
+
     private static func hourlyRate(_ facts: RateFacts) -> InsightSection {
         var body = "You're averaging \(Money.wholeDollarString(fromCents: Int((facts.overallDollarsPerHour * 100).rounded())))/hr across \(facts.nightsWithHours) shifts with hours logged."
-        if let bestWeekday = facts.bestWeekday, let bestRate = facts.bestWeekdayDollarsPerHour {
+        if let bestWeekday = facts.bestWeekday, let bestRate = facts.bestWeekdayDollarsPerHour, let count = facts.bestWeekdayNightCount {
             let weekdayName = Calendar.current.weekdaySymbols[bestWeekday - 1]
-            body += " \(weekdayName) pays best at \(Money.wholeDollarString(fromCents: Int((bestRate * 100).rounded())))/hr."
+            body += " \(weekdayName) pays best at \(Money.wholeDollarString(fromCents: Int((bestRate * 100).rounded())))/hr across \(nightsPhrase(count))."
         }
         return InsightSection(title: "Your Hourly Rate", body: body)
     }
 
     private static func tipPercent(_ facts: SalesFacts) -> InsightSection {
         var body = "You're averaging \(String(format: "%.1f", facts.overallTipPercent))% of sales across \(facts.nightsWithSales) shifts with sales logged."
-        if let bestWeekday = facts.bestWeekday, let bestPercent = facts.bestWeekdayTipPercent {
+        if let bestWeekday = facts.bestWeekday, let bestPercent = facts.bestWeekdayTipPercent, let count = facts.bestWeekdayNightCount {
             let weekdayName = Calendar.current.weekdaySymbols[bestWeekday - 1]
-            body += " \(weekdayName) tips best at \(String(format: "%.1f", bestPercent))%."
+            body += " \(weekdayName) tips best at \(String(format: "%.1f", bestPercent))% across \(nightsPhrase(count))."
         }
         return InsightSection(title: "Tip Percent", body: body)
     }

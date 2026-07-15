@@ -345,6 +345,61 @@ else above (the model, the invisibility rule, the picker, per-job
 periods/paychecks, StatsEngine's cross-job facts) is straightforward to
 build once that fork is resolved.
 
+## Pillar 10: The Climb to 90 (analysis-quality mission, 2026-07-15)
+
+An adversarial audit scored the analysis feature 62/100 on one axis — "does
+this help a tipped worker make more money" — and found it held back by a
+proxy where a fact should be, no sample-size humility, advice with no
+follow-up, single-venue blindness, and no forward planning. Four phases
+close that gap; each ships as its own commit series.
+
+### Phase A: Data Honesty (+6) — DONE
+
+- **Lunch/dinner is a captured fact now, not just inferred.** New optional
+  `shiftPeriod` (`ShiftPeriod?`, `lunch`/`dinner`) on `TipEntry` — same
+  CloudKit-safe raw-string-to-enum split as `kind`, but WITHOUT a
+  non-optional fallback: "never set" is a real, meaningful state here, so
+  the accessor stays `Optional` all the way through, never defaulted. Same
+  per-shift semantics as hours/tip-out/sales: canonical entry (credit
+  preferred), heals strays, resolved/written through `ShiftDetails`
+  alongside the other three. The log sheet's details group gains a
+  Lunch/Dinner segmented control, pre-selected from the clock (before 4 PM
+  → Lunch) whenever the shift being logged is actually today — a
+  backfilled past day has no clock to trust, so it starts unset rather
+  than guessed at. A double shift hides the picker entirely and clears any
+  stale value (isDouble already means "both"). `StatsEngine.lunchDinnerFacts`
+  and the lunch/dinner split inside `RateFacts` now use the explicit value
+  first, falling back to the same-day-logged `recordedAt` proxy only for
+  legacy nights that never captured one — and both now count a night ONCE
+  regardless of how many cash/credit records it has, fixing a latent
+  double-count for any night with both.
+- **Sample-size humility.** Every Move body now states the counts on both
+  sides ("across 8 Fridays and 5 Mondays"); `InsightsFactsCopy`'s
+  hourly-rate and tip-percent "best weekday" callouts do the same
+  (`RateFacts`/`SalesFacts` gained `bestWeekdayNightCount`); the terra
+  prompt mirrors it. The reveal's weekday-average line stays clean at 5+
+  nights of history for that weekday; below that it self-discloses with
+  "(across N Fridays)" rather than sounding more confident than the sample
+  actually supports.
+- **Variance guard on weekday comparisons.** `weekdaySwapMove` and
+  `rateLeaderMove` now require the delta to clear `max(flatFloor, 0.6 ×
+  pooledStandardDeviation)` — a pooled per-night SD across both sides being
+  compared — before firing, not just a flat dollar floor. 0.6 is a
+  deliberate calibration ("roughly more than half a standard deviation
+  apart"), not derived from anything; tune `MoveThresholds.varianceGuardFactor`
+  if Moves reads too eager or too quiet in practice. weekdaySwapMove's flat
+  floor also rose from $10 to $15 in the same pass.
+
+### Phase B: Close the Loop (+8) — not started
+### Phase C: Multiple Jobs (+8) — not started (design already committed, d01e7de)
+### Phase D: Plan Forward (+6) — not started
+
+### Explicitly deferred (out of scope)
+
+- Benchmarking against other users.
+- POS/scheduler integrations.
+- App-proposed experiments.
+
 ## What NOT to build (the restraint is the product)
 
 - No goals, budgets, or guilt-mechanic streaks. Records replace streaks.
