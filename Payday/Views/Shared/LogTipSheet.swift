@@ -369,7 +369,7 @@ struct LogTipSheet: View {
                     HStack {
                         Text("Hours")
                         Spacer()
-                        Stepper(value: hoursStepperBinding, in: 0...16, step: 0.25) {
+                        Stepper(value: hoursStepperBinding, in: 0...16, step: 0.5) {
                             Text(hoursWorked.map(Self.hoursLabel) ?? "Not logged")
                                 .foregroundStyle(PaydayColor.textSecondary)
                         }
@@ -415,7 +415,7 @@ struct LogTipSheet: View {
     }
 
     private static func hoursLabel(_ hours: Double) -> String {
-        var formatted = String(format: "%.2f", (hours * 4).rounded() / 4)
+        var formatted = String(format: "%.2f", (hours * 2).rounded() / 2)
         while formatted.hasSuffix("0") { formatted.removeLast() }
         if formatted.hasSuffix(".") { formatted.removeLast() }
         return "\(formatted) hrs"

@@ -52,7 +52,7 @@ final class TipEntry {
         set { kindRaw = newValue.rawValue }
     }
 
-    /// Hours worked this shift, quarter-hour granularity is plenty.
+    /// Hours worked this shift, half-hour granularity is plenty.
     /// Optional and meant to stay that way — "not entered" and "worked
     /// zero hours" must stay distinguishable, so this is never a defaulted
     /// non-optional. $/hr facts only ever compute over nights that HAVE
