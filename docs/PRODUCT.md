@@ -434,6 +434,22 @@ close that gap; each ships as its own commit series.
 - POS/scheduler integrations.
 - App-proposed experiments.
 
+### Mission acceptance test — status as of Phase B (2026-07-15)
+
+The full test ("seeded user with 8 weeks of varied data must show, without
+any tap: ≥1 Move with per-side sample sizes, ≥1 SINCE THEN follow-up with a
+dollar verdict, a Plan card projecting a week, and a two-job seed producing
+the cross-job comparison") is deferred to the end of Phase D. Partial result
+so far:
+
+- ✅ Move with per-side sample sizes — confirmed (Phase A).
+- ✅ SINCE THEN follow-up with a dollar verdict — confirmed via
+  `-SeedFollowUpDemo` (Phase B): "Since we flagged this, you've worked 2
+  more Fridays than before - bringing in about $407 more than your old
+  pace would have."
+- ⬜ Plan card projecting a week — not built (Phase D).
+- ⬜ Two-job seed producing the cross-job comparison — not built (Phase C).
+
 ## What NOT to build (the restraint is the product)
 
 - No goals, budgets, or guilt-mechanic streaks. Records replace streaks.

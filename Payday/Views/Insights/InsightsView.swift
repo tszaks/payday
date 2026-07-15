@@ -164,7 +164,7 @@ struct InsightsView: View {
 
                     footnote(for: facts)
                 } else {
-                    Text("Analysis isn't configured right now. These are your exact numbers, just not narrated.")
+                    Text("Narrated summaries are coming soon. These are your exact numbers.")
                         .font(PaydayFont.caption2)
                         .foregroundStyle(PaydayColor.textSecondary)
                         .multilineTextAlignment(.center)
