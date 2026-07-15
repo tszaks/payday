@@ -390,7 +390,41 @@ close that gap; each ships as its own commit series.
   if Moves reads too eager or too quiet in practice. weekdaySwapMove's flat
   floor also rose from $10 to $15 in the same pass.
 
-### Phase B: Close the Loop (+8) — not started
+### Phase B: Close the Loop (+8) — DONE
+
+- **Move ledger.** `MoveLedgerStore` (Models/) persists `[moveID: firstShownAt]`
+  to UserDefaults, same Codable-snapshot pattern as `InsightsStore`. One
+  entry per move id, set once and never overwritten — a move that stops
+  firing and later re-fires doesn't reset its clock. `InsightsView` records
+  every currently-showing move id the first time it's ever seen, via a
+  `.task(id:)` keyed on the move id list.
+- **Follow-up engine.** `StatsEngine.followUps(ledger:referenceDate:)`
+  checks every ledger entry at least 28 days old and asks one question:
+  since the move was shown, did the recommended slice of nights (a
+  weekday, or doubles) get worked more or less than the OLD pace would
+  have predicted, and did that produce real dollars beyond what the old
+  pace would have. Both a behavior-changed gate (≥1 whole occurrence away
+  from the old-pace projection) and a materiality gate ($50+ dollar gap)
+  have to clear — same silence-over-weak-advice discipline as `moves()`.
+  The target weekday is re-derived from records strictly BEFORE the move
+  was shown (`targetWeekday`), not from current data — what was actually
+  true at the time, matching each move function's own targeting logic.
+  Deliberately uses one uniform dollar metric (net cents per matching
+  night) across all five move types for the follow-up question, even
+  though the original moves justify themselves with different units
+  ($/night, $/hr, tip%) — "did real dollars move in the recommended
+  direction" is honest and comparable regardless of which metric first
+  flagged it.
+- **"SINCE THEN" card.** Renders above MOVE cards in Insights (a verdict
+  on a past recommendation outranks a fresh one). The newest follow-up
+  also feeds the terra prompt as a labeled input, same non-repeating
+  treatment as TOP MOVE.
+- QA-only: `-SeedFollowUpDemo` launch arg / Settings → Developer → "Seed
+  follow-up demo" fabricates an 8-week-before / 5-week-after Friday
+  dataset around a 35-day-old weekdaySwap ledger entry, since exercising
+  a 28-day-old follow-up needs deliberately aged history that
+  `-SeedSampleData`'s small realistic dataset doesn't have.
+
 ### Phase C: Multiple Jobs (+8) — not started (design already committed, d01e7de)
 ### Phase D: Plan Forward (+6) — not started
 

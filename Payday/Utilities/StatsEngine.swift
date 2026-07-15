@@ -846,6 +846,155 @@ struct StatsEngine {
             soloCount: soloNights.count
         )
     }
+
+    // MARK: Follow-ups
+
+    private enum FollowUpThresholds {
+        static let minimumAgeDays = 28
+        /// A recommendation only counts as "materially followed" once the
+        /// gap between what actually happened and what the OLD pattern
+        /// would have produced clears this - same silence-over-weak-advice
+        /// discipline as MoveThresholds.minimumAnnualImpactCents, just
+        /// scaled to a realized few-week window instead of an annualized
+        /// projection.
+        static let minimumEffectCents = 5000
+    }
+
+    /// Every calendar night as (date, net cents, isDouble) - the raw
+    /// substrate followUps() compares before vs. after a Move was first
+    /// shown. Kept separate from nightlyTotals() (which drops isDouble)
+    /// so one predicate closure can filter on either a weekday or doubles.
+    private func nightlyFacts() -> [(date: Date, netCents: Int, isDouble: Bool)] {
+        nightFacts(from: records).map { (date: $0.date, netCents: $0.netCents, isDouble: $0.isDouble) }
+    }
+
+    /// Checks every Move id in the ledger old enough to judge (>= 28 days
+    /// since MoveLedgerStore first recorded it as shown) and asks one
+    /// honest question: since then, did the recommended slice of nights
+    /// actually get worked more or less than the PRIOR pattern would have
+    /// predicted, and did that produce real dollars beyond what the old
+    /// pattern would have. Both gates have to clear inside behaviorFollowUp
+    /// - silence is the honest answer otherwise, same discipline as moves().
+    func followUps(ledger: [String: Date], referenceDate: Date = .now) -> [FollowUp] {
+        let minAge = TimeInterval(FollowUpThresholds.minimumAgeDays * 24 * 3600)
+        return ledger
+            .filter { referenceDate.timeIntervalSince($0.value) >= minAge }
+            .compactMap { id, shownAt in followUp(forMoveID: id, shownAt: shownAt, referenceDate: referenceDate) }
+            .sorted { abs($0.dollarEffectCents) > abs($1.dollarEffectCents) }
+    }
+
+    private func followUp(forMoveID id: String, shownAt: Date, referenceDate: Date) -> FollowUp? {
+        switch id {
+        case "weekdaySwap", "lapsedWinner", "rateLeader", "tipPercentSignal":
+            guard let weekday = targetWeekday(forMoveID: id, shownAt: shownAt) else { return nil }
+            let weekdayName = calendar.weekdaySymbols[weekday - 1]
+            return behaviorFollowUp(
+                moveID: id,
+                title: "\(weekdayName) Update",
+                singular: weekdayName,
+                plural: "\(weekdayName)s",
+                matches: { calendar.component(.weekday, from: $0.date) == weekday },
+                shownAt: shownAt,
+                referenceDate: referenceDate
+            )
+        case "doublesVerdict":
+            return behaviorFollowUp(
+                moveID: id,
+                title: "Doubles Update",
+                singular: "double",
+                plural: "doubles",
+                matches: { $0.isDouble },
+                shownAt: shownAt,
+                referenceDate: referenceDate
+            )
+        default:
+            return nil
+        }
+    }
+
+    /// Re-derives which weekday a given Move id was pointing at, using only
+    /// records from BEFORE it was shown - what was actually true at the
+    /// time, not what's true now. Mirrors each move function's own
+    /// targeting logic exactly, just returning the weekday instead of a
+    /// formatted Move.
+    private func targetWeekday(forMoveID id: String, shownAt: Date) -> Int? {
+        let engine = StatsEngine(records: records.filter { $0.date < shownAt }, calendar: calendar)
+        switch id {
+        case "weekdaySwap":
+            let averages = engine.weekdayNightAverages(engine.nightlyTotals())
+            guard averages.count >= 2 else { return nil }
+            return averages.max(by: { $0.avg < $1.avg })?.weekday
+        case "lapsedWinner":
+            let allNights = engine.nightlyTotals()
+            guard allNights.count >= 6 else { return nil }
+            let overallAvg = Double(allNights.reduce(0) { $0 + $1.cents }) / Double(allNights.count)
+            let cutoff = calendar.date(byAdding: .day, value: -MoveThresholds.lapsedWindowDays, to: shownAt) ?? shownAt
+            let recentWeekdays = Set(allNights.filter { $0.date >= cutoff }.map { calendar.component(.weekday, from: $0.date) })
+            let candidates = engine.weekdayNightAverages(allNights).filter { !recentWeekdays.contains($0.weekday) }
+            guard let best = candidates.max(by: { $0.avg < $1.avg }), best.avg > overallAvg * 1.1 else { return nil }
+            return best.weekday
+        case "rateLeader":
+            return engine.bestDollarsPerHourWeekday()?.weekday
+        case "tipPercentSignal":
+            let weekdayPercents = (1...7).compactMap { weekday -> (weekday: Int, percent: Double)? in
+                engine.averageTipPercent(forWeekday: weekday).map { (weekday: weekday, percent: $0) }
+            }
+            return weekdayPercents.max(by: { $0.percent < $1.percent })?.weekday
+        default:
+            return nil
+        }
+    }
+
+    /// Shared before/after comparison for any Move that recommends leaning
+    /// into (or away from) a specific slice of nights - a weekday, or
+    /// doubles. Splits every night at `shownAt`, projects what the BEFORE
+    /// period's own per-week rate would have produced over the AFTER
+    /// period's length, and reports the gap - in both occurrences and
+    /// dollars - between that projection and what actually happened.
+    private func behaviorFollowUp(
+        moveID: String,
+        title: String,
+        singular: String,
+        plural: String,
+        matches: ((date: Date, netCents: Int, isDouble: Bool)) -> Bool,
+        shownAt: Date,
+        referenceDate: Date
+    ) -> FollowUp? {
+        let allNights = nightlyFacts()
+        guard let earliestDate = allNights.map(\.date).min() else { return nil }
+        let beforeWeeks = shownAt.timeIntervalSince(earliestDate) / (7 * 24 * 3600)
+        let afterWeeks = referenceDate.timeIntervalSince(shownAt) / (7 * 24 * 3600)
+        guard beforeWeeks >= 1, afterWeeks >= 1 else { return nil }
+
+        let beforeMatching = allNights.filter { $0.date < shownAt }.filter(matches)
+        let afterMatching = allNights.filter { $0.date >= shownAt }.filter(matches)
+        guard !beforeMatching.isEmpty else { return nil }
+
+        let beforeAvgCents = Double(beforeMatching.reduce(0) { $0 + $1.netCents }) / Double(beforeMatching.count)
+        let beforeRatePerWeek = Double(beforeMatching.count) / beforeWeeks
+        let expectedAfterCount = beforeRatePerWeek * afterWeeks
+        let actualAfterCount = Double(afterMatching.count)
+        let deltaCount = actualAfterCount - expectedAfterCount
+        // Behavior-changed gate: at least one whole occurrence away from
+        // what the old pace alone would have predicted.
+        guard abs(deltaCount) >= 1.0 else { return nil }
+
+        let actualAfterCents = afterMatching.reduce(0) { $0 + $1.netCents }
+        let expectedAfterCents = Int((expectedAfterCount * beforeAvgCents).rounded())
+        let dollarEffectCents = actualAfterCents - expectedAfterCents
+        // Materiality gate, same spirit as moves(): a real gap, not noise.
+        guard abs(dollarEffectCents) >= FollowUpThresholds.minimumEffectCents else { return nil }
+
+        let roundedDelta = Int(abs(deltaCount).rounded())
+        let noun = roundedDelta == 1 ? singular : plural
+        let direction = deltaCount >= 0 ? "\(roundedDelta) more \(noun)" : "\(roundedDelta) fewer \(noun)"
+        let verdict = dollarEffectCents >= 0
+            ? "about \(Money.wholeDollarString(fromCents: dollarEffectCents)) more than your old pace would have"
+            : "about \(Money.wholeDollarString(fromCents: abs(dollarEffectCents))) less than your old pace would have"
+        let body = "Since we flagged this, you've worked \(direction) than before - bringing in \(verdict)."
+
+        return FollowUp(id: moveID, title: title, body: body, dollarEffectCents: dollarEffectCents)
+    }
 }
 
 /// The smart nudge's entire basis — see StatsEngine.workRhythm(referenceDate:).
@@ -936,6 +1085,19 @@ struct Move: Equatable, Codable, Sendable, Identifiable {
     let title: String
     let body: String
     let annualImpactCents: Int
+}
+
+/// A "since we told you..." check-in on a previously shown Move - see
+/// StatsEngine.followUps(ledger:referenceDate:). id matches the originating
+/// Move's id; a given Move id produces at most one FollowUp, only once
+/// MoveLedgerStore has recorded it as shown for at least 28 days.
+struct FollowUp: Equatable, Codable, Sendable, Identifiable {
+    let id: String
+    let title: String
+    let body: String
+    /// Signed: positive means the recommended behavior change paid off,
+    /// negative means it cost real money versus the prior pattern.
+    let dollarEffectCents: Int
 }
 
 /// Turns the engine's plain facts into the exact calm, specific copy the

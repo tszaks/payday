@@ -65,7 +65,7 @@ enum InsightsService {
     /// in so each refresh amends it rather than rewriting from scratch.
     /// Wording should settle down and change less over time as patterns
     /// stabilize, not reshuffle on every call.
-    static func narrate(facts: InsightsFacts, scheduleFrequency: PayFrequency, previousSections: [InsightSection]?, topMove: Move? = nil) async throws -> [InsightSection] {
+    static func narrate(facts: InsightsFacts, scheduleFrequency: PayFrequency, previousSections: [InsightSection]?, topMove: Move? = nil, latestFollowUp: FollowUp? = nil) async throws -> [InsightSection] {
         guard isConfigured else {
             throw InsightsError.generationFailed("No OpenAI API key configured.")
         }
@@ -77,7 +77,7 @@ enum InsightsService {
         request.httpBody = try JSONSerialization.data(withJSONObject: [
             "model": model,
             "instructions": instructions,
-            "input": promptDescription(for: facts, scheduleFrequency: scheduleFrequency, previousSections: previousSections, topMove: topMove),
+            "input": promptDescription(for: facts, scheduleFrequency: scheduleFrequency, previousSections: previousSections, topMove: topMove, latestFollowUp: latestFollowUp),
             "reasoning": ["effort": "low"],
             "text": ["format": responseFormat]
         ])
@@ -180,7 +180,7 @@ enum InsightsService {
         above.
         """
 
-    private static func promptDescription(for facts: InsightsFacts, scheduleFrequency: PayFrequency, previousSections: [InsightSection]?, topMove: Move?) -> String {
+    private static func promptDescription(for facts: InsightsFacts, scheduleFrequency: PayFrequency, previousSections: [InsightSection]?, topMove: Move?, latestFollowUp: FollowUp?) -> String {
         var lines = [
             "BACKGROUND CONTEXT, NOT A SECTION - pay frequency: \(scheduleFrequency.displayName).",
             "OVERALL: \(Money.string(fromCents: facts.totalCents)) across \(facts.shiftCount) shifts, averaging \(Money.string(fromCents: facts.averagePerShiftCents)) per shift.",
@@ -218,6 +218,10 @@ enum InsightsService {
 
         if let topMove {
             lines.append("TOP MOVE (already shown to the reader as its own card, above everything you write - do not repeat it as a section; only weave it into the final suggestion section if it genuinely strengthens it): \(topMove.title) - \(topMove.body)")
+        }
+
+        if let latestFollowUp {
+            lines.append("SINCE THEN (a follow-up on a past Move, already shown to the reader as its own card, above everything you write, including TOP MOVE - do not repeat it as a section; only weave it into the final suggestion section if it genuinely strengthens it): \(latestFollowUp.title) - \(latestFollowUp.body)")
         }
 
         var promptSections = ["NEW FACTS TO REFLECT:", lines.joined(separator: "\n")]

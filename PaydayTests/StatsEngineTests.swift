@@ -547,6 +547,99 @@ struct MovesTests {
     }
 }
 
+@Suite("Follow-ups")
+struct FollowUpTests {
+    // Shared before-period fixture for the weekday-keyed tests below:
+    // Friday every other week (4 of 8 weeks) at $150, Monday every week
+    // (8) at $80 — establishes Friday as the clear best weekday as of
+    // shownAt, with a real pace to compare the "after" period against.
+    private static let beforeFridaysWide: [(Int, Int)] = [(6, 26), (6, 12), (5, 29), (5, 15)]
+    private static let beforeMondays: [(Int, Int)] = [(6, 22), (6, 15), (6, 8), (6, 1), (5, 25), (5, 18), (5, 11), (5, 4)]
+
+    @Test("weekday swap follow-up fires when Friday nights increased and paid off versus the old pace")
+    func weekdaySwapFollowUpFires() {
+        var records: [TipRecord] = []
+        for (m, d) in Self.beforeFridaysWide { records.append(record(2026, m, d, cents: 15000)) }
+        for (m, d) in Self.beforeMondays { records.append(record(2026, m, d, cents: 8000)) }
+        // After: Friday every week (5), paying slightly more.
+        for (m, d) in [(7, 3), (7, 10), (7, 17), (7, 24), (7, 31)] { records.append(record(2026, m, d, cents: 16000)) }
+
+        let engine = StatsEngine(records: records)
+        let shownAt = date(2026, 6, 30)
+        let referenceDate = date(2026, 8, 1)
+        let followUp = engine.followUps(ledger: ["weekdaySwap": shownAt], referenceDate: referenceDate).first
+        #expect(followUp?.id == "weekdaySwap")
+        #expect(followUp?.title.contains("Friday") == true)
+        #expect((followUp?.dollarEffectCents ?? 0) > 0)
+    }
+
+    @Test("follow-up stays silent before the 28-day age gate")
+    func followUpSilentBeforeAgeGate() {
+        var records: [TipRecord] = []
+        for (m, d) in Self.beforeFridaysWide { records.append(record(2026, m, d, cents: 15000)) }
+        for (m, d) in Self.beforeMondays { records.append(record(2026, m, d, cents: 8000)) }
+        for (m, d) in [(7, 3), (7, 10)] { records.append(record(2026, m, d, cents: 16000)) }
+
+        let engine = StatsEngine(records: records)
+        let shownAt = date(2026, 6, 30)
+        let referenceDate = date(2026, 7, 10) // only 10 days after shownAt
+        #expect(engine.followUps(ledger: ["weekdaySwap": shownAt], referenceDate: referenceDate).isEmpty)
+    }
+
+    @Test("follow-up stays silent when Friday frequency didn't actually change")
+    func followUpSilentWithoutBehaviorChange() {
+        var records: [TipRecord] = []
+        for (m, d) in Self.beforeFridaysWide { records.append(record(2026, m, d, cents: 15000)) }
+        for (m, d) in Self.beforeMondays { records.append(record(2026, m, d, cents: 8000)) }
+        // After: Friday every OTHER week too — same pace as before, just continued.
+        for (m, d) in [(7, 10), (7, 24)] { records.append(record(2026, m, d, cents: 15000)) }
+
+        let engine = StatsEngine(records: records)
+        let shownAt = date(2026, 6, 30)
+        let referenceDate = date(2026, 8, 1)
+        #expect(engine.followUps(ledger: ["weekdaySwap": shownAt], referenceDate: referenceDate).isEmpty)
+    }
+
+    @Test("follow-up stays silent when behavior changed but the dollar effect doesn't clear materiality")
+    func followUpSilentWithoutMaterialEffect() {
+        var records: [TipRecord] = []
+        // Before: only 3 Fridays (the minimum to qualify), low value.
+        for (m, d) in [(6, 26), (5, 29), (5, 15)] { records.append(record(2026, m, d, cents: 1000)) }
+        for (m, d) in Self.beforeMondays { records.append(record(2026, m, d, cents: 500)) }
+        // After: Friday every week, but at the SAME low rate — frequency
+        // rose, but there isn't enough real money behind it to matter.
+        for (m, d) in [(7, 3), (7, 10), (7, 17), (7, 24), (7, 31)] { records.append(record(2026, m, d, cents: 1000)) }
+
+        let engine = StatsEngine(records: records)
+        let shownAt = date(2026, 6, 30)
+        let referenceDate = date(2026, 8, 1)
+        #expect(engine.followUps(ledger: ["weekdaySwap": shownAt], referenceDate: referenceDate).isEmpty)
+    }
+
+    @Test("doubles verdict follow-up uses isDouble, not a weekday, as its matching slice")
+    func doublesVerdictFollowUpFires() {
+        var records: [TipRecord] = []
+        // Before: a double every other week (4 of 8), modest pay.
+        for (m, d) in [(6, 26), (6, 12), (5, 29), (5, 15)] { records.append(record(2026, m, d, cents: 12000, isDouble: true)) }
+        for (m, d) in [(6, 22), (6, 15), (6, 8), (6, 1)] { records.append(record(2026, m, d, cents: 6000)) }
+        // After: a double every week, paying more.
+        for (m, d) in [(7, 3), (7, 10), (7, 17), (7, 24), (7, 31)] { records.append(record(2026, m, d, cents: 13000, isDouble: true)) }
+
+        let engine = StatsEngine(records: records)
+        let shownAt = date(2026, 6, 30)
+        let referenceDate = date(2026, 8, 1)
+        let followUp = engine.followUps(ledger: ["doublesVerdict": shownAt], referenceDate: referenceDate).first
+        #expect(followUp?.id == "doublesVerdict")
+        #expect((followUp?.dollarEffectCents ?? 0) > 0)
+    }
+
+    @Test("followUps is empty for an id with no ledger entry old enough to judge")
+    func followUpsEmptyWithoutQualifyingLedgerEntries() {
+        let engine = StatsEngine(records: [record(2026, 7, 3, cents: 15000)])
+        #expect(engine.followUps(ledger: [:], referenceDate: date(2026, 8, 1)).isEmpty)
+    }
+}
+
 @Suite("Work rhythm")
 struct WorkRhythmTests {
     @Test("a weekday worked most of its occurrences counts as usual")
