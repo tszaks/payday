@@ -1,5 +1,26 @@
 import SwiftUI
 import SwiftData
+import UniformTypeIdentifiers
+
+/// Defers the actual CSV build (and its temp-file write) until the share
+/// sheet asks for the file's data, inside FileRepresentation's closure —
+/// never while ShareLink itself is just rendering in the toolbar. Fixes a
+/// real perf regression: the plain-URL version this replaced regenerated
+/// the whole export and rewrote the file on every single body render.
+private struct CSVExport: Transferable {
+    let entries: [TipEntry]
+    let paycheckRecords: [PaycheckRecord]
+    let calculator: PayPeriodCalculator
+
+    static var transferRepresentation: some TransferRepresentation {
+        FileRepresentation(exportedContentType: .commaSeparatedText) { export in
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent("Payday-Export.csv")
+            let csv = CSVExporter.export(entries: export.entries, paycheckRecords: export.paycheckRecords, calculator: export.calculator)
+            try csv.write(to: url, atomically: true, encoding: .utf8)
+            return SentTransferredFile(url)
+        }
+    }
+}
 
 struct PeriodsView: View {
     @Environment(PayScheduleStore.self) private var scheduleStore
@@ -49,16 +70,6 @@ struct PeriodsView: View {
         return StatsEngine(records: yearEntries.map(TipRecord.init)).nightlyTotals()
     }
 
-    /// Overwrites the same stable filename every time rather than a
-    /// timestamped one, so re-exporting never leaves temp-file garbage
-    /// behind in between shares.
-    private var csvExportURL: URL {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("Payday-Export.csv")
-        let csv = CSVExporter.export(entries: allEntries, paycheckRecords: paycheckRecords, calculator: calculator)
-        try? csv.write(to: url, atomically: true, encoding: .utf8)
-        return url
-    }
-
     @State private var path = NavigationPath()
 
     var body: some View {
@@ -92,7 +103,14 @@ struct PeriodsView: View {
             .navigationTitle("Periods")
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
-                    ShareLink(item: csvExportURL) {
+                    // The CSV itself is only built and written to disk when
+                    // the share sheet actually asks for the file's data
+                    // (inside CSVExport's FileRepresentation closure) —
+                    // never on a plain render of this toolbar item.
+                    ShareLink(
+                        item: CSVExport(entries: allEntries, paycheckRecords: paycheckRecords, calculator: calculator),
+                        preview: SharePreview("Payday-Export.csv")
+                    ) {
                         Image(systemName: "square.and.arrow.up")
                     }
                 }

@@ -20,6 +20,7 @@ private struct DashboardFacts {
     let periodEntries: [TipEntry]
     let breakdown: TipBreakdown
     let totalCents: Int
+    let totalTipOutCents: Int
     let daysRemaining: Int
     let shiftCount: Int
     let shiftDays: [(day: Date, items: [TipEntry])]
@@ -45,6 +46,10 @@ private struct DashboardFacts {
         daysRemaining = calculator.daysRemaining(from: now)
         shiftCount = Set(periodEntries.map { calendar.startOfDay(for: $0.date) }).count
         shiftDays = ShiftDays.groupedByDay(periodEntries, date: \.date)
+        // One canonical tip-out per night (never a per-entry sum — see
+        // ShiftDetails), summed across the period — the gross/net gap the
+        // caption below has to explain.
+        totalTipOutCents = shiftDays.reduce(0) { $0 + (ShiftDetails.resolve(from: $1.items).tipOutCents ?? 0) }
 
         let statsEngine = StatsEngine(records: allEntries.map(TipRecord.init))
         // Net of any tip-out, same rule as every other analytical total —
@@ -252,7 +257,7 @@ struct DashboardView: View {
             }
 
             if facts.totalCents > 0 {
-                Text("Cash \(Money.string(fromCents: facts.breakdown.cashCents)) · Credit \(Money.string(fromCents: facts.breakdown.creditCents))")
+                Text(captionLine(for: facts))
                     .font(PaydayFont.caption)
                     .foregroundStyle(PaydayColor.textSecondary)
                     .monospacedDigit()
@@ -266,6 +271,16 @@ struct DashboardView: View {
             }
         }
         .paydayCard(padding: PaydaySpacing.p24)
+    }
+
+    /// The hero total above is net; this is gross's one-glance-away
+    /// explanation whenever a tip-out actually moved the two apart — never
+    /// silently letting cash+credit stop equaling the big number with no
+    /// cue why.
+    private func captionLine(for facts: DashboardFacts) -> String {
+        let base = "Cash \(Money.string(fromCents: facts.breakdown.cashCents)) · Credit \(Money.string(fromCents: facts.breakdown.creditCents))"
+        guard facts.totalTipOutCents > 0 else { return base }
+        return "\(base) · Tipped out \(Money.string(fromCents: facts.totalTipOutCents))"
     }
 
     /// The period itself, drawn: fills as days pass, ends at payday. This
