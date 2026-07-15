@@ -3,6 +3,13 @@ import Foundation
 /// Turns logged shifts into a plain CSV, one row per calendar night (cash
 /// and credit merged, same "a shift, not a row" rule as ShiftDayRow) — a
 /// pure, fully-tested function, no SwiftUI, no file I/O of its own.
+///
+/// Hours/Tip-Out/Sales are shift-level facts, not per-entry ones: each
+/// column reflects ShiftDetails.resolve's single canonical value (credit
+/// entry preferred, else cash), never a sum across the night's entries —
+/// a night with a stray value on both entries (legacy data) still reports
+/// one number here, matching every other reader in the app, rather than
+/// double-counting it.
 enum CSVExporter {
     static let header = "Date,Cash,Credit,Tip-Out,Net,Hours,Sales,Double,Note,Period,Paycheck"
 
@@ -17,28 +24,35 @@ enum CSVExporter {
     private static func row(for items: [TipEntry], day: Date, paycheckRecords: [PaycheckRecord], calculator: PayPeriodCalculator, calendar: Calendar) -> String {
         let cashCents = items.filter { $0.kind == .cash }.reduce(0) { $0 + $1.amountCents }
         let creditCents = items.filter { $0.kind == .credit }.reduce(0) { $0 + $1.amountCents }
-        let tipOutCents = items.compactMap(\.tipOutCents).reduce(0, +)
-        let netCents = items.reduce(0) { $0 + $1.netCents }
-        let hours = items.compactMap(\.hoursWorked).reduce(0, +)
-        let salesCents = items.compactMap(\.salesCents).reduce(0, +)
+        let shiftDetails = ShiftDetails.resolve(from: items)
+        let netCents = cashCents + creditCents - (shiftDetails.tipOutCents ?? 0)
         let isDouble = items.contains { $0.isDouble }
         let note = items.compactMap(\.note).joined(separator: "; ")
 
         let period = calculator.period(containing: day)
         let paycheck = paycheckRecords.first { $0.periodEnd >= period.start && $0.periodEnd <= period.end }
 
+        // Bound individually rather than inline in the array literal below —
+        // that many chained `.map(...) ?? ""` expressions in one array
+        // literal was slow enough to trip the type checker's time budget.
+        let tipOutField: String = shiftDetails.tipOutCents.map(dollars) ?? ""
+        let hoursField: String = shiftDetails.hoursWorked.map(trimmedHours) ?? ""
+        let salesField: String = shiftDetails.salesCents.map(dollars) ?? ""
+        let paycheckField: String = paycheck.map { dollars($0.paidTipsCents) } ?? ""
+        let periodField = "\(isoDate(period.start)) to \(isoDate(period.end))"
+
         let fields = [
             isoDate(day),
             dollars(cashCents),
             dollars(creditCents),
-            tipOutCents > 0 ? dollars(tipOutCents) : "",
+            tipOutField,
             dollars(netCents),
-            hours > 0 ? trimmedHours(hours) : "",
-            salesCents > 0 ? dollars(salesCents) : "",
+            hoursField,
+            salesField,
             isDouble ? "Y" : "N",
             escape(note),
-            "\(isoDate(period.start)) to \(isoDate(period.end))",
-            paycheck.map { dollars($0.paidTipsCents) } ?? ""
+            periodField,
+            paycheckField
         ]
         return fields.joined(separator: ",")
     }

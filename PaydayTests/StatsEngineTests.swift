@@ -60,6 +60,28 @@ struct NightlyTotalsTests {
         let engine = StatsEngine(records: [record(2026, 7, 1, cents: 5000)])
         #expect(engine.nightlyTotals()[0].cents == 5000)
     }
+
+    @Test("tip-out on the 'wrong' entry (cash, when a credit entry also exists) still nets correctly")
+    func nightlyTotalReadsTipOutFromWrongEntry() {
+        let records = [
+            record(2026, 7, 1, cents: 8600, kind: .credit),
+            record(2026, 7, 1, cents: 3200, kind: .cash, tipOutCents: 1500)
+        ]
+        let engine = StatsEngine(records: records)
+        // 8600 + 3200 - 1500 = 10300, not 11800 (ignoring it) or double-subtracted.
+        #expect(engine.nightlyTotals()[0].cents == 10300)
+    }
+
+    @Test("tip-out set on BOTH entries (corruption) is never double-subtracted")
+    func nightlyTotalNeverDoubleSubtractsTipOut() {
+        let records = [
+            record(2026, 7, 1, cents: 8600, kind: .credit, tipOutCents: 1500),
+            record(2026, 7, 1, cents: 3200, kind: .cash, tipOutCents: 1000)
+        ]
+        let engine = StatsEngine(records: records)
+        // Credit's 1500 wins outright — never 1500+1000=2500 subtracted.
+        #expect(engine.nightlyTotals()[0].cents == 8600 + 3200 - 1500)
+    }
 }
 
 @Suite("Records")
@@ -248,6 +270,28 @@ struct RateTests {
         #expect(engine.bestDollarsPerHourWeekday() == nil)
     }
 
+    @Test("hours on the 'wrong' entry (cash, when a credit entry also exists) still resolve correctly")
+    func dollarsPerHourReadsHoursFromWrongEntry() {
+        let records = [
+            record(2026, 7, 1, cents: 8600, kind: .credit),
+            record(2026, 7, 1, cents: 3200, kind: .cash, hoursWorked: 5)
+        ]
+        let engine = StatsEngine(records: records)
+        // (8600 + 3200) / 100 / 5 = $23.60/hr, not nil.
+        #expect(engine.dollarsPerHour(forNightAt: date(2026, 7, 1)) == 23.6)
+    }
+
+    @Test("hours set on BOTH entries (corruption) are never summed into double the real hours")
+    func dollarsPerHourNeverSumsHours() {
+        let records = [
+            record(2026, 7, 1, cents: 8600, kind: .credit, hoursWorked: 5),
+            record(2026, 7, 1, cents: 3200, kind: .cash, hoursWorked: 5)
+        ]
+        let engine = StatsEngine(records: records)
+        // If this summed to 10 hours the rate would be $11.80/hr instead.
+        #expect(engine.dollarsPerHour(forNightAt: date(2026, 7, 1)) == 23.6)
+    }
+
     @Test("best dollars-per-hour weekday picks the highest-blended-rate weekday")
     func bestWeekdayPicksHighestRate() {
         let engine = StatsEngine(records: [
@@ -288,6 +332,28 @@ struct TipPercentTests {
         let percent = engine.averageTipPercent()
         #expect(percent != nil)
         #expect(abs(percent! - (13000.0 / 60000.0 * 100)) < 0.001)
+    }
+
+    @Test("sales on the 'wrong' entry (cash, when a credit entry also exists) still resolve correctly")
+    func tipPercentReadsSalesFromWrongEntry() {
+        let records = [
+            record(2026, 7, 1, cents: 8600, kind: .credit),
+            record(2026, 7, 1, cents: 3200, kind: .cash, salesCents: 50000)
+        ]
+        let engine = StatsEngine(records: records)
+        // (8600 + 3200) / 50000 * 100 = 23.6%, not nil.
+        #expect(abs(engine.tipPercent(forNightAt: date(2026, 7, 1))! - 23.6) < 0.001)
+    }
+
+    @Test("sales set on BOTH entries (corruption) are never summed into double the real sales")
+    func tipPercentNeverSumsSales() {
+        let records = [
+            record(2026, 7, 1, cents: 8600, kind: .credit, salesCents: 50000),
+            record(2026, 7, 1, cents: 3200, kind: .cash, salesCents: 20000)
+        ]
+        let engine = StatsEngine(records: records)
+        // If this summed to $700 sales the percent would be ~16.9% instead.
+        #expect(abs(engine.tipPercent(forNightAt: date(2026, 7, 1))! - 23.6) < 0.001)
     }
 
     @Test("average tip percent for a weekday only blends that weekday's sales nights")

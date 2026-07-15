@@ -78,6 +78,28 @@ enum RevealRateClause: Equatable {
     case rate(dollarsPerHour: Double, isBestThisPeriod: Bool)
 }
 
+/// One calendar night's canonical shift-level facts — the single place the
+/// "hours/tip-out/sales live on at most one of a night's records" rule
+/// gets enforced on the READ side too, not just when LogTipSheet writes
+/// (see ShiftDetails, the same rule applied to TipEntry). If a night ever
+/// has more than one record and more than one holds a value — legacy data,
+/// or a bug — this always resolves to ONE number, preferring the credit
+/// record's value when there is one, else the cash record's, and NEVER
+/// sums a value across records, so corrupted or "wrong-entry" data can't
+/// double-count.
+private struct NightFacts {
+    let date: Date
+    let grossCents: Int
+    let tipOutCents: Int?
+    let hoursWorked: Double?
+    let salesCents: Int?
+    let isDouble: Bool
+
+    /// Gross minus the one canonical tip-out for the night — see the type
+    /// doc above for why this is never a per-record sum.
+    var netCents: Int { grossCents - (tipOutCents ?? 0) }
+}
+
 /// A small pure module computing pace, records, baselines, and the post-log
 /// reveal comparison. No I/O, no SwiftData — takes plain facts, returns
 /// plain facts, fully unit-testable like PayPeriodCalculator.
@@ -92,15 +114,34 @@ struct StatsEngine {
         self.calendar = cal
     }
 
+    /// Groups a set of records into one NightFacts per calendar day. The
+    /// one and only place hours/tip-out/sales get resolved from raw
+    /// records — every other function in this file reads through this
+    /// rather than re-deriving its own grouping.
+    private func nightFacts(from source: [TipRecord], excluding excludedDate: Date? = nil) -> [NightFacts] {
+        let filtered = excludedDate.map { excluded in source.filter { !calendar.isDate($0.date, inSameDayAs: excluded) } } ?? source
+        return Dictionary(grouping: filtered) { calendar.startOfDay(for: $0.date) }
+            .map { day, dayRecords -> NightFacts in
+                let credit = dayRecords.first { $0.kind == .credit }
+                let cash = dayRecords.first { $0.kind == .cash }
+                return NightFacts(
+                    date: day,
+                    grossCents: dayRecords.reduce(0) { $0 + $1.amountCents },
+                    tipOutCents: credit?.tipOutCents ?? cash?.tipOutCents,
+                    hoursWorked: credit?.hoursWorked ?? cash?.hoursWorked,
+                    salesCents: credit?.salesCents ?? cash?.salesCents,
+                    isDouble: dayRecords.contains { $0.isDouble }
+                )
+            }
+            .sorted { $0.date < $1.date }
+    }
+
     // MARK: Nightly totals
 
     /// One row per distinct calendar day with any logged record — a shift,
     /// not a row: one night can be two records (cash + credit).
     func nightlyTotals() -> [(date: Date, cents: Int)] {
-        let grouped = Dictionary(grouping: records) { calendar.startOfDay(for: $0.date) }
-        return grouped
-            .map { (date: $0.key, cents: $0.value.reduce(0) { $0 + $1.netCents }) }
-            .sorted { $0.date < $1.date }
+        nightFacts(from: records).map { (date: $0.date, cents: $0.netCents) }
     }
 
     // MARK: Records
@@ -135,20 +176,12 @@ struct StatsEngine {
     // MARK: Rate ($/hr)
 
     /// Every night that has BOTH a logged total and logged hours — the only
-    /// nights any $/hr number is allowed to touch. A night's hours are the
-    /// sum of its records' hoursWorked, which only double-counts if two
-    /// records for the same night both carry hours — callers (LogTipSheet)
-    /// are responsible for only ever setting it on one.
+    /// nights any $/hr number is allowed to touch. Hours resolve through
+    /// nightFacts (credit-preferred, never summed across records).
     private func nightlyRates(excluding excludedDate: Date? = nil) -> [(date: Date, cents: Int, hours: Double)] {
-        let hoursByDay = Dictionary(grouping: records) { calendar.startOfDay(for: $0.date) }
-            .compactMapValues { dayRecords -> Double? in
-                let hours = dayRecords.compactMap(\.hoursWorked)
-                guard !hours.isEmpty else { return nil }
-                return hours.reduce(0, +)
-            }
-        return nights(excluding: excludedDate).compactMap { night in
-            guard let hours = hoursByDay[night.date], hours > 0 else { return nil }
-            return (date: night.date, cents: night.cents, hours: hours)
+        nightFacts(from: records, excluding: excludedDate).compactMap { night in
+            guard let hours = night.hoursWorked, hours > 0 else { return nil }
+            return (date: night.date, cents: night.netCents, hours: hours)
         }
     }
 
@@ -192,18 +225,14 @@ struct StatsEngine {
     // MARK: Tip percent
 
     /// Every night with BOTH a logged total and logged sales — deliberately
-    /// GROSS (amountCents, not netCents), matching how tip percent is
-    /// always measured: against what the customer actually tipped, not
-    /// what a server walked out with after tipping out support staff.
+    /// GROSS (nightFacts.grossCents, not netCents), matching how tip
+    /// percent is always measured: against what the customer actually
+    /// tipped, not what a server walked out with after tipping out. Sales
+    /// resolve through nightFacts (credit-preferred, never summed).
     private func nightlySalesRates(excluding excludedDate: Date? = nil) -> [(date: Date, grossCents: Int, salesCents: Int)] {
-        let grouped = Dictionary(grouping: records) { calendar.startOfDay(for: $0.date) }
-        let days = excludedDate.map { excluded in grouped.keys.filter { !calendar.isDate($0, inSameDayAs: excluded) } } ?? Array(grouped.keys)
-        return days.compactMap { day -> (date: Date, grossCents: Int, salesCents: Int)? in
-            let dayRecords = grouped[day] ?? []
-            let sales = dayRecords.compactMap(\.salesCents).reduce(0, +)
-            guard sales > 0 else { return nil }
-            let gross = dayRecords.reduce(0) { $0 + $1.amountCents }
-            return (date: day, grossCents: gross, salesCents: sales)
+        nightFacts(from: records, excluding: excludedDate).compactMap { night in
+            guard let sales = night.salesCents, sales > 0 else { return nil }
+            return (date: night.date, grossCents: night.grossCents, salesCents: sales)
         }
     }
 
@@ -434,19 +463,20 @@ struct StatsEngine {
     func insightsFacts(referenceDate: Date = .now) -> InsightsFacts? {
         let cutoff = calendar.date(byAdding: .day, value: -Self.insightsRecentWindowDays, to: referenceDate) ?? .distantPast
         let recent = records.filter { $0.date >= cutoff }
-        let nights = Dictionary(grouping: recent) { calendar.startOfDay(for: $0.date) }
-            .map { (date: $0.key, cents: $0.value.reduce(0) { $0 + $1.netCents }) }
-            .sorted { $0.date < $1.date }
+        let nights = nightFacts(from: recent)
 
         guard nights.count >= Self.minimumShiftsForInsights else { return nil }
 
-        let totalCents = nights.reduce(0) { $0 + $1.cents }
-        let topDays = nights.sorted { $0.cents > $1.cents }.prefix(3).map { InsightsFacts.DayAmount(date: $0.date, cents: $0.cents) }
+        let totalCents = nights.reduce(0) { $0 + $1.netCents }
+        let topDays = nights.sorted { $0.netCents > $1.netCents }.prefix(3).map { InsightsFacts.DayAmount(date: $0.date, cents: $0.netCents) }
         // Composition of what came in, not take-home — stays gross on
         // purpose, same as the paycheck comparison.
         let cashCents = recent.filter { $0.kind == .cash }.reduce(0) { $0 + $1.amountCents }
         let creditCents = recent.filter { $0.kind == .credit }.reduce(0) { $0 + $1.amountCents }
-        let totalTipOutCents = recent.compactMap(\.tipOutCents).reduce(0, +)
+        // Nights' canonical tip-out, never the raw per-record sum — a
+        // night with a (legacy) value on both entries would otherwise
+        // count it twice here too.
+        let totalTipOutCents = nights.compactMap(\.tipOutCents).reduce(0, +)
 
         return InsightsFacts(
             totalCents: totalCents,
@@ -456,22 +486,20 @@ struct StatsEngine {
             cashCents: cashCents,
             creditCents: creditCents,
             lunchDinner: lunchDinnerFacts(from: recent),
-            doublesSolo: doublesSoloFacts(from: nights, records: recent),
+            doublesSolo: doublesSoloFacts(from: nights),
             totalTipOutCents: totalTipOutCents,
-            rate: rateFacts(from: recent, nights: nights),
-            sales: salesFacts(from: recent)
+            rate: rateFacts(from: nights, sameDayLoggedRecords: recent),
+            sales: salesFacts(from: nights)
         )
     }
 
-    /// Same recent window as the rest of insightsFacts. Deliberately built
-    /// from gross records, not the net-adjusted `nights` array — tip
-    /// percent is measured against gross, same rule as tipPercent() above.
-    private func salesFacts(from recent: [TipRecord]) -> SalesFacts? {
-        let grouped = Dictionary(grouping: recent) { calendar.startOfDay(for: $0.date) }
-        let salesNights = grouped.compactMap { day, dayRecords -> (date: Date, grossCents: Int, salesCents: Int)? in
-            let sales = dayRecords.compactMap(\.salesCents).reduce(0, +)
-            guard sales > 0 else { return nil }
-            return (date: day, grossCents: dayRecords.reduce(0) { $0 + $1.amountCents }, salesCents: sales)
+    /// Same recent window as the rest of insightsFacts, reading sales
+    /// through nightFacts — deliberately GROSS (grossCents, not netCents),
+    /// same rule as tipPercent() above.
+    private func salesFacts(from nights: [NightFacts]) -> SalesFacts? {
+        let salesNights = nights.compactMap { night -> (date: Date, grossCents: Int, salesCents: Int)? in
+            guard let sales = night.salesCents, sales > 0 else { return nil }
+            return (date: night.date, grossCents: night.grossCents, salesCents: sales)
         }
         guard salesNights.count >= Self.minimumNightsForSales, let overall = blendedTipPercent(salesNights) else { return nil }
 
@@ -490,16 +518,12 @@ struct StatsEngine {
 
     /// Same recent window as the rest of insightsFacts — a $/hr number from
     /// a year-old shift wouldn't reflect what tonight's rate actually is.
-    private func rateFacts(from recent: [TipRecord], nights: [(date: Date, cents: Int)]) -> RateFacts? {
-        let hoursByDay = Dictionary(grouping: recent) { calendar.startOfDay(for: $0.date) }
-            .compactMapValues { dayRecords -> Double? in
-                let hours = dayRecords.compactMap(\.hoursWorked)
-                guard !hours.isEmpty else { return nil }
-                return hours.reduce(0, +)
-            }
+    /// `sameDayLoggedRecords` is only for the lunch/dinner split below,
+    /// which needs `recordedAt`, a per-record fact nightFacts doesn't carry.
+    private func rateFacts(from nights: [NightFacts], sameDayLoggedRecords recent: [TipRecord]) -> RateFacts? {
         let rateNights = nights.compactMap { night -> (date: Date, cents: Int, hours: Double)? in
-            guard let hours = hoursByDay[night.date], hours > 0 else { return nil }
-            return (date: night.date, cents: night.cents, hours: hours)
+            guard let hours = night.hoursWorked, hours > 0 else { return nil }
+            return (date: night.date, cents: night.netCents, hours: hours)
         }
         guard rateNights.count >= Self.minimumNightsForRate, let overall = blendedRate(rateNights) else { return nil }
 
@@ -508,7 +532,7 @@ struct StatsEngine {
         }
         let bestWeekday = weekdayRates.count >= 2 ? weekdayRates.max { $0.rate < $1.rate } : nil
 
-        let doubleDates = Set(recent.filter(\.isDouble).map { calendar.startOfDay(for: $0.date) })
+        let doubleDates = Set(nights.filter(\.isDouble).map(\.date))
         let doubleRate = blendedRate(rateNights.filter { doubleDates.contains($0.date) })
         let soloRate = blendedRate(rateNights.filter { !doubleDates.contains($0.date) })
 
@@ -648,7 +672,7 @@ struct StatsEngine {
     /// checks the same split by $/hr, which can point the other way once
     /// the extra hours are accounted for.
     private func doublesVerdictMove(referenceDate: Date) -> Move? {
-        let doubleDates = Set(records.filter(\.isDouble).map { calendar.startOfDay(for: $0.date) })
+        let doubleDates = Set(nightFacts(from: records).filter(\.isDouble).map(\.date))
         guard !doubleDates.isEmpty else { return nil }
         let allRates = nightlyRates()
         let doubleRates = allRates.filter { doubleDates.contains($0.date) }
@@ -735,15 +759,13 @@ struct StatsEngine {
         }
     }
 
-    private func doublesSoloFacts(from nights: [(date: Date, cents: Int)], records: [TipRecord]) -> DoublesSoloFacts? {
-        let doubleDates = Set(records.filter(\.isDouble).map { calendar.startOfDay(for: $0.date) })
-        guard !doubleDates.isEmpty else { return nil }
-        let doubleNights = nights.filter { doubleDates.contains($0.date) }
-        let soloNights = nights.filter { !doubleDates.contains($0.date) }
+    private func doublesSoloFacts(from nights: [NightFacts]) -> DoublesSoloFacts? {
+        let doubleNights = nights.filter(\.isDouble)
+        let soloNights = nights.filter { !$0.isDouble }
         guard !doubleNights.isEmpty, !soloNights.isEmpty else { return nil }
 
-        let doubleTotal = doubleNights.reduce(0) { $0 + $1.cents }
-        let soloTotal = soloNights.reduce(0) { $0 + $1.cents }
+        let doubleTotal = doubleNights.reduce(0) { $0 + $1.netCents }
+        let soloTotal = soloNights.reduce(0) { $0 + $1.netCents }
         return DoublesSoloFacts(
             doubleAverageCents: doubleTotal / doubleNights.count,
             doubleCount: doubleNights.count,

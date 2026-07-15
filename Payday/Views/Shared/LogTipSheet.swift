@@ -41,10 +41,10 @@ struct LogTipSheet: View {
     /// headline, never hiding what net was computed from.
     @State private var revealGrossAndTipOut: (grossCents: Int, tipOutCents: Int)?
 
-    // Optional shift details — skippable, never nagged. hoursWorked and
-    // tipOutCents only ever land on ONE entry when a night has both cash
-    // and credit (see saveNew); StatsEngine sums a day's values across its
-    // records, so a duplicate value on both would silently double them.
+    // Optional shift details — skippable, never nagged. hoursWorked,
+    // tipOutCents, and salesCents are a fact about the SHIFT (the calendar
+    // day), never one entry or tip type — ShiftDetails is the one place
+    // read/write for these three fields is allowed to happen.
     @State private var showMoreDetails = false
     @State private var hoursWorked: Double?
     @State private var tipOutCents: Int = 0
@@ -63,6 +63,13 @@ struct LogTipSheet: View {
             _date = State(initialValue: entry.date)
             _note = State(initialValue: entry.note ?? "")
             _isDouble = State(initialValue: entry.isDouble)
+            // A synchronous fallback seeded from this entry alone — always
+            // available immediately, unlike the @Query-backed allEntries
+            // seedShiftDetailDefaults needs for the full night. onAppear
+            // upgrades this to the true shift-level value (looking at any
+            // sibling entry too) the moment allEntries has caught up; until
+            // then, this is still correct for a single-entry night and a
+            // reasonable placeholder otherwise.
             _hoursWorked = State(initialValue: entry.hoursWorked)
             _tipOutCents = State(initialValue: entry.tipOutCents ?? 0)
             _salesCents = State(initialValue: entry.salesCents ?? 0)
@@ -130,13 +137,39 @@ struct LogTipSheet: View {
     /// logic directly in a chained-modifier closure was slow enough to trip
     /// the type checker's time budget.
     private func seedShiftDetailDefaults() {
-        guard case .new = target else { return }
-        if hoursWorked == nil { hoursWorked = suggestedHours(for: date) }
-        if tipOutCents == 0 { tipOutCents = suggestedTipOutCents(for: date) ?? 0 }
-        if salesCents == 0 { salesCents = suggestedSalesCents(for: date) ?? 0 }
-        // A remembered default is still a value about to be saved — show
-        // it rather than attach it silently.
-        if hoursWorked != nil || tipOutCents > 0 || salesCents > 0 { showMoreDetails = true }
+        switch target {
+        case .new:
+            if hoursWorked == nil { hoursWorked = suggestedHours(for: date) }
+            if tipOutCents == 0 { tipOutCents = suggestedTipOutCents(for: date) ?? 0 }
+            if salesCents == 0 { salesCents = suggestedSalesCents(for: date) ?? 0 }
+            // A remembered default is still a value about to be saved —
+            // show it rather than attach it silently.
+            if hoursWorked != nil || tipOutCents > 0 || salesCents > 0 { showMoreDetails = true }
+        case .edit(let entry):
+            // A fact about the whole night, not this one entry — resolve
+            // across every entry sharing this date, same convention
+            // liveSaveEdit writes back through. Guarded on the night list
+            // actually containing `entry` itself: allEntries is @Query-
+            // backed and can momentarily be empty right as the sheet
+            // mounts, which would otherwise resolve against an empty
+            // array and wipe out the correct value init already seeded
+            // from `entry` directly.
+            let night = sameDayEntries(around: entry)
+            guard night.contains(where: { $0.id == entry.id }) else { return }
+            let resolved = ShiftDetails.resolve(from: night)
+            hoursWorked = resolved.hoursWorked
+            tipOutCents = resolved.tipOutCents ?? 0
+            salesCents = resolved.salesCents ?? 0
+            showMoreDetails = hoursWorked != nil || tipOutCents > 0 || salesCents > 0
+        }
+    }
+
+    /// Every entry sharing the same calendar day as `entry` — used to treat
+    /// hours/tip-out/sales as one shift-level fact instead of a per-entry
+    /// one, even though ShiftDetails physically stores them on a single
+    /// TipEntry.
+    private func sameDayEntries(around entry: TipEntry) -> [TipEntry] {
+        allEntries.filter { Calendar.current.isDate($0.date, inSameDayAs: entry.date) }
     }
 
     /// A default, not a lock: only suggests the toggle until the user has
@@ -154,32 +187,44 @@ struct LogTipSheet: View {
                 if let revealResult {
                     RevealCardView(result: revealResult, grossAndTipOut: revealGrossAndTipOut, onDismiss: { dismiss() })
                 } else {
-                    VStack(spacing: 24) {
-                        if isEditing {
-                            editContent
-                        } else {
-                            logContent
-                        }
-
-                        detailsCard
-                        moreDetailsCard
-
-                        if isEditing {
-                            Button(role: .destructive) { showDeleteConfirmation = true } label: {
-                                Text("Delete Tip")
-                                    .frame(maxWidth: .infinity)
+                    // Scrollable rather than a fixed VStack: expanding the
+                    // details group used to compress every row toward zero
+                    // height once the keyboard was up, badly enough that
+                    // the amount could render overlapping the nav title.
+                    // A ScrollView absorbs that extra height by scrolling
+                    // instead of squeezing, keeps the header stable in
+                    // every state, and (with the system's own keyboard
+                    // avoidance) keeps a focused field visible above the
+                    // keyboard automatically.
+                    ScrollView {
+                        VStack(spacing: 24) {
+                            if isEditing {
+                                editContent
+                            } else {
+                                logContent
                             }
-                            .buttonStyle(.glassProminent)
-                            .tint(PaydayColor.error)
-                            .padding(.horizontal)
-                            .padding(.top, 4)
-                            .confirmationDialog("Delete this tip?", isPresented: $showDeleteConfirmation, titleVisibility: .visible) {
-                                Button("Delete Tip", role: .destructive) { delete() }
+
+                            detailsCard
+                            moreDetailsCard
+
+                            if isEditing {
+                                Button(role: .destructive) { showDeleteConfirmation = true } label: {
+                                    Text("Delete Tip")
+                                        .frame(maxWidth: .infinity)
+                                }
+                                .buttonStyle(.glassProminent)
+                                .tint(PaydayColor.error)
+                                .padding(.horizontal)
+                                .padding(.top, 4)
+                                .confirmationDialog("Delete this tip?", isPresented: $showDeleteConfirmation, titleVisibility: .visible) {
+                                    Button("Delete Tip", role: .destructive) { delete() }
+                                }
                             }
                         }
+                        .padding(.top, 20)
+                        .padding(.bottom, 32)
                     }
-                    .padding(.top, 20)
-                    .padding(.bottom, 32)
+                    .scrollDismissesKeyboard(.interactively)
                 }
             }
             .background(PaydayColor.background)
@@ -319,7 +364,8 @@ struct LogTipSheet: View {
     private var moreDetailsCard: some View {
         card {
             DisclosureGroup("Hours, tip-out, sales", isExpanded: $showMoreDetails) {
-                VStack(spacing: 12) {
+                VStack(spacing: 0) {
+                    Divider().padding(.top, 14)
                     HStack {
                         Text("Hours")
                         Spacer()
@@ -328,22 +374,37 @@ struct LogTipSheet: View {
                                 .foregroundStyle(PaydayColor.textSecondary)
                         }
                     }
+                    .padding(.vertical, 14)
+                    Divider()
                     HStack {
                         Text("Tip-out")
                         Spacer()
-                        CompactCurrencyField(cents: $tipOutCents)
+                        CompactCurrencyField(cents: $tipOutCents, autoFocus: debugAutoFocusTipOut)
                     }
+                    .padding(.vertical, 14)
+                    Divider()
                     HStack {
                         Text("Sales")
                         Spacer()
                         CompactCurrencyField(cents: $salesCents)
                     }
+                    .padding(.vertical, 14)
                 }
-                .padding(.top, 12)
             }
             .padding()
             .tint(PaydayColor.textPrimary)
         }
+    }
+
+    /// Screenshot/QA hook only: lets a launch argument force the keyboard
+    /// up over the Tip-out field so the expanded+keyboard layout state can
+    /// be verified without a UI automation tool to tap into it.
+    private var debugAutoFocusTipOut: Bool {
+        #if DEBUG
+        ProcessInfo.processInfo.arguments.contains("-DebugFocusTipOut")
+        #else
+        false
+        #endif
     }
 
     private var hoursStepperBinding: Binding<Double> {
@@ -392,21 +453,21 @@ struct LogTipSheet: View {
         // every other analytical total.
         let reveal = statsEngine.reveal(forNightAt: normalizedDate, cents: netTotalCents, period: period, hoursWorked: hoursWorked)
 
-        // Shift-level details (hours, tip-out) go on exactly one of
-        // tonight's entries — putting them on both would double-count when
-        // StatsEngine sums a night's values across its records.
-        let creditIsPrimary = creditCents > 0
         var newEntries: [TipEntry] = []
         if cashCents > 0 {
-            let entry = TipEntry(date: normalizedDate, amountCents: cashCents, kind: .cash, note: trimmedNote, recordedAt: recordedAt, isDouble: isDouble, hoursWorked: creditIsPrimary ? nil : hoursWorked, tipOutCents: creditIsPrimary ? nil : effectiveTipOutCents, salesCents: creditIsPrimary ? nil : effectiveSalesCents)
+            let entry = TipEntry(date: normalizedDate, amountCents: cashCents, kind: .cash, note: trimmedNote, recordedAt: recordedAt, isDouble: isDouble)
             modelContext.insert(entry)
             newEntries.append(entry)
         }
         if creditCents > 0 {
-            let entry = TipEntry(date: normalizedDate, amountCents: creditCents, kind: .credit, note: trimmedNote, recordedAt: recordedAt, isDouble: isDouble, hoursWorked: hoursWorked, tipOutCents: effectiveTipOutCents, salesCents: effectiveSalesCents)
+            let entry = TipEntry(date: normalizedDate, amountCents: creditCents, kind: .credit, note: trimmedNote, recordedAt: recordedAt, isDouble: isDouble)
             modelContext.insert(entry)
             newEntries.append(entry)
         }
+        // Shift-level details land on one canonical entry (credit
+        // preferred), never split across both — see ShiftDetails.
+        ShiftDetails.write(hoursWorked: hoursWorked, tipOutCents: effectiveTipOutCents, salesCents: effectiveSalesCents, into: newEntries)
+
         revealResult = reveal
         revealGrossAndTipOut = effectiveTipOutCents.map { (grossCents: totalCents, tipOutCents: $0) }
         // Tonight is logged — cancel tonight's nudge and queue the next
@@ -426,9 +487,18 @@ struct LogTipSheet: View {
         entry.kind = kind
         entry.note = note.isEmpty ? nil : note
         entry.isDouble = isDouble
-        entry.hoursWorked = hoursWorked
-        entry.tipOutCents = tipOutCents > 0 ? tipOutCents : nil
-        entry.salesCents = salesCents > 0 ? salesCents : nil
+
+        // Shift-level details land on the night's one canonical entry
+        // (credit preferred, same convention as saveNew) and get cleared
+        // from every other entry sharing this date — self-healing any
+        // night that ended up with a value split across both entries.
+        ShiftDetails.write(
+            hoursWorked: hoursWorked,
+            tipOutCents: tipOutCents > 0 ? tipOutCents : nil,
+            salesCents: salesCents > 0 ? salesCents : nil,
+            into: sameDayEntries(around: entry)
+        )
+
         PaydayWidgetRefresh.request()
     }
 
@@ -443,10 +513,12 @@ struct LogTipSheet: View {
 
 /// A small, non-auto-focusing cents field for the optional shift-details
 /// group — same digit-shift-from-the-right technique as CurrencyAmountRow,
-/// just compact and self-contained since these are secondary, skippable
-/// fields, not the sheet's primary input.
+/// including its focused-ring treatment (scaled down to fit inline in a
+/// row), so tapping in shows unmistakably that this field is now the one
+/// accepting keystrokes, same as the Cash/Credit fields above.
 private struct CompactCurrencyField: View {
     @Binding var cents: Int
+    var autoFocus: Bool = false
     @FocusState private var isFocused: Bool
     @State private var digitsText: String = ""
 
@@ -459,16 +531,27 @@ private struct CompactCurrencyField: View {
                 .monospacedDigit()
                 .foregroundStyle(cents == 0 ? PaydayColor.textSecondary : PaydayColor.textPrimary)
                 .contentTransition(.numericText())
+                .accessibilityHidden(true)
             TextField("", text: $digitsText)
                 .keyboardType(.numberPad)
                 .focused($isFocused)
                 .opacity(0.01)
-                .frame(maxWidth: 100, alignment: .trailing)
                 .multilineTextAlignment(.trailing)
+                .accessibilityValue(Money.string(fromCents: cents))
         }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .frame(minWidth: 92, alignment: .trailing)
+        .overlay(
+            RoundedRectangle(cornerRadius: PaydayRadius.sm)
+                .strokeBorder(isFocused ? PaydayColor.primary : Color.clear, lineWidth: 2)
+        )
         .contentShape(Rectangle())
         .onTapGesture { isFocused = true }
-        .onAppear { digitsText = cents == 0 ? "" : String(cents) }
+        .onAppear {
+            digitsText = cents == 0 ? "" : String(cents)
+            if autoFocus { isFocused = true }
+        }
         .onChange(of: digitsText) { _, newValue in
             let filtered = String(newValue.filter(\.isNumber).prefix(Self.maxDigits))
             if filtered != newValue { digitsText = filtered }

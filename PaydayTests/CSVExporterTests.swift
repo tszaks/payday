@@ -73,6 +73,20 @@ struct CSVExporterTests {
         #expect(fields[9].contains("to"))
     }
 
+    @Test("hours/tip-out/sales set on BOTH entries (corruption) resolve to one canonical value, never a sum")
+    func shiftDetailsNeverDoubleCountAcrossEntries() {
+        let entries = [
+            TipEntry(date: date(2026, 7, 8), amountCents: 8600, kind: .credit, hoursWorked: 5, tipOutCents: 1500, salesCents: 43000),
+            TipEntry(date: date(2026, 7, 8), amountCents: 3200, kind: .cash, hoursWorked: 5, tipOutCents: 1000, salesCents: 10000)
+        ]
+        let csv = CSVExporter.export(entries: entries, paycheckRecords: [], calculator: calculator)
+        let fields = csv.split(separator: "\n")[1].split(separator: ",", omittingEmptySubsequences: false).map(String.init)
+        #expect(fields[3] == "15.00") // tip-out: credit's value, not 15+10
+        #expect(fields[5] == "5") // hours: credit's value, not 5+5
+        #expect(fields[6] == "430.00") // sales: credit's value, not 430+100
+        #expect(fields[4] == "103.00") // net: 8600+3200-1500, not -2500
+    }
+
     @Test("rows are ordered chronologically, oldest first")
     func rowsChronological() {
         let entries = [
