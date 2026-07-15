@@ -275,6 +275,60 @@ into a defaulted non-optional.
   new dependencies; the file is written to a stable temp path so repeat
   exports overwrite instead of accumulating.
 
+## Pillar 9: Multiple Jobs — DESIGN ONLY, implementation gated (2026-07-14)
+
+Design committed ahead of code per Tyler's standing instruction: scope this
+honestly and stop for a check-in before writing any Phase 4 code, since one
+piece of it is a real architectural decision, not just a schema add.
+
+**Model.** A new `Job` SwiftData model: `name: String`, optional
+`paySchedule: PaySchedule?` (CloudKit-safe — nil means "use the app's shared
+schedule," not "broken"), `colorTag` deferred (no new hues per design law;
+jobs differentiate by name/label, not color, same "text-forward" rule as
+everywhere else in this app). `TipEntry` gains an optional `job: Job?`
+relationship — same optional-relationship pattern as every field added this
+phase, genuinely low-risk on its own: SwiftData/CloudKit lightweight-migrate
+an added optional relationship the same way they migrated `hoursWorked`,
+`tipOutCents`, and `salesCents` this session. Every existing entry has
+`job == nil`; that is not a migration hazard, it is the definition of "no
+second job yet."
+
+**Invisibility until it matters.** Zero or one job (the common case) is
+today's app, byte-for-byte — no new UI appears anywhere until a second job
+exists. Jobs are created in Settings > Jobs. The moment a second job is
+created, per-job UI switches on everywhere at once.
+
+**With 2+ jobs:**
+- Log sheet gains a job picker, remembering the last job used per weekday
+  (same per-weekday-memory pattern as hours/tip-out/sales this phase).
+- Periods and paycheck verification become per-job: a period and its
+  paycheck comparison belong to one job's own schedule, never a blend.
+- `StatsEngine`, Insights, and Moves become job-aware and gain a genuinely
+  new capability neither has today: cross-job comparison ("Harry's pays $6
+  more than The Anchor on Fridays"; "Harry's averages $22/hr against The
+  Anchor's $15/hr").
+
+**The one real design fork — needs Tyler's steer before implementation:**
+Dashboard's hero is built around ONE period ("This pay period," one total,
+one pace line, one projection). Two jobs on independent schedules (e.g.
+biweekly Mon–Sun vs. weekly Wed–Tue) have no shared period boundary — there
+is no single "this pay period" once schedules disagree. "Combined by
+default with a one-tap job filter" (as specced) has to mean one of:
+  (a) the combined view is by CALENDAR WINDOW (today / this week / this
+      month), not by period, with "period" only appearing once a single
+      job is filtered to, or
+  (b) the combined view shows each job's own current period as its own
+      row/card stacked together, with no single blended total at all, or
+  (c) jobs are required to share one schedule (defeating "optional
+      per-job PaySchedule" as specced).
+None of these is obviously correct without knowing which case Tyler is
+actually solving for (two jobs that happen to share a payday cadence vs.
+two genuinely independent schedules) — this is the one thing worth a real
+conversation before code, not a judgment call to make solo. Everything
+else above (the model, the invisibility rule, the picker, per-job
+periods/paychecks, StatsEngine's cross-job facts) is straightforward to
+build once that fork is resolved.
+
 ## What NOT to build (the restraint is the product)
 
 - No goals, budgets, or guilt-mechanic streaks. Records replace streaks.
