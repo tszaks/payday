@@ -7,6 +7,7 @@ struct SettingsView: View {
     @Environment(PayScheduleStore.self) private var scheduleStore
     @Environment(InsightsStore.self) private var insightsStore
     @Environment(UserPreferencesStore.self) private var preferencesStore
+    @Environment(MoveLedgerStore.self) private var moveLedgerStore
     @Environment(\.dismiss) private var dismiss
 
     @State private var firstName: String
@@ -118,8 +119,11 @@ struct SettingsView: View {
                     Button("Seed sample data") {
                         DebugSeeder.seedSampleData(scheduleStore: scheduleStore, insightsStore: insightsStore)
                     }
+                    Button("Seed follow-up demo") {
+                        DebugSeeder.seedFollowUpDemoData(insightsStore: insightsStore, moveLedgerStore: moveLedgerStore)
+                    }
                     Button("Clear all data", role: .destructive) {
-                        DebugSeeder.clearAll(scheduleStore: scheduleStore, insightsStore: insightsStore)
+                        DebugSeeder.clearAll(scheduleStore: scheduleStore, insightsStore: insightsStore, moveLedgerStore: moveLedgerStore)
                     }
                 }
                 .listRowBackground(PaydayColor.fieldBackground)

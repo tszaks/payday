@@ -15,6 +15,7 @@ import SwiftData
 struct InsightsView: View {
     @Environment(PayScheduleStore.self) private var scheduleStore
     @Environment(InsightsStore.self) private var insightsStore
+    @Environment(MoveLedgerStore.self) private var moveLedgerStore
     @Query(sort: \TipEntry.date, order: .reverse) private var allEntries: [TipEntry]
 
     @State private var isLoading = false
@@ -56,11 +57,11 @@ struct InsightsView: View {
         // per each of facts/moves/recentNights independently re-deriving
         // its own `statsEngine`, the same redundant-rebuild pattern P1.3
         // fixed on Dashboard.
-        let pageFacts = InsightsPageFacts(allEntries: allEntries)
+        let pageFacts = InsightsPageFacts(allEntries: allEntries, ledger: moveLedgerStore.firstShownAt)
         NavigationStack {
             Group {
                 if let facts = pageFacts.facts {
-                    resultList(facts, moves: pageFacts.moves, recentNights: pageFacts.recentNights)
+                    resultList(facts, moves: pageFacts.moves, followUps: pageFacts.followUps, recentNights: pageFacts.recentNights)
                 } else {
                     ScrollView {
                         emptyState
@@ -73,15 +74,39 @@ struct InsightsView: View {
             .navigationTitle("Insights")
             .task(id: pageFacts.facts) {
                 guard isModelAvailable, let facts = pageFacts.facts, isRefreshDue(facts: facts) else { return }
-                await refresh(facts: facts, topMove: pageFacts.moves.first)
+                await refresh(facts: facts, topMove: pageFacts.moves.first, latestFollowUp: pageFacts.followUps.first)
+            }
+            .task(id: pageFacts.moves.map(\.id)) {
+                moveLedgerStore.recordShown(pageFacts.moves)
             }
         }
     }
 
-    private func resultList(_ facts: InsightsFacts, moves: [Move], recentNights: [(date: Date, cents: Int)]) -> some View {
+    private func resultList(_ facts: InsightsFacts, moves: [Move], followUps: [FollowUp], recentNights: [(date: Date, cents: Int)]) -> some View {
         ScrollView {
             VStack(spacing: PaydaySpacing.p16) {
-                // Moves come first and are always fresh — deterministic
+                // Follow-ups lead — a verdict on a past recommendation
+                // outranks a fresh one, since it answers "did that actually
+                // work" instead of just proposing something new.
+                ForEach(followUps) { followUp in
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("SINCE THEN")
+                            .font(PaydayFont.caption2)
+                            .tracking(0.8)
+                            .foregroundStyle(PaydayColor.primary)
+                        Text(followUp.title)
+                            .font(PaydayFont.headline)
+                            .foregroundStyle(PaydayColor.textPrimary)
+                        Text(followUp.body)
+                            .font(PaydayFont.bodyRegular)
+                            .foregroundStyle(PaydayColor.textPrimary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .paydayCard()
+                }
+
+                // Moves come next and are always fresh — deterministic
                 // math, not narration, so there's nothing to wait on.
                 ForEach(moves) { move in
                     VStack(alignment: .leading, spacing: 6) {
@@ -198,7 +223,7 @@ struct InsightsView: View {
         .padding(.top, 40)
     }
 
-    private func refresh(facts: InsightsFacts, topMove: Move?) async {
+    private func refresh(facts: InsightsFacts, topMove: Move?, latestFollowUp: FollowUp?) async {
         errorMessage = nil
         isLoading = true
         defer { isLoading = false }
@@ -208,7 +233,8 @@ struct InsightsView: View {
                 facts: facts,
                 scheduleFrequency: frequency,
                 previousSections: insightsStore.snapshot?.sections,
-                topMove: topMove
+                topMove: topMove,
+                latestFollowUp: latestFollowUp
             )
             insightsStore.snapshot = InsightsSnapshot(sections: sections, generatedAt: .now, facts: facts)
             insightsStore.lastAttemptFailed = false
@@ -226,15 +252,17 @@ struct InsightsView: View {
 private struct InsightsPageFacts {
     let facts: InsightsFacts?
     let moves: [Move]
+    let followUps: [FollowUp]
     /// Most recent 30 nights only — legible on a compact chart width, and
     /// matches Insights' own "recent patterns" framing rather than dumping
     /// the user's entire history into one bar chart.
     let recentNights: [(date: Date, cents: Int)]
 
-    init(allEntries: [TipEntry]) {
+    init(allEntries: [TipEntry], ledger: [String: Date]) {
         let statsEngine = StatsEngine(records: allEntries.map(TipRecord.init))
         facts = statsEngine.insightsFacts()
         moves = statsEngine.moves()
+        followUps = statsEngine.followUps(ledger: ledger)
         recentNights = Array(statsEngine.nightlyTotals().suffix(30))
     }
 }

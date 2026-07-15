@@ -8,6 +8,7 @@ struct PaydayApp: App {
     @State private var scheduleStore = PayScheduleStore()
     @State private var insightsStore = InsightsStore()
     @State private var preferencesStore = UserPreferencesStore()
+    @State private var moveLedgerStore = MoveLedgerStore()
 
     init() {
         try? Tips.configure([.displayFrequency(.immediate), .datastoreLocation(.applicationDefault)])
@@ -20,11 +21,12 @@ struct PaydayApp: App {
                 .environment(scheduleStore)
                 .environment(insightsStore)
                 .environment(preferencesStore)
+                .environment(moveLedgerStore)
                 .preferredColorScheme(preferencesStore.appearance.colorScheme)
                 .modelContainer(SharedModelContainer.shared)
                 .task {
                     #if DEBUG
-                    DebugSeeder.seedIfRequested(scheduleStore: scheduleStore, insightsStore: insightsStore)
+                    DebugSeeder.seedIfRequested(scheduleStore: scheduleStore, insightsStore: insightsStore, moveLedgerStore: moveLedgerStore)
                     #endif
                 }
         }
