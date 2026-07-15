@@ -226,6 +226,23 @@ CloudKit-safe `kindRaw` pattern applied to genuinely-optional fields — plain
 and "entered as zero" have to stay distinguishable facts, never collapsed
 into a defaulted non-optional.
 
+- **Hours/tip-out/sales are shift-level, by law (2026-07-15).** A product
+  ruling, not a UI convenience: hours worked, tip-out, and sales belong to
+  the SHIFT (the calendar day), never to an individual entry or tip type.
+  A night logged as cash + credit is still one number for each — "5 hours"
+  once, not 5 on the credit tab and another 5 on cash. `ShiftDetails`
+  (`Payday/Utilities/ShiftDetails.swift`) is the one place this is allowed
+  to be read or written: `resolve(from:)` always reads through the
+  credit entry when one exists, falling back to cash, and NEVER sums
+  across a night's entries; `write(...)` always lands a value on that same
+  canonical entry and clears it from every other entry sharing the night,
+  self-healing any night that ended up with a value split across both
+  (the original bug). `StatsEngine`'s own `NightFacts` grouping enforces
+  the identical rule on the analytical side — nightly totals, $/hr, and
+  tip percent all resolve through it too, so a corrupted or "wrong-entry"
+  night reads the same correct number everywhere, never double-counted.
+  `CSVExporter` resolves through `ShiftDetails` as well: one hours/tip-out/
+  sales figure per shift row, never a per-entry sum.
 - **Hours → $/hr.** Optional `hoursWorked` (quarter-hour granularity) on
   `TipEntry`, entered in the log sheet's collapsed "Hours, tip-out, sales"
   details group (skippable in under two seconds, remembers a per-weekday

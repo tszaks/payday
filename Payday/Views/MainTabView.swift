@@ -1,4 +1,5 @@
 import SwiftUI
+import SwiftData
 
 enum AppTab: String, CaseIterable, Identifiable {
     case dashboard, calendar, periods, insights, logTips
@@ -14,6 +15,9 @@ final class TabRouter {
 }
 
 struct MainTabView: View {
+    #if DEBUG
+    @Environment(\.modelContext) private var modelContext
+    #endif
     @State private var tabRouter = TabRouter()
     @State private var previousTab: AppTab = .dashboard
     @State private var isRestoringTabAfterLog = false
@@ -69,6 +73,17 @@ struct MainTabView: View {
             }
             if args.contains("-OpenLogSheet") {
                 deepLink.pendingLogTarget = .new(defaultDate: .now)
+            }
+            // Screenshot/QA hook only: open the edit sheet directly for the
+            // most recent entry of a given kind, so a cash+credit night's
+            // shared shift details can be verified from both tabs without
+            // needing UI automation to tap into it.
+            if let index = args.firstIndex(of: "-OpenEditSheet"), args.count > index + 1,
+               let kind = TipKind(rawValue: args[index + 1]) {
+                let descriptor = FetchDescriptor<TipEntry>(sortBy: [SortDescriptor(\.date, order: .reverse)])
+                if let entry = (try? modelContext.fetch(descriptor))?.first(where: { $0.kind == kind }) {
+                    deepLink.pendingLogTarget = .edit(entry)
+                }
             }
         }
         #endif
