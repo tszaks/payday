@@ -29,6 +29,16 @@ struct RootView: View {
                 break
             }
         }
+        .onAppear {
+            // Backgrounding an already-running app arms the lock via the
+            // scenePhase handler above, but a fully-terminated app (swiped
+            // away in the App Switcher, not just suspended) starts a brand
+            // new process on relaunch with no memory of that — nothing had
+            // ever checked the preference at launch time before, so a cold
+            // launch always opened straight to unlocked content regardless
+            // of the setting.
+            lockController.armIfEnabled(preferencesStore)
+        }
         #if DEBUG
         .onAppear {
             if ProcessInfo.processInfo.arguments.contains("-DebugForceLock") {
