@@ -29,7 +29,26 @@ struct DayDetailSheet: View {
                         .foregroundStyle(PaydayColor.textSecondary)
                         .listRowSeparator(.hidden)
                 } else {
-                    Section {
+                    if entries.count > 1 {
+                        Section {
+                            HStack {
+                                Text("Total")
+                                    .font(PaydayFont.subheadline)
+                                    .foregroundStyle(PaydayColor.textSecondary)
+                                Spacer()
+                                Text(Money.string(fromCents: totalCents))
+                                    .font(PaydayFont.displaySmall)
+                                    .monospacedDigit()
+                                    .foregroundStyle(PaydayColor.textPrimary)
+                            }
+                            .paydayCard()
+                        }
+                        .listRowInsets(EdgeInsets(top: 4, leading: PaydaySpacing.p16, bottom: 4, trailing: PaydaySpacing.p16))
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                    }
+
+                    Section("Entries") {
                         ForEach(entries) { entry in
                             Button {
                                 sheetTarget = .edit(entry)
@@ -46,13 +65,6 @@ struct DayDetailSheet: View {
                             }
                             .entryContextMenu(entry, sheetTarget: $sheetTarget, undoState: undoState, context: modelContext)
                         }
-                    } header: {
-                        Text(date.formatted(.dateTime.weekday(.wide).month(.wide).day()))
-                    } footer: {
-                        if entries.count > 1 {
-                            Text("Total: \(Money.string(fromCents: totalCents))")
-                                .monospacedDigit()
-                        }
                     }
                     .listRowBackground(PaydayColor.background)
                 }
@@ -60,7 +72,7 @@ struct DayDetailSheet: View {
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
             .background(PaydayColor.background)
-            .navigationTitle(date.formatted(.dateTime.month(.abbreviated).day()))
+            .navigationTitle(ShiftDays.humanLabel(for: date))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {

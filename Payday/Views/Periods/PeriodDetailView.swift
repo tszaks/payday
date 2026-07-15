@@ -1,6 +1,11 @@
 import SwiftUI
 import SwiftData
 
+private struct DaySelection: Identifiable {
+    let date: Date
+    var id: Date { date }
+}
+
 struct PeriodDetailView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(PayScheduleStore.self) private var scheduleStore
@@ -9,6 +14,7 @@ struct PeriodDetailView: View {
 
     let period: PayPeriod
     @State private var sheetTarget: TipEntrySheetTarget?
+    @State private var daySelection: DaySelection?
     @State private var showPaycheckSheet = false
     @State private var undoState = UndoDeleteToastState()
 
@@ -20,6 +26,10 @@ struct PeriodDetailView: View {
         allEntries
             .filter { $0.date >= period.start && $0.date <= period.end }
             .sorted { $0.date > $1.date }
+    }
+
+    private var shiftDays: [(day: Date, items: [TipEntry])] {
+        ShiftDays.groupedByDay(entries, date: \.date)
     }
 
     private var breakdown: TipBreakdown {
@@ -44,58 +54,40 @@ struct PeriodDetailView: View {
     var body: some View {
         List {
             Section {
-                VStack(spacing: 10) {
-                    Text(dateRangeString)
-                        .font(PaydayFont.subheadline)
-                        .foregroundStyle(PaydayColor.textSecondary)
-                    Text(Money.string(fromCents: loggedCents))
-                        .font(PaydayFont.displayXL)
-                        .monospacedDigit()
-                        .foregroundStyle(PaydayColor.textPrimary)
-                    HStack(spacing: 6) {
-                        Text("Cash \(Money.string(fromCents: breakdown.cashCents))")
-                        Text("·").foregroundStyle(PaydayColor.textSecondary)
-                        Text("Credit \(Money.string(fromCents: breakdown.creditCents))")
-                    }
-                    .font(PaydayFont.footnote)
-                    .monospacedDigit()
-                    .foregroundStyle(PaydayColor.textSecondary)
-                    Text("Paid \(payDate.formatted(.dateTime.month(.wide).day()))")
-                        .font(PaydayFont.caption)
-                        .foregroundStyle(PaydayColor.textSecondary)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
+                heroCard
             }
-            .listRowInsets(EdgeInsets())
+            .listRowInsets(EdgeInsets(top: 8, leading: PaydaySpacing.p16, bottom: 8, trailing: PaydaySpacing.p16))
             .listRowBackground(Color.clear)
             .listRowSeparator(.hidden)
 
             if !nightsInPeriod.isEmpty {
                 Section {
                     NightlyEarningsChart(nights: nightsInPeriod)
-                        .padding(.vertical, 4)
+                        .paydayCard()
                 }
-                .listRowBackground(PaydayColor.background)
+                .listRowInsets(EdgeInsets(top: 4, leading: PaydaySpacing.p16, bottom: 4, trailing: PaydaySpacing.p16))
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
             }
 
             Section("Paycheck") {
                 if let paycheck {
                     PaycheckComparisonView(breakdown: breakdown, paycheck: paycheck)
-                        .listRowInsets(EdgeInsets())
+                        .listRowInsets(EdgeInsets(top: 4, leading: PaydaySpacing.p16, bottom: 4, trailing: PaydaySpacing.p16))
                         .listRowBackground(Color.clear)
                     Button("Edit paycheck amount") { showPaycheckSheet = true }
+                        .listRowBackground(PaydayColor.background)
                 } else {
                     Button {
                         showPaycheckSheet = true
                     } label: {
                         Label("Enter paycheck amount", systemImage: "banknote")
                     }
+                    .listRowBackground(PaydayColor.background)
                 }
             }
-            .listRowBackground(PaydayColor.background)
 
-            if entries.isEmpty {
+            if shiftDays.isEmpty {
                 Section {
                     Text("No entries in this period.")
                         .foregroundStyle(PaydayColor.textSecondary)
@@ -103,21 +95,8 @@ struct PeriodDetailView: View {
                 .listRowBackground(PaydayColor.background)
             } else {
                 Section("Entries") {
-                    ForEach(entries) { entry in
-                        Button {
-                            sheetTarget = .edit(entry)
-                        } label: {
-                            EntryRow(entry: entry)
-                        }
-                        .buttonStyle(.plain)
-                        .swipeActions(edge: .trailing) {
-                            Button(role: .destructive) {
-                                undoState.delete(entry, in: modelContext)
-                            } label: {
-                                Label("Delete", systemImage: "trash")
-                            }
-                        }
-                        .entryContextMenu(entry, sheetTarget: $sheetTarget, undoState: undoState, context: modelContext)
+                    ForEach(shiftDays, id: \.day) { group in
+                        shiftRow(for: group)
                     }
                 }
                 .listRowBackground(PaydayColor.background)
@@ -131,10 +110,65 @@ struct PeriodDetailView: View {
         .sheet(item: $sheetTarget) { target in
             LogTipSheet(target: target)
         }
+        .sheet(item: $daySelection) { selection in
+            DayDetailSheet(date: selection.date)
+        }
         .sheet(isPresented: $showPaycheckSheet) {
             PaycheckEntrySheet(period: period, existing: paycheck)
         }
         .undoDeleteToast(undoState, context: modelContext)
+    }
+
+    private var heroCard: some View {
+        VStack(spacing: 10) {
+            Text(dateRangeString)
+                .font(PaydayFont.subheadline)
+                .foregroundStyle(PaydayColor.textSecondary)
+            Text(Money.string(fromCents: loggedCents))
+                .font(PaydayFont.displayXL)
+                .monospacedDigit()
+                .foregroundStyle(PaydayColor.textPrimary)
+            HStack(spacing: 6) {
+                Text("Cash \(Money.string(fromCents: breakdown.cashCents))")
+                Text("·").foregroundStyle(PaydayColor.textSecondary)
+                Text("Credit \(Money.string(fromCents: breakdown.creditCents))")
+            }
+            .font(PaydayFont.footnote)
+            .monospacedDigit()
+            .foregroundStyle(PaydayColor.textSecondary)
+            Text("Paid \(payDate.formatted(.dateTime.month(.wide).day()))")
+                .font(PaydayFont.caption)
+                .foregroundStyle(PaydayColor.textSecondary)
+        }
+        .frame(maxWidth: .infinity)
+        .paydayCard(padding: PaydaySpacing.p24)
+    }
+
+    @ViewBuilder
+    private func shiftRow(for group: (day: Date, items: [TipEntry])) -> some View {
+        if group.items.count == 1, let entry = group.items.first {
+            Button {
+                sheetTarget = .edit(entry)
+            } label: {
+                ShiftDayRow(day: group.day, entries: group.items)
+            }
+            .buttonStyle(.plain)
+            .swipeActions(edge: .trailing) {
+                Button(role: .destructive) {
+                    undoState.delete(entry, in: modelContext)
+                } label: {
+                    Label("Delete", systemImage: "trash")
+                }
+            }
+            .entryContextMenu(entry, sheetTarget: $sheetTarget, undoState: undoState, context: modelContext)
+        } else {
+            Button {
+                daySelection = DaySelection(date: group.day)
+            } label: {
+                ShiftDayRow(day: group.day, entries: group.items)
+            }
+            .buttonStyle(.plain)
+        }
     }
 
     private var dateRangeString: String {
@@ -183,12 +217,7 @@ struct PaycheckComparisonView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding()
-        .background(PaydayColor.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: PaydayRadius.lg, style: .continuous))
-        .paydayPremiumShadow()
-        .padding(.horizontal)
-        .padding(.vertical, 4)
+        .paydayCard()
     }
 
     private var comparisonLine: String {
