@@ -65,7 +65,7 @@ enum InsightsService {
     /// in so each refresh amends it rather than rewriting from scratch.
     /// Wording should settle down and change less over time as patterns
     /// stabilize, not reshuffle on every call.
-    static func narrate(facts: InsightsFacts, scheduleFrequency: PayFrequency, previousSections: [InsightSection]?) async throws -> [InsightSection] {
+    static func narrate(facts: InsightsFacts, scheduleFrequency: PayFrequency, previousSections: [InsightSection]?, topMove: Move? = nil) async throws -> [InsightSection] {
         guard isConfigured else {
             throw InsightsError.generationFailed("No OpenAI API key configured.")
         }
@@ -77,7 +77,7 @@ enum InsightsService {
         request.httpBody = try JSONSerialization.data(withJSONObject: [
             "model": model,
             "instructions": instructions,
-            "input": promptDescription(for: facts, scheduleFrequency: scheduleFrequency, previousSections: previousSections),
+            "input": promptDescription(for: facts, scheduleFrequency: scheduleFrequency, previousSections: previousSections, topMove: topMove),
             "reasoning": ["effort": "low"],
             "text": ["format": responseFormat]
         ])
@@ -141,20 +141,28 @@ enum InsightsService {
 
         You'll be given tip facts already computed - dates, dollar amounts, and counts. Never \
         invent a number that wasn't given to you, and never do any math of your own; just \
-        narrate the facts you're handed. \
+        narrate the facts you're handed. Every dollar figure you're given is already net of any \
+        tip-outs; never call a number "gross" or re-derive what it would be before a tip-out. \
 
         You'll always get an OVERALL fact and a CASH VS CREDIT fact - always turn each into \
-        its own section. TOP EARNING DAYS, LUNCH VS DINNER, and DOUBLES VS SOLO facts are only \
-        included when there's real data for them - turn each into its own section only when \
-        present, in the order given. Ignore the pay frequency line entirely when deciding what \
-        sections to write - it's background context for your own understanding, never a topic \
-        of its own. After all given facts are covered, add exactly one final section that's a \
-        concrete, actionable suggestion based on them - practical, not motivational. \
+        its own section. TOP EARNING DAYS, LUNCH VS DINNER, DOUBLES VS SOLO, RATE, TIP PERCENT, \
+        and TIP-OUTS facts are only included when there's real data for them - turn each into \
+        its own section only when present, in the order given, EXCEPT TIP-OUTS: fold that into \
+        the OVERALL section as a short trailing clause rather than a section of its own, since \
+        it's explaining a number already stated there. RATE is a $/hr fact and TIP PERCENT is a \
+        percent-of-sales fact, each only ever computed over shifts that actually had hours or \
+        sales logged - never estimate either for a shift that wasn't given one. TIP PERCENT is \
+        measured against gross tips, not the net figures everywhere else - don't flag this \
+        distinction to the reader, just use the percent you're given as-is. Ignore the pay \
+        frequency line entirely when deciding what sections to write - it's background context \
+        for your own understanding, never a topic of its own. After all given facts are \
+        covered, add exactly one final section that's a concrete, actionable suggestion based \
+        on them - practical, not motivational. \
 
         Each title is 2 to 4 words (e.g. "Overall Snapshot", "Top Earning Days", "Cash vs \
-        Credit", "Lunch vs Dinner", "Doubles vs Solo", "What To Try Next"). Each body is 2 to \
-        4 short sentences, no markdown formatting, no bullet characters, no disclaimers about \
-        being an AI. \
+        Credit", "Lunch vs Dinner", "Doubles vs Solo", "Your Hourly Rate", "Tip Percent", "What \
+        To Try Next"). Each body is 2 to 4 short sentences, no markdown formatting, no bullet \
+        characters, no disclaimers about being an AI. \
 
         Never say "entries," "data points," "dataset," or "logged" - if you need to name the \
         unit, say "shifts" or "days," but usually you don't need to name it at all: just talk \
@@ -172,7 +180,7 @@ enum InsightsService {
         above.
         """
 
-    private static func promptDescription(for facts: InsightsFacts, scheduleFrequency: PayFrequency, previousSections: [InsightSection]?) -> String {
+    private static func promptDescription(for facts: InsightsFacts, scheduleFrequency: PayFrequency, previousSections: [InsightSection]?, topMove: Move?) -> String {
         var lines = [
             "BACKGROUND CONTEXT, NOT A SECTION - pay frequency: \(scheduleFrequency.displayName).",
             "OVERALL: \(Money.string(fromCents: facts.totalCents)) across \(facts.shiftCount) shifts, averaging \(Money.string(fromCents: facts.averagePerShiftCents)) per shift.",
@@ -181,12 +189,35 @@ enum InsightsService {
             let days = facts.topDays.map { "\(Money.string(fromCents: $0.cents)) on \($0.date.formatted(.dateTime.month(.wide).day()))" }
             lines.append("TOP EARNING DAYS: " + days.joined(separator: ", ") + ".")
         }
-        lines.append("CASH VS CREDIT: \(Money.string(fromCents: facts.cashCents)) cash, \(Money.string(fromCents: facts.creditCents)) credit.")
+        lines.append("CASH VS CREDIT: \(Money.string(fromCents: facts.cashCents)) cash, \(Money.string(fromCents: facts.creditCents)) credit (this split is gross, before any tip-out).")
+        if facts.totalTipOutCents > 0 {
+            lines.append("TIP-OUTS: \(Money.string(fromCents: facts.totalTipOutCents)) total tipped out - already subtracted from OVERALL above.")
+        }
         if let lunchDinner = facts.lunchDinner {
             lines.append("LUNCH VS DINNER: lunch \(Money.string(fromCents: lunchDinner.lunchCents)) across \(lunchDinner.lunchShiftCount) shifts, dinner \(Money.string(fromCents: lunchDinner.dinnerCents)) across \(lunchDinner.dinnerShiftCount) shifts.")
         }
         if let doublesSolo = facts.doublesSolo {
             lines.append("DOUBLES VS SOLO: doubles averaged \(Money.string(fromCents: doublesSolo.doubleAverageCents)) across \(doublesSolo.doubleCount) shifts, solo averaged \(Money.string(fromCents: doublesSolo.soloAverageCents)) across \(doublesSolo.soloCount) shifts.")
+        }
+        if let rate = facts.rate {
+            var rateLine = "RATE: averaging \(Money.wholeDollarString(fromCents: Int((rate.overallDollarsPerHour * 100).rounded())))/hr across \(rate.nightsWithHours) shifts with hours logged."
+            if let bestWeekday = rate.bestWeekday, let bestRate = rate.bestWeekdayDollarsPerHour {
+                let weekdayName = Calendar.current.weekdaySymbols[bestWeekday - 1]
+                rateLine += " Best-paying weekday: \(weekdayName) at \(Money.wholeDollarString(fromCents: Int((bestRate * 100).rounded())))/hr."
+            }
+            lines.append(rateLine)
+        }
+        if let sales = facts.sales {
+            var salesLine = "TIP PERCENT: averaging \(String(format: "%.1f", sales.overallTipPercent))% of sales across \(sales.nightsWithSales) shifts with sales logged."
+            if let bestWeekday = sales.bestWeekday, let bestPercent = sales.bestWeekdayTipPercent {
+                let weekdayName = Calendar.current.weekdaySymbols[bestWeekday - 1]
+                salesLine += " Best weekday: \(weekdayName) at \(String(format: "%.1f", bestPercent))%."
+            }
+            lines.append(salesLine)
+        }
+
+        if let topMove {
+            lines.append("TOP MOVE (already shown to the reader as its own card, above everything you write - do not repeat it as a section; only weave it into the final suggestion section if it genuinely strengthens it): \(topMove.title) - \(topMove.body)")
         }
 
         var promptSections = ["NEW FACTS TO REFLECT:", lines.joined(separator: "\n")]

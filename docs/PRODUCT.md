@@ -217,6 +217,64 @@ deviation across the whole roadmap.
   AX sizes), VoiceOver labels on day cells/tiles, Reduce Motion on every
   animation including the reveal.
 
+## Pillar 8: The Earnings Engine (Deep Audit Phase 3, 2026-07-14) — DONE
+
+The headline work from the post-a5aa807 adversarial audit: which shifts,
+which nights, which choices actually pay. Everything below is the
+CloudKit-safe `kindRaw` pattern applied to genuinely-optional fields — plain
+`Double?`/`Int?` storage, no computed-accessor split, since "not entered"
+and "entered as zero" have to stay distinguishable facts, never collapsed
+into a defaulted non-optional.
+
+- **Hours → $/hr.** Optional `hoursWorked` (quarter-hour granularity) on
+  `TipEntry`, entered in the log sheet's collapsed "Hours, tip-out, sales"
+  details group (skippable in under two seconds, remembers a per-weekday
+  default). `StatsEngine` blends $/hr by total-dollars-over-total-hours
+  (never an average of nightly rates) overall, per weekday, and per
+  lunch/dinner/doubles/solo split — only ever over nights that actually
+  logged hours. The reveal gains an independent rate clause ("$41/hr, your
+  best rate this period") stacked under the usual comparison, never
+  replacing it.
+- **Net vs gross.** Optional `tipOutCents` on `TipEntry`. Every analytical
+  sum in `StatsEngine` — nightly totals, pace, period-to-date, projections,
+  Insights totals, Moves — nets a shift's tip-out out automatically via
+  `TipRecord.netCents`/`TipEntry.netCents`. The one deliberate exception:
+  paycheck comparison keeps reading logged credit as-is (matching what's
+  actually printed on a check stub), and tip percent is measured against
+  **gross**, matching how the industry always measures it. Gross and the
+  tip-out that produced net stay one glance away everywhere net is shown
+  (the reveal's gross+tip-out subtitle, the Period-detail hero's "$X tipped
+  out" caption) — never hidden, never silently subtracted.
+- **Sales + tip percent.** Optional `salesCents` on `TipEntry`. Tip percent
+  (gross tips ÷ sales) blends the same total-over-total way as $/hr, overall
+  and per weekday, only over nights with sales logged.
+- **Moves.** `StatsEngine.moves(referenceDate:)` — a deterministic, pure,
+  fully-tested function (no model, no network) emitting up to 3
+  dollar-quantified, annualized observations, ranked by impact and gated by
+  materiality (silence beats weak advice): weekday swap (net $/night, ≥3
+  nights each side), lapsed winner (a strong weekday gone quiet ≥21 days),
+  doubles verdict ($/hr, not just $/shift — doubles can look better per
+  shift and worse per hour once the extra hours are counted), rate leader
+  (best $/hr weekday vs overall), tip-percent signal (best tip-% weekday vs
+  overall). Rendered as cards at the TOP of Insights, above the chart —
+  always fresh, never narrated. The single best move is fed into the
+  gpt-5.6-terra prompt as a fact block so the model's closing suggestion can
+  reference it, but the cards themselves never touch the model.
+- **Projection.** `StatsEngine.projectedPeriodTotal(period:asOf:rhythm:)` —
+  current net total plus one estimated night (at that weekday's own
+  historical average) for every remaining calendar day that lands on a
+  usual weekday. One quiet line under the Dashboard's pace line ("On pace
+  for about $1,240"); suppressed entirely without a rhythm yet to project
+  from.
+- **Year view + CSV export.** A compact year-to-date card atop the Periods
+  tab (net total + shift count, current calendar year). A toolbar
+  `ShareLink` exports `CSVExporter`'s output — one row per calendar night
+  (cash and credit merged, same "a shift, not a row" rule as
+  `ShiftDayRow`): date, cash, credit, tip-out, net, hours, sales, double,
+  note, the night's own period range, and its matched paycheck if any. No
+  new dependencies; the file is written to a stable temp path so repeat
+  exports overwrite instead of accumulating.
+
 ## What NOT to build (the restraint is the product)
 
 - No goals, budgets, or guilt-mechanic streaks. Records replace streaks.

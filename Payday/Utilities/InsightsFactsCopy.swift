@@ -19,11 +19,22 @@ enum InsightsFactsCopy {
         if let doublesSolo = facts.doublesSolo {
             sections.append(doublesVsSolo(doublesSolo))
         }
+        if let rate = facts.rate {
+            sections.append(hourlyRate(rate))
+        }
+        if let sales = facts.sales {
+            sections.append(tipPercent(sales))
+        }
         return sections
     }
 
     private static func overallSnapshot(_ facts: InsightsFacts) -> InsightSection {
-        let body = "You made \(Money.string(fromCents: facts.totalCents)) across \(facts.shiftCount) shifts, averaging \(Money.string(fromCents: facts.averagePerShiftCents)) per shift."
+        var body = "You made \(Money.string(fromCents: facts.totalCents)) across \(facts.shiftCount) shifts, averaging \(Money.string(fromCents: facts.averagePerShiftCents)) per shift."
+        // The total above is already net — say so whenever a tip-out
+        // actually moved it, never silently.
+        if facts.totalTipOutCents > 0 {
+            body += " That's after \(Money.string(fromCents: facts.totalTipOutCents)) in tip-outs."
+        }
         return InsightSection(title: "Overall Snapshot", body: body)
     }
 
@@ -46,5 +57,23 @@ enum InsightsFactsCopy {
     private static func doublesVsSolo(_ facts: DoublesSoloFacts) -> InsightSection {
         let body = "Double shifts averaged \(Money.string(fromCents: facts.doubleAverageCents)) across \(facts.doubleCount) shifts. Solo shifts averaged \(Money.string(fromCents: facts.soloAverageCents)) across \(facts.soloCount) shifts."
         return InsightSection(title: "Doubles vs Solo", body: body)
+    }
+
+    private static func hourlyRate(_ facts: RateFacts) -> InsightSection {
+        var body = "You're averaging \(Money.wholeDollarString(fromCents: Int((facts.overallDollarsPerHour * 100).rounded())))/hr across \(facts.nightsWithHours) shifts with hours logged."
+        if let bestWeekday = facts.bestWeekday, let bestRate = facts.bestWeekdayDollarsPerHour {
+            let weekdayName = Calendar.current.weekdaySymbols[bestWeekday - 1]
+            body += " \(weekdayName) pays best at \(Money.wholeDollarString(fromCents: Int((bestRate * 100).rounded())))/hr."
+        }
+        return InsightSection(title: "Your Hourly Rate", body: body)
+    }
+
+    private static func tipPercent(_ facts: SalesFacts) -> InsightSection {
+        var body = "You're averaging \(String(format: "%.1f", facts.overallTipPercent))% of sales across \(facts.nightsWithSales) shifts with sales logged."
+        if let bestWeekday = facts.bestWeekday, let bestPercent = facts.bestWeekdayTipPercent {
+            let weekdayName = Calendar.current.weekdaySymbols[bestWeekday - 1]
+            body += " \(weekdayName) tips best at \(String(format: "%.1f", bestPercent))%."
+        }
+        return InsightSection(title: "Tip Percent", body: body)
     }
 }

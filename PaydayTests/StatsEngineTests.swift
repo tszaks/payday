@@ -11,14 +11,14 @@ private func date(_ year: Int, _ month: Int, _ day: Int) -> Date {
     return calendar.date(from: DateComponents(year: year, month: month, day: day))!
 }
 
-private func record(_ year: Int, _ month: Int, _ day: Int, cents: Int, kind: TipKind = .cash, isDouble: Bool = false, recordedHour: Int? = nil) -> TipRecord {
+private func record(_ year: Int, _ month: Int, _ day: Int, cents: Int, kind: TipKind = .cash, isDouble: Bool = false, recordedHour: Int? = nil, hoursWorked: Double? = nil, tipOutCents: Int? = nil, salesCents: Int? = nil) -> TipRecord {
     let shiftDate = date(year, month, day)
     let recordedAt = recordedHour.flatMap { hour in
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone.current
         return calendar.date(bySettingHour: hour, minute: 0, second: 0, of: shiftDate)
     }
-    return TipRecord(date: shiftDate, amountCents: cents, kind: kind, isDouble: isDouble, recordedAt: recordedAt)
+    return TipRecord(date: shiftDate, amountCents: cents, kind: kind, isDouble: isDouble, recordedAt: recordedAt, hoursWorked: hoursWorked, tipOutCents: tipOutCents, salesCents: salesCents)
 }
 
 @Suite("Nightly totals")
@@ -40,6 +40,25 @@ struct NightlyTotalsTests {
         let records = [record(2026, 7, 1, cents: 5000), record(2026, 7, 2, cents: 6000)]
         let engine = StatsEngine(records: records)
         #expect(engine.nightlyTotals().count == 2)
+    }
+
+    @Test("a night's total is net of any tip-out logged that night")
+    func nightlyTotalIsNet() {
+        let records = [
+            record(2026, 7, 1, cents: 8600, kind: .credit, tipOutCents: 1500),
+            record(2026, 7, 1, cents: 3200, kind: .cash)
+        ]
+        let engine = StatsEngine(records: records)
+        let nights = engine.nightlyTotals()
+        #expect(nights.count == 1)
+        // 8600 + 3200 - 1500 tip-out = 10300.
+        #expect(nights[0].cents == 10300)
+    }
+
+    @Test("a night with no tip-out logged has its full gross as the total")
+    func nightlyTotalWithoutTipOutIsGross() {
+        let engine = StatsEngine(records: [record(2026, 7, 1, cents: 5000)])
+        #expect(engine.nightlyTotals()[0].cents == 5000)
     }
 }
 
@@ -120,6 +139,14 @@ struct PaceTests {
         #expect(engine.periodToDateTotal(period: period, asOf: date(2026, 7, 15)) == 11000)
     }
 
+    @Test("period-to-date total nets any logged tip-outs")
+    func periodToDateIsNet() {
+        let period = PayPeriod(start: date(2026, 7, 6), end: date(2026, 7, 19))
+        let records = [record(2026, 7, 6, cents: 5000, tipOutCents: 1000), record(2026, 7, 15, cents: 6000)]
+        let engine = StatsEngine(records: records)
+        #expect(engine.periodToDateTotal(period: period, asOf: date(2026, 7, 15)) == 10000)
+    }
+
     @Test("prior period comparable total matches the same elapsed-day offset")
     func priorPeriodComparable() {
         let currentPeriod = PayPeriod(start: date(2026, 7, 6), end: date(2026, 7, 19))
@@ -151,6 +178,242 @@ struct PaceTests {
         let engine = StatsEngine(records: records)
         let delta = engine.paceDelta(currentPeriod: currentPeriod, priorPeriod: priorPeriod, asOf: date(2026, 7, 6))
         #expect(delta == 6000)
+    }
+}
+
+@Suite("Rate ($/hr)")
+struct RateTests {
+    @Test("dollars per hour for a specific night divides that night's total by its hours")
+    func dollarsPerHourForNight() {
+        let engine = StatsEngine(records: [record(2026, 7, 1, cents: 20000, hoursWorked: 5)])
+        #expect(engine.dollarsPerHour(forNightAt: date(2026, 7, 1)) == 40)
+    }
+
+    @Test("dollars per hour is nil for a night with no hours logged")
+    func dollarsPerHourNilWithoutHours() {
+        let engine = StatsEngine(records: [record(2026, 7, 1, cents: 20000)])
+        #expect(engine.dollarsPerHour(forNightAt: date(2026, 7, 1)) == nil)
+    }
+
+    @Test("average dollars per hour blends total dollars over total hours, not an average of nightly rates")
+    func averageDollarsPerHourIsBlended() {
+        // One 10-hour night at $10/hr, one 2-hour night at $50/hr. A naive
+        // average of the two rates would say $30/hr; blended by totals it's
+        // $200 over 12 hours = $16.67/hr.
+        let engine = StatsEngine(records: [
+            record(2026, 7, 1, cents: 10000, hoursWorked: 10),
+            record(2026, 7, 2, cents: 10000, hoursWorked: 2)
+        ])
+        let rate = engine.averageDollarsPerHour()
+        #expect(rate != nil)
+        #expect(abs(rate! - 16.666666) < 0.001)
+    }
+
+    @Test("average dollars per hour ignores nights with no hours logged")
+    func averageDollarsPerHourIgnoresUnloggedNights() {
+        let engine = StatsEngine(records: [
+            record(2026, 7, 1, cents: 10000, hoursWorked: 5),
+            record(2026, 7, 2, cents: 99999) // no hours — must not distort the rate
+        ])
+        #expect(engine.averageDollarsPerHour() == 20)
+    }
+
+    @Test("average dollars per hour is nil with no rate history at all")
+    func averageDollarsPerHourNilWithoutHistory() {
+        let engine = StatsEngine(records: [record(2026, 7, 1, cents: 10000)])
+        #expect(engine.averageDollarsPerHour() == nil)
+    }
+
+    @Test("average dollars per hour for a weekday only blends that weekday's rate nights")
+    func averageDollarsPerHourForWeekday() {
+        // July 1 and July 8 2026 are both Wednesdays.
+        let engine = StatsEngine(records: [
+            record(2026, 7, 1, cents: 10000, hoursWorked: 5),  // $20/hr
+            record(2026, 7, 8, cents: 6000, hoursWorked: 2),   // $30/hr
+            record(2026, 7, 3, cents: 100, hoursWorked: 10)    // a Friday — must not count
+        ])
+        let wednesday = Calendar.current.component(.weekday, from: date(2026, 7, 1))
+        // Blended: $160 over 7 hours.
+        let rate = engine.averageDollarsPerHour(forWeekday: wednesday)
+        #expect(rate != nil)
+        #expect(abs(rate! - (160.0 / 7)) < 0.001)
+    }
+
+    @Test("best dollars-per-hour weekday requires at least two weekdays of rate history")
+    func bestWeekdayNeedsTwoWeekdays() {
+        let engine = StatsEngine(records: [
+            record(2026, 7, 1, cents: 10000, hoursWorked: 5),
+            record(2026, 7, 8, cents: 6000, hoursWorked: 2) // same weekday (Wednesday) as above
+        ])
+        #expect(engine.bestDollarsPerHourWeekday() == nil)
+    }
+
+    @Test("best dollars-per-hour weekday picks the highest-blended-rate weekday")
+    func bestWeekdayPicksHighestRate() {
+        let engine = StatsEngine(records: [
+            record(2026, 7, 1, cents: 10000, hoursWorked: 5),  // Wednesday, $20/hr
+            record(2026, 7, 3, cents: 30000, hoursWorked: 5)   // Friday, $60/hr
+        ])
+        let friday = Calendar.current.component(.weekday, from: date(2026, 7, 3))
+        let best = engine.bestDollarsPerHourWeekday()
+        #expect(best?.weekday == friday)
+        #expect(best?.rate == 60)
+    }
+}
+
+@Suite("Tip percent")
+struct TipPercentTests {
+    @Test("tip percent for a night divides gross tips by sales, not net")
+    func tipPercentForNightIsGross() {
+        let engine = StatsEngine(records: [
+            record(2026, 7, 1, cents: 10000, kind: .credit, tipOutCents: 1500, salesCents: 50000)
+        ])
+        // 10000 gross / 50000 sales = 20%, ignoring the tip-out entirely.
+        #expect(engine.tipPercent(forNightAt: date(2026, 7, 1)) == 20)
+    }
+
+    @Test("tip percent is nil for a night with no sales logged")
+    func tipPercentNilWithoutSales() {
+        let engine = StatsEngine(records: [record(2026, 7, 1, cents: 10000)])
+        #expect(engine.tipPercent(forNightAt: date(2026, 7, 1)) == nil)
+    }
+
+    @Test("average tip percent blends total gross tips over total sales")
+    func averageTipPercentIsBlended() {
+        let engine = StatsEngine(records: [
+            record(2026, 7, 1, cents: 10000, salesCents: 50000), // 20%
+            record(2026, 7, 2, cents: 3000, salesCents: 10000)   // 30%
+        ])
+        // Blended: 13000 / 60000 = 21.67%, not a naive 25% average.
+        let percent = engine.averageTipPercent()
+        #expect(percent != nil)
+        #expect(abs(percent! - (13000.0 / 60000.0 * 100)) < 0.001)
+    }
+
+    @Test("average tip percent for a weekday only blends that weekday's sales nights")
+    func averageTipPercentForWeekday() {
+        // July 1 and July 8 2026 are both Wednesdays.
+        let engine = StatsEngine(records: [
+            record(2026, 7, 1, cents: 10000, salesCents: 50000), // Wednesday
+            record(2026, 7, 8, cents: 3000, salesCents: 10000),  // Wednesday
+            record(2026, 7, 3, cents: 999999, salesCents: 1)     // Friday, must not count
+        ])
+        let wednesday = Calendar.current.component(.weekday, from: date(2026, 7, 1))
+        let percent = engine.averageTipPercent(forWeekday: wednesday)
+        #expect(percent != nil)
+        #expect(abs(percent! - (13000.0 / 60000.0 * 100)) < 0.001)
+    }
+}
+
+@Suite("Moves")
+struct MovesTests {
+    @Test("weekday swap fires when one weekday clearly out-earns another, both with enough history")
+    func weekdaySwapFires() {
+        var records: [TipRecord] = []
+        // Fridays ($150 avg) vs Mondays ($50 avg), 3 nights each, 3 weeks apart.
+        for week in 0..<3 {
+            records.append(record(2026, 7, 3 + week * 7, cents: 15000)) // Friday
+            records.append(record(2026, 6, 29 + week * 7, cents: 5000)) // Monday
+        }
+        let engine = StatsEngine(records: records)
+        let moves = engine.moves(referenceDate: date(2026, 7, 24))
+        let swap = moves.first { $0.id == "weekdaySwap" }
+        #expect(swap != nil)
+        #expect(swap?.title.contains("Friday") == true)
+    }
+
+    @Test("weekday swap stays silent without at least two qualifying weekdays")
+    func weekdaySwapSilentWithoutHistory() {
+        let engine = StatsEngine(records: [record(2026, 7, 1, cents: 5000)])
+        #expect(engine.moves().first { $0.id == "weekdaySwap" } == nil)
+    }
+
+    @Test("lapsed winner fires for a strong weekday that hasn't shown up recently")
+    func lapsedWinnerFires() {
+        var records: [TipRecord] = []
+        // Three strong Fridays, all more than 21 days before referenceDate.
+        for week in 0..<3 {
+            records.append(record(2026, 6, 5 + week * 7, cents: 30000)) // Friday
+        }
+        // Ordinary recent nights on other weekdays, well within the window
+        // (needs >= 6 total nights of history before this move considers
+        // firing at all).
+        records.append(record(2026, 7, 20, cents: 5000)) // Monday
+        records.append(record(2026, 7, 21, cents: 5000)) // Tuesday
+        records.append(record(2026, 7, 22, cents: 5000)) // Wednesday
+        let engine = StatsEngine(records: records)
+        let moves = engine.moves(referenceDate: date(2026, 7, 24))
+        let lapsed = moves.first { $0.id == "lapsedWinner" }
+        #expect(lapsed != nil)
+        #expect(lapsed?.title.contains("Friday") == true)
+    }
+
+    @Test("doubles verdict fires when doubles and solo nights differ meaningfully per hour")
+    func doublesVerdictFires() {
+        var records: [TipRecord] = []
+        // Doubles: long hours, mediocre $/hr.
+        for day in [1, 8, 15] {
+            records.append(record(2026, 7, day, cents: 12000, isDouble: true, hoursWorked: 10))
+        }
+        // Solo: short hours, strong $/hr.
+        for day in [2, 9, 16] {
+            records.append(record(2026, 7, day, cents: 8000, hoursWorked: 4))
+        }
+        let engine = StatsEngine(records: records)
+        let verdict = engine.moves(referenceDate: date(2026, 7, 24)).first { $0.id == "doublesVerdict" }
+        #expect(verdict != nil)
+        #expect(verdict?.title == "Doubles Cost You")
+    }
+
+    @Test("rate leader fires when one weekday clearly out-earns per hour")
+    func rateLeaderFires() {
+        var records: [TipRecord] = []
+        for week in 0..<3 {
+            records.append(record(2026, 7, 3 + week * 7, cents: 20000, hoursWorked: 4))  // Friday, $50/hr
+            records.append(record(2026, 6, 29 + week * 7, cents: 10000, hoursWorked: 5)) // Monday, $20/hr
+        }
+        let engine = StatsEngine(records: records)
+        let leader = engine.moves(referenceDate: date(2026, 7, 24)).first { $0.id == "rateLeader" }
+        #expect(leader != nil)
+        #expect(leader?.title.contains("Friday") == true)
+    }
+
+    @Test("tip percent signal fires when one weekday clearly tips a higher percent")
+    func tipPercentSignalFires() {
+        var records: [TipRecord] = []
+        for week in 0..<3 {
+            records.append(record(2026, 7, 3 + week * 7, cents: 15000, salesCents: 50000)) // Friday, 30%
+            records.append(record(2026, 6, 29 + week * 7, cents: 5000, salesCents: 50000)) // Monday, 10%
+        }
+        let engine = StatsEngine(records: records)
+        let signal = engine.moves(referenceDate: date(2026, 7, 24)).first { $0.id == "tipPercentSignal" }
+        #expect(signal != nil)
+        #expect(signal?.title.contains("Friday") == true)
+    }
+
+    @Test("moves caps at 3 and ranks by annualized impact, descending")
+    func movesRankedAndCapped() {
+        var records: [TipRecord] = []
+        for week in 0..<3 {
+            records.append(record(2026, 7, 3 + week * 7, cents: 20000, isDouble: false, hoursWorked: 4, salesCents: 50000)) // Friday
+            records.append(record(2026, 6, 29 + week * 7, cents: 5000, hoursWorked: 5, salesCents: 50000))                  // Monday
+        }
+        for day in [1, 8, 15] {
+            records.append(record(2026, 7, day, cents: 12000, isDouble: true, hoursWorked: 10))
+        }
+        for day in [2, 9, 16] {
+            records.append(record(2026, 7, day, cents: 8000, hoursWorked: 4))
+        }
+        let engine = StatsEngine(records: records)
+        let moves = engine.moves(referenceDate: date(2026, 7, 24))
+        #expect(moves.count <= 3)
+        #expect(moves == moves.sorted { $0.annualImpactCents > $1.annualImpactCents })
+    }
+
+    @Test("moves is empty with no history at all — silence, not weak advice")
+    func movesEmptyWithoutHistory() {
+        let engine = StatsEngine(records: [])
+        #expect(engine.moves().isEmpty)
     }
 }
 
@@ -232,6 +495,45 @@ struct WorkRhythmTests {
         let rhythm = engine.workRhythm(referenceDate: date(2026, 7, 3))
         #expect(rhythm.usualWeekdays.isEmpty)
         #expect(rhythm.typicalLogHour == nil)
+    }
+}
+
+@Suite("Projection")
+struct ProjectionTests {
+    @Test("projection adds one estimated night per remaining usual weekday, at that weekday's average")
+    func midPeriodProjection() {
+        let period = PayPeriod(start: date(2026, 7, 6), end: date(2026, 7, 19))
+        // Monday average $50, Wednesday average $80. Both usual.
+        let engine = StatsEngine(records: [
+            record(2026, 7, 6, cents: 5000),  // Monday, inside the period
+            record(2026, 6, 22, cents: 5000), // Monday, prior history
+            record(2026, 7, 1, cents: 8000),  // Wednesday, prior history
+        ])
+        let rhythm = WorkRhythm(usualWeekdays: [
+            Calendar.current.component(.weekday, from: date(2026, 7, 6)),
+            Calendar.current.component(.weekday, from: date(2026, 7, 1))
+        ], typicalLogHour: nil)
+        // As of July 6 (day 1), remaining usual nights through July 19:
+        // Wednesdays July 8 & 15 ($80 each) and Mondays July 13 ($50).
+        let projected = engine.projectedPeriodTotal(period: period, asOf: date(2026, 7, 6), rhythm: rhythm)
+        #expect(projected == 5000 + 8000 + 8000 + 5000)
+    }
+
+    @Test("projection on the last day of the period adds nothing further")
+    func lastDayProjection() {
+        let period = PayPeriod(start: date(2026, 7, 6), end: date(2026, 7, 19))
+        let engine = StatsEngine(records: [record(2026, 7, 6, cents: 5000)])
+        let rhythm = WorkRhythm(usualWeekdays: [Calendar.current.component(.weekday, from: date(2026, 7, 6))], typicalLogHour: nil)
+        let projected = engine.projectedPeriodTotal(period: period, asOf: date(2026, 7, 19), rhythm: rhythm)
+        #expect(projected == engine.periodToDateTotal(period: period, asOf: date(2026, 7, 19)))
+    }
+
+    @Test("projection is nil without any usual weekdays yet")
+    func noRhythmProjectionIsNil() {
+        let period = PayPeriod(start: date(2026, 7, 6), end: date(2026, 7, 19))
+        let engine = StatsEngine(records: [])
+        let projected = engine.projectedPeriodTotal(period: period, asOf: date(2026, 7, 6), rhythm: WorkRhythm(usualWeekdays: [], typicalLogHour: nil))
+        #expect(projected == nil)
     }
 }
 
@@ -360,6 +662,35 @@ struct RevealTests {
         #expect(periodRank == 1)    // tonight beats all 3 in-period nights logged so far
         #expect(periodNightCount == 3)
     }
+
+    @Test("reveal has no rate clause when tonight has no hours logged")
+    func revealNoRateClauseWithoutHours() {
+        let period = PayPeriod(start: date(2026, 7, 6), end: date(2026, 7, 19))
+        let engine = StatsEngine(records: [])
+        let result = engine.reveal(forNightAt: date(2026, 7, 6), cents: 5000, period: period)
+        #expect(result.rateClause == nil)
+    }
+
+    @Test("reveal's rate clause marks the best rate this period when nothing else beats it")
+    func revealRateClauseBestThisPeriod() {
+        let period = PayPeriod(start: date(2026, 7, 6), end: date(2026, 7, 19))
+        let engine = StatsEngine(records: [
+            record(2026, 7, 6, cents: 10000, hoursWorked: 5) // $20/hr, earlier this period
+        ])
+        // Tonight: $30/hr, beats the $20/hr night earlier this period.
+        let result = engine.reveal(forNightAt: date(2026, 7, 8), cents: 15000, period: period, hoursWorked: 5)
+        #expect(result.rateClause == .rate(dollarsPerHour: 30, isBestThisPeriod: true))
+    }
+
+    @Test("reveal's rate clause is not the best when another rate night this period beats it")
+    func revealRateClauseNotBest() {
+        let period = PayPeriod(start: date(2026, 7, 6), end: date(2026, 7, 19))
+        let engine = StatsEngine(records: [
+            record(2026, 7, 6, cents: 20000, hoursWorked: 5) // $40/hr, earlier this period
+        ])
+        let result = engine.reveal(forNightAt: date(2026, 7, 8), cents: 15000, period: period, hoursWorked: 5)
+        #expect(result.rateClause == .rate(dollarsPerHour: 30, isBestThisPeriod: false))
+    }
 }
 
 @Suite("Reveal copy")
@@ -410,6 +741,18 @@ struct RevealCopyTests {
         #expect(RevealCopy.compactPaceLine(deltaCents: 12000) == "+$120.00 vs last period")
         #expect(RevealCopy.compactPaceLine(deltaCents: -5000) == "-$50.00 vs last period")
         #expect(RevealCopy.compactPaceLine(deltaCents: 0) == "Even vs last period")
+    }
+
+    @Test("rate clause names the best-this-period rate as a whole dollar amount")
+    func rateClauseBestThisPeriod() {
+        let text = RevealCopy.rateClause(for: .rate(dollarsPerHour: 41.2, isBestThisPeriod: true))
+        #expect(text == "$41/hr, your best rate this period.")
+    }
+
+    @Test("rate clause without the best-rate flag stays a plain shift fact")
+    func rateClauseOrdinary() {
+        let text = RevealCopy.rateClause(for: .rate(dollarsPerHour: 18, isBestThisPeriod: false))
+        #expect(text == "$18/hr this shift.")
     }
 }
 
@@ -498,6 +841,103 @@ struct InsightsFactsTests {
         let records = (1...5).map { record(2026, 7, $0, cents: 1000) }
         let engine = StatsEngine(records: records)
         #expect(engine.insightsFacts(referenceDate: date(2026, 7, 10))?.doublesSolo == nil)
+    }
+
+    @Test("overall total is net of tip-outs, and tip-out fact reports the total tipped out")
+    func totalIsNetAndTipOutFactPopulates() {
+        let records = [
+            record(2026, 7, 1, cents: 10000, tipOutCents: 1000),
+            record(2026, 7, 2, cents: 10000, tipOutCents: 500),
+            record(2026, 7, 3, cents: 10000),
+            record(2026, 7, 4, cents: 10000),
+            record(2026, 7, 5, cents: 10000)
+        ]
+        let engine = StatsEngine(records: records)
+        let facts = engine.insightsFacts(referenceDate: date(2026, 7, 10))
+        #expect(facts?.totalCents == 48500) // 50000 gross - 1500 total tip-out
+        #expect(facts?.totalTipOutCents == 1500)
+    }
+
+    @Test("tip-out fact is zero when nothing was tipped out")
+    func tipOutFactZeroWithoutAny() {
+        let records = (1...5).map { record(2026, 7, $0, cents: 1000) }
+        let engine = StatsEngine(records: records)
+        #expect(engine.insightsFacts(referenceDate: date(2026, 7, 10))?.totalTipOutCents == 0)
+    }
+
+    @Test("sales facts are nil below the minimum nights with sales logged")
+    func salesFactsNilBelowMinimum() {
+        let records = [
+            record(2026, 7, 1, cents: 10000, salesCents: 50000),
+            record(2026, 7, 2, cents: 10000, salesCents: 50000),
+            record(2026, 7, 3, cents: 10000),
+            record(2026, 7, 4, cents: 10000),
+            record(2026, 7, 5, cents: 10000)
+        ]
+        let engine = StatsEngine(records: records)
+        #expect(engine.insightsFacts(referenceDate: date(2026, 7, 10))?.sales == nil)
+    }
+
+    @Test("sales facts compute the blended overall tip percent once enough nights have sales")
+    func salesFactsOverall() {
+        let records = [
+            record(2026, 7, 1, cents: 10000, salesCents: 50000), // 20%
+            record(2026, 7, 2, cents: 3000, salesCents: 10000),  // 30%
+            record(2026, 7, 3, cents: 5000, salesCents: 25000),  // 20%
+            record(2026, 7, 4, cents: 1000),
+            record(2026, 7, 5, cents: 1000)
+        ]
+        let engine = StatsEngine(records: records)
+        let sales = engine.insightsFacts(referenceDate: date(2026, 7, 10))?.sales
+        #expect(sales?.nightsWithSales == 3)
+        // 18000 gross / 85000 sales.
+        #expect(sales.map { abs($0.overallTipPercent - (18000.0 / 85000.0 * 100)) < 0.001 } == true)
+    }
+
+    @Test("rate facts are nil below the minimum nights with hours logged")
+    func rateFactsNilBelowMinimum() {
+        let records = [
+            record(2026, 7, 1, cents: 1000, hoursWorked: 5),
+            record(2026, 7, 2, cents: 1000, hoursWorked: 5),
+            record(2026, 7, 3, cents: 1000), // no hours
+            record(2026, 7, 4, cents: 1000),
+            record(2026, 7, 5, cents: 1000)
+        ]
+        let engine = StatsEngine(records: records)
+        #expect(engine.insightsFacts(referenceDate: date(2026, 7, 10))?.rate == nil)
+    }
+
+    @Test("rate facts compute the blended overall rate once enough nights have hours")
+    func rateFactsOverall() {
+        let records = [
+            record(2026, 7, 1, cents: 10000, hoursWorked: 5), // $20/hr
+            record(2026, 7, 2, cents: 6000, hoursWorked: 2),  // $30/hr
+            record(2026, 7, 3, cents: 4000, hoursWorked: 2),  // $20/hr
+            record(2026, 7, 4, cents: 1000),
+            record(2026, 7, 5, cents: 1000)
+        ]
+        let engine = StatsEngine(records: records)
+        let rate = engine.insightsFacts(referenceDate: date(2026, 7, 10))?.rate
+        #expect(rate?.nightsWithHours == 3)
+        // $200 over 9 hours.
+        #expect(rate.map { abs($0.overallDollarsPerHour - (200.0 / 9)) < 0.001 } == true)
+    }
+
+    @Test("rate facts split lunch vs dinner and doubles vs solo only over rate nights")
+    func rateFactsSplits() {
+        let records = [
+            record(2026, 7, 1, cents: 10000, isDouble: true, recordedHour: 20, hoursWorked: 9), // dinner, double: $11.11/hr
+            record(2026, 7, 2, cents: 4000, recordedHour: 13, hoursWorked: 4),                  // lunch, solo: $10/hr
+            record(2026, 7, 3, cents: 5000, recordedHour: 19, hoursWorked: 5),                  // dinner, solo: $10/hr
+            record(2026, 7, 4, cents: 1000),
+            record(2026, 7, 5, cents: 1000)
+        ]
+        let engine = StatsEngine(records: records)
+        let rate = engine.insightsFacts(referenceDate: date(2026, 7, 10))?.rate
+        #expect(rate?.doubleDollarsPerHour != nil)
+        #expect(rate?.soloDollarsPerHour != nil)
+        #expect(rate?.lunchDollarsPerHour == 10)
+        #expect(rate.map { abs($0.dinnerDollarsPerHour! - (150.0 / 14)) < 0.001 } == true)
     }
 }
 
