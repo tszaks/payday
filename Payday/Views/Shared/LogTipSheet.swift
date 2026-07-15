@@ -63,10 +63,10 @@ struct LogTipSheet: View {
             _date = State(initialValue: entry.date)
             _note = State(initialValue: entry.note ?? "")
             _isDouble = State(initialValue: entry.isDouble)
-            // Hours/tip-out/sales are seeded in onAppear instead, once
-            // allEntries is populated — they're a fact about the whole
-            // night, not just this one entry, so seeding needs to look
-            // across every entry sharing this date (see seedShiftDetailDefaults).
+            _hoursWorked = State(initialValue: entry.hoursWorked)
+            _tipOutCents = State(initialValue: entry.tipOutCents ?? 0)
+            _salesCents = State(initialValue: entry.salesCents ?? 0)
+            _showMoreDetails = State(initialValue: entry.hoursWorked != nil || entry.tipOutCents != nil || entry.salesCents != nil)
         }
     }
 
@@ -130,32 +130,13 @@ struct LogTipSheet: View {
     /// logic directly in a chained-modifier closure was slow enough to trip
     /// the type checker's time budget.
     private func seedShiftDetailDefaults() {
-        switch target {
-        case .new:
-            if hoursWorked == nil { hoursWorked = suggestedHours(for: date) }
-            if tipOutCents == 0 { tipOutCents = suggestedTipOutCents(for: date) ?? 0 }
-            if salesCents == 0 { salesCents = suggestedSalesCents(for: date) ?? 0 }
-            // A remembered default is still a value about to be saved — show
-            // it rather than attach it silently.
-            if hoursWorked != nil || tipOutCents > 0 || salesCents > 0 { showMoreDetails = true }
-        case .edit(let entry):
-            // These are a fact about the whole night, not this one entry —
-            // a night with both cash and credit only ever has them set on
-            // one (see liveSaveEdit), so look across every entry sharing
-            // this date, not just the one being edited.
-            let night = sameDayEntries(around: entry)
-            hoursWorked = night.compactMap(\.hoursWorked).first
-            tipOutCents = night.compactMap(\.tipOutCents).first ?? 0
-            salesCents = night.compactMap(\.salesCents).first ?? 0
-            showMoreDetails = hoursWorked != nil || tipOutCents > 0 || salesCents > 0
-        }
-    }
-
-    /// Every entry sharing the same calendar day as `entry` — used to treat
-    /// hours/tip-out/sales as one shift-level fact instead of a per-entry
-    /// one, even though they're physically stored on a single TipEntry.
-    private func sameDayEntries(around entry: TipEntry) -> [TipEntry] {
-        allEntries.filter { Calendar.current.isDate($0.date, inSameDayAs: entry.date) }
+        guard case .new = target else { return }
+        if hoursWorked == nil { hoursWorked = suggestedHours(for: date) }
+        if tipOutCents == 0 { tipOutCents = suggestedTipOutCents(for: date) ?? 0 }
+        if salesCents == 0 { salesCents = suggestedSalesCents(for: date) ?? 0 }
+        // A remembered default is still a value about to be saved — show
+        // it rather than attach it silently.
+        if hoursWorked != nil || tipOutCents > 0 || salesCents > 0 { showMoreDetails = true }
     }
 
     /// A default, not a lock: only suggests the toggle until the user has
@@ -338,8 +319,7 @@ struct LogTipSheet: View {
     private var moreDetailsCard: some View {
         card {
             DisclosureGroup("Hours, tip-out, sales", isExpanded: $showMoreDetails) {
-                VStack(spacing: 0) {
-                    Divider().padding(.top, 14)
+                VStack(spacing: 12) {
                     HStack {
                         Text("Hours")
                         Spacer()
@@ -348,22 +328,18 @@ struct LogTipSheet: View {
                                 .foregroundStyle(PaydayColor.textSecondary)
                         }
                     }
-                    .padding(.vertical, 14)
-                    Divider()
                     HStack {
                         Text("Tip-out")
                         Spacer()
                         CompactCurrencyField(cents: $tipOutCents)
                     }
-                    .padding(.vertical, 14)
-                    Divider()
                     HStack {
                         Text("Sales")
                         Spacer()
                         CompactCurrencyField(cents: $salesCents)
                     }
-                    .padding(.vertical, 14)
                 }
+                .padding(.top, 12)
             }
             .padding()
             .tint(PaydayColor.textPrimary)
@@ -450,23 +426,9 @@ struct LogTipSheet: View {
         entry.kind = kind
         entry.note = note.isEmpty ? nil : note
         entry.isDouble = isDouble
-
-        // Hours/tip-out/sales are a shift-level fact, not a per-entry one —
-        // if this night has both a cash and a credit entry, they always
-        // land on the credit one (same convention as saveNew), never on
-        // both, so switching the Cash/Credit tab mid-edit can't leave two
-        // different "hours worked tonight" numbers behind.
-        let night = sameDayEntries(around: entry)
-        let primary = night.first { $0.kind == .credit } ?? entry
-        for other in night where other.id != primary.id {
-            other.hoursWorked = nil
-            other.tipOutCents = nil
-            other.salesCents = nil
-        }
-        primary.hoursWorked = hoursWorked
-        primary.tipOutCents = tipOutCents > 0 ? tipOutCents : nil
-        primary.salesCents = salesCents > 0 ? salesCents : nil
-
+        entry.hoursWorked = hoursWorked
+        entry.tipOutCents = tipOutCents > 0 ? tipOutCents : nil
+        entry.salesCents = salesCents > 0 ? salesCents : nil
         PaydayWidgetRefresh.request()
     }
 
@@ -481,9 +443,8 @@ struct LogTipSheet: View {
 
 /// A small, non-auto-focusing cents field for the optional shift-details
 /// group — same digit-shift-from-the-right technique as CurrencyAmountRow,
-/// including its focused-ring treatment (scaled down to fit inline in a
-/// row), so tapping in shows unmistakably that this field is now the one
-/// accepting keystrokes, same as the Cash/Credit fields above.
+/// just compact and self-contained since these are secondary, skippable
+/// fields, not the sheet's primary input.
 private struct CompactCurrencyField: View {
     @Binding var cents: Int
     @FocusState private var isFocused: Bool
@@ -498,22 +459,13 @@ private struct CompactCurrencyField: View {
                 .monospacedDigit()
                 .foregroundStyle(cents == 0 ? PaydayColor.textSecondary : PaydayColor.textPrimary)
                 .contentTransition(.numericText())
-                .accessibilityHidden(true)
             TextField("", text: $digitsText)
                 .keyboardType(.numberPad)
                 .focused($isFocused)
                 .opacity(0.01)
+                .frame(maxWidth: 100, alignment: .trailing)
                 .multilineTextAlignment(.trailing)
-                .accessibilityValue(Money.string(fromCents: cents))
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .frame(minWidth: 92, alignment: .trailing)
-        .background(PaydayColor.background, in: RoundedRectangle(cornerRadius: PaydayRadius.sm))
-        .overlay(
-            RoundedRectangle(cornerRadius: PaydayRadius.sm)
-                .strokeBorder(isFocused ? PaydayColor.primary : PaydayColor.textPrimary.opacity(0.08), lineWidth: isFocused ? 2 : 1)
-        )
         .contentShape(Rectangle())
         .onTapGesture { isFocused = true }
         .onAppear { digitsText = cents == 0 ? "" : String(cents) }
