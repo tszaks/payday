@@ -45,20 +45,28 @@ enum InsightsError: LocalizedError {
 }
 
 /// Narrates facts the stats engine already computed — never does arithmetic
-/// itself, never sees raw entries. Calls OpenAI's gpt-5.6-terra over the
-/// network; InsightsView falls back to InsightsFactsCopy's deterministic
-/// sections whenever this fails (no key, no network, rate limited) — the
-/// facts "must stand alone anyway."
+/// itself, never sees raw entries. Calls a small serverless proxy
+/// (payday-website's app/api/insights-narrate) that holds the OpenAI key
+/// server-side and owns the model/instructions/schema; the app never sees
+/// or ships a provider key, same pattern Vero uses. InsightsView falls
+/// back to InsightsFactsCopy's deterministic sections whenever this fails
+/// (not deployed yet, no network, rate limited) — the facts "must stand
+/// alone anyway."
 enum InsightsService {
-    private static let endpoint = URL(string: "https://api.openai.com/v1/responses")!
-    private static let model = "gpt-5.6-terra"
-
-    private static var apiKey: String {
-        Bundle.main.object(forInfoDictionaryKey: "OpenAIAPIKey") as? String ?? ""
-    }
+    /// Set once the payday-website Vercel deployment's production domain
+    /// is confirmed — the proxy route already exists
+    /// (app/api/insights-narrate/route.ts) but hasn't been deployed with a
+    /// rotated key yet. Empty until then: isConfigured stays false and
+    /// Insights shows its deterministic facts sections, exactly like a
+    /// build with no key ever did.
+    private static let proxyHost = ""
+    private static let endpoint: URL? = {
+        guard !proxyHost.isEmpty else { return nil }
+        return URL(string: "https://\(proxyHost)/api/insights-narrate")
+    }()
 
     static var isConfigured: Bool {
-        !apiKey.isEmpty
+        endpoint != nil
     }
 
     /// `previousSections` is the last narration shown, if any — passed back
@@ -66,26 +74,20 @@ enum InsightsService {
     /// Wording should settle down and change less over time as patterns
     /// stabilize, not reshuffle on every call.
     static func narrate(facts: InsightsFacts, scheduleFrequency: PayFrequency, previousSections: [InsightSection]?, topMove: Move? = nil, latestFollowUp: FollowUp? = nil) async throws -> [InsightSection] {
-        guard isConfigured else {
-            throw InsightsError.generationFailed("No OpenAI API key configured.")
+        guard let endpoint else {
+            throw InsightsError.generationFailed("Narration isn't set up yet.")
         }
 
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.httpBody = try JSONSerialization.data(withJSONObject: [
-            "model": model,
-            "instructions": instructions,
-            "input": promptDescription(for: facts, scheduleFrequency: scheduleFrequency, previousSections: previousSections, topMove: topMove, latestFollowUp: latestFollowUp),
-            "reasoning": ["effort": "low"],
-            "text": ["format": responseFormat]
+            "input": promptDescription(for: facts, scheduleFrequency: scheduleFrequency, previousSections: previousSections, topMove: topMove, latestFollowUp: latestFollowUp)
         ])
 
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse, (200..<300).contains(httpResponse.statusCode) else {
-            let message = String(data: data, encoding: .utf8) ?? "Unknown error"
-            throw InsightsError.generationFailed("OpenAI request failed (\(message.prefix(200))).")
+            throw InsightsError.generationFailed("Couldn't reach narration right now.")
         }
 
         guard let outputText = try JSONDecoder().decode(ResponsesEnvelope.self, from: data).outputText,
@@ -100,85 +102,6 @@ enum InsightsService {
         }
         return narration.sections
     }
-
-    // Immutable literal, never mutated after init — safe to exempt from
-    // Sendable checking, same as every other static-literal-dict case here.
-    nonisolated(unsafe) private static let responseFormat: [String: Any] = [
-        "type": "json_schema",
-        "name": "insights_narration",
-        "strict": true,
-        "schema": [
-            "type": "object",
-            "properties": [
-                "sections": [
-                    "type": "array",
-                    "items": [
-                        "type": "object",
-                        "properties": [
-                            "title": ["type": "string"],
-                            "body": ["type": "string"]
-                        ],
-                        "required": ["title", "body"],
-                        "additionalProperties": false
-                    ]
-                ]
-            ],
-            "required": ["sections"],
-            "additionalProperties": false
-        ]
-    ]
-
-    private static let instructions = """
-        You are a calm, precise analyst summarizing a restaurant server's tip data for them in \
-        plain conversational sentences - not a cheerleader, not a hype coach. Flat, neutral, \
-        matter-of-fact delivery, the way a bank statement summary reads, just in plain English \
-        instead of financial jargon. \
-
-        Absolute rule, no exceptions: never use an exclamation point. Never say "great job," \
-        "nice work," "solid," "awesome," or express excitement or praise of any kind. State \
-        each fact plainly and move on. If you catch yourself about to end a sentence with "!", \
-        end it with "." instead. \
-
-        You'll be given tip facts already computed - dates, dollar amounts, and counts. Never \
-        invent a number that wasn't given to you, and never do any math of your own; just \
-        narrate the facts you're handed. Every dollar figure you're given is already net of any \
-        tip-outs; never call a number "gross" or re-derive what it would be before a tip-out. \
-
-        You'll always get an OVERALL fact and a CASH VS CREDIT fact - always turn each into \
-        its own section. TOP EARNING DAYS, LUNCH VS DINNER, DOUBLES VS SOLO, RATE, TIP PERCENT, \
-        and TIP-OUTS facts are only included when there's real data for them - turn each into \
-        its own section only when present, in the order given, EXCEPT TIP-OUTS: fold that into \
-        the OVERALL section as a short trailing clause rather than a section of its own, since \
-        it's explaining a number already stated there. RATE is a $/hr fact and TIP PERCENT is a \
-        percent-of-sales fact, each only ever computed over shifts that actually had hours or \
-        sales logged - never estimate either for a shift that wasn't given one. TIP PERCENT is \
-        measured against gross tips, not the net figures everywhere else - don't flag this \
-        distinction to the reader, just use the percent you're given as-is. Ignore the pay \
-        frequency line entirely when deciding what sections to write - it's background context \
-        for your own understanding, never a topic of its own. After all given facts are \
-        covered, add exactly one final section that's a concrete, actionable suggestion based \
-        on them - practical, not motivational. \
-
-        Each title is 2 to 4 words (e.g. "Overall Snapshot", "Top Earning Days", "Cash vs \
-        Credit", "Lunch vs Dinner", "Doubles vs Solo", "Your Hourly Rate", "Tip Percent", "What \
-        To Try Next"). Each body is 2 to 4 short sentences, no markdown formatting, no bullet \
-        characters, no disclaimers about being an AI. \
-
-        Never say "entries," "data points," "dataset," or "logged" - if you need to name the \
-        unit, say "shifts" or "days," but usually you don't need to name it at all: just talk \
-        about the money. Say "you made $488 from credit tips versus $288 from cash" instead of \
-        "credit tips totaled $488 across five entries." \
-
-        You are usually asked to AMEND a previous analysis, not write a new one. When a \
-        previous analysis is given: keep every section and every sentence that is still \
-        accurate, word for word - do not rephrase something that hasn't changed just to sound \
-        fresh. Only touch a section whose underlying numbers actually moved, and change only \
-        what needs to change to make it accurate again. Only add or remove a section if a fact \
-        newly appeared or newly dropped out. The longer someone's history gets, the less any of \
-        this should move - a stable pattern should read as the same paragraph week after week, \
-        not a rewrite. If no previous analysis is given, write one fresh, following every rule \
-        above.
-        """
 
     private static func promptDescription(for facts: InsightsFacts, scheduleFrequency: PayFrequency, previousSections: [InsightSection]?, topMove: Move?, latestFollowUp: FollowUp?) -> String {
         var lines = [
