@@ -7,6 +7,102 @@ private struct DaySelection: Identifiable {
     var id: Date { date }
 }
 
+/// Every number the Dashboard shows, computed exactly once per render from
+/// allEntries — StatsEngine construction and workRhythm() (which walks
+/// every calendar day since the first entry) are real costs that used to
+/// happen 4-5 times per body evaluation, once per scattered computed
+/// property that each rebuilt its own StatsEngine from scratch. This
+/// bundles them into one pass; the engine itself is untouched and stays
+/// pure — this is a call-site fix, not an engine rewrite.
+private struct DashboardFacts {
+    let calculator: PayPeriodCalculator
+    let currentPeriod: PayPeriod
+    let periodEntries: [TipEntry]
+    let breakdown: TipBreakdown
+    let totalCents: Int
+    let daysRemaining: Int
+    let shiftCount: Int
+    let shiftDays: [(day: Date, items: [TipEntry])]
+    let paceDeltaCents: Int?
+    let isPaydayMoment: Bool
+    let bestNightThisPeriod: (date: Date, cents: Int)?
+    let isBestPeriodEver: Bool
+    let predictedPaycheckCents: Int
+    let predictedPayDate: Date
+    let tonightLine: String?
+
+    init(allEntries: [TipEntry], schedule: PaySchedule?, now: Date, forcePaydayMoment: Bool) {
+        let calendar = Calendar.current
+        calculator = PayPeriodCalculator(schedule: schedule ?? .fallback)
+        let period = calculator.period(containing: now)
+        currentPeriod = period
+        let previousDay = calendar.date(byAdding: .day, value: -1, to: period.start) ?? period.start
+        let priorPeriod = calculator.period(containing: previousDay)
+
+        periodEntries = allEntries.filter { $0.date >= period.start && $0.date <= period.end }
+        breakdown = TipBreakdown.total(of: periodEntries)
+        totalCents = breakdown.totalCents
+        daysRemaining = calculator.daysRemaining(from: now)
+        shiftCount = Set(periodEntries.map { calendar.startOfDay(for: $0.date) }).count
+        shiftDays = ShiftDays.groupedByDay(periodEntries, date: \.date)
+
+        let statsEngine = StatsEngine(records: allEntries.map(TipRecord.init))
+
+        // Hidden until there's real history to compare against — a
+        // brand-new user's first period has no "last period" to be ahead of.
+        if allEntries.contains(where: { $0.date >= priorPeriod.start && $0.date <= priorPeriod.end }) {
+            paceDeltaCents = statsEngine.paceDelta(currentPeriod: period, priorPeriod: priorPeriod, asOf: now)
+        } else {
+            paceDeltaCents = nil
+        }
+
+        isPaydayMoment = forcePaydayMoment || (daysRemaining == 0 && totalCents > 0)
+        bestNightThisPeriod = statsEngine.bestNight(in: period)
+
+        // Only claims "best period yet" when there's at least one completed
+        // period in history to actually beat.
+        if let earliestEntryDate = allEntries.map(\.date).min() {
+            var cursor = period
+            var comparedAny = false
+            var isBest = true
+            for _ in 0..<24 {
+                guard let previousEnd = calendar.date(byAdding: .day, value: -1, to: cursor.start),
+                      previousEnd >= earliestEntryDate
+                else { break }
+                cursor = calculator.period(containing: previousEnd)
+                comparedAny = true
+                if statsEngine.periodToDateTotal(period: cursor, asOf: cursor.end) >= totalCents {
+                    isBest = false
+                    break
+                }
+            }
+            isBestPeriodEver = comparedAny && isBest
+        } else {
+            isBestPeriodEver = false
+        }
+
+        // Credit tips are what land on a stub; cash never does. Same
+        // fallback PaycheckComparisonView uses for legacy all-cash periods.
+        predictedPaycheckCents = breakdown.creditCents > 0 ? breakdown.creditCents : totalCents
+        predictedPayDate = calculator.payDate(for: period)
+
+        // Echo of tonight's reveal verdict, if something was logged today.
+        let tonightEntries = periodEntries.filter { calendar.isDateInToday($0.date) }
+        var tonightRevealText: String?
+        if !tonightEntries.isEmpty {
+            let cents = tonightEntries.reduce(0) { $0 + $1.amountCents }
+            let today = calendar.startOfDay(for: now)
+            let result = statsEngine.reveal(forNightAt: today, cents: cents, period: period)
+            tonightRevealText = "\(RevealCopy.headline(cents: cents)) \(RevealCopy.comparison(for: result.comparison))"
+        }
+        tonightLine = TonightLine.compose(
+            rhythm: statsEngine.workRhythm(),
+            tonightRevealText: tonightRevealText,
+            isPaydayMoment: isPaydayMoment
+        )
+    }
+}
+
 struct DashboardView: View {
     @Environment(PayScheduleStore.self) private var scheduleStore
     @Environment(TabRouter.self) private var tabRouter
@@ -33,133 +129,28 @@ struct DashboardView: View {
         return "\(timeOfDay), \(firstName)"
     }
 
-    private var calculator: PayPeriodCalculator {
-        // Fallback keeps a transient render safe if the schedule is cleared
-        // while this view is still mounted; RootView swaps to setup next tick.
-        PayPeriodCalculator(schedule: scheduleStore.schedule ?? .fallback)
-    }
-
-    private var currentPeriod: PayPeriod {
-        calculator.period(containing: .now)
-    }
-
-    private var periodEntries: [TipEntry] {
-        allEntries.filter { $0.date >= currentPeriod.start && $0.date <= currentPeriod.end }
-    }
-
-    private var breakdown: TipBreakdown {
-        TipBreakdown.total(of: periodEntries)
-    }
-
-    private var totalCents: Int {
-        breakdown.totalCents
-    }
-
-    private var daysRemaining: Int {
-        calculator.daysRemaining(from: .now)
-    }
-
-    /// A shift is a day worked, not a row: logging one night writes up to
-    /// two entries (cash + credit), so count distinct days, not entries.
-    private var shiftCount: Int {
-        Set(periodEntries.map { Calendar.current.startOfDay(for: $0.date) }).count
-    }
-
-    private var shiftDays: [(day: Date, items: [TipEntry])] {
-        ShiftDays.groupedByDay(periodEntries, date: \.date)
-    }
-
-    private var priorPeriod: PayPeriod {
-        let previousDay = Calendar.current.date(byAdding: .day, value: -1, to: currentPeriod.start) ?? currentPeriod.start
-        return calculator.period(containing: previousDay)
-    }
-
-    /// Hidden until there's real history to compare against — a brand-new
-    /// user's first period has no "last period" worth being ahead of.
-    private var paceDeltaCents: Int? {
-        guard allEntries.contains(where: { $0.date >= priorPeriod.start && $0.date <= priorPeriod.end }) else { return nil }
-        return statsEngine.paceDelta(currentPeriod: currentPeriod, priorPeriod: priorPeriod, asOf: .now)
-    }
-
-    private var statsEngine: StatsEngine {
-        StatsEngine(records: allEntries.map(TipRecord.init))
-    }
-
-    /// The app is named after this moment: the last day of a pay period,
-    /// when there's a verdict to deliver and a paycheck to predict.
-    private var isPaydayMoment: Bool {
+    private var forcePaydayMoment: Bool {
         #if DEBUG
-        if ProcessInfo.processInfo.arguments.contains("-DebugForcePaydayMoment") { return true }
+        return ProcessInfo.processInfo.arguments.contains("-DebugForcePaydayMoment")
+        #else
+        return false
         #endif
-        return daysRemaining == 0 && totalCents > 0
-    }
-
-    private var bestNightThisPeriod: (date: Date, cents: Int)? {
-        statsEngine.bestNight(in: currentPeriod)
-    }
-
-    /// Only claims "best period yet" when there's at least one completed
-    /// period in history to actually beat.
-    private var isBestPeriodEver: Bool {
-        guard let earliestEntryDate = allEntries.map(\.date).min() else { return false }
-        var cursor = currentPeriod
-        var comparedAny = false
-        for _ in 0..<24 {
-            guard let previousEnd = Calendar.current.date(byAdding: .day, value: -1, to: cursor.start),
-                  previousEnd >= earliestEntryDate
-            else { break }
-            cursor = calculator.period(containing: previousEnd)
-            comparedAny = true
-            if statsEngine.periodToDateTotal(period: cursor, asOf: cursor.end) >= totalCents {
-                return false
-            }
-        }
-        return comparedAny
-    }
-
-    /// Credit tips are what land on a stub; cash never does. Same fallback
-    /// PaycheckComparisonView uses for legacy all-cash periods.
-    private var predictedPaycheckCents: Int {
-        breakdown.creditCents > 0 ? breakdown.creditCents : totalCents
-    }
-
-    private var predictedPayDate: Date {
-        calculator.payDate(for: currentPeriod)
-    }
-
-    /// Echo of tonight's reveal verdict, if something was logged today —
-    /// "$118.00 tonight. $34.00 above your Friday average."
-    private var tonightRevealText: String? {
-        let calendar = Calendar.current
-        let tonightEntries = periodEntries.filter { calendar.isDateInToday($0.date) }
-        guard !tonightEntries.isEmpty else { return nil }
-        let cents = tonightEntries.reduce(0) { $0 + $1.amountCents }
-        let today = calendar.startOfDay(for: .now)
-        let result = statsEngine.reveal(forNightAt: today, cents: cents, period: currentPeriod)
-        return "\(RevealCopy.headline(cents: cents)) \(RevealCopy.comparison(for: result.comparison))"
-    }
-
-    private var tonightLine: String? {
-        TonightLine.compose(
-            rhythm: statsEngine.workRhythm(),
-            tonightRevealText: tonightRevealText,
-            isPaydayMoment: isPaydayMoment
-        )
     }
 
     private let paydayVerificationTip = PaydayVerificationTip()
 
     var body: some View {
+        let facts = DashboardFacts(allEntries: allEntries, schedule: scheduleStore.schedule, now: .now, forcePaydayMoment: forcePaydayMoment)
         NavigationStack {
             List {
                 Section {
-                    heroCard
+                    heroCard(facts)
                 }
                 .listRowInsets(EdgeInsets(top: 8, leading: PaydaySpacing.p16, bottom: 8, trailing: PaydaySpacing.p16))
                 .listRowBackground(Color.clear)
                 .listRowSeparator(.hidden)
 
-                if let tonightLine {
+                if let tonightLine = facts.tonightLine {
                     Section {
                         Text(tonightLine)
                             .font(PaydayFont.subheadline)
@@ -174,7 +165,7 @@ struct DashboardView: View {
                     .listRowSeparator(.hidden)
                 }
 
-                if periodEntries.isEmpty {
+                if facts.periodEntries.isEmpty {
                     Section {
                         emptyState
                     }
@@ -182,7 +173,7 @@ struct DashboardView: View {
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
                 } else {
-                    shiftsSection
+                    shiftsSection(facts)
                 }
             }
             .listStyle(.plain)
@@ -207,7 +198,7 @@ struct DashboardView: View {
             }
             #if DEBUG
             .onAppear {
-                if ProcessInfo.processInfo.arguments.contains("-OpenEditSheet"), let first = periodEntries.first {
+                if ProcessInfo.processInfo.arguments.contains("-OpenEditSheet"), let first = facts.periodEntries.first {
                     sheetTarget = .edit(first)
                 }
                 if ProcessInfo.processInfo.arguments.contains("-OpenSettings") {
@@ -224,21 +215,21 @@ struct DashboardView: View {
 
     // MARK: Hero card
 
-    private var heroCard: some View {
+    private func heroCard(_ facts: DashboardFacts) -> some View {
         VStack(spacing: PaydaySpacing.p20) {
             VStack(spacing: 6) {
                 Text("This pay period")
                     .font(PaydayFont.subheadline)
                     .foregroundStyle(PaydayColor.textSecondary)
-                Text(Money.string(fromCents: totalCents))
+                Text(Money.string(fromCents: facts.totalCents))
                     .font(PaydayFont.displayXXL)
                     .monospacedDigit()
                     .foregroundStyle(PaydayColor.textPrimary)
                     .contentTransition(.numericText())
-                    .animation(PaydayAnimation.premiumSpring, value: totalCents)
+                    .animation(PaydayAnimation.premiumSpring, value: facts.totalCents)
                     .lineLimit(1)
                     .minimumScaleFactor(0.5)
-                if let paceDeltaCents {
+                if let paceDeltaCents = facts.paceDeltaCents {
                     // The screen's one color moment: ahead is green because
                     // being ahead is the act. Behind stays quiet gray — red
                     // is reserved for a shorted paycheck, never for pace.
@@ -250,18 +241,18 @@ struct DashboardView: View {
                 }
             }
 
-            if totalCents > 0 {
-                Text("Cash \(Money.string(fromCents: breakdown.cashCents)) · Credit \(Money.string(fromCents: breakdown.creditCents))")
+            if facts.totalCents > 0 {
+                Text("Cash \(Money.string(fromCents: facts.breakdown.cashCents)) · Credit \(Money.string(fromCents: facts.breakdown.creditCents))")
                     .font(PaydayFont.caption)
                     .foregroundStyle(PaydayColor.textSecondary)
                     .monospacedDigit()
             }
 
-            progressTrack
+            progressTrack(facts)
 
-            if isPaydayMoment {
+            if facts.isPaydayMoment {
                 Divider()
-                paydayMomentSection
+                paydayMomentSection(facts)
             }
         }
         .paydayCard(padding: PaydaySpacing.p24)
@@ -269,8 +260,8 @@ struct DashboardView: View {
 
     /// The period itself, drawn: fills as days pass, ends at payday. This
     /// carries "days left" without a number — a glance shows where you are.
-    private var progressTrack: some View {
-        let fraction = calculator.progress(through: .now, in: currentPeriod)
+    private func progressTrack(_ facts: DashboardFacts) -> some View {
+        let fraction = facts.calculator.progress(through: .now, in: facts.currentPeriod)
         return VStack(spacing: 6) {
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
@@ -284,16 +275,16 @@ struct DashboardView: View {
             .frame(height: 4)
             .accessibilityElement()
             .accessibilityLabel("Pay period progress")
-            .accessibilityValue(daysRemaining == 0 ? "Last day" : "\(daysRemaining) days left")
+            .accessibilityValue(facts.daysRemaining == 0 ? "Last day" : "\(facts.daysRemaining) days left")
 
             HStack {
-                if daysRemaining > 0 {
-                    Text(daysRemaining == 1 ? "1 day left" : "\(daysRemaining) days left")
+                if facts.daysRemaining > 0 {
+                    Text(facts.daysRemaining == 1 ? "1 day left" : "\(facts.daysRemaining) days left")
                         .font(PaydayFont.caption2)
                         .foregroundStyle(PaydayColor.textTertiary)
                 }
                 Spacer()
-                Text("Payday · \(predictedPayDate.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day()))")
+                Text("Payday · \(facts.predictedPayDate.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day()))")
                     .font(PaydayFont.caption2)
                     .foregroundStyle(PaydayColor.textSecondary)
             }
@@ -310,19 +301,19 @@ struct DashboardView: View {
         }
     }
 
-    private var paydayMomentSection: some View {
+    private func paydayMomentSection(_ facts: DashboardFacts) -> some View {
         VStack(spacing: 16) {
             VStack(spacing: 4) {
                 Text("Period complete")
                     .font(PaydayFont.subheadline)
                     .foregroundStyle(PaydayColor.textSecondary)
-                if let bestNightThisPeriod {
+                if let bestNightThisPeriod = facts.bestNightThisPeriod {
                     Text("Best night: \(Money.string(fromCents: bestNightThisPeriod.cents)) on \(bestNightThisPeriod.date.formatted(.dateTime.month(.abbreviated).day()))")
                         .font(PaydayFont.footnote)
                         .foregroundStyle(PaydayColor.textSecondary)
                         .monospacedDigit()
                 }
-                if isBestPeriodEver {
+                if facts.isBestPeriodEver {
                     Text("Your best period yet")
                         .font(PaydayFont.subheadline)
                         .foregroundStyle(PaydayColor.primary)
@@ -333,11 +324,11 @@ struct DashboardView: View {
                 Text("Predicted paycheck")
                     .font(PaydayFont.caption)
                     .foregroundStyle(PaydayColor.textSecondary)
-                Text(Money.string(fromCents: predictedPaycheckCents))
+                Text(Money.string(fromCents: facts.predictedPaycheckCents))
                     .font(PaydayFont.displayLarge)
                     .monospacedDigit()
                     .foregroundStyle(PaydayColor.textPrimary)
-                Text("Expect it around \(predictedPayDate.formatted(.dateTime.month(.abbreviated).day()))")
+                Text("Expect it around \(facts.predictedPayDate.formatted(.dateTime.month(.abbreviated).day()))")
                     .font(PaydayFont.caption2)
                     .foregroundStyle(PaydayColor.textSecondary)
             }
@@ -347,12 +338,12 @@ struct DashboardView: View {
 
     // MARK: Shifts
 
-    private var shiftsSection: some View {
+    private func shiftsSection(_ facts: DashboardFacts) -> some View {
         Section {
-            ForEach(shiftDays.prefix(Self.maxShiftRows), id: \.day) { group in
+            ForEach(facts.shiftDays.prefix(Self.maxShiftRows), id: \.day) { group in
                 shiftRow(for: group)
             }
-            if shiftDays.count > Self.maxShiftRows {
+            if facts.shiftDays.count > Self.maxShiftRows {
                 Button {
                     tabRouter.selected = .periods
                 } label: {
@@ -367,7 +358,7 @@ struct DashboardView: View {
             HStack {
                 Text("Shifts")
                 Spacer()
-                Text(shiftCount == 1 ? "1 this period" : "\(shiftCount) this period")
+                Text(facts.shiftCount == 1 ? "1 this period" : "\(facts.shiftCount) this period")
                     .textCase(nil)
                     .font(PaydayFont.caption)
                     .foregroundStyle(PaydayColor.textTertiary)
@@ -413,54 +404,6 @@ struct DashboardView: View {
             description: Text("Log tonight's tips and watch the total build toward payday.")
         )
         .padding(.vertical, 16)
-    }
-}
-
-/// One shift (one day), however many rows it took to log it.
-private struct ShiftDayRow: View {
-    let day: Date
-    let entries: [TipEntry]
-
-    private var totalCents: Int {
-        entries.reduce(0) { $0 + $1.amountCents }
-    }
-
-    private var subtitle: String {
-        var parts: [String] = []
-        let breakdown = TipBreakdown.total(of: entries)
-        if breakdown.cashCents > 0, breakdown.creditCents > 0 {
-            parts.append("Cash \(Money.string(fromCents: breakdown.cashCents)) · Credit \(Money.string(fromCents: breakdown.creditCents))")
-        } else {
-            parts.append(entries.first?.kind.displayName ?? "")
-        }
-        if entries.contains(where: \.isDouble) {
-            parts.append("double")
-        }
-        if let note = entries.compactMap(\.note).first(where: { !$0.isEmpty }) {
-            parts.append(note)
-        }
-        return parts.joined(separator: " · ")
-    }
-
-    var body: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(ShiftDays.humanLabel(for: day))
-                    .font(PaydayFont.body)
-                    .foregroundStyle(PaydayColor.textPrimary)
-                Text(subtitle)
-                    .font(PaydayFont.caption)
-                    .foregroundStyle(PaydayColor.textSecondary)
-                    .monospacedDigit()
-                    .lineLimit(1)
-            }
-            Spacer()
-            Text(Money.string(fromCents: totalCents))
-                .font(PaydayFont.displaySmall)
-                .monospacedDigit()
-                .foregroundStyle(PaydayColor.textPrimary)
-        }
-        .padding(.vertical, 4)
     }
 }
 

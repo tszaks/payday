@@ -173,5 +173,7 @@ struct SettingsView: View {
             payDelayDays: delayDays,
             firstWeekday: firstWeekday
         )
+        // Period boundaries move the widget's numbers too.
+        PaydayWidgetRefresh.request()
     }
 }

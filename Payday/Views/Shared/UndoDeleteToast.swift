@@ -43,6 +43,7 @@ final class UndoDeleteToastState {
         context.delete(entry)
         try? context.save()
         PaydayHaptics.medium()
+        PaydayWidgetRefresh.request()
         dismissTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(4))
             guard !Task.isCancelled else { return }
@@ -57,6 +58,7 @@ final class UndoDeleteToastState {
         try? context.save()
         self.snapshot = nil
         PaydayHaptics.success()
+        PaydayWidgetRefresh.request()
     }
 }
 

@@ -120,10 +120,10 @@ struct PaydayWidgetEntryView: View {
                     .minimumScaleFactor(0.6)
 
                 if let paceDeltaCents = entry.paceDeltaCents {
-                    Text(RevealCopy.paceLine(deltaCents: paceDeltaCents))
+                    Text(RevealCopy.compactPaceLine(deltaCents: paceDeltaCents))
                         .font(PaydayFont.caption2)
                         .foregroundStyle(PaydayColor.textSecondary)
-                        .lineLimit(2)
+                        .lineLimit(1)
                 } else {
                     Text(daysRemainingText)
                         .font(PaydayFont.caption2)

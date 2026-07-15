@@ -92,6 +92,7 @@ struct PaycheckEntrySheet: View {
             modelContext.insert(record)
         }
         PaydayHaptics.success()
+        PaydayWidgetRefresh.request()
         dismiss()
     }
 
@@ -99,6 +100,7 @@ struct PaycheckEntrySheet: View {
         if let existing {
             modelContext.delete(existing)
         }
+        PaydayWidgetRefresh.request()
         dismiss()
     }
 }

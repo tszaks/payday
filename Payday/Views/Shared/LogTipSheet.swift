@@ -290,6 +290,7 @@ struct LogTipSheet: View {
         // refreshed within this same call, so the just-inserted entries
         // are appended explicitly rather than relied on to already be in it.
         SmartNudgeScheduler.reschedule(preferencesStore: preferencesStore, allEntries: allEntries + newEntries)
+        PaydayWidgetRefresh.request()
     }
 
     /// Edit flow: every field change writes straight through to the entry.
@@ -301,12 +302,14 @@ struct LogTipSheet: View {
         entry.kind = kind
         entry.note = note.isEmpty ? nil : note
         entry.isDouble = isDouble
+        PaydayWidgetRefresh.request()
     }
 
     private func delete() {
         if case .edit(let entry) = target {
             modelContext.delete(entry)
         }
+        PaydayWidgetRefresh.request()
         dismiss()
     }
 }

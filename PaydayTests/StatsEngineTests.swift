@@ -404,6 +404,13 @@ struct RevealCopyTests {
         #expect(RevealCopy.paceLine(deltaCents: -5000).contains("behind"))
         #expect(RevealCopy.paceLine(deltaCents: 0) == "Even with last period at this point.")
     }
+
+    @Test("compact pace line fits a widget caption: signed amount, no sentence")
+    func compactPaceLineWording() {
+        #expect(RevealCopy.compactPaceLine(deltaCents: 12000) == "+$120.00 vs last period")
+        #expect(RevealCopy.compactPaceLine(deltaCents: -5000) == "-$50.00 vs last period")
+        #expect(RevealCopy.compactPaceLine(deltaCents: 0) == "Even vs last period")
+    }
 }
 
 @Suite("Insights facts")
