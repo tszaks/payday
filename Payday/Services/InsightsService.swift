@@ -201,17 +201,17 @@ enum InsightsService {
         }
         if let rate = facts.rate {
             var rateLine = "RATE: averaging \(Money.wholeDollarString(fromCents: Int((rate.overallDollarsPerHour * 100).rounded())))/hr across \(rate.nightsWithHours) shifts with hours logged."
-            if let bestWeekday = rate.bestWeekday, let bestRate = rate.bestWeekdayDollarsPerHour {
+            if let bestWeekday = rate.bestWeekday, let bestRate = rate.bestWeekdayDollarsPerHour, let count = rate.bestWeekdayNightCount {
                 let weekdayName = Calendar.current.weekdaySymbols[bestWeekday - 1]
-                rateLine += " Best-paying weekday: \(weekdayName) at \(Money.wholeDollarString(fromCents: Int((bestRate * 100).rounded())))/hr."
+                rateLine += " Best-paying weekday: \(weekdayName) at \(Money.wholeDollarString(fromCents: Int((bestRate * 100).rounded())))/hr across \(count == 1 ? "1 night" : "\(count) nights")."
             }
             lines.append(rateLine)
         }
         if let sales = facts.sales {
             var salesLine = "TIP PERCENT: averaging \(String(format: "%.1f", sales.overallTipPercent))% of sales across \(sales.nightsWithSales) shifts with sales logged."
-            if let bestWeekday = sales.bestWeekday, let bestPercent = sales.bestWeekdayTipPercent {
+            if let bestWeekday = sales.bestWeekday, let bestPercent = sales.bestWeekdayTipPercent, let count = sales.bestWeekdayNightCount {
                 let weekdayName = Calendar.current.weekdaySymbols[bestWeekday - 1]
-                salesLine += " Best weekday: \(weekdayName) at \(String(format: "%.1f", bestPercent))%."
+                salesLine += " Best weekday: \(weekdayName) at \(String(format: "%.1f", bestPercent))% across \(count == 1 ? "1 night" : "\(count) nights")."
             }
             lines.append(salesLine)
         }

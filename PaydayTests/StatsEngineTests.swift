@@ -11,14 +11,14 @@ private func date(_ year: Int, _ month: Int, _ day: Int) -> Date {
     return calendar.date(from: DateComponents(year: year, month: month, day: day))!
 }
 
-private func record(_ year: Int, _ month: Int, _ day: Int, cents: Int, kind: TipKind = .cash, isDouble: Bool = false, recordedHour: Int? = nil, hoursWorked: Double? = nil, tipOutCents: Int? = nil, salesCents: Int? = nil) -> TipRecord {
+private func record(_ year: Int, _ month: Int, _ day: Int, cents: Int, kind: TipKind = .cash, isDouble: Bool = false, recordedHour: Int? = nil, hoursWorked: Double? = nil, tipOutCents: Int? = nil, salesCents: Int? = nil, shiftPeriod: ShiftPeriod? = nil) -> TipRecord {
     let shiftDate = date(year, month, day)
     let recordedAt = recordedHour.flatMap { hour in
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone.current
         return calendar.date(bySettingHour: hour, minute: 0, second: 0, of: shiftDate)
     }
-    return TipRecord(date: shiftDate, amountCents: cents, kind: kind, isDouble: isDouble, recordedAt: recordedAt, hoursWorked: hoursWorked, tipOutCents: tipOutCents, salesCents: salesCents)
+    return TipRecord(date: shiftDate, amountCents: cents, kind: kind, isDouble: isDouble, recordedAt: recordedAt, hoursWorked: hoursWorked, tipOutCents: tipOutCents, salesCents: salesCents, shiftPeriod: shiftPeriod)
 }
 
 @Suite("Nightly totals")
@@ -481,6 +481,70 @@ struct MovesTests {
         let engine = StatsEngine(records: [])
         #expect(engine.moves().isEmpty)
     }
+
+    @Test("weekday swap stays silent when a real-looking delta sits inside noisy, high-variance history")
+    func weekdaySwapSilencedByHighVariance() {
+        let records = [
+            // Fridays: $20, $100, $20 — wide spread, avg $46.67.
+            record(2026, 7, 3, cents: 2000),
+            record(2026, 7, 10, cents: 10000),
+            record(2026, 7, 17, cents: 2000),
+            // Mondays: $5, $70, $5 — also wide spread, avg $26.67.
+            record(2026, 6, 29, cents: 500),
+            record(2026, 7, 6, cents: 7000),
+            record(2026, 7, 13, cents: 500)
+        ]
+        let engine = StatsEngine(records: records)
+        // The $20 delta clears the flat $15 floor on its own, but the
+        // pooled spread across both weekdays is wide enough that this
+        // shouldn't read as a real signal.
+        #expect(engine.moves(referenceDate: date(2026, 7, 24)).first { $0.id == "weekdaySwap" } == nil)
+    }
+
+    @Test("weekday swap still fires when a comparable delta sits inside consistent, low-variance history")
+    func weekdaySwapFiresWithLowVariance() {
+        let records = [
+            record(2026, 7, 3, cents: 4000),
+            record(2026, 7, 10, cents: 4200),
+            record(2026, 7, 17, cents: 3800),
+            record(2026, 6, 29, cents: 2000),
+            record(2026, 7, 6, cents: 2200),
+            record(2026, 7, 13, cents: 1800)
+        ]
+        let engine = StatsEngine(records: records)
+        let swap = engine.moves(referenceDate: date(2026, 7, 24)).first { $0.id == "weekdaySwap" }
+        #expect(swap != nil)
+        #expect(swap?.body.contains("across 3 Fridays") == true)
+        #expect(swap?.body.contains("across 3 Mondays") == true)
+    }
+
+    @Test("rate leader stays silent when a real-looking $/hr delta sits inside noisy history")
+    func rateLeaderSilencedByHighVariance() {
+        let records = [
+            record(2026, 7, 3, cents: 2000, hoursWorked: 2),
+            record(2026, 7, 10, cents: 14000, hoursWorked: 2),
+            record(2026, 7, 17, cents: 2000, hoursWorked: 2),
+            record(2026, 6, 29, cents: 1000, hoursWorked: 2),
+            record(2026, 7, 6, cents: 7000, hoursWorked: 2),
+            record(2026, 7, 13, cents: 1000, hoursWorked: 2)
+        ]
+        let engine = StatsEngine(records: records)
+        #expect(engine.moves(referenceDate: date(2026, 7, 24)).first { $0.id == "rateLeader" } == nil)
+    }
+
+    @Test("rate leader still fires when a comparable $/hr delta sits inside consistent history")
+    func rateLeaderFiresWithLowVariance() {
+        let records = [
+            record(2026, 7, 3, cents: 3000, hoursWorked: 2),
+            record(2026, 7, 10, cents: 3100, hoursWorked: 2),
+            record(2026, 7, 17, cents: 2900, hoursWorked: 2),
+            record(2026, 6, 29, cents: 1200, hoursWorked: 2),
+            record(2026, 7, 6, cents: 1300, hoursWorked: 2),
+            record(2026, 7, 13, cents: 1100, hoursWorked: 2)
+        ]
+        let engine = StatsEngine(records: records)
+        #expect(engine.moves(referenceDate: date(2026, 7, 24)).first { $0.id == "rateLeader" } != nil)
+    }
 }
 
 @Suite("Work rhythm")
@@ -719,7 +783,7 @@ struct RevealTests {
             record(2026, 7, 11, cents: 1300)   // earlier in the current period — 3 in-period nights, all below tonight
         ])
         let result = engine.reveal(forNightAt: date(2026, 7, 13), cents: 5500, period: period)
-        guard case .weekdayAverage(let weekday, let deltaCents, let periodRank, let periodNightCount) = result.comparison else {
+        guard case .weekdayAverage(let weekday, let deltaCents, let periodRank, let periodNightCount, let sampleCount) = result.comparison else {
             Issue.record("expected weekdayAverage case")
             return
         }
@@ -727,6 +791,7 @@ struct RevealTests {
         #expect(deltaCents == -500) // 5500 - 6000 (the only other Monday on record)
         #expect(periodRank == 1)    // tonight beats all 3 in-period nights logged so far
         #expect(periodNightCount == 3)
+        #expect(sampleCount == 1)   // only one other Monday to average against
     }
 
     @Test("reveal has no rate clause when tonight has no hours logged")
@@ -783,16 +848,28 @@ struct RevealCopyTests {
 
     @Test("weekday average copy includes a period rank clincher only when it qualifies")
     func weekdayAverageWithRank() {
-        let text = RevealCopy.comparison(for: .weekdayAverage(weekday: 2, deltaCents: 3400, periodRank: 3, periodNightCount: 5))
+        let text = RevealCopy.comparison(for: .weekdayAverage(weekday: 2, deltaCents: 3400, periodRank: 3, periodNightCount: 5, sampleCount: 8))
         #expect(text.contains("above your"))
         #expect(text.contains("Third-best night this period."))
     }
 
     @Test("weekday average copy omits the clincher when the rank doesn't qualify")
     func weekdayAverageWithoutRank() {
-        let text = RevealCopy.comparison(for: .weekdayAverage(weekday: 2, deltaCents: -1200, periodRank: nil, periodNightCount: 5))
+        let text = RevealCopy.comparison(for: .weekdayAverage(weekday: 2, deltaCents: -1200, periodRank: nil, periodNightCount: 5, sampleCount: 8))
         #expect(text.contains("below your"))
         #expect(!text.contains("period."))
+    }
+
+    @Test("weekday average copy self-discloses a thin sample below 5 nights")
+    func weekdayAverageDisclosesThinSample() {
+        let text = RevealCopy.comparison(for: .weekdayAverage(weekday: 2, deltaCents: 3400, periodRank: nil, periodNightCount: 1, sampleCount: 2))
+        #expect(text.contains("(across 2 Mondays)"))
+    }
+
+    @Test("weekday average copy stays clean at 5 nights or more")
+    func weekdayAverageStaysCleanAtFiveOrMore() {
+        let text = RevealCopy.comparison(for: .weekdayAverage(weekday: 2, deltaCents: 3400, periodRank: nil, periodNightCount: 5, sampleCount: 5))
+        #expect(!text.contains("across"))
     }
 
     @Test("pace line reads ahead, behind, and even correctly")
@@ -883,6 +960,71 @@ struct InsightsFactsTests {
         #expect(facts?.lunchDinner?.lunchCents == 3000)
         #expect(facts?.lunchDinner?.dinnerShiftCount == 3)
         #expect(facts?.lunchDinner?.dinnerCents == 12000)
+    }
+
+    @Test("an explicit shift period wins over the recordedAt proxy, even when they disagree")
+    func explicitShiftPeriodBeatsProxy() {
+        // Logged at 8pm (would proxy to dinner) but explicitly tagged lunch.
+        let records = [
+            record(2026, 7, 1, cents: 1000, recordedHour: 20, shiftPeriod: .lunch),
+            record(2026, 7, 2, cents: 2000, recordedHour: 13, shiftPeriod: .lunch),
+            record(2026, 7, 3, cents: 3000, recordedHour: 19),
+            record(2026, 7, 4, cents: 4000, recordedHour: 20),
+            record(2026, 7, 5, cents: 5000, recordedHour: 21)
+        ]
+        let engine = StatsEngine(records: records)
+        let facts = engine.insightsFacts(referenceDate: date(2026, 7, 10))
+        // July 1 counts as lunch (explicit), not dinner (what the 8pm
+        // proxy would have said) — 1000 + 2000 = 3000 lunch, across 2 nights.
+        #expect(facts?.lunchDinner?.lunchShiftCount == 2)
+        #expect(facts?.lunchDinner?.lunchCents == 3000)
+        #expect(facts?.lunchDinner?.dinnerShiftCount == 3)
+    }
+
+    @Test("the recordedAt proxy still classifies legacy nights with no explicit shift period")
+    func proxyStillWorksForLegacyNights() {
+        let records = [
+            record(2026, 7, 1, cents: 1000, recordedHour: 12),
+            record(2026, 7, 2, cents: 2000, recordedHour: 13),
+            record(2026, 7, 3, cents: 3000, recordedHour: 19),
+            record(2026, 7, 4, cents: 4000, recordedHour: 20),
+            record(2026, 7, 5, cents: 5000, recordedHour: 21)
+        ]
+        let engine = StatsEngine(records: records)
+        let facts = engine.insightsFacts(referenceDate: date(2026, 7, 10))
+        #expect(facts?.lunchDinner?.lunchShiftCount == 2)
+        #expect(facts?.lunchDinner?.dinnerShiftCount == 3)
+    }
+
+    @Test("a backfilled night with no explicit shift period is excluded, never guessed at")
+    func backfillWithoutExplicitValueStillExcluded() {
+        // Backfilled (recordedAt days later) and never tagged explicitly.
+        let backfilled = TipRecord(date: date(2026, 7, 1), amountCents: 9999, kind: .cash, isDouble: false, recordedAt: date(2026, 7, 8))
+        let records = [backfilled] + [
+            record(2026, 7, 2, cents: 1000, recordedHour: 12),
+            record(2026, 7, 3, cents: 2000, recordedHour: 13),
+            record(2026, 7, 4, cents: 3000, recordedHour: 19),
+            record(2026, 7, 5, cents: 4000, recordedHour: 20),
+            record(2026, 7, 6, cents: 5000, recordedHour: 21)
+        ]
+        let engine = StatsEngine(records: records)
+        let facts = engine.insightsFacts(referenceDate: date(2026, 7, 10))
+        #expect(facts?.lunchDinner?.lunchShiftCount == 2)
+        #expect(facts?.lunchDinner?.dinnerShiftCount == 3)
+    }
+
+    @Test("a night counts once for lunch/dinner even with both a cash and credit record")
+    func lunchDinnerCountsNightsNotRecords() {
+        var records = [
+            record(2026, 7, 1, cents: 1000, kind: .credit, recordedHour: 12),
+            record(2026, 7, 1, cents: 500, kind: .cash, recordedHour: 12)
+        ]
+        records += (2...5).map { record(2026, 7, $0, cents: 1000, recordedHour: 19) }
+        let engine = StatsEngine(records: records)
+        let facts = engine.insightsFacts(referenceDate: date(2026, 7, 10))
+        // Two records, one night — must count once, gross summed across kind.
+        #expect(facts?.lunchDinner?.lunchShiftCount == 1)
+        #expect(facts?.lunchDinner?.lunchCents == 1500)
     }
 
     @Test("doubles vs solo compares average per double against average per solo shift")

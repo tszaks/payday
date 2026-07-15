@@ -18,6 +18,25 @@ enum TipKind: String, Codable, CaseIterable, Identifiable, Sendable {
     }
 }
 
+/// Which half of the day a shift fell in — captured explicitly now instead
+/// of only inferred from when it was logged. A double shift is neither
+/// (isDouble already means "both"); nil means never set, which the engine
+/// only ever fills in with the legacy same-day-logged proxy, never guesses
+/// at directly.
+enum ShiftPeriod: String, Codable, CaseIterable, Identifiable, Sendable {
+    case lunch
+    case dinner
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .lunch: "Lunch"
+        case .dinner: "Dinner"
+        }
+    }
+}
+
 @Model
 final class TipEntry {
     // CloudKit requires every attribute to be optional or have a default —
@@ -71,6 +90,17 @@ final class TipEntry {
     /// tip-percent fact.
     var salesCents: Int?
 
+    // Same optional-raw-string-to-enum split as kindRaw/kind, but WITHOUT
+    // a non-optional fallback: "never set" is a real, meaningful state
+    // here (unlike kind, which must always resolve to something), so the
+    // accessor stays Optional all the way through.
+    private var shiftPeriodRaw: String?
+
+    var shiftPeriod: ShiftPeriod? {
+        get { shiftPeriodRaw.flatMap(ShiftPeriod.init(rawValue:)) }
+        set { shiftPeriodRaw = newValue?.rawValue }
+    }
+
     /// Gross minus any tip-out — "what you walked with." Equal to
     /// amountCents when there's no tip-out logged for this entry.
     var netCents: Int {
@@ -87,7 +117,8 @@ final class TipEntry {
         isDouble: Bool = false,
         hoursWorked: Double? = nil,
         tipOutCents: Int? = nil,
-        salesCents: Int? = nil
+        salesCents: Int? = nil,
+        shiftPeriod: ShiftPeriod? = nil
     ) {
         self.id = id
         self.date = date
@@ -99,5 +130,6 @@ final class TipEntry {
         self.hoursWorked = hoursWorked
         self.tipOutCents = tipOutCents
         self.salesCents = salesCents
+        self.shiftPeriodRaw = shiftPeriod?.rawValue
     }
 }

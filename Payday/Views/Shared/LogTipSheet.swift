@@ -42,13 +42,14 @@ struct LogTipSheet: View {
     @State private var revealGrossAndTipOut: (grossCents: Int, tipOutCents: Int)?
 
     // Optional shift details — skippable, never nagged. hoursWorked,
-    // tipOutCents, and salesCents are a fact about the SHIFT (the calendar
-    // day), never one entry or tip type — ShiftDetails is the one place
-    // read/write for these three fields is allowed to happen.
+    // tipOutCents, salesCents, and shiftPeriod are a fact about the SHIFT
+    // (the calendar day), never one entry or tip type — ShiftDetails is
+    // the one place read/write for these four fields is allowed to happen.
     @State private var showMoreDetails = false
     @State private var hoursWorked: Double?
     @State private var tipOutCents: Int = 0
     @State private var salesCents: Int = 0
+    @State private var shiftPeriod: ShiftPeriod?
 
     init(target: TipEntrySheetTarget) {
         self.target = target
@@ -57,6 +58,14 @@ struct LogTipSheet: View {
             _date = State(initialValue: defaultDate)
             _note = State(initialValue: "")
             _isDouble = State(initialValue: false)
+            // The clock is only a trustworthy proxy for "which shift is
+            // this" when the shift being logged is actually today — a
+            // backfilled past day has no clock to read, so it starts
+            // unset rather than guessed at.
+            if Calendar.current.isDateInToday(defaultDate) {
+                let hour = Calendar.current.component(.hour, from: .now)
+                _shiftPeriod = State(initialValue: hour < 16 ? .lunch : .dinner)
+            }
         case .edit(let entry):
             _amountCents = State(initialValue: entry.amountCents)
             _kind = State(initialValue: entry.kind)
@@ -73,7 +82,8 @@ struct LogTipSheet: View {
             _hoursWorked = State(initialValue: entry.hoursWorked)
             _tipOutCents = State(initialValue: entry.tipOutCents ?? 0)
             _salesCents = State(initialValue: entry.salesCents ?? 0)
-            _showMoreDetails = State(initialValue: entry.hoursWorked != nil || entry.tipOutCents != nil || entry.salesCents != nil)
+            _shiftPeriod = State(initialValue: entry.shiftPeriod)
+            _showMoreDetails = State(initialValue: entry.hoursWorked != nil || entry.tipOutCents != nil || entry.salesCents != nil || entry.shiftPeriod != nil)
         }
     }
 
@@ -160,7 +170,8 @@ struct LogTipSheet: View {
             hoursWorked = resolved.hoursWorked
             tipOutCents = resolved.tipOutCents ?? 0
             salesCents = resolved.salesCents ?? 0
-            showMoreDetails = hoursWorked != nil || tipOutCents > 0 || salesCents > 0
+            shiftPeriod = resolved.shiftPeriod
+            showMoreDetails = hoursWorked != nil || tipOutCents > 0 || salesCents > 0 || shiftPeriod != nil
         }
     }
 
@@ -179,6 +190,13 @@ struct LogTipSheet: View {
         if cashCents + creditCents >= average * 2 {
             isDouble = true
         }
+    }
+
+    /// A double IS both lunch and dinner — any lunch-or-dinner value left
+    /// over from before the toggle was flipped on would misstate that, so
+    /// it's cleared rather than left stale.
+    private func clearShiftPeriodIfDouble() {
+        if isDouble { shiftPeriod = nil }
     }
 
     var body: some View {
@@ -253,17 +271,21 @@ struct LogTipSheet: View {
             .onChange(of: kind) { _, _ in liveSaveEdit() }
             .onChange(of: date) { _, _ in liveSaveEdit() }
             .onChange(of: note) { _, _ in liveSaveEdit() }
-            .onChange(of: isDouble) { _, _ in liveSaveEdit() }
+            .onChange(of: isDouble) { _, _ in clearShiftPeriodIfDouble(); liveSaveEdit() }
             .onChange(of: cashCents) { _, _ in maybeSuggestDouble() }
             .onChange(of: creditCents) { _, _ in maybeSuggestDouble() }
             .onChange(of: hoursWorked) { _, _ in liveSaveEdit() }
             .onChange(of: tipOutCents) { _, _ in liveSaveEdit() }
             .onChange(of: salesCents) { _, _ in liveSaveEdit() }
+            .onChange(of: shiftPeriod) { _, _ in liveSaveEdit() }
             .onAppear { seedShiftDetailDefaults() }
         }
         // Fixed height for the common case, plus .large as an escape hatch so
         // content is never clipped on smaller iPhones with the keypad up.
-        .presentationDetents([.height(isEditing ? 480 : 520), .large])
+        // Screenshot/QA hook: -DebugNoAutoFocus also opens straight to the
+        // .large detent, so the full scrollable sheet — details group
+        // included — is visible without needing a drag gesture to expand it.
+        .presentationDetents(debugSuppressAutoFocus ? [.large] : [.height(isEditing ? 480 : 520), .large])
         .presentationDragIndicator(.visible)
         .presentationBackground(PaydayColor.background)
         #if DEBUG
@@ -318,7 +340,7 @@ struct LogTipSheet: View {
 
     private var editContent: some View {
         VStack(spacing: 16) {
-            CurrencyAmountField(cents: $amountCents)
+            CurrencyAmountField(cents: $amountCents, autoFocus: !debugSuppressAutoFocus)
 
             Picker("Tip type", selection: $kind) {
                 ForEach(TipKind.allCases) { kind in
@@ -389,6 +411,24 @@ struct LogTipSheet: View {
                         CompactCurrencyField(cents: $salesCents)
                     }
                     .padding(.vertical, 14)
+                    // A double IS both, so there's nothing for this picker
+                    // to say once that toggle is on — hidden rather than
+                    // shown disabled with a value that would misstate it.
+                    if !isDouble {
+                        Divider()
+                        HStack {
+                            Text("Lunch or dinner")
+                            Spacer()
+                            Picker("", selection: $shiftPeriod) {
+                                Text("Lunch").tag(ShiftPeriod?.some(.lunch))
+                                Text("Dinner").tag(ShiftPeriod?.some(.dinner))
+                            }
+                            .pickerStyle(.segmented)
+                            .frame(width: 180)
+                            .labelsHidden()
+                        }
+                        .padding(.vertical, 14)
+                    }
                 }
             }
             .padding()
@@ -402,6 +442,18 @@ struct LogTipSheet: View {
     private var debugAutoFocusTipOut: Bool {
         #if DEBUG
         ProcessInfo.processInfo.arguments.contains("-DebugFocusTipOut")
+        #else
+        false
+        #endif
+    }
+
+    /// Screenshot/QA hook only: lets a launch argument suppress the edit
+    /// flow's default amount-field autofocus, so the full sheet — details
+    /// group included — can be screenshotted without the keyboard covering
+    /// whatever's below the fold.
+    private var debugSuppressAutoFocus: Bool {
+        #if DEBUG
+        ProcessInfo.processInfo.arguments.contains("-DebugNoAutoFocus")
         #else
         false
         #endif
@@ -466,7 +518,7 @@ struct LogTipSheet: View {
         }
         // Shift-level details land on one canonical entry (credit
         // preferred), never split across both — see ShiftDetails.
-        ShiftDetails.write(hoursWorked: hoursWorked, tipOutCents: effectiveTipOutCents, salesCents: effectiveSalesCents, into: newEntries)
+        ShiftDetails.write(hoursWorked: hoursWorked, tipOutCents: effectiveTipOutCents, salesCents: effectiveSalesCents, shiftPeriod: isDouble ? nil : shiftPeriod, into: newEntries)
 
         revealResult = reveal
         revealGrossAndTipOut = effectiveTipOutCents.map { (grossCents: totalCents, tipOutCents: $0) }
@@ -496,6 +548,7 @@ struct LogTipSheet: View {
             hoursWorked: hoursWorked,
             tipOutCents: tipOutCents > 0 ? tipOutCents : nil,
             salesCents: salesCents > 0 ? salesCents : nil,
+            shiftPeriod: isDouble ? nil : shiftPeriod,
             into: sameDayEntries(around: entry)
         )
 
