@@ -41,12 +41,33 @@ struct PeriodsView: View {
         paycheckRecords.first { $0.periodEnd >= period.start && $0.periodEnd <= period.end }
     }
 
+    /// This calendar year's entries only, net of any tip-outs — same rule
+    /// StatsEngine applies everywhere else money gets summed.
+    private var yearToDateNights: [(date: Date, cents: Int)] {
+        let year = Calendar.current.component(.year, from: .now)
+        let yearEntries = allEntries.filter { Calendar.current.component(.year, from: $0.date) == year }
+        return StatsEngine(records: yearEntries.map(TipRecord.init)).nightlyTotals()
+    }
+
+    /// Overwrites the same stable filename every time rather than a
+    /// timestamped one, so re-exporting never leaves temp-file garbage
+    /// behind in between shares.
+    private var csvExportURL: URL {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("Payday-Export.csv")
+        let csv = CSVExporter.export(entries: allEntries, paycheckRecords: paycheckRecords, calculator: calculator)
+        try? csv.write(to: url, atomically: true, encoding: .utf8)
+        return url
+    }
+
     @State private var path = NavigationPath()
 
     var body: some View {
         NavigationStack(path: $path) {
             ScrollView {
                 LazyVStack(spacing: PaydaySpacing.p12) {
+                    if !yearToDateNights.isEmpty {
+                        yearToDateCard
+                    }
                     ForEach(periods.indices, id: \.self) { index in
                         let period = periods[index]
                         let periodBreakdown = breakdown(for: period)
@@ -69,6 +90,13 @@ struct PeriodsView: View {
             .contentMargins(.bottom, 88, for: .scrollContent)
             .background(PaydayColor.background)
             .navigationTitle("Periods")
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    ShareLink(item: csvExportURL) {
+                        Image(systemName: "square.and.arrow.up")
+                    }
+                }
+            }
             #if DEBUG
             .onAppear {
                 if ProcessInfo.processInfo.arguments.contains("-OpenPeriodWithPaycheck"), path.isEmpty,
@@ -81,6 +109,29 @@ struct PeriodsView: View {
                 PeriodDetailView(period: period)
             }
         }
+    }
+}
+
+extension PeriodsView {
+    fileprivate var yearToDateCard: some View {
+        let totalCents = yearToDateNights.reduce(0) { $0 + $1.cents }
+        let year = Calendar.current.component(.year, from: .now)
+        return HStack {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("\(String(year)) Year to Date")
+                    .font(PaydayFont.caption)
+                    .foregroundStyle(PaydayColor.textSecondary)
+                Text(Money.string(fromCents: totalCents))
+                    .font(PaydayFont.displaySmall)
+                    .monospacedDigit()
+                    .foregroundStyle(PaydayColor.textPrimary)
+            }
+            Spacer(minLength: 0)
+            Text("\(yearToDateNights.count) shifts")
+                .font(PaydayFont.caption)
+                .foregroundStyle(PaydayColor.textSecondary)
+        }
+        .paydayCard()
     }
 }
 

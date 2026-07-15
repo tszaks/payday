@@ -24,6 +24,7 @@ private struct DashboardFacts {
     let shiftCount: Int
     let shiftDays: [(day: Date, items: [TipEntry])]
     let paceDeltaCents: Int?
+    let projectedTotalCents: Int?
     let isPaydayMoment: Bool
     let bestNightThisPeriod: (date: Date, cents: Int)?
     let isBestPeriodEver: Bool
@@ -41,12 +42,14 @@ private struct DashboardFacts {
 
         periodEntries = allEntries.filter { $0.date >= period.start && $0.date <= period.end }
         breakdown = TipBreakdown.total(of: periodEntries)
-        totalCents = breakdown.totalCents
         daysRemaining = calculator.daysRemaining(from: now)
         shiftCount = Set(periodEntries.map { calendar.startOfDay(for: $0.date) }).count
         shiftDays = ShiftDays.groupedByDay(periodEntries, date: \.date)
 
         let statsEngine = StatsEngine(records: allEntries.map(TipRecord.init))
+        // Net of any tip-out, same rule as every other analytical total —
+        // breakdown above stays gross, purely for the cash/credit subtitle.
+        totalCents = statsEngine.periodToDateTotal(period: period, asOf: now)
 
         // Hidden until there's real history to compare against — a
         // brand-new user's first period has no "last period" to be ahead of.
@@ -55,6 +58,7 @@ private struct DashboardFacts {
         } else {
             paceDeltaCents = nil
         }
+        projectedTotalCents = statsEngine.projectedPeriodTotal(period: period, asOf: now, rhythm: statsEngine.workRhythm(referenceDate: now))
 
         isPaydayMoment = forcePaydayMoment || (daysRemaining == 0 && totalCents > 0)
         bestNightThisPeriod = statsEngine.bestNight(in: period)
@@ -90,7 +94,7 @@ private struct DashboardFacts {
         let tonightEntries = periodEntries.filter { calendar.isDateInToday($0.date) }
         var tonightRevealText: String?
         if !tonightEntries.isEmpty {
-            let cents = tonightEntries.reduce(0) { $0 + $1.amountCents }
+            let cents = tonightEntries.reduce(0) { $0 + $1.netCents }
             let today = calendar.startOfDay(for: now)
             let result = statsEngine.reveal(forNightAt: today, cents: cents, period: period)
             tonightRevealText = "\(RevealCopy.headline(cents: cents)) \(RevealCopy.comparison(for: result.comparison))"
@@ -238,6 +242,12 @@ struct DashboardView: View {
                         .foregroundStyle(paceDeltaCents > 0 ? PaydayColor.primary : PaydayColor.textSecondary)
                         .monospacedDigit()
                         .animation(PaydayAnimation.premiumSpring, value: paceDeltaCents > 0)
+                }
+                if let projectedTotalCents = facts.projectedTotalCents {
+                    Text(RevealCopy.projectionLine(cents: projectedTotalCents))
+                        .font(PaydayFont.caption)
+                        .foregroundStyle(PaydayColor.textSecondary)
+                        .monospacedDigit()
                 }
             }
 

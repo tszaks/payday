@@ -52,7 +52,43 @@ final class TipEntry {
         set { kindRaw = newValue.rawValue }
     }
 
-    init(id: UUID = UUID(), date: Date, amountCents: Int, kind: TipKind = .cash, note: String? = nil, recordedAt: Date? = nil, isDouble: Bool = false) {
+    /// Hours worked this shift, quarter-hour granularity is plenty.
+    /// Optional and meant to stay that way — "not entered" and "worked
+    /// zero hours" must stay distinguishable, so this is never a defaulted
+    /// non-optional. $/hr facts only ever compute over nights that HAVE
+    /// this; never fabricated for the rest.
+    var hoursWorked: Double?
+
+    /// What got tipped out to bussers/bar/runners this shift, in cents.
+    /// Optional for the same reason as hours — "no tip-out logged" and
+    /// "tipped out zero" are different facts. When present, NET (gross
+    /// minus this) becomes the number this app reports for that night;
+    /// see PRODUCT.md's net-vs-gross section.
+    var tipOutCents: Int?
+
+    /// Total sales this shift, in cents — lets tip percent (gross tips /
+    /// sales) be computed. Optional; only nights that have this get a
+    /// tip-percent fact.
+    var salesCents: Int?
+
+    /// Gross minus any tip-out — "what you walked with." Equal to
+    /// amountCents when there's no tip-out logged for this entry.
+    var netCents: Int {
+        amountCents - (tipOutCents ?? 0)
+    }
+
+    init(
+        id: UUID = UUID(),
+        date: Date,
+        amountCents: Int,
+        kind: TipKind = .cash,
+        note: String? = nil,
+        recordedAt: Date? = nil,
+        isDouble: Bool = false,
+        hoursWorked: Double? = nil,
+        tipOutCents: Int? = nil,
+        salesCents: Int? = nil
+    ) {
         self.id = id
         self.date = date
         self.amountCents = amountCents
@@ -60,5 +96,8 @@ final class TipEntry {
         self.note = note
         self.recordedAt = recordedAt
         self.isDouble = isDouble
+        self.hoursWorked = hoursWorked
+        self.tipOutCents = tipOutCents
+        self.salesCents = salesCents
     }
 }

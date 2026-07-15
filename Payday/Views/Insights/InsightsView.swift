@@ -34,6 +34,12 @@ struct InsightsView: View {
         statsEngine.insightsFacts()
     }
 
+    /// Deterministic, not narrated — computed fresh every render, unlike
+    /// the model sections below which only update on a refresh cadence.
+    private var moves: [Move] {
+        statsEngine.moves()
+    }
+
     /// Most recent 30 nights only — legible on a compact chart width, and
     /// matches Insights' own "recent patterns" framing rather than dumping
     /// the user's entire history into one bar chart.
@@ -90,6 +96,26 @@ struct InsightsView: View {
     private func resultList(_ facts: InsightsFacts) -> some View {
         ScrollView {
             VStack(spacing: PaydaySpacing.p16) {
+                // Moves come first and are always fresh — deterministic
+                // math, not narration, so there's nothing to wait on.
+                ForEach(moves) { move in
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("MOVE")
+                            .font(PaydayFont.caption2)
+                            .tracking(0.8)
+                            .foregroundStyle(PaydayColor.primary)
+                        Text(move.title)
+                            .font(PaydayFont.headline)
+                            .foregroundStyle(PaydayColor.textPrimary)
+                        Text(move.body)
+                            .font(PaydayFont.bodyRegular)
+                            .foregroundStyle(PaydayColor.textPrimary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .paydayCard()
+                }
+
                 // Chart card — the one visual, contained like every other
                 // surface. The chart owns its own label (it doubles as the
                 // scrub readout), so no separate header here.
@@ -199,7 +225,8 @@ struct InsightsView: View {
             let sections = try await InsightsService.narrate(
                 facts: facts,
                 scheduleFrequency: frequency,
-                previousSections: insightsStore.snapshot?.sections
+                previousSections: insightsStore.snapshot?.sections,
+                topMove: moves.first
             )
             insightsStore.snapshot = InsightsSnapshot(sections: sections, generatedAt: .now, facts: facts)
             insightsStore.lastAttemptFailed = false

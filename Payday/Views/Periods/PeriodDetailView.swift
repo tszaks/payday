@@ -36,12 +36,27 @@ struct PeriodDetailView: View {
         TipBreakdown.total(of: entries)
     }
 
-    private var loggedCents: Int {
-        breakdown.totalCents
-    }
-
     private var nightsInPeriod: [(date: Date, cents: Int)] {
         StatsEngine(records: entries.map(TipRecord.init)).nightlyTotals()
+    }
+
+    /// Sum of this period's nights, which nightlyTotals() already nets
+    /// against any logged tip-out — the headline this hero shows.
+    private var netCents: Int {
+        nightsInPeriod.reduce(0) { $0 + $1.cents }
+    }
+
+    /// Nil when nothing was tipped out this period — keeps that caption
+    /// off the hero entirely rather than showing "$0 tipped out."
+    private var totalTipOutCents: Int? {
+        let total = entries.compactMap(\.tipOutCents).reduce(0, +)
+        return total > 0 ? total : nil
+    }
+
+    /// Only this period's own entries feed the rate — a different period's
+    /// $/hr belongs on that period's detail screen, not this one.
+    private var averageDollarsPerHour: Double? {
+        StatsEngine(records: entries.map(TipRecord.init)).averageDollarsPerHour()
     }
 
     private var paycheck: PaycheckRecord? {
@@ -124,7 +139,7 @@ struct PeriodDetailView: View {
             Text(dateRangeString)
                 .font(PaydayFont.subheadline)
                 .foregroundStyle(PaydayColor.textSecondary)
-            Text(Money.string(fromCents: loggedCents))
+            Text(Money.string(fromCents: netCents))
                 .font(PaydayFont.displayXL)
                 .monospacedDigit()
                 .foregroundStyle(PaydayColor.textPrimary)
@@ -136,6 +151,21 @@ struct PeriodDetailView: View {
             .font(PaydayFont.footnote)
             .monospacedDigit()
             .foregroundStyle(PaydayColor.textSecondary)
+            if let totalTipOutCents {
+                // Gross is the cash/credit split above; this keeps the
+                // tip-out that turned it into the net headline one glance
+                // away too, never hidden.
+                Text("\(Money.string(fromCents: totalTipOutCents)) tipped out")
+                    .font(PaydayFont.caption)
+                    .monospacedDigit()
+                    .foregroundStyle(PaydayColor.textSecondary)
+            }
+            if let averageDollarsPerHour {
+                Text("Averaging \(Money.wholeDollarString(fromCents: Int((averageDollarsPerHour * 100).rounded())))/hr")
+                    .font(PaydayFont.caption)
+                    .monospacedDigit()
+                    .foregroundStyle(PaydayColor.textSecondary)
+            }
             Text("Paid \(payDate.formatted(.dateTime.month(.wide).day()))")
                 .font(PaydayFont.caption)
                 .foregroundStyle(PaydayColor.textSecondary)
