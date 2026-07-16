@@ -18,11 +18,11 @@ enum TipKind: String, Codable, CaseIterable, Identifiable, Sendable {
     }
 }
 
-/// Which half of the day a shift fell in — captured explicitly now instead
-/// of only inferred from when it was logged. A double shift is neither
-/// (isDouble already means "both"); nil means never set, which the engine
-/// only ever fills in with the legacy same-day-logged proxy, never guesses
-/// at directly.
+/// Which half of the day a shift fell in — the defining period of one
+/// closeout. Captured explicitly at log time now; nil means never set
+/// (legacy rows), which the engine only ever fills in with the same-day
+/// recordedAt proxy, never guesses at directly. A double day is simply two
+/// shifts, e.g. a lunch shift plus a dinner shift.
 enum ShiftPeriod: String, Codable, CaseIterable, Identifiable, Sendable {
     case lunch
     case dinner
@@ -59,10 +59,19 @@ final class TipEntry {
     /// time and are skipped by the time-of-day analytics.
     var recordedAt: Date?
 
-    /// User-declared, never inferred: whether this was a double (worked two
-    /// shifts that day). A Bool with a default lightweight-migrates cleanly,
-    /// unlike the enum trick above — legacy rows just read false.
+    /// Vestigial: doubles are now emergent from shiftID grouping (a day with
+    /// 2+ distinct shiftIDs). Retained only for CloudKit schema stability and
+    /// interop with older app versions still writing it — a deployed CloudKit
+    /// record type can't drop a field. Never read in product logic anymore.
     var isDouble: Bool = false
+
+    /// Groups the rows of ONE closeout (a single shift's cash + credit).
+    /// A "shift" is all rows sharing this id; a day is a collection of
+    /// shifts; a "double" is emergent (a day with 2+ distinct shiftIDs).
+    /// Optional like shiftPeriodRaw: legacy rows migrate to nil, and a
+    /// one-time backfill (MigrationRunner) fills them. UUID is a first-class
+    /// CloudKit attribute type, so no raw-string trick is needed here.
+    var shiftID: UUID?
 
     /// Non-optional view of the tip kind; legacy entries with no stored
     /// value read as cash.
@@ -118,7 +127,8 @@ final class TipEntry {
         hoursWorked: Double? = nil,
         tipOutCents: Int? = nil,
         salesCents: Int? = nil,
-        shiftPeriod: ShiftPeriod? = nil
+        shiftPeriod: ShiftPeriod? = nil,
+        shiftID: UUID? = nil
     ) {
         self.id = id
         self.date = date
@@ -131,5 +141,6 @@ final class TipEntry {
         self.tipOutCents = tipOutCents
         self.salesCents = salesCents
         self.shiftPeriodRaw = shiftPeriod?.rawValue
+        self.shiftID = shiftID
     }
 }
