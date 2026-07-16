@@ -8,17 +8,27 @@ struct ShiftDayRow: View {
     let day: Date
     let entries: [TipEntry]
 
-    private var totalCents: Int {
-        entries.reduce(0) { $0 + $1.amountCents }
+    private var breakdown: TipBreakdown {
+        TipBreakdown.total(of: entries)
+    }
+
+    /// Net — the income number. Matches the hero total and the tonight
+    /// reveal, which are both net, so one shift never shows two numbers.
+    private var netCents: Int {
+        breakdown.netTotalCents
     }
 
     private var subtitle: String {
         var parts: [String] = []
-        let breakdown = TipBreakdown.total(of: entries)
         if breakdown.cashCents > 0, breakdown.creditCents > 0 {
             parts.append("Cash \(Money.string(fromCents: breakdown.cashCents)) · Credit \(Money.string(fromCents: breakdown.creditCents))")
         } else {
             parts.append(entries.first?.kind.displayName ?? "")
+        }
+        // A tip-out is why net is below gross — always shown so the number
+        // to its right is never unexplained.
+        if breakdown.tipOutCents > 0 {
+            parts.append("Tipped out \(Money.string(fromCents: breakdown.tipOutCents))")
         }
         if entries.contains(where: \.isDouble) {
             parts.append("double")
@@ -39,10 +49,11 @@ struct ShiftDayRow: View {
                     .font(PaydayFont.caption)
                     .foregroundStyle(PaydayColor.textSecondary)
                     .monospacedDigit()
-                    .lineLimit(1)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Spacer()
-            Text(Money.string(fromCents: totalCents))
+            Text(Money.string(fromCents: netCents))
                 .font(PaydayFont.displaySmall)
                 .monospacedDigit()
                 .foregroundStyle(PaydayColor.textPrimary)
