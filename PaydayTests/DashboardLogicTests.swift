@@ -73,10 +73,14 @@ struct ShiftDayGroupingTests {
         #expect(groups.count == 1)
     }
 
-    @Test("human labels: tonight, yesterday, weekday, then dated")
+    @Test("human labels: today, yesterday, weekday, then dated")
     func labels() {
         let now = date(2026, 7, 14, hour: 20) // a Tuesday
-        #expect(ShiftDays.humanLabel(for: date(2026, 7, 14), relativeTo: now) == "Tonight")
+        // "Today", not "Tonight" — a shift is a whole day; a lunch logged
+        // at 2pm and read back at 8pm must not read "Tonight."
+        #expect(ShiftDays.humanLabel(for: date(2026, 7, 14), relativeTo: now) == "Today")
+        // A 2pm shift is still "Today", never "Tonight".
+        #expect(ShiftDays.humanLabel(for: date(2026, 7, 14, hour: 14), relativeTo: now) == "Today")
         #expect(ShiftDays.humanLabel(for: date(2026, 7, 13), relativeTo: now) == "Yesterday")
         #expect(ShiftDays.humanLabel(for: date(2026, 7, 10), relativeTo: now) == "Friday")
         let older = ShiftDays.humanLabel(for: date(2026, 7, 3), relativeTo: now)
@@ -93,29 +97,29 @@ struct TonightLineTests {
     @Test("payday moment silences the line entirely")
     func paydaySilence() {
         let rhythm = WorkRhythm(usualWeekdays: [3], typicalLogHour: 22)
-        let line = TonightLine.compose(rhythm: rhythm, tonightRevealText: "$100.00 tonight.", isPaydayMoment: true, now: tuesdayNight)
+        let line = TonightLine.compose(rhythm: rhythm, tonightRevealText: "$100.00 today.", isPaydayMoment: true, now: tuesdayNight)
         #expect(line == nil)
     }
 
-    @Test("logged tonight echoes the reveal verdict")
+    @Test("logged today echoes the reveal verdict verbatim")
     func revealEcho() {
         let rhythm = WorkRhythm(usualWeekdays: [3], typicalLogHour: 22)
-        let line = TonightLine.compose(rhythm: rhythm, tonightRevealText: "$118.00 tonight. $34.00 above your Tuesday average.", isPaydayMoment: false, now: tuesdayNight)
-        #expect(line == "$118.00 tonight. $34.00 above your Tuesday average.")
+        let line = TonightLine.compose(rhythm: rhythm, tonightRevealText: "$118.00 today. $34.00 above your Tuesday average.", isPaydayMoment: false, now: tuesdayNight)
+        #expect(line == "$118.00 today. $34.00 above your Tuesday average.")
     }
 
-    @Test("usual work night with a typical hour prompts with the time")
+    @Test("usual work day with a typical hour prompts with the time, no time-of-day word")
     func workNightPrompt() {
         let rhythm = WorkRhythm(usualWeekdays: [3], typicalLogHour: 22)
         let line = TonightLine.compose(rhythm: rhythm, tonightRevealText: nil, isPaydayMoment: false, now: tuesdayNight)
-        #expect(line == "Tuesday shift tonight. You usually log around 10\u{202F}PM.")
+        #expect(line == "You usually work Tuesdays around 10\u{202F}PM.")
     }
 
-    @Test("usual work night without a typical hour still prompts")
+    @Test("usual work day without a typical hour still prompts")
     func workNightPromptNoHour() {
         let rhythm = WorkRhythm(usualWeekdays: [3], typicalLogHour: nil)
         let line = TonightLine.compose(rhythm: rhythm, tonightRevealText: nil, isPaydayMoment: false, now: tuesdayNight)
-        #expect(line == "Tuesday shift tonight.")
+        #expect(line == "You usually work Tuesdays.")
     }
 
     @Test("not a usual night, nothing logged: no line")
