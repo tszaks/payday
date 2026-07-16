@@ -185,10 +185,10 @@ One set of App Intents, five surfaces. In priority order:
 - Smart defaults in LogTipSheet: a server with zero cash history and
   ≥3 credit entries gets the credit field focused first instead of cash
   (and the keyboard's "Next" button now goes whichever direction isn't
-  focused, not just cash→credit, so it still makes sense for them). An
-  amount ≥2x the user's average per-shift auto-enables the double toggle —
-  a default, not a lock: touching the toggle yourself always wins from
-  then on. Date defaults were already right, per the original note.
+  focused, not just cash→credit, so it still makes sense for them). Date
+  defaults were already right, per the original note.
+  (The old ≥2x-average "double toggle" auto-enable was removed with the
+  shift-model rework below — a double is now emergent, not a toggle.)
 
 7/7 items complete. See the final summary for commit hashes and every
 deviation across the whole roadmap.
@@ -202,7 +202,7 @@ deviation across the whole roadmap.
 - Swift Charts in Insights + Period detail: nightly earnings bar chart,
   scrub-to-inspect with selection haptics (Health-style). Green opacity ramp
   only, per design law.
-- TipKit for the two teachable concepts: paycheck verification, double toggle.
+- TipKit for the teachable concept: paycheck verification.
 - `.sensoryFeedback` for haptics (route through PaydayHaptics).
 - iCloud sync via SwiftData + CloudKit and a Face ID lock (LocalAuthentication),
   like Notes. DONE: schema pass gave `TipEntry.id/date/amountCents` and
@@ -237,21 +237,36 @@ CloudKit-safe `kindRaw` pattern applied to genuinely-optional fields — plain
 and "entered as zero" have to stay distinguishable facts, never collapsed
 into a defaulted non-optional.
 
-- **Hours/tip-out/sales are shift-level, by law (2026-07-15).** A product
-  ruling, not a UI convenience: hours worked, tip-out, and sales belong to
-  the SHIFT (the calendar day), never to an individual entry or tip type.
+- **A shift = one closeout, a day = a collection of shifts (2026-07-16).**
+  Servers close out after each shift, so a "double" is not a toggle — it's
+  simply two shifts logged the same day (a lunch closeout, then a dinner
+  closeout). Each `TipEntry` carries an optional `shiftID: UUID`; a shift is
+  all rows sharing one (its cash + credit), and a double is emergent: any day
+  with 2+ distinct shiftIDs. The Lunch/Dinner picker is the shift's period,
+  always visible. `isDouble` is retired from all logic (the column stays on
+  `TipEntry`, dormant, for CloudKit schema stability). A one-time
+  `MigrationRunner` backfills one deterministic shiftID per legacy day, so
+  old data stays a single shift. `StatsEngine` keeps two levels: per-SHIFT
+  facts (records, the reveal, $/hr, lunch/dinner) and per-DAY totals (the
+  chart, pace, weekday moves); this fixed the bug where a double's summed day
+  crowned "best night ever" over honest single shifts. Rows on a double day
+  read "Today · Lunch" / "Today · Dinner"; a single-shift day stays plain.
+- **Hours/tip-out/sales are shift-level, by law (2026-07-15; per-shift since
+  2026-07-16).** A product ruling, not a UI convenience: hours worked,
+  tip-out, and sales belong to the SHIFT (one closeout), never to an
+  individual entry or tip type.
   A night logged as cash + credit is still one number for each — "5 hours"
   once, not 5 on the credit tab and another 5 on cash. `ShiftDetails`
   (`Payday/Utilities/ShiftDetails.swift`) is the one place this is allowed
   to be read or written: `resolve(from:)` always reads through the
   credit entry when one exists, falling back to cash, and NEVER sums
   across a night's entries; `write(...)` always lands a value on that same
-  canonical entry and clears it from every other entry sharing the night,
-  self-healing any night that ended up with a value split across both
-  (the original bug). `StatsEngine`'s own `NightFacts` grouping enforces
+  canonical entry and clears it from every other entry in the shift,
+  self-healing any shift that ended up with a value split across both
+  (the original bug). `StatsEngine`'s own `ShiftFacts` grouping enforces
   the identical rule on the analytical side — nightly totals, $/hr, and
   tip percent all resolve through it too, so a corrupted or "wrong-entry"
-  night reads the same correct number everywhere, never double-counted.
+  shift reads the same correct number everywhere, never double-counted.
   `CSVExporter` resolves through `ShiftDetails` as well: one hours/tip-out/
   sales figure per shift row, never a per-entry sum.
 - **Hours → $/hr.** Optional `hoursWorked` (half-hour granularity) on
