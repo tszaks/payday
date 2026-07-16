@@ -377,6 +377,26 @@ struct LogTipSheet: View {
                 set: { isDouble = $0; isDoubleManuallySet = true }
             ))
             .padding()
+            // Lunch or dinner lives here, always visible next to Double
+            // shift — it's a one-tap shift categorization (pre-selected
+            // from the clock), not a number-entry metric like the ones in
+            // the collapsible group below. A double is both, so the row
+            // hides once that toggle is on.
+            if !isDouble {
+                Divider()
+                HStack {
+                    Text("Lunch or dinner")
+                    Spacer()
+                    Picker("", selection: $shiftPeriod) {
+                        Text("Lunch").tag(ShiftPeriod?.some(.lunch))
+                        Text("Dinner").tag(ShiftPeriod?.some(.dinner))
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(width: 180)
+                    .labelsHidden()
+                }
+                .padding()
+            }
         }
     }
 
@@ -411,24 +431,6 @@ struct LogTipSheet: View {
                         CompactCurrencyField(cents: $salesCents)
                     }
                     .padding(.vertical, 14)
-                    // A double IS both, so there's nothing for this picker
-                    // to say once that toggle is on — hidden rather than
-                    // shown disabled with a value that would misstate it.
-                    if !isDouble {
-                        Divider()
-                        HStack {
-                            Text("Lunch or dinner")
-                            Spacer()
-                            Picker("", selection: $shiftPeriod) {
-                                Text("Lunch").tag(ShiftPeriod?.some(.lunch))
-                                Text("Dinner").tag(ShiftPeriod?.some(.dinner))
-                            }
-                            .pickerStyle(.segmented)
-                            .frame(width: 180)
-                            .labelsHidden()
-                        }
-                        .padding(.vertical, 14)
-                    }
                 }
             }
             .padding()
