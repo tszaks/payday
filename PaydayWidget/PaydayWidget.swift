@@ -157,5 +157,6 @@ struct PaydayWidget: Widget {
 struct PaydayWidgetBundle: WidgetBundle {
     var body: some Widget {
         PaydayWidget()
+        PaydayLogControl()
     }
 }

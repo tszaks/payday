@@ -377,6 +377,11 @@ struct DashboardView: View {
             }
             if facts.shiftDays.count > Self.maxShiftRows {
                 Button {
+                    // "See all" used to just switch tabs and leave the
+                    // person staring at the periods LIST — the shifts they
+                    // were looking at live inside the CURRENT period's
+                    // detail, so land there directly.
+                    tabRouter.pendingCurrentPeriodDetail = true
                     tabRouter.selected = .periods
                 } label: {
                     Text("See all")

@@ -141,6 +141,22 @@ struct LogTipSheet: View {
             .first?.salesCents
     }
 
+    /// Same-weekday tip-out, shown only as a CompactCurrencyField
+    /// placeholder (see the type's own doc) — never pre-filled as a real
+    /// value. New-log only: an existing shift already has its own honest
+    /// number, not a guess to overlay. Recomputes as `date` changes, so
+    /// backdating to a different weekday updates the hint too.
+    private var tipOutPlaceholderCents: Int? {
+        guard case .new = target else { return nil }
+        return suggestedTipOutCents(for: date)
+    }
+
+    /// Same reasoning as tipOutPlaceholderCents, for sales.
+    private var salesPlaceholderCents: Int? {
+        guard case .new = target else { return nil }
+        return suggestedSalesCents(for: date)
+    }
+
     /// Pulled out of the view body's onAppear closure — inlining this much
     /// logic directly in a chained-modifier closure was slow enough to trip
     /// the type checker's time budget.
@@ -155,11 +171,16 @@ struct LogTipSheet: View {
                 clockOut = calendar.date(bySettingHour: outComponents.hour ?? 0, minute: outComponents.minute ?? 0, second: 0, of: date)
                 hoursWorked = ShiftTimes.hours(clockIn: clockIn, clockOut: clockOut)
             }
-            if tipOutCents == 0 { tipOutCents = suggestedTipOutCents(for: date) ?? 0 }
-            if salesCents == 0 { salesCents = suggestedSalesCents(for: date) ?? 0 }
-            // A remembered default is still a value about to be saved —
-            // show it rather than attach it silently.
-            if hoursWorked != nil || tipOutCents > 0 || salesCents > 0 || clockIn != nil || clockOut != nil { showMoreDetails = true }
+            // Times pre-fill as real values because they're stable per
+            // weekday — a genuine fact worth attaching automatically.
+            // Tip-out and sales are NOT: they used to pre-fill tipOutCents/
+            // salesCents directly here, which meant a rushed Save could
+            // silently attach last Friday's tip-out to tonight. Now they
+            // only ever surface as a CompactCurrencyField placeholder
+            // (tipOutPlaceholderCents/salesPlaceholderCents) — a hint to tap
+            // into, never a committed value. Still worth surfacing when one
+            // exists, though — auto-expand rather than hide it.
+            if hoursWorked != nil || clockIn != nil || clockOut != nil || tipOutPlaceholderCents != nil || salesPlaceholderCents != nil { showMoreDetails = true }
         case .edit(let entry):
             // A fact about the whole shift, not this one entry — resolve
             // across every entry in the shift, same convention liveSaveEdit
@@ -257,6 +278,27 @@ struct LogTipSheet: View {
                                 .disabled(!canSave)
                         }
                     }
+                    // The whole flow — Cash through Sales — is reachable
+                    // without a hand ever leaving the bottom of the screen:
+                    // Next cycles every currency field in the sheet, and
+                    // Save/Done sits right beside it so a rushed one-handed
+                    // log never has to reach up to the nav bar.
+                    if let focusedCurrencyField {
+                        ToolbarItemGroup(placement: .keyboard) {
+                            Spacer()
+                            Button("Next") {
+                                self.focusedCurrencyField = nextFocusField(after: focusedCurrencyField)
+                            }
+                            Button(isEditing ? "Done" : "Save") {
+                                if isEditing {
+                                    dismiss()
+                                } else {
+                                    saveNew()
+                                }
+                            }
+                            .disabled(!isEditing && !canSave)
+                        }
+                    }
                 }
             }
             .onChange(of: cashCents) { _, _ in liveSaveEdit() }
@@ -340,15 +382,18 @@ struct LogTipSheet: View {
             }
             .padding(.horizontal)
         }
-        .toolbar {
-            if let focusedCurrencyField {
-                ToolbarItemGroup(placement: .keyboard) {
-                    Spacer()
-                    Button("Next") {
-                        self.focusedCurrencyField = focusedCurrencyField == .cash ? .credit : .cash
-                    }
-                }
-            }
+    }
+
+    /// Next cycles Cash -> Credit -> (Tip-out -> Sales, only when the
+    /// details group is actually open — those fields don't exist on screen
+    /// otherwise) -> back to Cash. Collapsed, it stays the old Cash <->
+    /// Credit toggle.
+    private func nextFocusField(after field: CurrencyRowField) -> CurrencyRowField {
+        switch field {
+        case .cash: return .credit
+        case .credit: return showMoreDetails ? .tipOut : .cash
+        case .tipOut: return .sales
+        case .sales: return .cash
         }
     }
 
@@ -432,14 +477,14 @@ struct LogTipSheet: View {
                     HStack {
                         Text("Tip-out")
                         Spacer()
-                        CompactCurrencyField(cents: $tipOutCents, autoFocus: debugAutoFocusTipOut)
+                        CompactCurrencyField(cents: $tipOutCents, field: .tipOut, focusedField: $focusedCurrencyField, autoFocus: debugAutoFocusTipOut, placeholderCents: tipOutPlaceholderCents)
                     }
                     .padding(.vertical, 14)
                     Divider()
                     HStack {
                         Text("Sales")
                         Spacer()
-                        CompactCurrencyField(cents: $salesCents)
+                        CompactCurrencyField(cents: $salesCents, field: .sales, focusedField: $focusedCurrencyField, placeholderCents: salesPlaceholderCents)
                     }
                     .padding(.vertical, 14)
                 }
@@ -646,30 +691,48 @@ struct LogTipSheet: View {
     }
 }
 
-/// A small, non-auto-focusing cents field for the optional shift-details
-/// group — same digit-shift-from-the-right technique as CurrencyAmountRow,
-/// including its focused-ring treatment (scaled down to fit inline in a
-/// row), so tapping in shows unmistakably that this field is now the one
-/// accepting keystrokes, same as the Cash/Credit fields above.
+/// A small cents field for the optional shift-details group — same
+/// digit-shift-from-the-right technique as CurrencyAmountRow, including its
+/// focused-ring treatment (scaled down to fit inline in a row) and the same
+/// externally-driven FocusState (so the keyboard toolbar's Next button can
+/// cycle through Tip-out and Sales too, not just Cash/Credit).
 private struct CompactCurrencyField: View {
     @Binding var cents: Int
+    let field: CurrencyRowField
+    var focusedField: FocusState<CurrencyRowField?>.Binding
     var autoFocus: Bool = false
-    @FocusState private var isFocused: Bool
+    /// A same-weekday suggestion, shown only while cents == 0 — a hint to
+    /// tap into, never a value that saves on its own. See LogTipSheet's
+    /// seedShiftDetailDefaults: pre-filling this straight into `cents` used
+    /// to let a rushed Save silently attach last Friday's tip-out to
+    /// tonight.
+    var placeholderCents: Int? = nil
     @State private var digitsText: String = ""
 
     private static let maxDigits = 7
+    private var isFocused: Bool { focusedField.wrappedValue == field }
 
     var body: some View {
         ZStack(alignment: .trailing) {
-            Text(Money.string(fromCents: cents))
-                .font(PaydayFont.body)
-                .monospacedDigit()
-                .foregroundStyle(cents == 0 ? PaydayColor.textSecondary : PaydayColor.textPrimary)
-                .contentTransition(.numericText())
-                .accessibilityHidden(true)
+            if cents == 0, let placeholderCents {
+                // Tertiary, not secondary — a hint reads visibly softer than
+                // an honest zero, so it's never mistaken for a real number.
+                Text(Money.string(fromCents: placeholderCents))
+                    .font(PaydayFont.body)
+                    .monospacedDigit()
+                    .foregroundStyle(PaydayColor.textTertiary)
+                    .accessibilityHidden(true)
+            } else {
+                Text(Money.string(fromCents: cents))
+                    .font(PaydayFont.body)
+                    .monospacedDigit()
+                    .foregroundStyle(cents == 0 ? PaydayColor.textSecondary : PaydayColor.textPrimary)
+                    .contentTransition(.numericText())
+                    .accessibilityHidden(true)
+            }
             TextField("", text: $digitsText)
                 .keyboardType(.numberPad)
-                .focused($isFocused)
+                .focused(focusedField, equals: field)
                 .opacity(0.01)
                 .multilineTextAlignment(.trailing)
                 .accessibilityValue(Money.string(fromCents: cents))
@@ -682,10 +745,10 @@ private struct CompactCurrencyField: View {
                 .strokeBorder(isFocused ? PaydayColor.primary : Color.clear, lineWidth: 2)
         )
         .contentShape(Rectangle())
-        .onTapGesture { isFocused = true }
+        .onTapGesture { focusedField.wrappedValue = field }
         .onAppear {
             digitsText = cents == 0 ? "" : String(cents)
-            if autoFocus { isFocused = true }
+            if autoFocus { focusedField.wrappedValue = field }
         }
         .onChange(of: digitsText) { _, newValue in
             let filtered = String(newValue.filter(\.isNumber).prefix(Self.maxDigits))
