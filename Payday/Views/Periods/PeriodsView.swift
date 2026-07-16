@@ -86,7 +86,7 @@ struct PeriodsView: View {
                             PeriodRow(
                                 period: period,
                                 isCurrent: index == 0,
-                                loggedCents: periodBreakdown.totalCents,
+                                loggedCents: periodBreakdown.netTotalCents,
                                 loggedCreditCents: periodBreakdown.creditCents,
                                 payDate: calculator.payDate(for: period),
                                 paycheck: paycheck(for: period)

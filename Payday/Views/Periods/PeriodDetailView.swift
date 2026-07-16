@@ -215,7 +215,10 @@ struct PaycheckComparisonView: View {
     /// paycheck but zero credit is almost certainly legacy data — fall back
     /// to comparing the total rather than showing a nonsense full-overpay.
     private var usesCreditOnly: Bool { breakdown.creditCents > 0 }
-    private var comparedCents: Int { usesCreditOnly ? breakdown.creditCents : breakdown.totalCents }
+    // Gross, deliberately: this compares against a pay-stub's tips line,
+    // which reports gross credit tips — a separate question from income,
+    // which is net everywhere else in the app.
+    private var comparedCents: Int { usesCreditOnly ? breakdown.creditCents : breakdown.grossTotalCents }
 
     private var deltaCents: Int { paycheck.paidTipsCents - comparedCents }
     private var isShort: Bool { deltaCents < 0 }

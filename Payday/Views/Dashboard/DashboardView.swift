@@ -90,9 +90,9 @@ private struct DashboardFacts {
             isBestPeriodEver = false
         }
 
-        // Credit tips are what land on a stub; cash never does. Same
-        // fallback PaycheckComparisonView uses for legacy all-cash periods.
-        predictedPaycheckCents = breakdown.creditCents > 0 ? breakdown.creditCents : totalCents
+        // Credit tips are what land on a stub; cash never does. Gross, like
+        // PaycheckComparisonView — a stub reports gross, not net income.
+        predictedPaycheckCents = breakdown.creditCents > 0 ? breakdown.creditCents : breakdown.grossTotalCents
         predictedPayDate = calculator.payDate(for: period)
 
         // Echo of tonight's reveal verdict, if something was logged today.
