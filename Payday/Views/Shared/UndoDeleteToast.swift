@@ -11,7 +11,13 @@ struct DeletedTipSnapshot {
     let kind: TipKind
     let note: String?
     let recordedAt: Date?
-    let isDouble: Bool
+    // Captured so an undo rejoins the exact shift it left, with its
+    // canonical hours/tip-out/sales/period intact — all previously dropped.
+    let shiftID: UUID?
+    let hoursWorked: Double?
+    let tipOutCents: Int?
+    let salesCents: Int?
+    let shiftPeriod: ShiftPeriod?
 
     init(entry: TipEntry) {
         id = entry.id
@@ -20,11 +26,15 @@ struct DeletedTipSnapshot {
         kind = entry.kind
         note = entry.note
         recordedAt = entry.recordedAt
-        isDouble = entry.isDouble
+        shiftID = entry.shiftID
+        hoursWorked = entry.hoursWorked
+        tipOutCents = entry.tipOutCents
+        salesCents = entry.salesCents
+        shiftPeriod = entry.shiftPeriod
     }
 
     func restored() -> TipEntry {
-        TipEntry(id: id, date: date, amountCents: amountCents, kind: kind, note: note, recordedAt: recordedAt, isDouble: isDouble)
+        TipEntry(id: id, date: date, amountCents: amountCents, kind: kind, note: note, recordedAt: recordedAt, hoursWorked: hoursWorked, tipOutCents: tipOutCents, salesCents: salesCents, shiftPeriod: shiftPeriod, shiftID: shiftID)
     }
 }
 

@@ -2,9 +2,19 @@ import SwiftUI
 import SwiftData
 import TipKit
 
-private struct DaySelection: Identifiable {
-    let date: Date
-    var id: Date { date }
+/// Identifies one shift (a group of entries sharing a shiftID) for the
+/// detail sheet — a double day has two of these, so the sheet can't key on
+/// the calendar day alone.
+private struct ShiftSelection: Identifiable {
+    let day: Date
+    let shiftID: UUID
+    var id: UUID { shiftID }
+}
+
+/// The latest wall-clock a shift was logged, for ordering today's shifts —
+/// falls back to the shift's date when no recordedAt was captured.
+private func shiftRecordedAt(_ items: [TipEntry]) -> Date {
+    items.compactMap(\.recordedAt).max() ?? items.map(\.date).max() ?? .distantPast
 }
 
 /// Every number the Dashboard shows, computed exactly once per render from
@@ -23,7 +33,10 @@ private struct DashboardFacts {
     let totalTipOutCents: Int
     let daysRemaining: Int
     let shiftCount: Int
-    let shiftDays: [(day: Date, items: [TipEntry])]
+    let shiftDays: [(day: Date, shiftID: UUID, items: [TipEntry])]
+    /// Calendar days that hold 2+ shifts — a "double" — so a row can label
+    /// itself "Today · Lunch" / "Today · Dinner" only when it needs to.
+    let multiShiftDays: Set<Date>
     let paceDeltaCents: Int?
     let projectedTotalCents: Int?
     let isPaydayMoment: Bool
@@ -44,9 +57,14 @@ private struct DashboardFacts {
         periodEntries = allEntries.filter { $0.date >= period.start && $0.date <= period.end }
         breakdown = TipBreakdown.total(of: periodEntries)
         daysRemaining = calculator.daysRemaining(from: now)
-        shiftCount = Set(periodEntries.map { calendar.startOfDay(for: $0.date) }).count
-        shiftDays = ShiftDays.groupedByDay(periodEntries, date: \.date)
-        // One canonical tip-out per night (never a per-entry sum — see
+        shiftDays = ShiftDays.groupedByShift(periodEntries, shiftID: \.shiftID, date: \.date, period: \.shiftPeriod)
+        // A "shift" now counts closeouts, not calendar days.
+        shiftCount = shiftDays.count
+        // Days that hold more than one shift — the emergent doubles.
+        var dayCounts: [Date: Int] = [:]
+        for shift in shiftDays { dayCounts[shift.day, default: 0] += 1 }
+        multiShiftDays = Set(dayCounts.filter { $0.value >= 2 }.keys)
+        // One canonical tip-out per shift (never a per-entry sum — see
         // ShiftDetails), summed across the period — the gross/net gap the
         // caption below has to explain.
         totalTipOutCents = shiftDays.reduce(0) { $0 + (ShiftDetails.resolve(from: $1.items).tipOutCents ?? 0) }
@@ -95,13 +113,18 @@ private struct DashboardFacts {
         predictedPaycheckCents = breakdown.creditCents > 0 ? breakdown.creditCents : breakdown.grossTotalCents
         predictedPayDate = calculator.payDate(for: period)
 
-        // Echo of tonight's reveal verdict, if something was logged today.
-        let tonightEntries = periodEntries.filter { calendar.isDateInToday($0.date) }
+        // Echo of tonight's reveal verdict, for the most recently logged
+        // shift today — consistent with the per-shift reveal shown at log
+        // time, rather than summing a double day into one number.
+        let todayShifts = ShiftDays.groupedByShift(
+            periodEntries.filter { calendar.isDateInToday($0.date) },
+            shiftID: \.shiftID, date: \.date, period: \.shiftPeriod
+        )
         var tonightRevealText: String?
-        if !tonightEntries.isEmpty {
-            let cents = tonightEntries.reduce(0) { $0 + $1.netCents }
+        if let latest = todayShifts.max(by: { shiftRecordedAt($0.items) < shiftRecordedAt($1.items) }) {
+            let cents = TipBreakdown.total(of: latest.items).netTotalCents
             let today = calendar.startOfDay(for: now)
-            let result = statsEngine.reveal(forNightAt: today, cents: cents, period: period)
+            let result = statsEngine.reveal(forNightAt: today, cents: cents, period: period, shiftID: latest.shiftID)
             tonightRevealText = "\(RevealCopy.headline(cents: cents)) \(RevealCopy.comparison(for: result.comparison))"
         }
         tonightLine = TonightLine.compose(
@@ -121,7 +144,7 @@ struct DashboardView: View {
     @Query(sort: \TipEntry.date, order: .reverse) private var allEntries: [TipEntry]
 
     @State private var sheetTarget: TipEntrySheetTarget?
-    @State private var daySelection: DaySelection?
+    @State private var shiftSelection: ShiftSelection?
     @State private var showSettings = false
     @State private var undoState = UndoDeleteToastState()
     @State private var progressTrackDrawn = false
@@ -202,8 +225,8 @@ struct DashboardView: View {
             .sheet(item: $sheetTarget) { target in
                 LogTipSheet(target: target)
             }
-            .sheet(item: $daySelection) { selection in
-                DayDetailSheet(date: selection.date)
+            .sheet(item: $shiftSelection) { selection in
+                DayDetailSheet(date: selection.day, shiftID: selection.shiftID)
             }
             #if DEBUG
             .onAppear {
@@ -362,8 +385,8 @@ struct DashboardView: View {
 
     private func shiftsSection(_ facts: DashboardFacts) -> some View {
         Section {
-            ForEach(facts.shiftDays.prefix(Self.maxShiftRows), id: \.day) { group in
-                shiftRow(for: group)
+            ForEach(facts.shiftDays.prefix(Self.maxShiftRows), id: \.shiftID) { group in
+                shiftRow(for: group, multiShiftDays: facts.multiShiftDays)
             }
             if facts.shiftDays.count > Self.maxShiftRows {
                 Button {
@@ -389,12 +412,14 @@ struct DashboardView: View {
     }
 
     @ViewBuilder
-    private func shiftRow(for group: (day: Date, items: [TipEntry])) -> some View {
+    private func shiftRow(for group: (day: Date, shiftID: UUID, items: [TipEntry]), multiShiftDays: Set<Date>) -> some View {
+        let period = ShiftDetails.resolve(from: group.items).shiftPeriod
+        let dayHasMultiple = multiShiftDays.contains(group.day)
         if group.items.count == 1, let entry = group.items.first {
             Button {
                 sheetTarget = .edit(entry)
             } label: {
-                ShiftDayRow(day: group.day, entries: group.items)
+                ShiftDayRow(day: group.day, period: period, dayHasMultipleShifts: dayHasMultiple, entries: group.items)
             }
             .buttonStyle(.plain)
             .listRowBackground(PaydayColor.background)
@@ -407,12 +432,12 @@ struct DashboardView: View {
             }
             .entryContextMenu(entry, sheetTarget: $sheetTarget, undoState: undoState, context: modelContext)
         } else {
-            // A merged night (cash + credit rows): one tap opens the day's
+            // A merged shift (cash + credit rows): one tap opens that shift's
             // entries for editing — per-entry actions live there.
             Button {
-                daySelection = DaySelection(date: group.day)
+                shiftSelection = ShiftSelection(day: group.day, shiftID: group.shiftID)
             } label: {
-                ShiftDayRow(day: group.day, entries: group.items)
+                ShiftDayRow(day: group.day, period: period, dayHasMultipleShifts: dayHasMultiple, entries: group.items)
             }
             .buttonStyle(.plain)
             .listRowBackground(PaydayColor.background)
@@ -458,9 +483,6 @@ struct EntryRow: View {
         // the recorded time isn't the shift time, so we don't imply it is.
         if recordedSameDay, let recordedAt = entry.recordedAt {
             parts.append(recordedAt.formatted(date: .omitted, time: .shortened))
-        }
-        if entry.isDouble {
-            parts.append("double")
         }
         if let note = entry.note, !note.isEmpty {
             parts.append(note)

@@ -50,7 +50,7 @@ enum DebugSeeder {
         }
         func insertNight(_ date: Date, cents: Int) {
             let at = calendar.date(bySettingHour: 20, minute: 0, second: 0, of: date) ?? date
-            context.insert(TipEntry(date: date, amountCents: cents, kind: .credit, note: nil, recordedAt: at, isDouble: false, hoursWorked: 5.0, tipOutCents: nil, salesCents: nil, shiftPeriod: .dinner))
+            context.insert(TipEntry(date: date, amountCents: cents, kind: .credit, note: nil, recordedAt: at, hoursWorked: 5.0, tipOutCents: nil, salesCents: nil, shiftPeriod: .dinner, shiftID: UUID()))
         }
 
         // BEFORE the move was shown (weeks 12 down to 5 ago): Friday every
@@ -112,39 +112,51 @@ enum DebugSeeder {
         }
 
         let currentPeriod = calculator.period(containing: today)
-        // hoursWorked, tipOutCents, and shiftPeriod only ever sit on one
-        // record per night (credit when a night has both, matching
-        // LogTipSheet's convention) — otherwise StatsEngine's per-day
-        // resolution would have two conflicting values to choose from.
-        let sampleOffsets: [(daysAgo: Int, cents: Int, kind: TipKind, note: String?, hour: Int, minute: Int, isDouble: Bool, hoursWorked: Double?, tipOutCents: Int?, salesCents: Int?, shiftPeriod: ShiftPeriod?)] = [
-            (0, 8600, .credit, nil, 19, 20, false, 5.5, 1500, 43000, .dinner),
-            (0, 3200, .cash, nil, 19, 25, false, nil, nil, nil, nil),
-            (1, 11200, .credit, nil, 20, 5, true, 9.0, 2000, 56000, nil), // double — no single period applies
-            (3, 6400, .cash, nil, 13, 10, false, 4.5, nil, 32000, .lunch),
-            (4, 9800, .credit, "lunch", 12, 45, false, 4.0, 1000, 49000, .lunch),
-            (6, 7300, .cash, nil, 18, 40, false, 5.0, nil, nil, .dinner)
+        // `shift` groups rows into closeouts: rows sharing one shift index are
+        // one shift (e.g. a cash+credit night), and two shifts on the same
+        // day make an emergent double. hoursWorked/tipOut/sales/period sit on
+        // one record per shift (credit preferred), matching LogTipSheet.
+        let sampleOffsets: [(daysAgo: Int, cents: Int, kind: TipKind, note: String?, hour: Int, minute: Int, shift: Int, hoursWorked: Double?, tipOutCents: Int?, salesCents: Int?, shiftPeriod: ShiftPeriod?)] = [
+            (0, 8600, .credit, nil, 19, 20, 0, 5.5, 1500, 43000, .dinner),
+            (0, 3200, .cash, nil, 19, 25, 0, nil, nil, nil, nil),
+            // A real double on daysAgo 1: a lunch closeout AND a dinner closeout.
+            (1, 5200, .cash, nil, 13, 30, 1, 4.0, nil, 26000, .lunch),
+            (1, 6000, .credit, nil, 20, 5, 2, 5.0, 2000, 30000, .dinner),
+            (3, 6400, .cash, nil, 13, 10, 3, 4.5, nil, 32000, .lunch),
+            (4, 9800, .credit, "lunch", 12, 45, 4, 4.0, 1000, 49000, .lunch),
+            (6, 7300, .cash, nil, 18, 40, 5, 5.0, nil, nil, .dinner)
         ]
+        var currentShiftIDs: [Int: UUID] = [:]
         for sample in sampleOffsets {
             guard let r = recorded(daysAgo: sample.daysAgo, from: today, hour: sample.hour, minute: sample.minute),
                   r.day >= currentPeriod.start else { continue }
-            context.insert(TipEntry(date: r.day, amountCents: sample.cents, kind: sample.kind, note: sample.note, recordedAt: r.at, isDouble: sample.isDouble, hoursWorked: sample.hoursWorked, tipOutCents: sample.tipOutCents, salesCents: sample.salesCents, shiftPeriod: sample.shiftPeriod))
+            let shiftID = currentShiftIDs[sample.shift] ?? {
+                let id = UUID(); currentShiftIDs[sample.shift] = id; return id
+            }()
+            context.insert(TipEntry(date: r.day, amountCents: sample.cents, kind: sample.kind, note: sample.note, recordedAt: r.at, hoursWorked: sample.hoursWorked, tipOutCents: sample.tipOutCents, salesCents: sample.salesCents, shiftPeriod: sample.shiftPeriod, shiftID: shiftID))
         }
 
         if let priorPeriodEnd = calendar.date(byAdding: .day, value: -1, to: currentPeriod.start) {
             let priorPeriod = calculator.period(containing: priorPeriodEnd)
-            let priorOffsets: [(daysAgo: Int, cents: Int, kind: TipKind, note: String?, hour: Int, minute: Int, isDouble: Bool, hoursWorked: Double?, tipOutCents: Int?, salesCents: Int?, shiftPeriod: ShiftPeriod?)] = [
-                (2, 9100, .credit, nil, 19, 15, false, 5.5, 1600, 45500, .dinner),
-                (4, 12300, .credit, nil, 20, 30, true, 9.5, 2200, 61500, nil), // double
-                (6, 8800, .cash, nil, 18, 50, false, 5.0, nil, 44000, .dinner),
-                (8, 7600, .credit, "lunch", 12, 30, false, 4.0, 1000, 38000, .lunch),
-                (10, 10400, .cash, nil, 13, 20, false, 4.5, nil, nil, .lunch)
+            let priorOffsets: [(daysAgo: Int, cents: Int, kind: TipKind, note: String?, hour: Int, minute: Int, shift: Int, hoursWorked: Double?, tipOutCents: Int?, salesCents: Int?, shiftPeriod: ShiftPeriod?)] = [
+                (2, 9100, .credit, nil, 19, 15, 0, 5.5, 1600, 45500, .dinner),
+                // A real double on daysAgo 4: a lunch closeout AND a dinner closeout.
+                (4, 5800, .cash, nil, 13, 15, 1, 4.5, nil, 29000, .lunch),
+                (4, 6500, .credit, nil, 20, 30, 2, 5.0, 2200, 32500, .dinner),
+                (6, 8800, .cash, nil, 18, 50, 3, 5.0, nil, 44000, .dinner),
+                (8, 7600, .credit, "lunch", 12, 30, 4, 4.0, 1000, 38000, .lunch),
+                (10, 10400, .cash, nil, 13, 20, 5, 4.5, nil, nil, .lunch)
             ]
+            var priorShiftIDs: [Int: UUID] = [:]
             var loggedCreditTotal = 0
             for sample in priorOffsets {
                 guard let r = recorded(daysAgo: sample.daysAgo, from: priorPeriod.end, hour: sample.hour, minute: sample.minute),
                       r.day >= priorPeriod.start, r.day <= priorPeriod.end else { continue }
                 if sample.kind == .credit { loggedCreditTotal += sample.cents }
-                context.insert(TipEntry(date: r.day, amountCents: sample.cents, kind: sample.kind, note: sample.note, recordedAt: r.at, isDouble: sample.isDouble, hoursWorked: sample.hoursWorked, tipOutCents: sample.tipOutCents, salesCents: sample.salesCents, shiftPeriod: sample.shiftPeriod))
+                let shiftID = priorShiftIDs[sample.shift] ?? {
+                    let id = UUID(); priorShiftIDs[sample.shift] = id; return id
+                }()
+                context.insert(TipEntry(date: r.day, amountCents: sample.cents, kind: sample.kind, note: sample.note, recordedAt: r.at, hoursWorked: sample.hoursWorked, tipOutCents: sample.tipOutCents, salesCents: sample.salesCents, shiftPeriod: sample.shiftPeriod, shiftID: shiftID))
             }
             // Paycheck reflects credit tips only (cash is walked nightly),
             // a hair under what was logged — a realistic small discrepancy.

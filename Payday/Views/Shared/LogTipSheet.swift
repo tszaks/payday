@@ -32,8 +32,6 @@ struct LogTipSheet: View {
     // Shared
     @State private var date: Date
     @State private var note: String
-    @State private var isDouble: Bool
-    @State private var isDoubleManuallySet = false
     @State private var showDeleteConfirmation = false
     @State private var revealResult: RevealResult?
     /// Set alongside revealResult only when a tip-out was logged tonight —
@@ -43,8 +41,8 @@ struct LogTipSheet: View {
 
     // Optional shift details — skippable, never nagged. hoursWorked,
     // tipOutCents, salesCents, and shiftPeriod are a fact about the SHIFT
-    // (the calendar day), never one entry or tip type — ShiftDetails is
-    // the one place read/write for these four fields is allowed to happen.
+    // (one closeout), never one entry or tip type — ShiftDetails is the
+    // one place read/write for these four fields is allowed to happen.
     @State private var showMoreDetails = false
     @State private var hoursWorked: Double?
     @State private var tipOutCents: Int = 0
@@ -57,7 +55,6 @@ struct LogTipSheet: View {
         case .new(let defaultDate):
             _date = State(initialValue: defaultDate)
             _note = State(initialValue: "")
-            _isDouble = State(initialValue: false)
             // The clock is only a trustworthy proxy for "which shift is
             // this" when the shift being logged is actually today — a
             // backfilled past day has no clock to read, so it starts
@@ -71,7 +68,6 @@ struct LogTipSheet: View {
             _kind = State(initialValue: entry.kind)
             _date = State(initialValue: entry.date)
             _note = State(initialValue: entry.note ?? "")
-            _isDouble = State(initialValue: entry.isDouble)
             // A synchronous fallback seeded from this entry alone — always
             // available immediately, unlike the @Query-backed allEntries
             // seedShiftDetailDefaults needs for the full night. onAppear
@@ -103,12 +99,6 @@ struct LogTipSheet: View {
         let hasCash = allEntries.contains { $0.kind == .cash }
         let creditCount = allEntries.filter { $0.kind == .credit }.count
         return !hasCash && creditCount >= 3
-    }
-
-    private var averagePerShiftCents: Int? {
-        let nights = StatsEngine(records: allEntries.map(TipRecord.init)).nightlyTotals()
-        guard !nights.isEmpty else { return nil }
-        return nights.reduce(0) { $0 + $1.cents } / nights.count
     }
 
     /// The most recently logged hours for this same weekday — lets a
@@ -156,17 +146,16 @@ struct LogTipSheet: View {
             // show it rather than attach it silently.
             if hoursWorked != nil || tipOutCents > 0 || salesCents > 0 { showMoreDetails = true }
         case .edit(let entry):
-            // A fact about the whole night, not this one entry — resolve
-            // across every entry sharing this date, same convention
-            // liveSaveEdit writes back through. Guarded on the night list
-            // actually containing `entry` itself: allEntries is @Query-
-            // backed and can momentarily be empty right as the sheet
-            // mounts, which would otherwise resolve against an empty
-            // array and wipe out the correct value init already seeded
-            // from `entry` directly.
-            let night = sameDayEntries(around: entry)
-            guard night.contains(where: { $0.id == entry.id }) else { return }
-            let resolved = ShiftDetails.resolve(from: night)
+            // A fact about the whole shift, not this one entry — resolve
+            // across every entry in the shift, same convention liveSaveEdit
+            // writes back through. Guarded on the shift list actually
+            // containing `entry` itself: allEntries is @Query-backed and can
+            // momentarily be empty right as the sheet mounts, which would
+            // otherwise resolve against an empty array and wipe out the
+            // correct value init already seeded from `entry` directly.
+            let shift = sameShiftEntries(around: entry)
+            guard shift.contains(where: { $0.id == entry.id }) else { return }
+            let resolved = ShiftDetails.resolve(from: shift)
             hoursWorked = resolved.hoursWorked
             tipOutCents = resolved.tipOutCents ?? 0
             salesCents = resolved.salesCents ?? 0
@@ -175,28 +164,16 @@ struct LogTipSheet: View {
         }
     }
 
-    /// Every entry sharing the same calendar day as `entry` — used to treat
-    /// hours/tip-out/sales as one shift-level fact instead of a per-entry
-    /// one, even though ShiftDetails physically stores them on a single
-    /// TipEntry.
-    private func sameDayEntries(around entry: TipEntry) -> [TipEntry] {
-        allEntries.filter { Calendar.current.isDate($0.date, inSameDayAs: entry.date) }
-    }
-
-    /// A default, not a lock: only suggests the toggle until the user has
-    /// touched it themselves, at which point their choice always wins.
-    private func maybeSuggestDouble() {
-        guard !isDoubleManuallySet, let average = averagePerShiftCents, average > 0 else { return }
-        if cashCents + creditCents >= average * 2 {
-            isDouble = true
+    /// Every entry belonging to the same shift (closeout) as `entry` — the
+    /// rows sharing its shiftID — used to treat hours/tip-out/sales as one
+    /// shift-level fact instead of a per-entry one, even though ShiftDetails
+    /// physically stores them on a single TipEntry. Falls back to same-day
+    /// for a legacy entry with no shiftID yet (pre-migration).
+    private func sameShiftEntries(around entry: TipEntry) -> [TipEntry] {
+        if let shiftID = entry.shiftID {
+            return allEntries.filter { $0.shiftID == shiftID }
         }
-    }
-
-    /// A double IS both lunch and dinner — any lunch-or-dinner value left
-    /// over from before the toggle was flipped on would misstate that, so
-    /// it's cleared rather than left stale.
-    private func clearShiftPeriodIfDouble() {
-        if isDouble { shiftPeriod = nil }
+        return allEntries.filter { $0.shiftID == nil && Calendar.current.isDate($0.date, inSameDayAs: entry.date) }
     }
 
     var body: some View {
@@ -271,9 +248,6 @@ struct LogTipSheet: View {
             .onChange(of: kind) { _, _ in liveSaveEdit() }
             .onChange(of: date) { _, _ in liveSaveEdit() }
             .onChange(of: note) { _, _ in liveSaveEdit() }
-            .onChange(of: isDouble) { _, _ in clearShiftPeriodIfDouble(); liveSaveEdit() }
-            .onChange(of: cashCents) { _, _ in maybeSuggestDouble() }
-            .onChange(of: creditCents) { _, _ in maybeSuggestDouble() }
             .onChange(of: hoursWorked) { _, _ in liveSaveEdit() }
             .onChange(of: tipOutCents) { _, _ in liveSaveEdit() }
             .onChange(of: salesCents) { _, _ in liveSaveEdit() }
@@ -372,31 +346,22 @@ struct LogTipSheet: View {
             }
             .padding()
             Divider()
-            Toggle("Double shift", isOn: Binding(
-                get: { isDouble },
-                set: { isDouble = $0; isDoubleManuallySet = true }
-            ))
-            .padding()
-            // Lunch or dinner lives here, always visible next to Double
-            // shift — it's a one-tap shift categorization (pre-selected
-            // from the clock), not a number-entry metric like the ones in
-            // the collapsible group below. A double is both, so the row
-            // hides once that toggle is on.
-            if !isDouble {
-                Divider()
-                HStack {
-                    Text("Shift")
-                    Spacer()
-                    Picker("", selection: $shiftPeriod) {
-                        Text("Lunch").tag(ShiftPeriod?.some(.lunch))
-                        Text("Dinner").tag(ShiftPeriod?.some(.dinner))
-                    }
-                    .pickerStyle(.segmented)
-                    .frame(width: 180)
-                    .labelsHidden()
+            // Lunch or dinner — the defining period of this one closeout,
+            // always visible (pre-selected from the clock for today). A
+            // "double" isn't a toggle anymore: you just log a second shift
+            // for the day, and the two closeouts make the double.
+            HStack {
+                Text("Shift")
+                Spacer()
+                Picker("", selection: $shiftPeriod) {
+                    Text("Lunch").tag(ShiftPeriod?.some(.lunch))
+                    Text("Dinner").tag(ShiftPeriod?.some(.dinner))
                 }
-                .padding()
+                .pickerStyle(.segmented)
+                .frame(width: 180)
+                .labelsHidden()
             }
+            .padding()
         }
     }
 
@@ -500,27 +465,34 @@ struct LogTipSheet: View {
         let effectiveSalesCents = salesCents > 0 ? salesCents : nil
         let netTotalCents = totalCents - (effectiveTipOutCents ?? 0)
 
+        // One id ties this closeout's cash and credit rows into one shift.
+        // Logging again the same day mints a fresh id — that's how a double
+        // (two closeouts) emerges, with no toggle.
+        let shiftID = UUID()
+
         let statsEngine = StatsEngine(records: allEntries.map(TipRecord.init))
         let calculator = PayPeriodCalculator(schedule: scheduleStore.schedule ?? .fallback)
         let period = calculator.period(containing: normalizedDate)
         // Reveal always speaks in net — the same rule StatsEngine applies to
-        // every other analytical total.
-        let reveal = statsEngine.reveal(forNightAt: normalizedDate, cents: netTotalCents, period: period, hoursWorked: hoursWorked)
+        // every other analytical total. Passing this shift's id lets the
+        // reveal compare it against the day's other shift (if any) rather
+        // than excluding the whole day.
+        let reveal = statsEngine.reveal(forNightAt: normalizedDate, cents: netTotalCents, period: period, hoursWorked: hoursWorked, shiftID: shiftID)
 
         var newEntries: [TipEntry] = []
         if cashCents > 0 {
-            let entry = TipEntry(date: normalizedDate, amountCents: cashCents, kind: .cash, note: trimmedNote, recordedAt: recordedAt, isDouble: isDouble)
+            let entry = TipEntry(date: normalizedDate, amountCents: cashCents, kind: .cash, note: trimmedNote, recordedAt: recordedAt, shiftID: shiftID)
             modelContext.insert(entry)
             newEntries.append(entry)
         }
         if creditCents > 0 {
-            let entry = TipEntry(date: normalizedDate, amountCents: creditCents, kind: .credit, note: trimmedNote, recordedAt: recordedAt, isDouble: isDouble)
+            let entry = TipEntry(date: normalizedDate, amountCents: creditCents, kind: .credit, note: trimmedNote, recordedAt: recordedAt, shiftID: shiftID)
             modelContext.insert(entry)
             newEntries.append(entry)
         }
         // Shift-level details land on one canonical entry (credit
         // preferred), never split across both — see ShiftDetails.
-        ShiftDetails.write(hoursWorked: hoursWorked, tipOutCents: effectiveTipOutCents, salesCents: effectiveSalesCents, shiftPeriod: isDouble ? nil : shiftPeriod, into: newEntries)
+        ShiftDetails.write(hoursWorked: hoursWorked, tipOutCents: effectiveTipOutCents, salesCents: effectiveSalesCents, shiftPeriod: shiftPeriod, into: newEntries)
 
         revealResult = reveal
         revealGrossAndTipOut = effectiveTipOutCents.map { (grossCents: totalCents, tipOutCents: $0) }
@@ -540,18 +512,17 @@ struct LogTipSheet: View {
         entry.amountCents = amountCents
         entry.kind = kind
         entry.note = note.isEmpty ? nil : note
-        entry.isDouble = isDouble
 
-        // Shift-level details land on the night's one canonical entry
+        // Shift-level details land on the shift's one canonical entry
         // (credit preferred, same convention as saveNew) and get cleared
-        // from every other entry sharing this date — self-healing any
-        // night that ended up with a value split across both entries.
+        // from every other entry in the shift — self-healing any shift
+        // that ended up with a value split across both entries.
         ShiftDetails.write(
             hoursWorked: hoursWorked,
             tipOutCents: tipOutCents > 0 ? tipOutCents : nil,
             salesCents: salesCents > 0 ? salesCents : nil,
-            shiftPeriod: isDouble ? nil : shiftPeriod,
-            into: sameDayEntries(around: entry)
+            shiftPeriod: shiftPeriod,
+            into: sameShiftEntries(around: entry)
         )
 
         PaydayWidgetRefresh.request()

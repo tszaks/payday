@@ -1,32 +1,37 @@
 import Foundation
 
-/// Turns logged shifts into a plain CSV, one row per calendar night (cash
-/// and credit merged, same "a shift, not a row" rule as ShiftDayRow) — a
-/// pure, fully-tested function, no SwiftUI, no file I/O of its own.
+/// Turns logged shifts into a plain CSV, one row per shift (one closeout;
+/// cash and credit merged, same "a shift, not a row" rule as ShiftDayRow) —
+/// a pure, fully-tested function, no SwiftUI, no file I/O of its own. A
+/// double day produces two rows, one per closeout, distinguished by the
+/// Shift column and both flagged Double.
 ///
 /// Hours/Tip-Out/Sales are shift-level facts, not per-entry ones: each
 /// column reflects ShiftDetails.resolve's single canonical value (credit
-/// entry preferred, else cash), never a sum across the night's entries —
-/// a night with a stray value on both entries (legacy data) still reports
+/// entry preferred, else cash), never a sum across the shift's entries —
+/// a shift with a stray value on both entries (legacy data) still reports
 /// one number here, matching every other reader in the app, rather than
 /// double-counting it.
 enum CSVExporter {
-    static let header = "Date,Cash,Credit,Tip-Out,Net,Hours,Sales,Double,Note,Period,Paycheck"
+    static let header = "Date,Shift,Cash,Credit,Tip-Out,Net,Hours,Sales,Double,Note,Period,Paycheck"
 
     static func export(entries: [TipEntry], paycheckRecords: [PaycheckRecord], calculator: PayPeriodCalculator, calendar: Calendar = .current) -> String {
-        let shiftDays = ShiftDays.groupedByDay(entries, date: \.date).sorted { $0.day < $1.day }
-        let rows = shiftDays.map { group -> String in
-            row(for: group.items, day: group.day, paycheckRecords: paycheckRecords, calculator: calculator, calendar: calendar)
+        let shifts = ShiftDays.groupedByShift(entries, shiftID: \.shiftID, date: \.date, period: \.shiftPeriod, calendar: calendar)
+            .sorted { $0.day < $1.day }
+        var dayShiftCounts: [Date: Int] = [:]
+        for shift in shifts { dayShiftCounts[shift.day, default: 0] += 1 }
+        let rows = shifts.map { group -> String in
+            row(for: group.items, day: group.day, dayHasMultipleShifts: (dayShiftCounts[group.day] ?? 0) >= 2, paycheckRecords: paycheckRecords, calculator: calculator, calendar: calendar)
         }
         return ([header] + rows).joined(separator: "\n")
     }
 
-    private static func row(for items: [TipEntry], day: Date, paycheckRecords: [PaycheckRecord], calculator: PayPeriodCalculator, calendar: Calendar) -> String {
+    private static func row(for items: [TipEntry], day: Date, dayHasMultipleShifts: Bool, paycheckRecords: [PaycheckRecord], calculator: PayPeriodCalculator, calendar: Calendar) -> String {
         let cashCents = items.filter { $0.kind == .cash }.reduce(0) { $0 + $1.amountCents }
         let creditCents = items.filter { $0.kind == .credit }.reduce(0) { $0 + $1.amountCents }
         let shiftDetails = ShiftDetails.resolve(from: items)
         let netCents = cashCents + creditCents - (shiftDetails.tipOutCents ?? 0)
-        let isDouble = items.contains { $0.isDouble }
+        let shiftField = shiftDetails.shiftPeriod?.displayName ?? ""
         let note = items.compactMap(\.note).joined(separator: "; ")
 
         let period = calculator.period(containing: day)
@@ -43,13 +48,14 @@ enum CSVExporter {
 
         let fields = [
             isoDate(day),
+            shiftField,
             dollars(cashCents),
             dollars(creditCents),
             tipOutField,
             dollars(netCents),
             hoursField,
             salesField,
-            isDouble ? "Y" : "N",
+            dayHasMultipleShifts ? "Y" : "N",
             escape(note),
             periodField,
             paycheckField

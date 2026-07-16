@@ -70,7 +70,9 @@ struct LogTipsIntent: AppIntent {
             date: Calendar.current.startOfDay(for: .now),
             amountCents: cents,
             kind: kind.tipKind,
-            recordedAt: .now
+            recordedAt: .now,
+            // One entry from the intent is its own shift (closeout).
+            shiftID: UUID()
         )
         let context = SharedModelContainer.shared.mainContext
         context.insert(entry)

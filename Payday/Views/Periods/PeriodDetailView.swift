@@ -1,9 +1,10 @@
 import SwiftUI
 import SwiftData
 
-private struct DaySelection: Identifiable {
-    let date: Date
-    var id: Date { date }
+private struct ShiftSelection: Identifiable {
+    let day: Date
+    let shiftID: UUID
+    var id: UUID { shiftID }
 }
 
 struct PeriodDetailView: View {
@@ -14,7 +15,7 @@ struct PeriodDetailView: View {
 
     let period: PayPeriod
     @State private var sheetTarget: TipEntrySheetTarget?
-    @State private var daySelection: DaySelection?
+    @State private var shiftSelection: ShiftSelection?
     @State private var showPaycheckSheet = false
     @State private var undoState = UndoDeleteToastState()
 
@@ -28,8 +29,14 @@ struct PeriodDetailView: View {
             .sorted { $0.date > $1.date }
     }
 
-    private var shiftDays: [(day: Date, items: [TipEntry])] {
-        ShiftDays.groupedByDay(entries, date: \.date)
+    private var shiftDays: [(day: Date, shiftID: UUID, items: [TipEntry])] {
+        ShiftDays.groupedByShift(entries, shiftID: \.shiftID, date: \.date, period: \.shiftPeriod)
+    }
+
+    private var multiShiftDays: Set<Date> {
+        var counts: [Date: Int] = [:]
+        for shift in shiftDays { counts[shift.day, default: 0] += 1 }
+        return Set(counts.filter { $0.value >= 2 }.keys)
     }
 
     private var breakdown: TipBreakdown {
@@ -103,7 +110,7 @@ struct PeriodDetailView: View {
                 .listRowBackground(PaydayColor.background)
             } else {
                 Section("Entries") {
-                    ForEach(shiftDays, id: \.day) { group in
+                    ForEach(shiftDays, id: \.shiftID) { group in
                         shiftRow(for: group)
                     }
                 }
@@ -118,8 +125,8 @@ struct PeriodDetailView: View {
         .sheet(item: $sheetTarget) { target in
             LogTipSheet(target: target)
         }
-        .sheet(item: $daySelection) { selection in
-            DayDetailSheet(date: selection.date)
+        .sheet(item: $shiftSelection) { selection in
+            DayDetailSheet(date: selection.day, shiftID: selection.shiftID)
         }
         .sheet(isPresented: $showPaycheckSheet) {
             PaycheckEntrySheet(period: period, existing: paycheck)
@@ -159,12 +166,14 @@ struct PeriodDetailView: View {
     }
 
     @ViewBuilder
-    private func shiftRow(for group: (day: Date, items: [TipEntry])) -> some View {
+    private func shiftRow(for group: (day: Date, shiftID: UUID, items: [TipEntry])) -> some View {
+        let period = ShiftDetails.resolve(from: group.items).shiftPeriod
+        let dayHasMultiple = multiShiftDays.contains(group.day)
         if group.items.count == 1, let entry = group.items.first {
             Button {
                 sheetTarget = .edit(entry)
             } label: {
-                ShiftDayRow(day: group.day, entries: group.items)
+                ShiftDayRow(day: group.day, period: period, dayHasMultipleShifts: dayHasMultiple, entries: group.items)
             }
             .buttonStyle(.plain)
             .swipeActions(edge: .trailing) {
@@ -177,9 +186,9 @@ struct PeriodDetailView: View {
             .entryContextMenu(entry, sheetTarget: $sheetTarget, undoState: undoState, context: modelContext)
         } else {
             Button {
-                daySelection = DaySelection(date: group.day)
+                shiftSelection = ShiftSelection(day: group.day, shiftID: group.shiftID)
             } label: {
-                ShiftDayRow(day: group.day, entries: group.items)
+                ShiftDayRow(day: group.day, period: period, dayHasMultipleShifts: dayHasMultiple, entries: group.items)
             }
             .buttonStyle(.plain)
         }

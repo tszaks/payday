@@ -1,19 +1,23 @@
 import SwiftUI
 
-/// One shift (one day), however many rows it took to log it — a merged
-/// cash+credit night reads as a single row with both amounts in the
+/// One shift (one closeout), however many rows it took to log it — a merged
+/// cash+credit shift reads as a single row with both amounts in the
 /// subtitle, not two separate list rows. Shared between Dashboard and
-/// Period detail so both screens describe a night the same way.
+/// Period detail so both screens describe a shift the same way. On a double
+/// day the two shifts each get their own row, distinguished by period
+/// ("Today · Lunch" / "Today · Dinner").
 struct ShiftDayRow: View {
     let day: Date
+    let period: ShiftPeriod?
+    let dayHasMultipleShifts: Bool
     let entries: [TipEntry]
 
     private var breakdown: TipBreakdown {
         TipBreakdown.total(of: entries)
     }
 
-    /// Net — the income number. Matches the hero total and the tonight
-    /// reveal, which are both net, so one shift never shows two numbers.
+    /// Net — the income number. Matches the hero total and the reveal,
+    /// which are both net, so one shift never shows two numbers.
     private var netCents: Int {
         breakdown.netTotalCents
     }
@@ -29,9 +33,6 @@ struct ShiftDayRow: View {
         // is already net (what you kept), and a tip-out isn't income worth
         // repeating on every glance. It stays visible/editable in the shift's
         // own sheet, and the period hero still reconciles it.
-        if entries.contains(where: \.isDouble) {
-            parts.append("double")
-        }
         if let note = entries.compactMap(\.note).first(where: { !$0.isEmpty }) {
             parts.append(note)
         }
@@ -41,7 +42,7 @@ struct ShiftDayRow: View {
     var body: some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
-                Text(ShiftDays.humanLabel(for: day))
+                Text(ShiftDays.shiftLabel(day: day, period: period, dayHasMultipleShifts: dayHasMultipleShifts))
                     .font(PaydayFont.body)
                     .foregroundStyle(PaydayColor.textPrimary)
                 Text(subtitle)
