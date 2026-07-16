@@ -7,6 +7,9 @@ struct TipRecord: Sendable, Hashable {
     let date: Date
     let amountCents: Int
     let kind: TipKind
+    /// Vestigial mirror of TipEntry.isDouble — never read for logic anymore
+    /// (a "double" is now a day with 2+ distinct shiftIDs, see nightlyFacts).
+    /// Kept only so this value type stays a faithful mirror of the model.
     let isDouble: Bool
     /// Groups the rows of one closeout (a shift). A shift = records sharing
     /// this id; a "double" is a calendar day with 2+ distinct shiftIDs.

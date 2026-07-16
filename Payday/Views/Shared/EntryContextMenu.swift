@@ -27,7 +27,10 @@ extension View {
 
 @MainActor
 private func duplicateTipEntry(_ entry: TipEntry, into context: ModelContext) {
-    let copy = TipEntry(date: entry.date, amountCents: entry.amountCents, kind: entry.kind, note: entry.note, recordedAt: .now, isDouble: entry.isDouble)
+    // A duplicate is a NEW closeout, so it gets its own shiftID (never the
+    // source's) — dropping a copy onto the same day becomes an emergent
+    // second shift. Its period carries over as a sensible default.
+    let copy = TipEntry(date: entry.date, amountCents: entry.amountCents, kind: entry.kind, note: entry.note, recordedAt: .now, shiftPeriod: entry.shiftPeriod, shiftID: UUID())
     context.insert(copy)
     try? context.save()
     PaydayHaptics.medium()

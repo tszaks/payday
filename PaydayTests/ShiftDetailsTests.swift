@@ -117,4 +117,26 @@ struct ShiftDetailsWriteTests {
         #expect(entry.hoursWorked == nil)
         #expect(entry.shiftPeriod == nil)
     }
+
+    @Test("two shifts on the same day don't cross-contaminate — each write touches only its own shift")
+    func twoShiftsSameDayStayIndependent() {
+        let lunchID = UUID()
+        let dinnerID = UUID()
+        // A lunch closeout and a dinner closeout on the same calendar day.
+        let lunch = TipEntry(date: date(2026, 7, 1), amountCents: 4000, kind: .cash, shiftPeriod: .lunch, shiftID: lunchID)
+        let dinner = TipEntry(date: date(2026, 7, 1), amountCents: 6000, kind: .cash, shiftPeriod: .dinner, shiftID: dinnerID)
+
+        // Writing the lunch shift (its entries only) must not clear the
+        // dinner shift's values — the callers now pass shift-scoped arrays.
+        ShiftDetails.write(hoursWorked: 4, tipOutCents: 500, salesCents: nil, shiftPeriod: .lunch, into: [lunch])
+        #expect(lunch.hoursWorked == 4)
+        #expect(lunch.tipOutCents == 500)
+        #expect(dinner.hoursWorked == nil) // untouched
+        #expect(dinner.shiftPeriod == .dinner)
+
+        ShiftDetails.write(hoursWorked: 5, tipOutCents: 900, salesCents: nil, shiftPeriod: .dinner, into: [dinner])
+        #expect(dinner.hoursWorked == 5)
+        #expect(dinner.tipOutCents == 900)
+        #expect(lunch.hoursWorked == 4) // still intact
+    }
 }

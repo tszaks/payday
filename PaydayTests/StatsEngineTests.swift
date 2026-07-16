@@ -485,10 +485,11 @@ struct MovesTests {
             records.append(record(2026, 6, 29 + week * 7, cents: 5000, hoursWorked: 5, salesCents: 50000))                  // Monday
         }
         for day in [1, 8, 15] {
-            records.append(record(2026, 7, day, cents: 12000, isDouble: true, hoursWorked: 10))
+            records.append(record(2026, 7, day, cents: 6000, hoursWorked: 5, shiftID: UUID()))
+            records.append(record(2026, 7, day, cents: 6000, hoursWorked: 5, shiftID: UUID()))
         }
         for day in [2, 9, 16] {
-            records.append(record(2026, 7, day, cents: 8000, hoursWorked: 4))
+            records.append(record(2026, 7, day, cents: 8000, hoursWorked: 4, shiftID: UUID()))
         }
         let engine = StatsEngine(records: records)
         let moves = engine.moves(referenceDate: date(2026, 7, 24))

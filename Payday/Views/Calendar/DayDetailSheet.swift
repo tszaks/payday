@@ -7,14 +7,21 @@ struct DayDetailSheet: View {
     @Query private var allEntries: [TipEntry]
 
     let date: Date
+    /// When set, the sheet shows just one shift (closeout); otherwise the
+    /// whole calendar day. A double day opens one shift at a time.
+    var shiftID: UUID? = nil
     @State private var sheetTarget: TipEntrySheetTarget?
     @State private var undoState = UndoDeleteToastState()
 
     private var entries: [TipEntry] {
-        let day = Calendar.current.startOfDay(for: date)
-        return allEntries
-            .filter { Calendar.current.isDate($0.date, inSameDayAs: day) }
-            .sorted { $0.amountCents > $1.amountCents }
+        let scoped: [TipEntry]
+        if let shiftID {
+            scoped = allEntries.filter { $0.shiftID == shiftID }
+        } else {
+            let day = Calendar.current.startOfDay(for: date)
+            scoped = allEntries.filter { Calendar.current.isDate($0.date, inSameDayAs: day) }
+        }
+        return scoped.sorted { $0.amountCents > $1.amountCents }
     }
 
     private var totalCents: Int {
