@@ -163,12 +163,6 @@ struct InsightsView: View {
                     }
 
                     footnote(for: facts)
-                } else {
-                    Text("Narrated summaries are coming soon. These are your exact numbers.")
-                        .font(PaydayFont.caption2)
-                        .foregroundStyle(PaydayColor.textSecondary)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, PaydaySpacing.p20)
                 }
             }
             .padding(.horizontal, PaydaySpacing.p16)

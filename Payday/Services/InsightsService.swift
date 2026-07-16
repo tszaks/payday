@@ -59,7 +59,7 @@ enum InsightsService {
     /// rotated key yet. Empty until then: isConfigured stays false and
     /// Insights shows its deterministic facts sections, exactly like a
     /// build with no key ever did.
-    private static let proxyHost = ""
+    private static let proxyHost = "payday-website-eta.vercel.app"
     private static let endpoint: URL? = {
         guard !proxyHost.isEmpty else { return nil }
         return URL(string: "https://\(proxyHost)/api/insights-narrate")
