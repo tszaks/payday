@@ -7,36 +7,37 @@ struct DayDetailSheet: View {
     @Query private var allEntries: [TipEntry]
 
     let date: Date
-    /// When set, the sheet shows just one shift (closeout); otherwise the
-    /// whole calendar day. A double day opens one shift at a time.
-    var shiftID: UUID? = nil
     @State private var sheetTarget: TipEntrySheetTarget?
     @State private var undoState = UndoDeleteToastState()
 
-    private var entries: [TipEntry] {
-        let scoped: [TipEntry]
-        if let shiftID {
-            scoped = allEntries.filter { $0.shiftID == shiftID }
-        } else {
-            let day = Calendar.current.startOfDay(for: date)
-            scoped = allEntries.filter { Calendar.current.isDate($0.date, inSameDayAs: day) }
-        }
-        return scoped.sorted { $0.amountCents > $1.amountCents }
+    private var dayEntries: [TipEntry] {
+        let day = Calendar.current.startOfDay(for: date)
+        return allEntries.filter { Calendar.current.isDate($0.date, inSameDayAs: day) }
     }
 
+    /// This day's shifts (one closeout each, however many rows it took to
+    /// log it) — the sheet lists shifts, not entries, same as Dashboard and
+    /// Period detail now that the entry layer never surfaces in the UI.
+    private var shifts: [(day: Date, shiftID: UUID, items: [TipEntry])] {
+        ShiftDays.groupedByShift(dayEntries, shiftID: \.shiftID, date: \.date, period: \.shiftPeriod)
+    }
+
+    /// Net — the income number, matching the hero total and every other
+    /// total in the app (fixes a gross-vs-net mismatch this sheet used to
+    /// have with the rest of the app).
     private var totalCents: Int {
-        entries.reduce(0) { $0 + $1.amountCents }
+        TipBreakdown.total(of: dayEntries).netTotalCents
     }
 
     var body: some View {
         NavigationStack {
             List {
-                if entries.isEmpty {
+                if shifts.isEmpty {
                     Text("No tips logged this day.")
                         .foregroundStyle(PaydayColor.textSecondary)
                         .listRowSeparator(.hidden)
                 } else {
-                    if entries.count > 1 {
+                    if shifts.count > 1 {
                         Section {
                             HStack {
                                 Text("Total")
@@ -55,22 +56,9 @@ struct DayDetailSheet: View {
                         .listRowSeparator(.hidden)
                     }
 
-                    Section("Entries") {
-                        ForEach(entries) { entry in
-                            Button {
-                                sheetTarget = .edit(entry)
-                            } label: {
-                                EntryRow(entry: entry)
-                            }
-                            .buttonStyle(.plain)
-                            .swipeActions(edge: .trailing) {
-                                Button(role: .destructive) {
-                                    undoState.delete(entry, in: modelContext)
-                                } label: {
-                                    Label("Delete", systemImage: "trash")
-                                }
-                            }
-                            .entryContextMenu(entry, sheetTarget: $sheetTarget, undoState: undoState, context: modelContext)
+                    Section("Shifts") {
+                        ForEach(shifts, id: \.shiftID) { group in
+                            shiftRow(for: group)
                         }
                     }
                     .listRowBackground(PaydayColor.background)
@@ -100,5 +88,26 @@ struct DayDetailSheet: View {
         .undoDeleteToast(undoState, context: modelContext)
         .presentationDetents([.medium, .large])
         .presentationBackground(PaydayColor.background)
+    }
+
+    @ViewBuilder
+    private func shiftRow(for group: (day: Date, shiftID: UUID, items: [TipEntry])) -> some View {
+        let period = ShiftDetails.resolve(from: group.items).shiftPeriod
+        if let anchor = group.items.first {
+            Button {
+                sheetTarget = .edit(anchor)
+            } label: {
+                ShiftDayRow(day: group.day, period: period, dayHasMultipleShifts: shifts.count >= 2, entries: group.items)
+            }
+            .buttonStyle(.plain)
+            .swipeActions(edge: .trailing) {
+                Button(role: .destructive) {
+                    undoState.delete(group.items, in: modelContext)
+                } label: {
+                    Label("Delete", systemImage: "trash")
+                }
+            }
+            .shiftContextMenu(group.items, sheetTarget: $sheetTarget, undoState: undoState, context: modelContext)
+        }
     }
 }

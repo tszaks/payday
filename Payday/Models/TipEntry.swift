@@ -99,6 +99,16 @@ final class TipEntry {
     /// tip-percent fact.
     var salesCents: Int?
 
+    /// Clock-in / clock-out for the shift — the input people actually
+    /// remember ("I worked 11:30 to 4"), from which hoursWorked is computed
+    /// rather than hand-counted. Only the time-of-day component matters
+    /// (ShiftTimes measures wrap-aware minutes between the two, so an
+    /// overnight closeout works); the stored date part is incidental.
+    /// Optional and shift-level like hoursWorked — lives on the one
+    /// canonical entry via ShiftDetails, nil for legacy rows.
+    var clockIn: Date?
+    var clockOut: Date?
+
     // Same optional-raw-string-to-enum split as kindRaw/kind, but WITHOUT
     // a non-optional fallback: "never set" is a real, meaningful state
     // here (unlike kind, which must always resolve to something), so the
@@ -128,7 +138,9 @@ final class TipEntry {
         tipOutCents: Int? = nil,
         salesCents: Int? = nil,
         shiftPeriod: ShiftPeriod? = nil,
-        shiftID: UUID? = nil
+        shiftID: UUID? = nil,
+        clockIn: Date? = nil,
+        clockOut: Date? = nil
     ) {
         self.id = id
         self.date = date
@@ -142,5 +154,7 @@ final class TipEntry {
         self.salesCents = salesCents
         self.shiftPeriodRaw = shiftPeriod?.rawValue
         self.shiftID = shiftID
+        self.clockIn = clockIn
+        self.clockOut = clockOut
     }
 }

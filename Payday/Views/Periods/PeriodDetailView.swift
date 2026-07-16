@@ -1,12 +1,6 @@
 import SwiftUI
 import SwiftData
 
-private struct ShiftSelection: Identifiable {
-    let day: Date
-    let shiftID: UUID
-    var id: UUID { shiftID }
-}
-
 struct PeriodDetailView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(PayScheduleStore.self) private var scheduleStore
@@ -15,7 +9,6 @@ struct PeriodDetailView: View {
 
     let period: PayPeriod
     @State private var sheetTarget: TipEntrySheetTarget?
-    @State private var shiftSelection: ShiftSelection?
     @State private var showPaycheckSheet = false
     @State private var undoState = UndoDeleteToastState()
 
@@ -125,9 +118,6 @@ struct PeriodDetailView: View {
         .sheet(item: $sheetTarget) { target in
             LogTipSheet(target: target)
         }
-        .sheet(item: $shiftSelection) { selection in
-            DayDetailSheet(date: selection.day, shiftID: selection.shiftID)
-        }
         .sheet(isPresented: $showPaycheckSheet) {
             PaycheckEntrySheet(period: period, existing: paycheck)
         }
@@ -169,28 +159,21 @@ struct PeriodDetailView: View {
     private func shiftRow(for group: (day: Date, shiftID: UUID, items: [TipEntry])) -> some View {
         let period = ShiftDetails.resolve(from: group.items).shiftPeriod
         let dayHasMultiple = multiShiftDays.contains(group.day)
-        if group.items.count == 1, let entry = group.items.first {
+        if let anchor = group.items.first {
             Button {
-                sheetTarget = .edit(entry)
+                sheetTarget = .edit(anchor)
             } label: {
                 ShiftDayRow(day: group.day, period: period, dayHasMultipleShifts: dayHasMultiple, entries: group.items)
             }
             .buttonStyle(.plain)
             .swipeActions(edge: .trailing) {
                 Button(role: .destructive) {
-                    undoState.delete(entry, in: modelContext)
+                    undoState.delete(group.items, in: modelContext)
                 } label: {
                     Label("Delete", systemImage: "trash")
                 }
             }
-            .entryContextMenu(entry, sheetTarget: $sheetTarget, undoState: undoState, context: modelContext)
-        } else {
-            Button {
-                shiftSelection = ShiftSelection(day: group.day, shiftID: group.shiftID)
-            } label: {
-                ShiftDayRow(day: group.day, period: period, dayHasMultipleShifts: dayHasMultiple, entries: group.items)
-            }
-            .buttonStyle(.plain)
+            .shiftContextMenu(group.items, sheetTarget: $sheetTarget, undoState: undoState, context: modelContext)
         }
     }
 

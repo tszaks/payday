@@ -3,14 +3,13 @@ import SwiftData
 
 /// Owns its own dismissal and save logic.
 ///
-/// Logging a new shift captures cash AND credit together (the two numbers a
-/// server actually walks out with), saving one TipEntry per non-zero amount.
-/// This is a creation flow, so it stays Cancel + explicit Save.
-///
-/// Editing an existing entry stays single-amount with a kind toggle, since an
-/// entry is one specific cash-or-credit record — but per the Vero sheet
-/// standard, edit flows live-save: every field change writes straight to the
-/// entry, and the toolbar is a single Done.
+/// A shift is one closeout — cash and credit walked out with the same
+/// night, one Started/Ended pair, one tip-out, one Sales, one Note. Both
+/// logging a new shift and editing an existing one use the exact same form:
+/// the "entry" layer never surfaces in the UI, so there's nothing to ask
+/// twice and nothing per-tip-type to juggle. Creation stays Cancel +
+/// explicit Save; editing live-saves every field straight through, same as
+/// the Vero sheet standard, with the toolbar reduced to a single Done.
 struct LogTipSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
@@ -20,14 +19,11 @@ struct LogTipSheet: View {
 
     let target: TipEntrySheetTarget
 
-    // New-log state (dual amount)
+    // Cash + credit together — the two numbers a server actually walks out
+    // with, whether this is a brand-new shift or an existing one being edited.
     @State private var cashCents: Int = 0
     @State private var creditCents: Int = 0
     @FocusState private var focusedCurrencyField: CurrencyRowField?
-
-    // Edit state (single amount + kind)
-    @State private var amountCents: Int = 0
-    @State private var kind: TipKind = .cash
 
     // Shared
     @State private var date: Date
@@ -40,14 +36,17 @@ struct LogTipSheet: View {
     @State private var revealGrossAndTipOut: (grossCents: Int, tipOutCents: Int)?
 
     // Optional shift details — skippable, never nagged. hoursWorked,
-    // tipOutCents, salesCents, and shiftPeriod are a fact about the SHIFT
-    // (one closeout), never one entry or tip type — ShiftDetails is the
-    // one place read/write for these four fields is allowed to happen.
+    // tipOutCents, salesCents, shiftPeriod, clockIn, and clockOut are all
+    // facts about the SHIFT (one closeout), never one entry or tip type —
+    // ShiftDetails is the one place read/write for these six fields is
+    // allowed to happen.
     @State private var showMoreDetails = false
     @State private var hoursWorked: Double?
     @State private var tipOutCents: Int = 0
     @State private var salesCents: Int = 0
     @State private var shiftPeriod: ShiftPeriod?
+    @State private var clockIn: Date?
+    @State private var clockOut: Date?
 
     init(target: TipEntrySheetTarget) {
         self.target = target
@@ -64,22 +63,27 @@ struct LogTipSheet: View {
                 _shiftPeriod = State(initialValue: hour < 16 ? .lunch : .dinner)
             }
         case .edit(let entry):
-            _amountCents = State(initialValue: entry.amountCents)
-            _kind = State(initialValue: entry.kind)
+            // A synchronous fallback seeded from the anchor entry alone —
+            // always available immediately, unlike the @Query-backed
+            // allEntries seedShiftDetailDefaults needs for the full shift.
+            // onAppear upgrades this to the true shift-level values (looking
+            // at every sibling entry too) the moment allEntries has caught
+            // up; until then, this is still correct for a single-entry
+            // shift and a reasonable placeholder otherwise.
+            if entry.kind == .cash {
+                _cashCents = State(initialValue: entry.amountCents)
+            } else {
+                _creditCents = State(initialValue: entry.amountCents)
+            }
             _date = State(initialValue: entry.date)
             _note = State(initialValue: entry.note ?? "")
-            // A synchronous fallback seeded from this entry alone — always
-            // available immediately, unlike the @Query-backed allEntries
-            // seedShiftDetailDefaults needs for the full night. onAppear
-            // upgrades this to the true shift-level value (looking at any
-            // sibling entry too) the moment allEntries has caught up; until
-            // then, this is still correct for a single-entry night and a
-            // reasonable placeholder otherwise.
             _hoursWorked = State(initialValue: entry.hoursWorked)
             _tipOutCents = State(initialValue: entry.tipOutCents ?? 0)
             _salesCents = State(initialValue: entry.salesCents ?? 0)
             _shiftPeriod = State(initialValue: entry.shiftPeriod)
-            _showMoreDetails = State(initialValue: entry.hoursWorked != nil || entry.tipOutCents != nil || entry.salesCents != nil || entry.shiftPeriod != nil)
+            _clockIn = State(initialValue: entry.clockIn)
+            _clockOut = State(initialValue: entry.clockOut)
+            _showMoreDetails = State(initialValue: entry.hoursWorked != nil || entry.tipOutCents != nil || entry.salesCents != nil || entry.shiftPeriod != nil || entry.clockIn != nil || entry.clockOut != nil)
         }
     }
 
@@ -101,19 +105,23 @@ struct LogTipSheet: View {
         return !hasCash && creditCount >= 3
     }
 
-    /// The most recently logged hours for this same weekday — lets a
-    /// regular Friday bartender see their usual number already sitting
-    /// there instead of having to remember and re-enter it every time.
-    private func suggestedHours(for date: Date) -> Double? {
+    /// The most recent same-weekday shift with both clock times logged —
+    /// lets a regular Friday bartender see their usual Started/Ended already
+    /// sitting there instead of having to remember and re-enter it every
+    /// time. Re-anchored onto the shift being logged in seedShiftDetailDefaults,
+    /// so only the hour/minute of the suggestion is actually used.
+    private func suggestedClockTimes(for date: Date) -> (`in`: Date, out: Date)? {
         let calendar = Calendar.current
         let weekday = calendar.component(.weekday, from: date)
-        return allEntries
-            .filter { $0.hoursWorked != nil && calendar.component(.weekday, from: $0.date) == weekday }
+        let match = allEntries
+            .filter { $0.clockIn != nil && $0.clockOut != nil && calendar.component(.weekday, from: $0.date) == weekday }
             .sorted { $0.date > $1.date }
-            .first?.hoursWorked
+            .first
+        guard let matchIn = match?.clockIn, let matchOut = match?.clockOut else { return nil }
+        return (in: matchIn, out: matchOut)
     }
 
-    /// Same per-weekday memory as hours, for tip-out.
+    /// Same per-weekday memory as clock times, for tip-out.
     private func suggestedTipOutCents(for date: Date) -> Int? {
         let calendar = Calendar.current
         let weekday = calendar.component(.weekday, from: date)
@@ -123,7 +131,7 @@ struct LogTipSheet: View {
             .first?.tipOutCents
     }
 
-    /// Same per-weekday memory as hours and tip-out, for sales.
+    /// Same per-weekday memory as clock times and tip-out, for sales.
     private func suggestedSalesCents(for date: Date) -> Int? {
         let calendar = Calendar.current
         let weekday = calendar.component(.weekday, from: date)
@@ -139,12 +147,19 @@ struct LogTipSheet: View {
     private func seedShiftDetailDefaults() {
         switch target {
         case .new:
-            if hoursWorked == nil { hoursWorked = suggestedHours(for: date) }
+            if clockIn == nil, clockOut == nil, let suggestion = suggestedClockTimes(for: date) {
+                let calendar = Calendar.current
+                let inComponents = calendar.dateComponents([.hour, .minute], from: suggestion.`in`)
+                let outComponents = calendar.dateComponents([.hour, .minute], from: suggestion.out)
+                clockIn = calendar.date(bySettingHour: inComponents.hour ?? 0, minute: inComponents.minute ?? 0, second: 0, of: date)
+                clockOut = calendar.date(bySettingHour: outComponents.hour ?? 0, minute: outComponents.minute ?? 0, second: 0, of: date)
+                hoursWorked = ShiftTimes.hours(clockIn: clockIn, clockOut: clockOut)
+            }
             if tipOutCents == 0 { tipOutCents = suggestedTipOutCents(for: date) ?? 0 }
             if salesCents == 0 { salesCents = suggestedSalesCents(for: date) ?? 0 }
             // A remembered default is still a value about to be saved —
             // show it rather than attach it silently.
-            if hoursWorked != nil || tipOutCents > 0 || salesCents > 0 { showMoreDetails = true }
+            if hoursWorked != nil || tipOutCents > 0 || salesCents > 0 || clockIn != nil || clockOut != nil { showMoreDetails = true }
         case .edit(let entry):
             // A fact about the whole shift, not this one entry — resolve
             // across every entry in the shift, same convention liveSaveEdit
@@ -155,20 +170,24 @@ struct LogTipSheet: View {
             // correct value init already seeded from `entry` directly.
             let shift = sameShiftEntries(around: entry)
             guard shift.contains(where: { $0.id == entry.id }) else { return }
+            cashCents = shift.filter { $0.kind == .cash }.reduce(0) { $0 + $1.amountCents }
+            creditCents = shift.filter { $0.kind == .credit }.reduce(0) { $0 + $1.amountCents }
             let resolved = ShiftDetails.resolve(from: shift)
             hoursWorked = resolved.hoursWorked
             tipOutCents = resolved.tipOutCents ?? 0
             salesCents = resolved.salesCents ?? 0
             shiftPeriod = resolved.shiftPeriod
-            showMoreDetails = hoursWorked != nil || tipOutCents > 0 || salesCents > 0 || shiftPeriod != nil
+            clockIn = resolved.clockIn
+            clockOut = resolved.clockOut
+            showMoreDetails = hoursWorked != nil || tipOutCents > 0 || salesCents > 0 || shiftPeriod != nil || clockIn != nil || clockOut != nil
         }
     }
 
     /// Every entry belonging to the same shift (closeout) as `entry` — the
-    /// rows sharing its shiftID — used to treat hours/tip-out/sales as one
-    /// shift-level fact instead of a per-entry one, even though ShiftDetails
-    /// physically stores them on a single TipEntry. Falls back to same-day
-    /// for a legacy entry with no shiftID yet (pre-migration).
+    /// rows sharing its shiftID — used to treat hours/tip-out/sales/times as
+    /// one shift-level fact instead of a per-entry one, even though
+    /// ShiftDetails physically stores them on a single TipEntry. Falls back
+    /// to same-day for a legacy entry with no shiftID yet (pre-migration).
     private func sameShiftEntries(around entry: TipEntry) -> [TipEntry] {
         if let shiftID = entry.shiftID {
             return allEntries.filter { $0.shiftID == shiftID }
@@ -193,26 +212,22 @@ struct LogTipSheet: View {
                     // keyboard automatically.
                     ScrollView {
                         VStack(spacing: 24) {
-                            if isEditing {
-                                editContent
-                            } else {
-                                logContent
-                            }
+                            shiftAmountContent
 
                             detailsCard
                             moreDetailsCard
 
                             if isEditing {
                                 Button(role: .destructive) { showDeleteConfirmation = true } label: {
-                                    Text("Delete Tip")
+                                    Text("Delete Shift")
                                         .frame(maxWidth: .infinity)
                                 }
                                 .buttonStyle(.glassProminent)
                                 .tint(PaydayColor.error)
                                 .padding(.horizontal)
                                 .padding(.top, 4)
-                                .confirmationDialog("Delete this tip?", isPresented: $showDeleteConfirmation, titleVisibility: .visible) {
-                                    Button("Delete Tip", role: .destructive) { delete() }
+                                .confirmationDialog("Delete this shift?", isPresented: $showDeleteConfirmation, titleVisibility: .visible) {
+                                    Button("Delete Shift", role: .destructive) { delete() }
                                 }
                             }
                         }
@@ -223,7 +238,7 @@ struct LogTipSheet: View {
                 }
             }
             .background(PaydayColor.background)
-            .navigationTitle(revealResult != nil ? "" : (isEditing ? "Edit Tips" : "Log Tips"))
+            .navigationTitle(revealResult != nil ? "" : (isEditing ? "Edit Shift" : "Log Shift"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 if revealResult == nil {
@@ -244,15 +259,24 @@ struct LogTipSheet: View {
                     }
                 }
             }
-            .onChange(of: amountCents) { _, _ in liveSaveEdit() }
-            .onChange(of: kind) { _, _ in liveSaveEdit() }
+            .onChange(of: cashCents) { _, _ in liveSaveEdit() }
+            .onChange(of: creditCents) { _, _ in liveSaveEdit() }
             .onChange(of: date) { _, _ in liveSaveEdit() }
             .onChange(of: note) { _, _ in liveSaveEdit() }
             .onChange(of: hoursWorked) { _, _ in liveSaveEdit() }
             .onChange(of: tipOutCents) { _, _ in liveSaveEdit() }
             .onChange(of: salesCents) { _, _ in liveSaveEdit() }
             .onChange(of: shiftPeriod) { _, _ in liveSaveEdit() }
+            .onChange(of: clockIn) { _, _ in
+                if clockIn != nil, clockOut != nil { hoursWorked = ShiftTimes.hours(clockIn: clockIn, clockOut: clockOut) }
+                liveSaveEdit()
+            }
+            .onChange(of: clockOut) { _, _ in
+                if clockIn != nil, clockOut != nil { hoursWorked = ShiftTimes.hours(clockIn: clockIn, clockOut: clockOut) }
+                liveSaveEdit()
+            }
             .onAppear { seedShiftDetailDefaults() }
+            .onDisappear { pruneZeroedRows() }
         }
         // Fixed height for the common case, plus .large as an escape hatch so
         // content is never clipped on smaller iPhones with the keypad up.
@@ -274,9 +298,9 @@ struct LogTipSheet: View {
         #endif
     }
 
-    // MARK: New log — cash + credit together
+    // MARK: Shift total — cash + credit together, new or edit alike
 
-    private var logContent: some View {
+    private var shiftAmountContent: some View {
         VStack(spacing: 16) {
             VStack(spacing: 4) {
                 Text("Shift total")
@@ -293,8 +317,8 @@ struct LogTipSheet: View {
             }
 
             VStack(spacing: 12) {
-                CurrencyAmountRow(label: "Cash", cents: $cashCents, field: .cash, focusedField: $focusedCurrencyField, autoFocus: !prefersCreditFirst)
-                CurrencyAmountRow(label: "Credit", cents: $creditCents, field: .credit, focusedField: $focusedCurrencyField, autoFocus: prefersCreditFirst)
+                CurrencyAmountRow(label: "Cash", cents: $cashCents, field: .cash, focusedField: $focusedCurrencyField, autoFocus: !isEditing && !prefersCreditFirst)
+                CurrencyAmountRow(label: "Credit", cents: $creditCents, field: .credit, focusedField: $focusedCurrencyField, autoFocus: !isEditing && prefersCreditFirst)
             }
             .padding(.horizontal)
         }
@@ -307,22 +331,6 @@ struct LogTipSheet: View {
                     }
                 }
             }
-        }
-    }
-
-    // MARK: Edit — single amount + kind
-
-    private var editContent: some View {
-        VStack(spacing: 16) {
-            CurrencyAmountField(cents: $amountCents, autoFocus: !debugSuppressAutoFocus)
-
-            Picker("Tip type", selection: $kind) {
-                ForEach(TipKind.allCases) { kind in
-                    Text(kind.displayName).tag(kind)
-                }
-            }
-            .pickerStyle(.segmented)
-            .padding(.horizontal)
         }
     }
 
@@ -366,23 +374,43 @@ struct LogTipSheet: View {
     }
 
     /// Optional shift details, collapsed by default unless already set —
-    /// hours today, tip-out and sales to follow. Never required: leaving
-    /// this closed logs exactly what the app always logged.
+    /// times, tip-out and sales. Never required: leaving this closed logs
+    /// exactly what the app always logged.
     private var moreDetailsCard: some View {
         card {
-            DisclosureGroup("Hours, tip-out, sales", isExpanded: $showMoreDetails) {
+            DisclosureGroup("Time, tip-out, sales", isExpanded: $showMoreDetails) {
                 VStack(spacing: 0) {
                     Divider().padding(.top, 14)
                     HStack {
-                        Text("Hours")
+                        Text("Started")
                         Spacer()
-                        Stepper(value: hoursStepperBinding, in: 0...16, step: 0.5) {
-                            Text(hoursWorked.map(Self.hoursLabel) ?? "Not logged")
-                                .foregroundStyle(PaydayColor.textSecondary)
+                        if clockIn != nil {
+                            DatePicker("", selection: clockInBinding, displayedComponents: .hourAndMinute)
+                                .labelsHidden()
+                        } else {
+                            Button("Set") { clockIn = defaultClockIn }
                         }
                     }
                     .padding(.vertical, 14)
                     Divider()
+                    HStack {
+                        Text("Ended")
+                        Spacer()
+                        if clockOut != nil {
+                            DatePicker("", selection: clockOutBinding, displayedComponents: .hourAndMinute)
+                                .labelsHidden()
+                        } else {
+                            Button("Set") { clockOut = defaultClockOut }
+                        }
+                    }
+                    .padding(.vertical, 14)
+                    if let hoursWorked {
+                        Text("That's \(Self.hoursLabel(hoursWorked)).")
+                            .font(PaydayFont.caption)
+                            .foregroundStyle(PaydayColor.textSecondary)
+                            .padding(.top, 8)
+                    }
+                    Divider().padding(.top, 14)
                     HStack {
                         Text("Tip-out")
                         Spacer()
@@ -401,6 +429,28 @@ struct LogTipSheet: View {
             .padding()
             .tint(PaydayColor.textPrimary)
         }
+    }
+
+    /// Lunch defaults to an 11am start; dinner (or no period set yet)
+    /// defaults to 5pm — a sensible first guess rather than "now," which
+    /// would be wrong for a backfilled past day.
+    private var defaultClockIn: Date {
+        let hour = shiftPeriod == .lunch ? 11 : 17
+        return Calendar.current.date(bySettingHour: hour, minute: 0, second: 0, of: date) ?? date
+    }
+
+    /// Lunch defaults to a 4pm end; dinner (or nil) defaults to 11pm.
+    private var defaultClockOut: Date {
+        let hour = shiftPeriod == .lunch ? 16 : 23
+        return Calendar.current.date(bySettingHour: hour, minute: 0, second: 0, of: date) ?? date
+    }
+
+    private var clockInBinding: Binding<Date> {
+        Binding(get: { clockIn ?? defaultClockIn }, set: { clockIn = $0 })
+    }
+
+    private var clockOutBinding: Binding<Date> {
+        Binding(get: { clockOut ?? defaultClockOut }, set: { clockOut = $0 })
     }
 
     /// Screenshot/QA hook only: lets a launch argument force the keyboard
@@ -426,15 +476,11 @@ struct LogTipSheet: View {
         #endif
     }
 
-    private var hoursStepperBinding: Binding<Double> {
-        Binding(
-            get: { hoursWorked ?? 0 },
-            set: { hoursWorked = $0 > 0 ? $0 : nil }
-        )
-    }
-
     private static func hoursLabel(_ hours: Double) -> String {
-        var formatted = String(format: "%.2f", (hours * 2).rounded() / 2)
+        // Quarter-hour precision, matching what ShiftTimes computes from the
+        // Started/Ended pair — a 9:30-5:15 shift must caption as 7.75, not
+        // round itself up to 8 while the times right above say otherwise.
+        var formatted = String(format: "%.2f", (hours * 4).rounded() / 4)
         while formatted.hasSuffix("0") { formatted.removeLast() }
         if formatted.hasSuffix(".") { formatted.removeLast() }
         return "\(formatted) hrs"
@@ -492,7 +538,7 @@ struct LogTipSheet: View {
         }
         // Shift-level details land on one canonical entry (credit
         // preferred), never split across both — see ShiftDetails.
-        ShiftDetails.write(hoursWorked: hoursWorked, tipOutCents: effectiveTipOutCents, salesCents: effectiveSalesCents, shiftPeriod: shiftPeriod, into: newEntries)
+        ShiftDetails.write(hoursWorked: hoursWorked, tipOutCents: effectiveTipOutCents, salesCents: effectiveSalesCents, shiftPeriod: shiftPeriod, clockIn: clockIn, clockOut: clockOut, into: newEntries)
 
         revealResult = reveal
         revealGrossAndTipOut = effectiveTipOutCents.map { (grossCents: totalCents, tipOutCents: $0) }
@@ -504,14 +550,35 @@ struct LogTipSheet: View {
         PaydayWidgetRefresh.request()
     }
 
-    /// Edit flow: every field change writes straight through to the entry.
+    /// Edit flow: every field change writes straight through to the shift.
     /// Routine, reversible edits stay silent — no haptic on every keystroke.
+    /// Cash and credit are now each their own row across the whole shift
+    /// (not one entry's amount+kind), so this reconciles the shift's actual
+    /// rows against the two on-screen totals: an existing row gets its
+    /// amount updated (or zeroed, or deleted if it's not the anchor), and a
+    /// kind with no existing row yet gets a fresh one inserted.
     private func liveSaveEdit() {
-        guard case .edit(let entry) = target else { return }
-        entry.date = Calendar.current.startOfDay(for: min(date, .now))
-        entry.amountCents = amountCents
-        entry.kind = kind
-        entry.note = note.isEmpty ? nil : note
+        guard case .edit(let anchor) = target else { return }
+        var rows = sameShiftEntries(around: anchor)
+        guard rows.contains(where: { $0.id == anchor.id }) else { return }
+        let normalizedDate = Calendar.current.startOfDay(for: min(date, .now))
+        let trimmedNote = note.isEmpty ? nil : note
+        for kind in [TipKind.cash, .credit] {
+            let cents = kind == .cash ? cashCents : creditCents
+            if let row = rows.first(where: { $0.kind == kind }) {
+                if cents > 0 || row.id == anchor.id || rows.count == 1 {
+                    row.amountCents = cents          // never delete the anchor mid-edit
+                } else {
+                    modelContext.delete(row)          // non-anchor row zeroed out
+                    rows.removeAll { $0.id == row.id }
+                }
+            } else if cents > 0 {
+                let newRow = TipEntry(date: normalizedDate, amountCents: cents, kind: kind, note: trimmedNote, recordedAt: .now, shiftID: anchor.shiftID)
+                modelContext.insert(newRow)
+                rows.append(newRow)
+            }
+        }
+        for row in rows { row.date = normalizedDate; row.note = trimmedNote }
 
         // Shift-level details land on the shift's one canonical entry
         // (credit preferred, same convention as saveNew) and get cleared
@@ -522,15 +589,39 @@ struct LogTipSheet: View {
             tipOutCents: tipOutCents > 0 ? tipOutCents : nil,
             salesCents: salesCents > 0 ? salesCents : nil,
             shiftPeriod: shiftPeriod,
-            into: sameShiftEntries(around: entry)
+            clockIn: clockIn,
+            clockOut: clockOut,
+            into: rows
         )
 
         PaydayWidgetRefresh.request()
     }
 
+    /// A row that got zeroed out mid-edit (cash typed down to 0 while
+    /// credit carries the shift, say) is deleted immediately by
+    /// liveSaveEdit's reconciliation above — but the anchor itself is
+    /// deliberately never deleted while its sheet is still open, so this
+    /// sweeps it up too if it's the one left holding a zero when the sheet
+    /// closes. Always leaves at least one row behind.
+    private func pruneZeroedRows() {
+        guard case .edit(let anchor) = target else { return }
+        let rows = sameShiftEntries(around: anchor)
+        guard rows.count > 1 else { return }
+        let zeroed = rows.filter { $0.amountCents == 0 }
+        guard zeroed.count < rows.count else {
+            // Every row is zero — keep the first so the shift isn't silently
+            // erased out from under the person who just closed the sheet.
+            for row in zeroed.dropFirst() { modelContext.delete(row) }
+            return
+        }
+        for row in zeroed { modelContext.delete(row) }
+    }
+
     private func delete() {
         if case .edit(let entry) = target {
-            modelContext.delete(entry)
+            for row in sameShiftEntries(around: entry) {
+                modelContext.delete(row)
+            }
         }
         PaydayWidgetRefresh.request()
         dismiss()

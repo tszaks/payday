@@ -118,6 +118,27 @@ struct ShiftDetailsWriteTests {
         #expect(entry.shiftPeriod == nil)
     }
 
+    @Test("clockIn/clockOut land on the primary and are cleared from every other entry, same as the other four fields")
+    func clockTimesFollowTheSamePrimaryRule() {
+        let credit = TipEntry(date: date(2026, 7, 1), amountCents: 8600, kind: .credit, hoursWorked: 5, shiftPeriod: .dinner, clockIn: date(2026, 7, 1), clockOut: date(2026, 7, 1))
+        let cash = TipEntry(date: date(2026, 7, 1), amountCents: 3200, kind: .cash, hoursWorked: 5, shiftPeriod: .dinner, clockIn: date(2026, 7, 1), clockOut: date(2026, 7, 1))
+        let clockIn = date(2026, 7, 2)
+        let clockOut = date(2026, 7, 3)
+        ShiftDetails.write(hoursWorked: 6, tipOutCents: nil, salesCents: nil, shiftPeriod: .dinner, clockIn: clockIn, clockOut: clockOut, into: [cash, credit])
+        #expect(credit.clockIn == clockIn)
+        #expect(credit.clockOut == clockOut)
+        #expect(cash.clockIn == nil)
+        #expect(cash.clockOut == nil)
+    }
+
+    @Test("existing call sites that never pass clockIn/clockOut keep compiling via the defaulted params, and default to nil")
+    func clockTimesDefaultToNilWhenOmitted() {
+        let entry = TipEntry(date: date(2026, 7, 1), amountCents: 5000, kind: .cash, clockIn: date(2026, 7, 1), clockOut: date(2026, 7, 1))
+        ShiftDetails.write(hoursWorked: 5, tipOutCents: nil, salesCents: nil, shiftPeriod: nil, into: [entry])
+        #expect(entry.clockIn == nil)
+        #expect(entry.clockOut == nil)
+    }
+
     @Test("two shifts on the same day don't cross-contaminate — each write touches only its own shift")
     func twoShiftsSameDayStayIndependent() {
         let lunchID = UUID()

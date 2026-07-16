@@ -12,12 +12,15 @@ struct DeletedTipSnapshot {
     let note: String?
     let recordedAt: Date?
     // Captured so an undo rejoins the exact shift it left, with its
-    // canonical hours/tip-out/sales/period intact — all previously dropped.
+    // canonical hours/tip-out/sales/period/clock-times intact — all
+    // previously dropped.
     let shiftID: UUID?
     let hoursWorked: Double?
     let tipOutCents: Int?
     let salesCents: Int?
     let shiftPeriod: ShiftPeriod?
+    let clockIn: Date?
+    let clockOut: Date?
 
     init(entry: TipEntry) {
         id = entry.id
@@ -31,42 +34,49 @@ struct DeletedTipSnapshot {
         tipOutCents = entry.tipOutCents
         salesCents = entry.salesCents
         shiftPeriod = entry.shiftPeriod
+        clockIn = entry.clockIn
+        clockOut = entry.clockOut
     }
 
     func restored() -> TipEntry {
-        TipEntry(id: id, date: date, amountCents: amountCents, kind: kind, note: note, recordedAt: recordedAt, hoursWorked: hoursWorked, tipOutCents: tipOutCents, salesCents: salesCents, shiftPeriod: shiftPeriod, shiftID: shiftID)
+        TipEntry(id: id, date: date, amountCents: amountCents, kind: kind, note: note, recordedAt: recordedAt, hoursWorked: hoursWorked, tipOutCents: tipOutCents, salesCents: salesCents, shiftPeriod: shiftPeriod, shiftID: shiftID, clockIn: clockIn, clockOut: clockOut)
     }
 }
 
 /// Immediate delete + Undo toast — Apple's own grammar (Mail, Reminders,
 /// Notes) for a destructive swipe action. Deletes right away rather than
-/// asking first; Undo is the safety net, not a dialog.
+/// asking first; Undo is the safety net, not a dialog. Operates on a whole
+/// shift's rows at once now (a merged cash+credit closeout deletes and
+/// undoes together), never a lone entry.
 @MainActor
 @Observable
 final class UndoDeleteToastState {
-    private(set) var snapshot: DeletedTipSnapshot?
+    private(set) var snapshots: [DeletedTipSnapshot] = []
     private var dismissTask: Task<Void, Never>?
 
-    func delete(_ entry: TipEntry, in context: ModelContext) {
+    var snapshot: DeletedTipSnapshot? { snapshots.first }
+
+    func delete(_ entries: [TipEntry], in context: ModelContext) {
+        guard !entries.isEmpty else { return }
         dismissTask?.cancel()
-        snapshot = DeletedTipSnapshot(entry: entry)
-        context.delete(entry)
+        snapshots = entries.map(DeletedTipSnapshot.init)
+        for entry in entries { context.delete(entry) }
         try? context.save()
         PaydayHaptics.medium()
         PaydayWidgetRefresh.request()
         dismissTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(4))
             guard !Task.isCancelled else { return }
-            self?.snapshot = nil
+            self?.snapshots = []
         }
     }
 
     func undo(in context: ModelContext) {
-        guard let snapshot else { return }
+        guard !snapshots.isEmpty else { return }
         dismissTask?.cancel()
-        context.insert(snapshot.restored())
+        for snapshot in snapshots { context.insert(snapshot.restored()) }
         try? context.save()
-        self.snapshot = nil
+        snapshots = []
         PaydayHaptics.success()
         PaydayWidgetRefresh.request()
     }
@@ -90,7 +100,7 @@ private struct UndoDeleteToastModifier: ViewModifier {
 
     private var toast: some View {
         HStack {
-            Text("Tip deleted")
+            Text("Shift deleted")
                 .font(PaydayFont.subheadline)
                 .foregroundStyle(PaydayColor.textPrimary)
             Spacer()

@@ -26,6 +26,10 @@ struct ShiftDayRow: View {
         var parts: [String] = []
         if breakdown.cashCents > 0, breakdown.creditCents > 0 {
             parts.append("Cash \(Money.string(fromCents: breakdown.cashCents)) · Credit \(Money.string(fromCents: breakdown.creditCents))")
+        } else if breakdown.creditCents > 0 {
+            parts.append("Credit")
+        } else if breakdown.cashCents > 0 {
+            parts.append("Cash")
         } else {
             parts.append(entries.first?.kind.displayName ?? "")
         }
