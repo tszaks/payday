@@ -11,14 +11,20 @@ private func date(_ year: Int, _ month: Int, _ day: Int) -> Date {
     return calendar.date(from: DateComponents(year: year, month: month, day: day))!
 }
 
-private func record(_ year: Int, _ month: Int, _ day: Int, cents: Int, kind: TipKind = .cash, isDouble: Bool = false, recordedHour: Int? = nil, hoursWorked: Double? = nil, tipOutCents: Int? = nil, salesCents: Int? = nil, shiftPeriod: ShiftPeriod? = nil, shiftID: UUID? = nil) -> TipRecord {
+private func record(_ year: Int, _ month: Int, _ day: Int, cents: Int, kind: TipKind = .cash, isDouble: Bool = false, recordedHour: Int? = nil, hoursWorked: Double? = nil, tipOutCents: Int? = nil, salesCents: Int? = nil, shiftPeriod: ShiftPeriod? = nil, shiftID: UUID? = nil, clockInHour: Int? = nil, clockOutHour: Int? = nil) -> TipRecord {
     let shiftDate = date(year, month, day)
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone.current
     let recordedAt = recordedHour.flatMap { hour in
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = TimeZone.current
-        return calendar.date(bySettingHour: hour, minute: 0, second: 0, of: shiftDate)
+        calendar.date(bySettingHour: hour, minute: 0, second: 0, of: shiftDate)
     }
-    return TipRecord(date: shiftDate, amountCents: cents, kind: kind, isDouble: isDouble, recordedAt: recordedAt, hoursWorked: hoursWorked, tipOutCents: tipOutCents, salesCents: salesCents, shiftPeriod: shiftPeriod, shiftID: shiftID)
+    let clockIn = clockInHour.flatMap { hour in
+        calendar.date(bySettingHour: hour, minute: 0, second: 0, of: shiftDate)
+    }
+    let clockOut = clockOutHour.flatMap { hour in
+        calendar.date(bySettingHour: hour, minute: 0, second: 0, of: shiftDate)
+    }
+    return TipRecord(date: shiftDate, amountCents: cents, kind: kind, isDouble: isDouble, recordedAt: recordedAt, hoursWorked: hoursWorked, tipOutCents: tipOutCents, salesCents: salesCents, shiftPeriod: shiftPeriod, shiftID: shiftID, clockIn: clockIn, clockOut: clockOut)
 }
 
 /// Two distinct shift ids for building emergent "double" days in tests — a
@@ -565,6 +571,41 @@ struct MovesTests {
         ]
         let engine = StatsEngine(records: records)
         #expect(engine.moves(referenceDate: date(2026, 7, 24)).first { $0.id == "rateLeader" } != nil)
+    }
+
+    @Test("start-time leader fires when one start-hour bucket clearly out-earns per hour")
+    func startTimeLeaderFires() {
+        let records = [
+            record(2026, 7, 3, cents: 3000, hoursWorked: 2, clockInHour: 17),
+            record(2026, 7, 10, cents: 3100, hoursWorked: 2, clockInHour: 17),
+            record(2026, 7, 17, cents: 2900, hoursWorked: 2, clockInHour: 17),
+            record(2026, 6, 29, cents: 1200, hoursWorked: 2, clockInHour: 11),
+            record(2026, 7, 6, cents: 1300, hoursWorked: 2, clockInHour: 11),
+            record(2026, 7, 13, cents: 1100, hoursWorked: 2, clockInHour: 11)
+        ]
+        let engine = StatsEngine(records: records)
+        let leader = engine.moves(referenceDate: date(2026, 7, 24)).first { $0.id == "startTimeLeader" }
+        #expect(leader != nil)
+        // Computed the same way production's hourLabel does, so this stays
+        // correct regardless of the test runner's locale/region.
+        let bestHourLabel = Calendar.current.date(bySettingHour: 17, minute: 0, second: 0, of: .now)!.formatted(.dateTime.hour())
+        #expect(leader?.title.contains(bestHourLabel) == true)
+    }
+
+    @Test("start-time leader stays silent when a real-looking $/hr delta sits inside noisy history")
+    func startTimeLeaderSilencedByHighVariance() {
+        let records = [
+            record(2026, 7, 3, cents: 2000, hoursWorked: 1, clockInHour: 17),
+            record(2026, 7, 10, cents: 10000, hoursWorked: 1, clockInHour: 17),
+            record(2026, 7, 17, cents: 2000, hoursWorked: 1, clockInHour: 17),
+            record(2026, 6, 29, cents: 500, hoursWorked: 1, clockInHour: 11),
+            record(2026, 7, 6, cents: 7000, hoursWorked: 1, clockInHour: 11),
+            record(2026, 7, 13, cents: 500, hoursWorked: 1, clockInHour: 11)
+        ]
+        let engine = StatsEngine(records: records)
+        // Same $20/hr-ish delta as startTimeLeaderFires' spread, but wide
+        // enough per-bucket variance that it shouldn't read as real signal.
+        #expect(engine.moves(referenceDate: date(2026, 7, 24)).first { $0.id == "startTimeLeader" } == nil)
     }
 }
 
@@ -1292,6 +1333,62 @@ struct InsightsFactsTests {
         #expect(rate?.lunchDollarsPerHour == 10)
         #expect(rate.map { abs($0.dinnerDollarsPerHour! - (150.0 / 14)) < 0.001 } == true)
     }
+
+    @Test("start-time facts pick the correct best/worst hours, rates, and counts across two qualifying buckets")
+    func startTimeFactsTwoBuckets() {
+        let records = [
+            record(2026, 7, 1, cents: 20000, hoursWorked: 5, clockInHour: 17),
+            record(2026, 7, 2, cents: 20000, hoursWorked: 5, clockInHour: 17),
+            record(2026, 7, 3, cents: 20000, hoursWorked: 5, clockInHour: 17),
+            record(2026, 7, 4, cents: 10000, hoursWorked: 5, clockInHour: 16),
+            record(2026, 7, 5, cents: 10000, hoursWorked: 5, clockInHour: 16),
+            record(2026, 7, 6, cents: 10000, hoursWorked: 5, clockInHour: 16)
+        ]
+        let engine = StatsEngine(records: records)
+        let startTime = engine.insightsFacts(referenceDate: date(2026, 7, 10))?.startTime
+        #expect(startTime?.bestStartHour == 17)
+        #expect(startTime?.bestDollarsPerHour == 40)
+        #expect(startTime?.bestShiftCount == 3)
+        #expect(startTime?.worstStartHour == 16)
+        #expect(startTime?.worstDollarsPerHour == 20)
+        #expect(startTime?.worstShiftCount == 3)
+    }
+
+    @Test("start-time facts are nil with only one qualifying bucket — nothing to be 'best' or 'worst' against")
+    func startTimeFactsNilWithOneBucket() {
+        let records = (1...5).map { record(2026, 7, $0, cents: 10000, hoursWorked: 5, clockInHour: 17) }
+        let engine = StatsEngine(records: records)
+        #expect(engine.insightsFacts(referenceDate: date(2026, 7, 10))?.startTime == nil)
+    }
+
+    @Test("start-time facts are nil when no bucket reaches the minimum shift count")
+    func startTimeFactsNilBelowBucketMinimum() {
+        let records = [
+            record(2026, 7, 1, cents: 10000, hoursWorked: 5, clockInHour: 17),
+            record(2026, 7, 2, cents: 10000, hoursWorked: 5, clockInHour: 17),
+            record(2026, 7, 3, cents: 10000, hoursWorked: 5, clockInHour: 16),
+            record(2026, 7, 4, cents: 10000, hoursWorked: 5, clockInHour: 16),
+            record(2026, 7, 5, cents: 10000) // padding to clear the insights minimum; no hours/clock-in of its own
+        ]
+        let engine = StatsEngine(records: records)
+        #expect(engine.insightsFacts(referenceDate: date(2026, 7, 10))?.startTime == nil)
+    }
+
+    @Test("shifts with hours but no clock-in are excluded from start-time bucketing entirely")
+    func startTimeFactsExcludesShiftsWithoutClockIn() {
+        let records = [
+            record(2026, 7, 1, cents: 10000, hoursWorked: 5, clockInHour: 17),
+            record(2026, 7, 2, cents: 10000, hoursWorked: 5, clockInHour: 17),
+            record(2026, 7, 3, cents: 10000, hoursWorked: 5, clockInHour: 17),
+            record(2026, 7, 4, cents: 10000, hoursWorked: 5), // hours, but no clock-in
+            record(2026, 7, 5, cents: 10000, hoursWorked: 5),
+            record(2026, 7, 6, cents: 10000, hoursWorked: 5)
+        ]
+        let engine = StatsEngine(records: records)
+        // If the no-clock-in shifts wrongly formed a second bucket, this
+        // would be non-nil — the whole point of this test is that they don't.
+        #expect(engine.insightsFacts(referenceDate: date(2026, 7, 10))?.startTime == nil)
+    }
 }
 
 @Suite("Insights facts copy (no-AI fallback)")
@@ -1322,5 +1419,19 @@ struct InsightsFactsCopyTests {
         for section in InsightsFactsCopy.sections(for: facts) {
             #expect(!section.body.lowercased().contains("entries"))
         }
+    }
+
+    @Test("start times section appears only when start-time facts exist")
+    func startTimesSectionAppearsWhenPresent() {
+        var facts = InsightsFacts(totalCents: 10000, shiftCount: 5, averagePerShiftCents: 2000, topDays: [], cashCents: 4000, creditCents: 6000, lunchDinner: nil, doublesSolo: nil)
+        facts.startTime = StartTimeFacts(bestStartHour: 17, bestDollarsPerHour: 34, bestShiftCount: 6, worstStartHour: 16, worstDollarsPerHour: 27, worstShiftCount: 4)
+        let sections = InsightsFactsCopy.sections(for: facts)
+        #expect(sections.contains { $0.title == "Start Times" })
+        let body = sections.first { $0.title == "Start Times" }?.body ?? ""
+        // Computed the same way production's hourLabel does, so this stays
+        // correct regardless of the test runner's locale/region.
+        let bestHourLabel = Calendar.current.date(bySettingHour: 17, minute: 0, second: 0, of: .now)!.formatted(.dateTime.hour())
+        #expect(body.contains(bestHourLabel))
+        #expect(body.contains("6 nights")) // matches the nightsPhrase convention every other section here uses
     }
 }

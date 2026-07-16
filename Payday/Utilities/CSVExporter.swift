@@ -6,14 +6,14 @@ import Foundation
 /// double day produces two rows, one per closeout, distinguished by the
 /// Shift column and both flagged Double.
 ///
-/// Hours/Tip-Out/Sales are shift-level facts, not per-entry ones: each
-/// column reflects ShiftDetails.resolve's single canonical value (credit
-/// entry preferred, else cash), never a sum across the shift's entries —
-/// a shift with a stray value on both entries (legacy data) still reports
-/// one number here, matching every other reader in the app, rather than
-/// double-counting it.
+/// Hours/Start/End/Tip-Out/Sales are shift-level facts, not per-entry ones:
+/// each column reflects ShiftDetails.resolve's single canonical value
+/// (credit entry preferred, else cash), never a sum across the shift's
+/// entries — a shift with a stray value on both entries (legacy data) still
+/// reports one number here, matching every other reader in the app, rather
+/// than double-counting it.
 enum CSVExporter {
-    static let header = "Date,Shift,Cash,Credit,Tip-Out,Net,Hours,Sales,Double,Note,Period,Paycheck"
+    static let header = "Date,Shift,Cash,Credit,Tip-Out,Net,Hours,Start,End,Sales,Double,Note,Period,Paycheck"
 
     static func export(entries: [TipEntry], paycheckRecords: [PaycheckRecord], calculator: PayPeriodCalculator, calendar: Calendar = .current) -> String {
         let shifts = ShiftDays.groupedByShift(entries, shiftID: \.shiftID, date: \.date, period: \.shiftPeriod, calendar: calendar)
@@ -42,6 +42,8 @@ enum CSVExporter {
         // literal was slow enough to trip the type checker's time budget.
         let tipOutField: String = shiftDetails.tipOutCents.map(dollars) ?? ""
         let hoursField: String = shiftDetails.hoursWorked.map(trimmedHours) ?? ""
+        let startField: String = shiftDetails.clockIn.map { time24($0, calendar: calendar) } ?? ""
+        let endField: String = shiftDetails.clockOut.map { time24($0, calendar: calendar) } ?? ""
         let salesField: String = shiftDetails.salesCents.map(dollars) ?? ""
         let paycheckField: String = paycheck.map { dollars($0.paidTipsCents) } ?? ""
         let periodField = "\(isoDate(period.start)) to \(isoDate(period.end))"
@@ -54,6 +56,8 @@ enum CSVExporter {
             tipOutField,
             dollars(netCents),
             hoursField,
+            startField,
+            endField,
             salesField,
             dayHasMultipleShifts ? "Y" : "N",
             escape(note),
@@ -76,6 +80,15 @@ enum CSVExporter {
         while formatted.hasSuffix("0") { formatted.removeLast() }
         if formatted.hasSuffix(".") { formatted.removeLast() }
         return formatted
+    }
+
+    /// Fixed 24-hour "HH:mm" — deliberately locale-independent, unlike the
+    /// am/pm rendering Moves and Insights narration use for prose. A CSV
+    /// column needs one unambiguous format regardless of who opens it, same
+    /// reasoning as isoDate below.
+    private static func time24(_ date: Date, calendar: Calendar) -> String {
+        let components = calendar.dateComponents([.hour, .minute], from: date)
+        return String(format: "%02d:%02d", components.hour ?? 0, components.minute ?? 0)
     }
 
     /// Quotes and escapes a field only when it actually needs it — a plain

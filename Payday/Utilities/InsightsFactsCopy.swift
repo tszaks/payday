@@ -25,6 +25,9 @@ enum InsightsFactsCopy {
         if let sales = facts.sales {
             sections.append(tipPercent(sales))
         }
+        if let startTime = facts.startTime {
+            sections.append(startTimes(startTime))
+        }
         return sections
     }
 
@@ -79,5 +82,22 @@ enum InsightsFactsCopy {
             body += " \(weekdayName) tips best at \(String(format: "%.1f", bestPercent))% across \(nightsPhrase(count))."
         }
         return InsightSection(title: "Tip Percent", body: body)
+    }
+
+    /// We only ever know a shift's total, never how pay was distributed
+    /// within it — so this is honestly a shift-vs-shift comparison by start
+    /// hour, never a claim about a specific minute (see StartTimeFacts).
+    private static func startTimes(_ facts: StartTimeFacts) -> InsightSection {
+        let body = "Shifts starting around \(hourLabel(facts.bestStartHour)) average \(Money.wholeDollarString(fromCents: Int((facts.bestDollarsPerHour * 100).rounded())))/hr across \(nightsPhrase(facts.bestShiftCount)). Shifts starting around \(hourLabel(facts.worstStartHour)) average \(Money.wholeDollarString(fromCents: Int((facts.worstDollarsPerHour * 100).rounded())))/hr across \(nightsPhrase(facts.worstShiftCount))."
+        return InsightSection(title: "Start Times", body: body)
+    }
+
+    /// Same locale-respecting rendering as StatsEngine's own hourLabel — an
+    /// actual Date at that hour, formatted by Date.FormatStyle rather than
+    /// hand-rolled am/pm math.
+    private static func hourLabel(_ hour: Int) -> String {
+        let calendar = Calendar.current
+        let anchored = calendar.date(bySettingHour: hour, minute: 0, second: 0, of: .now) ?? .now
+        return anchored.formatted(.dateTime.hour())
     }
 }

@@ -138,6 +138,13 @@ enum InsightsService {
             }
             lines.append(salesLine)
         }
+        if let startTime = facts.startTime {
+            let bestHour = hourLabel(startTime.bestStartHour)
+            let worstHour = hourLabel(startTime.worstStartHour)
+            let bestRate = Money.wholeDollarString(fromCents: Int((startTime.bestDollarsPerHour * 100).rounded()))
+            let worstRate = Money.wholeDollarString(fromCents: Int((startTime.worstDollarsPerHour * 100).rounded()))
+            lines.append("START TIMES: shifts starting around \(bestHour) average \(bestRate)/hr across \(startTime.bestShiftCount == 1 ? "1 shift" : "\(startTime.bestShiftCount) shifts"); around \(worstHour) average \(worstRate)/hr across \(startTime.worstShiftCount == 1 ? "1 shift" : "\(startTime.worstShiftCount) shifts").")
+        }
 
         if let topMove {
             lines.append("TOP MOVE (already shown to the reader as its own card, above everything you write - do not repeat it as a section; only weave it into the final suggestion section if it genuinely strengthens it): \(topMove.title) - \(topMove.body)")
@@ -153,5 +160,14 @@ enum InsightsService {
             promptSections = ["PREVIOUS ANALYSIS (amend this, do not rewrite from scratch):", previous, ""] + promptSections
         }
         return promptSections.joined(separator: "\n")
+    }
+
+    /// Same locale-respecting rendering as StatsEngine's own hourLabel — an
+    /// actual Date at that hour, formatted by Date.FormatStyle rather than
+    /// hand-rolled am/pm math.
+    private static func hourLabel(_ hour: Int) -> String {
+        let calendar = Calendar.current
+        let anchored = calendar.date(bySettingHour: hour, minute: 0, second: 0, of: .now) ?? .now
+        return anchored.formatted(.dateTime.hour())
     }
 }
