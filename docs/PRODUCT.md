@@ -237,6 +237,19 @@ CloudKit-safe `kindRaw` pattern applied to genuinely-optional fields — plain
 and "entered as zero" have to stay distinguishable facts, never collapsed
 into a defaulted non-optional.
 
+- **The entry layer never surfaces in the UI (2026-07-16).** A shift is the
+  only object a user touches. Tapping any shift row opens ONE sheet shaped
+  exactly like logging — Cash + Credit, one Date, one Note, one Lunch/Dinner
+  picker, one Started/Ended time pair, one tip-out, one sales — never a list
+  of entries, never the same fact asked per tip type. Cash/credit rows are
+  storage only; the edit sheet reconciles them against the two on-screen
+  amounts. Delete/Duplicate/Undo act on whole shifts.
+- **Hours are computed, never counted (2026-07-16).** `clockIn`/`clockOut`
+  on `TipEntry` (shift-level, via ShiftDetails); `ShiftTimes.hours` measures
+  the pair wrap-aware (overnight closeouts work) at quarter-hour precision
+  and writes `hoursWorked`, which stays the analytical source of truth for
+  $/hr. Started/Ended rows replaced the hours stepper; per-weekday time
+  suggestions replaced hour suggestions.
 - **A shift = one closeout, a day = a collection of shifts (2026-07-16).**
   Servers close out after each shift, so a "double" is not a toggle — it's
   simply two shifts logged the same day (a lunch closeout, then a dinner
