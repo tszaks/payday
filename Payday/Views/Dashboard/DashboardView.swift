@@ -248,12 +248,11 @@ struct DashboardView: View {
                         .monospacedDigit()
                         .animation(PaydayAnimation.premiumSpring, value: paceDeltaCents > 0)
                 }
-                if let projectedTotalCents = facts.projectedTotalCents {
-                    Text(RevealCopy.projectionLine(cents: projectedTotalCents))
-                        .font(PaydayFont.caption)
-                        .foregroundStyle(PaydayColor.textSecondary)
-                        .monospacedDigit()
-                }
+                // Projection line removed: it overlapped the pace line above
+                // (two framings of the same trajectory). Pace stays — it's
+                // grounded in real logged history on both sides and it's the
+                // screen's one green moment; projection was the softer of the
+                // two. (Still computed for the widget/Insights.)
             }
 
             if facts.totalCents > 0 {
@@ -302,12 +301,10 @@ struct DashboardView: View {
             .accessibilityLabel("Pay period progress")
             .accessibilityValue(facts.daysRemaining == 0 ? "Last day" : "\(facts.daysRemaining) days left")
 
+            // The bar already shows how far through the period you are, so
+            // "N days left" was the same fact twice — only the payday date
+            // remains, labeling where the bar ends.
             HStack {
-                if facts.daysRemaining > 0 {
-                    Text(facts.daysRemaining == 1 ? "1 day left" : "\(facts.daysRemaining) days left")
-                        .font(PaydayFont.caption2)
-                        .foregroundStyle(PaydayColor.textTertiary)
-                }
                 Spacer()
                 Text("Payday · \(facts.predictedPayDate.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day()))")
                     .font(PaydayFont.caption2)

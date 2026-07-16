@@ -46,13 +46,6 @@ struct PeriodDetailView: View {
         nightsInPeriod.reduce(0) { $0 + $1.cents }
     }
 
-    /// Nil when nothing was tipped out this period — keeps that caption
-    /// off the hero entirely rather than showing "$0 tipped out."
-    private var totalTipOutCents: Int? {
-        let total = entries.compactMap(\.tipOutCents).reduce(0, +)
-        return total > 0 ? total : nil
-    }
-
     /// Only this period's own entries feed the rate — a different period's
     /// $/hr belongs on that period's detail screen, not this one.
     private var averageDollarsPerHour: Double? {
@@ -151,15 +144,6 @@ struct PeriodDetailView: View {
             .font(PaydayFont.footnote)
             .monospacedDigit()
             .foregroundStyle(PaydayColor.textSecondary)
-            if let totalTipOutCents {
-                // Gross is the cash/credit split above; this keeps the
-                // tip-out that turned it into the net headline one glance
-                // away too, never hidden.
-                Text("\(Money.string(fromCents: totalTipOutCents)) tipped out")
-                    .font(PaydayFont.caption)
-                    .monospacedDigit()
-                    .foregroundStyle(PaydayColor.textSecondary)
-            }
             if let averageDollarsPerHour {
                 Text("Averaging \(Money.wholeDollarString(fromCents: Int((averageDollarsPerHour * 100).rounded())))/hr")
                     .font(PaydayFont.caption)
