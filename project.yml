@@ -50,6 +50,13 @@ targets:
         UIBackgroundModes:
           - remote-notification
         NSFaceIDUsageDescription: Payday can lock itself with Face ID when you turn that on in Settings.
+        # Lock Screen / StandBy accessory widgets can't host an interactive
+        # button (see PaydayWidgetAccessoryViews.swift) — widgetURL + this
+        # URL scheme is the only way one of those taps can reach the app.
+        CFBundleURLTypes:
+          - CFBundleURLName: com.szakacsmedia.payday
+            CFBundleURLSchemes:
+              - payday
     dependencies:
       - target: PaydayWidget
         embed: true

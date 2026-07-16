@@ -1,11 +1,15 @@
 import SwiftUI
 
-/// Which currency row the keypad is driving — owned by the parent (LogTipSheet)
-/// so a keyboard toolbar "Next" button can move focus from one row to another;
-/// a numberPad has no built-in Next/Return key of its own.
+/// Which currency field the keypad is driving — owned by the parent
+/// (LogTipSheet) so a keyboard toolbar "Next" button can move focus from one
+/// field to another; a numberPad has no built-in Next/Return key of its own.
+/// tipOut/sales are the same shared focus chain (see CompactCurrencyField in
+/// LogTipSheet.swift), so the whole sheet is reachable bottom-thumb-only.
 enum CurrencyRowField: Hashable {
     case cash
     case credit
+    case tipOut
+    case sales
 }
 
 /// A labeled, cents-based currency entry as a self-contained rounded field

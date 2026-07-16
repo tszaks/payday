@@ -24,6 +24,7 @@ private struct CSVExport: Transferable {
 
 struct PeriodsView: View {
     @Environment(PayScheduleStore.self) private var scheduleStore
+    @Environment(TabRouter.self) private var tabRouter
     @Query private var allEntries: [TipEntry]
     @Query private var paycheckRecords: [PaycheckRecord]
 
@@ -123,10 +124,23 @@ struct PeriodsView: View {
                 }
             }
             #endif
+            .onAppear { consumePendingCurrentPeriodDetail() }
+            .onChange(of: tabRouter.pendingCurrentPeriodDetail) { _, _ in consumePendingCurrentPeriodDetail() }
             .navigationDestination(for: PayPeriod.self) { period in
                 PeriodDetailView(period: period)
             }
         }
+    }
+
+    /// "See all" on Dashboard sets the flag and switches tabs in the same
+    /// beat — this view may not have appeared yet at that instant, so both
+    /// onAppear and onChange call through here rather than picking one.
+    /// Only acts when the stack is empty, same guard the -OpenPeriodWithPaycheck
+    /// debug hook uses, so it never interrupts navigation already in flight.
+    private func consumePendingCurrentPeriodDetail() {
+        guard tabRouter.pendingCurrentPeriodDetail, path.isEmpty, let currentPeriod = periods.first else { return }
+        path.append(currentPeriod)
+        tabRouter.pendingCurrentPeriodDetail = false
     }
 }
 

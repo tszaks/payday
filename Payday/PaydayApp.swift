@@ -24,6 +24,17 @@ struct PaydayApp: App {
                 .environment(moveLedgerStore)
                 .preferredColorScheme(preferencesStore.appearance.colorScheme)
                 .modelContainer(SharedModelContainer.shared)
+                // Lock Screen / StandBy accessory widgets can't host an
+                // interactive button (accessory families are rendered by the
+                // system, not the widget's own view) — widgetURL is the only
+                // way a tap on one of those can reach the app. This is the
+                // other half: payday://log jumps straight to the log sheet,
+                // the same destination OpenLogSheetIntent gives the
+                // home-screen widget's "+".
+                .onOpenURL { url in
+                    guard url.scheme == "payday", url.host == "log" else { return }
+                    DeepLinkCoordinator.shared.pendingLogTarget = .new(defaultDate: .now)
+                }
                 .task {
                     #if DEBUG
                     DebugSeeder.seedIfRequested(scheduleStore: scheduleStore, insightsStore: insightsStore, moveLedgerStore: moveLedgerStore)

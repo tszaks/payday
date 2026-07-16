@@ -13,6 +13,13 @@ extension PaydayWidgetEntryView {
         entry.daysRemaining == 0 ? "Last day" : "\(entry.daysRemaining) day\(entry.daysRemaining == 1 ? "" : "s") left"
     }
 
+    // widgetURL on all three: accessory families can't host an interactive
+    // button (the system renders these itself), so a tap is only ever
+    // reachable via this URL — payday://log, opened by PaydayApp's
+    // onOpenURL, straight into the log sheet. The home-screen widget above
+    // is untouched: its own interactive "+" button already covers this.
+    private static let logURL = URL(string: "payday://log")
+
     var circularView: some View {
         ZStack {
             AccessoryWidgetBackground()
@@ -29,6 +36,7 @@ extension PaydayWidgetEntryView {
             }
         }
         .containerBackground(for: .widget) { Color.clear }
+        .widgetURL(Self.logURL)
     }
 
     var rectangularView: some View {
@@ -47,6 +55,7 @@ extension PaydayWidgetEntryView {
             }
         }
         .containerBackground(for: .widget) { Color.clear }
+        .widgetURL(Self.logURL)
     }
 
     var inlineView: some View {
@@ -58,5 +67,6 @@ extension PaydayWidgetEntryView {
             }
         }
         .containerBackground(for: .widget) { Color.clear }
+        .widgetURL(Self.logURL)
     }
 }

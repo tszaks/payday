@@ -12,6 +12,12 @@ enum AppTab: String, CaseIterable, Identifiable {
 @Observable
 final class TabRouter {
     var selected: AppTab = .dashboard
+    /// Set alongside `selected = .periods` by anything that wants to land
+    /// inside the CURRENT period's detail, not just the periods list —
+    /// PeriodsView clears it once it's consumed the request. A plain enum
+    /// case rather than a full deep-link target because periods is the only
+    /// screen anything currently jumps this deep into.
+    var pendingCurrentPeriodDetail = false
 }
 
 struct MainTabView: View {
