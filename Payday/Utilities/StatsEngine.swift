@@ -1109,8 +1109,10 @@ enum RevealCopy {
         Calendar.current.weekdaySymbols[weekday - 1]
     }
 
+    // "today," not "tonight," so a lunch shift logged at 2pm — or this
+    // line read back on the dashboard hours later — never reads wrong.
     static func headline(cents: Int) -> String {
-        "\(Money.string(fromCents: cents)) tonight."
+        "\(Money.string(fromCents: cents)) today."
     }
 
     static func comparison(for result: RevealComparison) -> String {

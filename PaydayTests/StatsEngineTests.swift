@@ -921,7 +921,7 @@ struct RevealTests {
 struct RevealCopyTests {
     @Test("headline formats the shift total")
     func headlineFormat() {
-        #expect(RevealCopy.headline(cents: 18600) == "$186.00 tonight.")
+        #expect(RevealCopy.headline(cents: 18600) == "$186.00 today.")
     }
 
     @Test("all-time record copy names the previous best")

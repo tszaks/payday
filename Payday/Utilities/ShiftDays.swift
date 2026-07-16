@@ -20,16 +20,18 @@ enum ShiftDays {
             .map { (day: $0, items: buckets[$0] ?? []) }
     }
 
-    /// The label a person would use for the day: "Tonight", "Yesterday",
+    /// The label a person would use for the day: "Today", "Yesterday",
     /// a bare weekday inside the last week, then "Friday, Jul 11".
     /// The year is deliberately never shown — it's always this one.
+    /// "Today" (not "Tonight") because a shift is a whole day: a lunch
+    /// logged at 2pm is still today, and this label is read at any hour.
     static func humanLabel(for day: Date, relativeTo now: Date = .now, calendar: Calendar = .current) -> String {
         let day = calendar.startOfDay(for: day)
         let today = calendar.startOfDay(for: now)
         let daysAgo = calendar.dateComponents([.day], from: day, to: today).day ?? 0
 
         switch daysAgo {
-        case 0: return "Tonight"
+        case 0: return "Today"
         case 1: return "Yesterday"
         case 2...6: return day.formatted(.dateTime.weekday(.wide))
         default: return day.formatted(.dateTime.weekday(.wide).month(.abbreviated).day())

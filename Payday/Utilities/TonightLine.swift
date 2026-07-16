@@ -24,13 +24,16 @@ enum TonightLine {
         let weekday = calendar.component(.weekday, from: now)
         guard rhythm.usualWeekdays.contains(weekday) else { return nil }
 
+        // Time-neutral: this is a usual-work-day nudge that may show at any
+        // hour, and the worker's shift could be lunch or dinner — so no
+        // "tonight."
         let dayName = calendar.weekdaySymbols[weekday - 1]
         guard let hour = rhythm.typicalLogHour,
               let at = calendar.date(bySettingHour: hour, minute: 0, second: 0, of: now)
         else {
-            return "\(dayName) shift tonight."
+            return "You usually work \(dayName)s."
         }
         let hourText = at.formatted(.dateTime.hour())
-        return "\(dayName) shift tonight. You usually log around \(hourText)."
+        return "You usually work \(dayName)s around \(hourText)."
     }
 }
