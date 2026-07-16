@@ -2,15 +2,6 @@ import SwiftUI
 import SwiftData
 import TipKit
 
-/// Identifies one shift (a group of entries sharing a shiftID) for the
-/// detail sheet — a double day has two of these, so the sheet can't key on
-/// the calendar day alone.
-private struct ShiftSelection: Identifiable {
-    let day: Date
-    let shiftID: UUID
-    var id: UUID { shiftID }
-}
-
 /// The latest wall-clock a shift was logged, for ordering today's shifts —
 /// falls back to the shift's date when no recordedAt was captured.
 private func shiftRecordedAt(_ items: [TipEntry]) -> Date {
@@ -144,7 +135,6 @@ struct DashboardView: View {
     @Query(sort: \TipEntry.date, order: .reverse) private var allEntries: [TipEntry]
 
     @State private var sheetTarget: TipEntrySheetTarget?
-    @State private var shiftSelection: ShiftSelection?
     @State private var showSettings = false
     @State private var undoState = UndoDeleteToastState()
     @State private var progressTrackDrawn = false
@@ -224,9 +214,6 @@ struct DashboardView: View {
             }
             .sheet(item: $sheetTarget) { target in
                 LogTipSheet(target: target)
-            }
-            .sheet(item: $shiftSelection) { selection in
-                DayDetailSheet(date: selection.day, shiftID: selection.shiftID)
             }
             #if DEBUG
             .onAppear {
@@ -415,9 +402,13 @@ struct DashboardView: View {
     private func shiftRow(for group: (day: Date, shiftID: UUID, items: [TipEntry]), multiShiftDays: Set<Date>) -> some View {
         let period = ShiftDetails.resolve(from: group.items).shiftPeriod
         let dayHasMultiple = multiShiftDays.contains(group.day)
-        if group.items.count == 1, let entry = group.items.first {
+        // A shift, single-entry or merged cash+credit, is one row now — the
+        // edit sheet is shaped like a shift regardless of how many TipEntry
+        // rows it took to log it, so there's no separate "open this shift's
+        // entries" destination anymore.
+        if let anchor = group.items.first {
             Button {
-                sheetTarget = .edit(entry)
+                sheetTarget = .edit(anchor)
             } label: {
                 ShiftDayRow(day: group.day, period: period, dayHasMultipleShifts: dayHasMultiple, entries: group.items)
             }
@@ -425,22 +416,12 @@ struct DashboardView: View {
             .listRowBackground(PaydayColor.background)
             .swipeActions(edge: .trailing) {
                 Button(role: .destructive) {
-                    undoState.delete(entry, in: modelContext)
+                    undoState.delete(group.items, in: modelContext)
                 } label: {
                     Label("Delete", systemImage: "trash")
                 }
             }
-            .entryContextMenu(entry, sheetTarget: $sheetTarget, undoState: undoState, context: modelContext)
-        } else {
-            // A merged shift (cash + credit rows): one tap opens that shift's
-            // entries for editing — per-entry actions live there.
-            Button {
-                shiftSelection = ShiftSelection(day: group.day, shiftID: group.shiftID)
-            } label: {
-                ShiftDayRow(day: group.day, period: period, dayHasMultipleShifts: dayHasMultiple, entries: group.items)
-            }
-            .buttonStyle(.plain)
-            .listRowBackground(PaydayColor.background)
+            .shiftContextMenu(group.items, sheetTarget: $sheetTarget, undoState: undoState, context: modelContext)
         }
     }
 
@@ -467,49 +448,5 @@ private struct PaydayVerificationTip: Tip {
 
     var image: Image? {
         Image(systemName: "checkmark.seal")
-    }
-}
-
-struct EntryRow: View {
-    let entry: TipEntry
-
-    private var subtitle: String {
-        let calendar = Calendar.current
-        let recordedSameDay = entry.recordedAt.map { calendar.isDate($0, inSameDayAs: entry.date) } ?? false
-
-        var parts = [entry.kind.displayName]
-        // Only show the clock time when the tip was recorded the same day it
-        // was earned — then it reads as roughly when you worked. For backfills
-        // the recorded time isn't the shift time, so we don't imply it is.
-        if recordedSameDay, let recordedAt = entry.recordedAt {
-            parts.append(recordedAt.formatted(date: .omitted, time: .shortened))
-        }
-        if let note = entry.note, !note.isEmpty {
-            parts.append(note)
-        }
-        if !recordedSameDay, let recordedAt = entry.recordedAt {
-            parts.append("logged \(recordedAt.formatted(.dateTime.month(.abbreviated).day()))")
-        }
-        return parts.joined(separator: " · ")
-    }
-
-    var body: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(entry.date.formatted(.dateTime.month(.abbreviated).day().year()))
-                    .font(PaydayFont.body)
-                    .foregroundStyle(PaydayColor.textPrimary)
-                Text(subtitle)
-                    .font(PaydayFont.caption)
-                    .foregroundStyle(PaydayColor.textSecondary)
-                    .monospacedDigit()
-            }
-            Spacer()
-            Text(Money.string(fromCents: entry.amountCents))
-                .font(PaydayFont.displaySmall)
-                .monospacedDigit()
-                .foregroundStyle(PaydayColor.textPrimary)
-        }
-        .padding(.vertical, 4)
     }
 }

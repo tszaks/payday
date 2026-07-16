@@ -29,15 +29,19 @@ struct CalendarView: View {
         calculator.period(containing: .now)
     }
 
+    // Net everywhere — every income number in the app is net of any logged
+    // tip-out (see PRODUCT.md), and this grid used to be the one place still
+    // summing gross amountCents, silently disagreeing with the Dashboard and
+    // Period detail totals for the same days.
     private var dailyTotals: [Date: Int] {
         Dictionary(grouping: allEntries, by: { calendar.startOfDay(for: $0.date) })
-            .mapValues { entries in entries.reduce(0) { $0 + $1.amountCents } }
+            .mapValues { entries in entries.reduce(0) { $0 + $1.netCents } }
     }
 
     private var monthTotalCents: Int {
         allEntries
             .filter { calendar.isDate($0.date, equalTo: displayedMonth, toGranularity: .month) }
-            .reduce(0) { $0 + $1.amountCents }
+            .reduce(0) { $0 + $1.netCents }
     }
 
     private var gridDays: [Date] {
