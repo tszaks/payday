@@ -34,7 +34,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.szakacsmedia.payday
         TARGETED_DEVICE_FAMILY: "1"
         MARKETING_VERSION: "1.0"
-        CURRENT_PROJECT_VERSION: "71626"
+        CURRENT_PROJECT_VERSION: "71627"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         GENERATE_INFOPLIST_FILE: YES
@@ -87,7 +87,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.szakacsmedia.payday.widget
         TARGETED_DEVICE_FAMILY: "1"
         MARKETING_VERSION: "1.0"
-        CURRENT_PROJECT_VERSION: "71626"
+        CURRENT_PROJECT_VERSION: "71627"
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_CFBundleDisplayName: Payday
         CODE_SIGN_ENTITLEMENTS: PaydayWidget/PaydayWidget.entitlements
