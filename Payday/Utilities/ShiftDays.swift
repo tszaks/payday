@@ -20,6 +20,109 @@ enum ShiftDays {
             .map { (day: $0, items: buckets[$0] ?? []) }
     }
 
+    /// Groups items into shifts (one closeout), newest day first, and within
+    /// a day ordered lunch → dinner so a double day's two rows read top to
+    /// bottom. A shift is all items sharing a `shiftID`; items with a nil id
+    /// (legacy rows not yet migrated) fall back to a stable day-derived id so
+    /// nothing is ever dropped and all of a day's un-migrated rows stay one
+    /// shift. Returns the day each shift belongs to alongside its id.
+    static func groupedByShift<T>(
+        _ items: [T],
+        shiftID: (T) -> UUID?,
+        date: (T) -> Date,
+        period: (T) -> ShiftPeriod? = { _ in nil },
+        calendar: Calendar = .current
+    ) -> [(day: Date, shiftID: UUID, items: [T])] {
+        var order: [UUID] = []
+        var buckets: [UUID: [T]] = [:]
+        for item in items {
+            let id = shiftID(item) ?? deterministicShiftID(for: date(item), calendar: calendar)
+            if buckets[id] == nil { order.append(id) }
+            buckets[id, default: []].append(item)
+        }
+
+        // Sort key per shift: newest day first, then lunch before dinner
+        // (nil period last), then earliest item as a stable tie-break.
+        func periodRank(_ p: ShiftPeriod?) -> Int {
+            switch p {
+            case .lunch: return 0
+            case .dinner: return 1
+            case nil: return 2
+            }
+        }
+        return order
+            .map { id -> (day: Date, shiftID: UUID, items: [T]) in
+                let group = buckets[id] ?? []
+                let day = calendar.startOfDay(for: group.map(date).min() ?? .now)
+                return (day: day, shiftID: id, items: group)
+            }
+            .sorted { lhs, rhs in
+                if lhs.day != rhs.day { return lhs.day > rhs.day }
+                let lp = periodRank(lhs.items.compactMap(period).first)
+                let rp = periodRank(rhs.items.compactMap(period).first)
+                if lp != rp { return lp < rp }
+                let lEarliest = lhs.items.map(date).min() ?? .now
+                let rEarliest = rhs.items.map(date).min() ?? .now
+                return lEarliest < rEarliest
+            }
+    }
+
+    /// The label for one shift's row. A single-shift day reads exactly like
+    /// before ("Today") — no added noise. A day with more than one shift
+    /// distinguishes them by period ("Today · Lunch" / "Today · Dinner"),
+    /// falling back to an ordinal only when a period was never set.
+    static func shiftLabel(
+        day: Date,
+        period: ShiftPeriod?,
+        dayHasMultipleShifts: Bool,
+        ordinal: Int? = nil,
+        relativeTo now: Date = .now,
+        calendar: Calendar = .current
+    ) -> String {
+        let base = humanLabel(for: day, relativeTo: now, calendar: calendar)
+        guard dayHasMultipleShifts else { return base }
+        if let period {
+            return "\(base) · \(period.displayName)"
+        }
+        if let ordinal {
+            return "\(base) · \(ordinalWord(ordinal))"
+        }
+        return base
+    }
+
+    private static func ordinalWord(_ n: Int) -> String {
+        switch n {
+        case 1: return "1st"
+        case 2: return "2nd"
+        case 3: return "3rd"
+        default: return "\(n)th"
+        }
+    }
+
+    /// A stable UUID for a calendar day — same day in, same UUID out, on any
+    /// device, with no persistence. Used both by the shift-grouping fallback
+    /// above and by MigrationRunner's legacy backfill so the two agree.
+    static func deterministicShiftID(for someDate: Date, calendar: Calendar = .current) -> UUID {
+        let dayIndex = Int(calendar.startOfDay(for: someDate).timeIntervalSinceReferenceDate / 86_400)
+        var bytes = [UInt8](repeating: 0, count: 16)
+        // Fixed prefix namespaces these ids so they can't collide with a
+        // random UUID minted for a real new log.
+        bytes[0] = 0x5A
+        bytes[1] = 0xAC
+        bytes[2] = 0x5D
+        bytes[3] = 0x00
+        let magnitude = UInt64(bitPattern: Int64(dayIndex))
+        for i in 0..<8 {
+            bytes[8 + i] = UInt8((magnitude >> (UInt64(i) * 8)) & 0xFF)
+        }
+        return UUID(uuid: (
+            bytes[0], bytes[1], bytes[2], bytes[3],
+            bytes[4], bytes[5], bytes[6], bytes[7],
+            bytes[8], bytes[9], bytes[10], bytes[11],
+            bytes[12], bytes[13], bytes[14], bytes[15]
+        ))
+    }
+
     /// The label a person would use for the day: "Today", "Yesterday",
     /// a bare weekday inside the last week, then "Friday, Jul 11".
     /// The year is deliberately never shown — it's always this one.

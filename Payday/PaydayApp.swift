@@ -28,6 +28,10 @@ struct PaydayApp: App {
                     #if DEBUG
                     DebugSeeder.seedIfRequested(scheduleStore: scheduleStore, insightsStore: insightsStore, moveLedgerStore: moveLedgerStore)
                     #endif
+                    // Backfill shiftID on any legacy rows (cheap nil-predicate
+                    // fetch; no-ops once every row is migrated). Runs after the
+                    // debug seeder so seeded rows already carry their own ids.
+                    MigrationRunner.backfillShiftIDs(in: SharedModelContainer.shared.mainContext)
                 }
         }
     }

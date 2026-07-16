@@ -11,15 +11,20 @@ private func date(_ year: Int, _ month: Int, _ day: Int) -> Date {
     return calendar.date(from: DateComponents(year: year, month: month, day: day))!
 }
 
-private func record(_ year: Int, _ month: Int, _ day: Int, cents: Int, kind: TipKind = .cash, isDouble: Bool = false, recordedHour: Int? = nil, hoursWorked: Double? = nil, tipOutCents: Int? = nil, salesCents: Int? = nil, shiftPeriod: ShiftPeriod? = nil) -> TipRecord {
+private func record(_ year: Int, _ month: Int, _ day: Int, cents: Int, kind: TipKind = .cash, isDouble: Bool = false, recordedHour: Int? = nil, hoursWorked: Double? = nil, tipOutCents: Int? = nil, salesCents: Int? = nil, shiftPeriod: ShiftPeriod? = nil, shiftID: UUID? = nil) -> TipRecord {
     let shiftDate = date(year, month, day)
     let recordedAt = recordedHour.flatMap { hour in
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone.current
         return calendar.date(bySettingHour: hour, minute: 0, second: 0, of: shiftDate)
     }
-    return TipRecord(date: shiftDate, amountCents: cents, kind: kind, isDouble: isDouble, recordedAt: recordedAt, hoursWorked: hoursWorked, tipOutCents: tipOutCents, salesCents: salesCents, shiftPeriod: shiftPeriod)
+    return TipRecord(date: shiftDate, amountCents: cents, kind: kind, isDouble: isDouble, recordedAt: recordedAt, hoursWorked: hoursWorked, tipOutCents: tipOutCents, salesCents: salesCents, shiftPeriod: shiftPeriod, shiftID: shiftID)
 }
+
+/// Two distinct shift ids for building emergent "double" days in tests — a
+/// double is now two shifts on one calendar day, each with its own id.
+private let lunchShift = UUID()
+private let dinnerShift = UUID()
 
 @Suite("Nightly totals")
 struct NightlyTotalsTests {
@@ -148,6 +153,20 @@ struct RecordsTests {
         // Thursday never occurred in the fixture.
         let thursday = Calendar.current.component(.weekday, from: date(2026, 7, 2))
         #expect(engine.averageForWeekday(thursday) == nil)
+    }
+
+    @Test("best night ever is per-shift: a double day's summed total can't crown a bigger single shift")
+    func bestNightEverIsPerShift() {
+        // A double day of two $60 closeouts ($120 combined) plus one honest
+        // $90 single shift. Records are per-shift, so the record is $90 — the
+        // day's $120 sum never becomes a single "best night."
+        let records = [
+            record(2026, 7, 1, cents: 6000, shiftID: UUID()),
+            record(2026, 7, 1, cents: 6000, shiftID: UUID()),
+            record(2026, 7, 8, cents: 9000, shiftID: UUID())
+        ]
+        let engine = StatsEngine(records: records)
+        #expect(engine.bestNightEver()?.cents == 9000)
     }
 }
 
@@ -417,13 +436,14 @@ struct MovesTests {
     @Test("doubles verdict fires when doubles and solo nights differ meaningfully per hour")
     func doublesVerdictFires() {
         var records: [TipRecord] = []
-        // Doubles: long hours, mediocre $/hr.
+        // Doubles: two closeouts a day, long hours, mediocre $/hr ($12/hr).
         for day in [1, 8, 15] {
-            records.append(record(2026, 7, day, cents: 12000, isDouble: true, hoursWorked: 10))
+            records.append(record(2026, 7, day, cents: 6000, hoursWorked: 5, shiftID: UUID()))
+            records.append(record(2026, 7, day, cents: 6000, hoursWorked: 5, shiftID: UUID()))
         }
-        // Solo: short hours, strong $/hr.
+        // Solo: one closeout, short hours, strong $/hr ($20/hr).
         for day in [2, 9, 16] {
-            records.append(record(2026, 7, day, cents: 8000, hoursWorked: 4))
+            records.append(record(2026, 7, day, cents: 8000, hoursWorked: 4, shiftID: UUID()))
         }
         let engine = StatsEngine(records: records)
         let verdict = engine.moves(referenceDate: date(2026, 7, 24)).first { $0.id == "doublesVerdict" }
@@ -619,11 +639,17 @@ struct FollowUpTests {
     @Test("doubles verdict follow-up uses isDouble, not a weekday, as its matching slice")
     func doublesVerdictFollowUpFires() {
         var records: [TipRecord] = []
-        // Before: a double every other week (4 of 8), modest pay.
-        for (m, d) in [(6, 26), (6, 12), (5, 29), (5, 15)] { records.append(record(2026, m, d, cents: 12000, isDouble: true)) }
+        // Before: a double (two closeouts) every other week (4 of 8), modest pay.
+        for (m, d) in [(6, 26), (6, 12), (5, 29), (5, 15)] {
+            records.append(record(2026, m, d, cents: 6000, shiftID: UUID()))
+            records.append(record(2026, m, d, cents: 6000, shiftID: UUID()))
+        }
         for (m, d) in [(6, 22), (6, 15), (6, 8), (6, 1)] { records.append(record(2026, m, d, cents: 6000)) }
         // After: a double every week, paying more.
-        for (m, d) in [(7, 3), (7, 10), (7, 17), (7, 24), (7, 31)] { records.append(record(2026, m, d, cents: 13000, isDouble: true)) }
+        for (m, d) in [(7, 3), (7, 10), (7, 17), (7, 24), (7, 31)] {
+            records.append(record(2026, m, d, cents: 6500, shiftID: UUID()))
+            records.append(record(2026, m, d, cents: 6500, shiftID: UUID()))
+        }
 
         let engine = StatsEngine(records: records)
         let shownAt = date(2026, 6, 30)
@@ -815,6 +841,25 @@ struct RevealTests {
         let result = engine.reveal(forNightAt: date(2026, 7, 6), cents: 9000, period: period)
         #expect(result.comparison == .allTimeRecord(previousBestCents: 5000))
         #expect(result.isRecord)
+    }
+
+    @Test("the second shift of a double day is compared against the first shift, not the whole day")
+    func secondShiftComparesAgainstFirstShift() {
+        let period = PayPeriod(start: date(2026, 7, 6), end: date(2026, 7, 19))
+        let lunchID = UUID()
+        let dinnerID = UUID()
+        // A $50 lunch closeout is already logged for July 6. The dinner
+        // closeout is being revealed now (its id excluded, since it's the
+        // shift just logged), so the lunch stays visible as prior history.
+        let engine = StatsEngine(records: [record(2026, 7, 6, cents: 5000, shiftID: lunchID)])
+        let result = engine.reveal(forNightAt: date(2026, 7, 6), cents: 9000, period: period, shiftID: dinnerID)
+        #expect(result.comparison == .allTimeRecord(previousBestCents: 5000))
+        #expect(result.isRecord)
+
+        // Without a shiftID the whole day is excluded (the legacy path), so
+        // the lunch is hidden and there's nothing left to beat.
+        let dayScoped = engine.reveal(forNightAt: date(2026, 7, 6), cents: 9000, period: period)
+        #expect(dayScoped.comparison == .firstNightLogged)
     }
 
     @Test("first shift of a period outranks a weekday record when not also an all-time record")
@@ -1123,11 +1168,15 @@ struct InsightsFactsTests {
     @Test("doubles vs solo compares average per double against average per solo shift")
     func doublesSoloSplit() {
         let records = [
-            record(2026, 7, 1, cents: 10000, isDouble: true),
-            record(2026, 7, 2, cents: 14000, isDouble: true),
-            record(2026, 7, 3, cents: 3000, isDouble: false),
-            record(2026, 7, 4, cents: 5000, isDouble: false),
-            record(2026, 7, 5, cents: 4000, isDouble: false)
+            // Two double days (two closeouts each): $100 and $140 total.
+            record(2026, 7, 1, cents: 5000, shiftID: UUID()),
+            record(2026, 7, 1, cents: 5000, shiftID: UUID()),
+            record(2026, 7, 2, cents: 7000, shiftID: UUID()),
+            record(2026, 7, 2, cents: 7000, shiftID: UUID()),
+            // Three solo days.
+            record(2026, 7, 3, cents: 3000),
+            record(2026, 7, 4, cents: 5000),
+            record(2026, 7, 5, cents: 4000)
         ]
         let engine = StatsEngine(records: records)
         let facts = engine.insightsFacts(referenceDate: date(2026, 7, 10))
@@ -1227,7 +1276,9 @@ struct InsightsFactsTests {
     @Test("rate facts split lunch vs dinner and doubles vs solo only over rate nights")
     func rateFactsSplits() {
         let records = [
-            record(2026, 7, 1, cents: 10000, isDouble: true, recordedHour: 20, hoursWorked: 9), // dinner, double: $11.11/hr
+            // Day 1 is a double: two dinner closeouts, $100 over 9 hours total ($11.11/hr).
+            record(2026, 7, 1, cents: 5000, recordedHour: 20, hoursWorked: 4.5, shiftID: UUID()),
+            record(2026, 7, 1, cents: 5000, recordedHour: 20, hoursWorked: 4.5, shiftID: UUID()),
             record(2026, 7, 2, cents: 4000, recordedHour: 13, hoursWorked: 4),                  // lunch, solo: $10/hr
             record(2026, 7, 3, cents: 5000, recordedHour: 19, hoursWorked: 5),                  // dinner, solo: $10/hr
             record(2026, 7, 4, cents: 1000),
