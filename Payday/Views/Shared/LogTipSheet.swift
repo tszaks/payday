@@ -314,6 +314,24 @@ struct LogTipSheet: View {
                     .animation(PaydayAnimation.premiumSpring, value: cashCents + creditCents)
                     .lineLimit(1)
                     .minimumScaleFactor(0.5)
+                // Live $/hr, computed as the fields change — and NET of any
+                // tip-out, by product ruling: a tip-out is recorded because
+                // it's an important fact, but it is never income. Not in
+                // your total, not in your hourly, not in anything that
+                // means you keep the money. Only appears once the shift has
+                // a length (times set, or legacy hours).
+                if let hoursWorked, hoursWorked > 0 {
+                    let netCents = cashCents + creditCents - tipOutCents
+                    if netCents > 0 {
+                        let rateCentsPerHour = Int((Double(netCents) / hoursWorked).rounded())
+                        Text(tipOutCents > 0
+                             ? "\(Money.wholeDollarString(fromCents: rateCentsPerHour))/hr after tip-out"
+                             : "\(Money.wholeDollarString(fromCents: rateCentsPerHour))/hr")
+                            .font(PaydayFont.caption)
+                            .monospacedDigit()
+                            .foregroundStyle(PaydayColor.textSecondary)
+                    }
+                }
             }
 
             VStack(spacing: 12) {

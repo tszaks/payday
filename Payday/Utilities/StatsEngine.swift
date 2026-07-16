@@ -34,6 +34,14 @@ struct TipRecord: Sendable, Hashable {
     /// same-day-logged recordedAt proxy for legacy records with this nil.
     let shiftPeriod: ShiftPeriod?
 
+    /// Clock-in/clock-out for the shift — shift-level like hoursWorked
+    /// (lives on at most one of a shift's records, see ShiftDetails), used
+    /// only to bucket shifts by start time for the start-time analysis
+    /// below. Nil for legacy records and any shift where times were never
+    /// logged.
+    let clockIn: Date?
+    let clockOut: Date?
+
     /// Gross minus any tip-out — "what you walked with." Every analytical
     /// sum in this engine (nightly totals, pace, insights totals) uses
     /// this, never amountCents directly, so a logged tip-out always nets
@@ -42,7 +50,7 @@ struct TipRecord: Sendable, Hashable {
     /// how tip percent is measured everywhere in the industry.
     var netCents: Int { amountCents - (tipOutCents ?? 0) }
 
-    init(date: Date, amountCents: Int, kind: TipKind, isDouble: Bool, recordedAt: Date? = nil, hoursWorked: Double? = nil, tipOutCents: Int? = nil, salesCents: Int? = nil, shiftPeriod: ShiftPeriod? = nil, shiftID: UUID? = nil) {
+    init(date: Date, amountCents: Int, kind: TipKind, isDouble: Bool, recordedAt: Date? = nil, hoursWorked: Double? = nil, tipOutCents: Int? = nil, salesCents: Int? = nil, shiftPeriod: ShiftPeriod? = nil, shiftID: UUID? = nil, clockIn: Date? = nil, clockOut: Date? = nil) {
         self.date = date
         self.amountCents = amountCents
         self.kind = kind
@@ -53,12 +61,14 @@ struct TipRecord: Sendable, Hashable {
         self.salesCents = salesCents
         self.shiftPeriod = shiftPeriod
         self.shiftID = shiftID
+        self.clockIn = clockIn
+        self.clockOut = clockOut
     }
 }
 
 extension TipRecord {
     init(entry: TipEntry) {
-        self.init(date: entry.date, amountCents: entry.amountCents, kind: entry.kind, isDouble: entry.isDouble, recordedAt: entry.recordedAt, hoursWorked: entry.hoursWorked, tipOutCents: entry.tipOutCents, salesCents: entry.salesCents, shiftPeriod: entry.shiftPeriod, shiftID: entry.shiftID)
+        self.init(date: entry.date, amountCents: entry.amountCents, kind: entry.kind, isDouble: entry.isDouble, recordedAt: entry.recordedAt, hoursWorked: entry.hoursWorked, tipOutCents: entry.tipOutCents, salesCents: entry.salesCents, shiftPeriod: entry.shiftPeriod, shiftID: entry.shiftID, clockIn: entry.clockIn, clockOut: entry.clockOut)
     }
 }
 
@@ -112,6 +122,11 @@ private struct ShiftFacts {
     let salesCents: Int?
     let shiftPeriod: ShiftPeriod?
     let recordedAt: Date?
+    /// Clock-in/clock-out, resolved the same credit-preferred way as every
+    /// other shift-level field above — used only by the start-time bucketing
+    /// below.
+    let clockIn: Date?
+    let clockOut: Date?
 
     /// Gross minus the one canonical tip-out for the shift — see the type
     /// doc above for why this is never a per-record sum.
@@ -155,7 +170,9 @@ struct StatsEngine {
                     hoursWorked: credit?.hoursWorked ?? cash?.hoursWorked,
                     salesCents: credit?.salesCents ?? cash?.salesCents,
                     shiftPeriod: credit?.shiftPeriod ?? cash?.shiftPeriod,
-                    recordedAt: credit?.recordedAt ?? cash?.recordedAt
+                    recordedAt: credit?.recordedAt ?? cash?.recordedAt,
+                    clockIn: credit?.clockIn ?? cash?.clockIn,
+                    clockOut: credit?.clockOut ?? cash?.clockOut
                 )
             }
             .sorted { $0.date < $1.date }
@@ -531,6 +548,11 @@ struct StatsEngine {
     static let minimumNightsForRate = 3
     /// Same reasoning as minimumNightsForRate, for sales-logging.
     static let minimumNightsForSales = 3
+    /// A start-hour bucket (see StartTimeFacts) needs at least this many
+    /// qualifying shifts before its blended rate counts as anything more
+    /// than noise — same >= 3 floor every other weekday-keyed comparison
+    /// in this file already requires.
+    static let minimumShiftsPerStartBucket = 3
 
     /// Every number Insights is allowed to talk about — computed here, not
     /// by the model. "The stats engine computes facts; the model narrates
@@ -568,7 +590,8 @@ struct StatsEngine {
             doublesSolo: doublesSoloFacts(from: shifts),
             totalTipOutCents: totalTipOutCents,
             rate: rateFacts(from: shifts),
-            sales: salesFacts(from: shifts)
+            sales: salesFacts(from: shifts),
+            startTime: startTimeFacts(from: shifts)
         )
     }
 
@@ -659,6 +682,40 @@ struct StatsEngine {
         )
     }
 
+    /// $/hr by start-time bucket (see StartTimeFacts) — same recent window
+    /// as the rest of insightsFacts. We only ever know a SHIFT's total, never
+    /// how pay was distributed within it, so this is honestly a shift-vs-
+    /// shift comparison by when the shift started, never a claim about which
+    /// minute of a shift paid better. Buckets on the exact clock-in hour
+    /// (17 = "5 PM starts"); a bucket needs >= minimumShiftsPerStartBucket
+    /// qualifying shifts, and there need to be at least two such buckets,
+    /// before there's anything to call "best" or "worst" against.
+    private func startTimeFacts(from shifts: [ShiftFacts]) -> StartTimeFacts? {
+        let qualifying = shifts.compactMap { shift -> (hour: Int, date: Date, cents: Int, hours: Double)? in
+            guard let hours = shift.hoursWorked, hours > 0, let clockIn = shift.clockIn else { return nil }
+            return (hour: calendar.component(.hour, from: clockIn), date: shift.date, cents: shift.netCents, hours: hours)
+        }
+        let buckets = Dictionary(grouping: qualifying, by: { $0.hour })
+            .filter { $0.value.count >= Self.minimumShiftsPerStartBucket }
+            .compactMap { hour, group -> (hour: Int, rate: Double, count: Int)? in
+                guard let rate = blendedRate(group.map { (date: $0.date, cents: $0.cents, hours: $0.hours) }) else { return nil }
+                return (hour: hour, rate: rate, count: group.count)
+            }
+        guard buckets.count >= 2,
+              let best = buckets.max(by: { $0.rate < $1.rate }),
+              let worst = buckets.min(by: { $0.rate < $1.rate }),
+              best.hour != worst.hour
+        else { return nil }
+        return StartTimeFacts(
+            bestStartHour: best.hour,
+            bestDollarsPerHour: best.rate,
+            bestShiftCount: best.count,
+            worstStartHour: worst.hour,
+            worstDollarsPerHour: worst.rate,
+            worstShiftCount: worst.count
+        )
+    }
+
     /// A shift counts once here, never once per cash+credit record — see
     /// classifyByShiftPeriod for the explicit-vs-proxy rule. A double day
     /// correctly contributes both its lunch and its dinner shift.
@@ -722,7 +779,8 @@ struct StatsEngine {
             lapsedWinnerMove(referenceDate: referenceDate),
             doublesVerdictMove(referenceDate: referenceDate),
             rateLeaderMove(),
-            tipPercentSignalMove()
+            tipPercentSignalMove(),
+            startTimeLeaderMove()
         ].compactMap { $0 }
         return Array(
             candidates
@@ -868,6 +926,57 @@ struct StatsEngine {
             body: "\(weekdayName)s average \(Money.wholeDollarString(fromCents: Int((best.rate * 100).rounded())))/hr across \(countPhrase(weekdayRates.count, singular: "night", plural: "nights")), against \(Money.wholeDollarString(fromCents: Int((overallRate * 100).rounded())))/hr overall. Working \(weekdayName)s regularly is worth about \(Money.wholeDollarString(fromCents: annualImpact)) a year over your average rate.",
             annualImpactCents: annualImpact
         )
+    }
+
+    /// Best-paying start-hour bucket against worst-paying (see
+    /// StartTimeFacts) — a genuinely different fact from rateLeaderMove
+    /// (which compares weekdays) and weekdaySwapMove ($/night): this is
+    /// about WHEN a shift starts, recomputed over ALL history like every
+    /// other Move here, not the 180-day insights window.
+    private func startTimeLeaderMove() -> Move? {
+        guard let facts = startTimeFacts(from: shiftFacts(from: records)) else { return nil }
+        let deltaPerHourCents = Int(((facts.bestDollarsPerHour - facts.worstDollarsPerHour) * 100).rounded())
+        guard deltaPerHourCents >= MoveThresholds.minimumRateDeltaCents else { return nil }
+
+        // Variance guard, same spirit as rateLeaderMove: pool the best
+        // bucket's per-shift $/hr against the worst bucket's so a handful of
+        // lucky late starts can't look like real signal against noisy history.
+        let qualifying = shiftFacts(from: records).compactMap { shift -> (hour: Int, cents: Int, hours: Double)? in
+            guard let hours = shift.hoursWorked, hours > 0, let clockIn = shift.clockIn else { return nil }
+            return (hour: calendar.component(.hour, from: clockIn), cents: shift.netCents, hours: hours)
+        }
+        func centsPerHour(_ shift: (hour: Int, cents: Int, hours: Double)) -> Int {
+            Int((Double(shift.cents) / shift.hours).rounded())
+        }
+        let bestGroup = qualifying.filter { $0.hour == facts.bestStartHour }
+        let worstGroup = qualifying.filter { $0.hour == facts.worstStartHour }
+        guard !bestGroup.isEmpty, !worstGroup.isEmpty else { return nil }
+        let pooledSD = pooledStandardDeviationCents(bestGroup.map(centsPerHour), worstGroup.map(centsPerHour))
+        let requiredDelta = max(MoveThresholds.minimumRateDeltaCents, Int((MoveThresholds.varianceGuardFactor * pooledSD).rounded()))
+        guard deltaPerHourCents >= requiredDelta else { return nil }
+
+        let avgHours = bestGroup.reduce(0.0) { $0 + $1.hours } / Double(bestGroup.count)
+        let annualImpact = Int((facts.bestDollarsPerHour - facts.worstDollarsPerHour) * avgHours * MoveThresholds.assumedWeeksPerYear * 100)
+        guard annualImpact >= MoveThresholds.minimumAnnualImpactCents else { return nil }
+
+        // "later"/"earlier" is a real directional claim, not filler — get it
+        // right regardless of which bucket happens to be the best one.
+        let direction = facts.bestStartHour > facts.worstStartHour ? "later" : "earlier"
+        return Move(
+            id: "startTimeLeader",
+            title: "\(hourLabel(facts.bestStartHour)) Starts Pay Best",
+            body: "Shifts you start around \(hourLabel(facts.bestStartHour)) average \(Money.wholeDollarString(fromCents: Int((facts.bestDollarsPerHour * 100).rounded())))/hr across \(countPhrase(facts.bestShiftCount, singular: "shift", plural: "shifts")), against \(Money.wholeDollarString(fromCents: Int((facts.worstDollarsPerHour * 100).rounded())))/hr around \(hourLabel(facts.worstStartHour)) - the \(direction) start is worth about \(Money.wholeDollarString(fromCents: annualImpact)) a year at your usual hours.",
+            annualImpactCents: annualImpact
+        )
+    }
+
+    /// Renders a start-hour bucket key as "5 PM" / "11 AM" — builds an
+    /// actual Date at that hour and lets Date.FormatStyle render it, so the
+    /// am/pm convention (or 24-hour clock, for locales that use one) always
+    /// matches the user's own locale instead of hand-rolled am/pm math.
+    private func hourLabel(_ hour: Int) -> String {
+        let anchored = calendar.date(bySettingHour: hour, minute: 0, second: 0, of: .now) ?? .now
+        return anchored.formatted(.dateTime.hour())
     }
 
     /// The best tip-percent weekday against the overall tip-percent average.
@@ -1124,6 +1233,7 @@ struct InsightsFacts: Equatable, Codable, Sendable {
     var totalTipOutCents: Int = 0
     var rate: RateFacts? = nil
     var sales: SalesFacts? = nil
+    var startTime: StartTimeFacts? = nil
 }
 
 struct LunchDinnerFacts: Equatable, Codable, Sendable {
@@ -1156,6 +1266,22 @@ struct RateFacts: Equatable, Codable, Sendable {
     let dinnerDollarsPerHour: Double?
     let doubleDollarsPerHour: Double?
     let soloDollarsPerHour: Double?
+}
+
+/// $/hr by start-time bucket — the only honest way to ask "does WHEN a
+/// shift starts pay differently," since we only ever know a shift's total,
+/// never how pay was distributed within it. Every comparison here is
+/// shift-vs-shift by start hour, never a claim about a specific minute.
+/// bestStartHour/worstStartHour are the exact clock-in hour (0-23; 17 means
+/// shifts starting at 5 PM), only ever built from shifts that logged BOTH
+/// hours and a clock-in.
+struct StartTimeFacts: Equatable, Codable, Sendable {
+    let bestStartHour: Int
+    let bestDollarsPerHour: Double
+    let bestShiftCount: Int
+    let worstStartHour: Int
+    let worstDollarsPerHour: Double
+    let worstShiftCount: Int
 }
 
 /// Tip-percent facts — only ever built from nights that actually have
