@@ -139,6 +139,22 @@ struct ShiftDetailsWriteTests {
         #expect(entry.clockOut == nil)
     }
 
+    @Test("serverCount lands on the primary and is cleared from every other entry, same primary-entry rule as the rest")
+    func serverCountFollowsTheSamePrimaryRule() {
+        let credit = TipEntry(date: date(2026, 7, 1), amountCents: 8600, kind: .credit, hoursWorked: 5, shiftPeriod: .dinner, serverCount: 3)
+        let cash = TipEntry(date: date(2026, 7, 1), amountCents: 3200, kind: .cash, hoursWorked: 5, shiftPeriod: .dinner, serverCount: 3)
+        ShiftDetails.write(hoursWorked: 6, tipOutCents: nil, salesCents: nil, shiftPeriod: .dinner, serverCount: 4, into: [cash, credit])
+        #expect(credit.serverCount == 4)
+        #expect(cash.serverCount == nil)
+    }
+
+    @Test("serverCount defaults to nil when omitted, same as clockIn/clockOut")
+    func serverCountDefaultsToNilWhenOmitted() {
+        let entry = TipEntry(date: date(2026, 7, 1), amountCents: 5000, kind: .cash, serverCount: 4)
+        ShiftDetails.write(hoursWorked: 5, tipOutCents: nil, salesCents: nil, shiftPeriod: nil, into: [entry])
+        #expect(entry.serverCount == nil)
+    }
+
     @Test("two shifts on the same day don't cross-contaminate — each write touches only its own shift")
     func twoShiftsSameDayStayIndependent() {
         let lunchID = UUID()

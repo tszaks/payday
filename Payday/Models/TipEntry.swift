@@ -109,6 +109,15 @@ final class TipEntry {
     var clockIn: Date?
     var clockOut: Date?
 
+    /// How many servers were on the floor this shift — capture-only for
+    /// now, no engine analysis yet (that comes once there's enough data to
+    /// make a floor-size claim honestly). Floor size changes section size
+    /// and split economics, so it's worth having on record early. Optional
+    /// and shift-level like hoursWorked: "not entered" and "zero servers"
+    /// are different facts, and it lives on the one canonical entry via
+    /// ShiftDetails, nil for legacy rows.
+    var serverCount: Int?
+
     // Same optional-raw-string-to-enum split as kindRaw/kind, but WITHOUT
     // a non-optional fallback: "never set" is a real, meaningful state
     // here (unlike kind, which must always resolve to something), so the
@@ -140,7 +149,8 @@ final class TipEntry {
         shiftPeriod: ShiftPeriod? = nil,
         shiftID: UUID? = nil,
         clockIn: Date? = nil,
-        clockOut: Date? = nil
+        clockOut: Date? = nil,
+        serverCount: Int? = nil
     ) {
         self.id = id
         self.date = date
@@ -156,5 +166,6 @@ final class TipEntry {
         self.shiftID = shiftID
         self.clockIn = clockIn
         self.clockOut = clockOut
+        self.serverCount = serverCount
     }
 }

@@ -40,13 +40,16 @@ struct LogTipSheet: View {
     // facts about the SHIFT (one closeout), never one entry or tip type —
     // ShiftDetails is the one place read/write for these six fields is
     // allowed to happen.
-    @State private var showMoreDetails = false
     @State private var hoursWorked: Double?
     @State private var tipOutCents: Int = 0
     @State private var salesCents: Int = 0
     @State private var shiftPeriod: ShiftPeriod?
     @State private var clockIn: Date?
     @State private var clockOut: Date?
+    /// How many servers were on the floor — capture-only for now (see
+    /// TipEntry.serverCount), same optional/shift-level treatment as
+    /// everything else in this group.
+    @State private var serverCount: Int?
 
     init(target: TipEntrySheetTarget) {
         self.target = target
@@ -83,7 +86,7 @@ struct LogTipSheet: View {
             _shiftPeriod = State(initialValue: entry.shiftPeriod)
             _clockIn = State(initialValue: entry.clockIn)
             _clockOut = State(initialValue: entry.clockOut)
-            _showMoreDetails = State(initialValue: entry.hoursWorked != nil || entry.tipOutCents != nil || entry.salesCents != nil || entry.shiftPeriod != nil || entry.clockIn != nil || entry.clockOut != nil)
+            _serverCount = State(initialValue: entry.serverCount)
         }
     }
 
@@ -175,12 +178,11 @@ struct LogTipSheet: View {
             // weekday — a genuine fact worth attaching automatically.
             // Tip-out and sales are NOT: they used to pre-fill tipOutCents/
             // salesCents directly here, which meant a rushed Save could
-            // silently attach last Friday's tip-out to tonight. Now they
-            // only ever surface as a CompactCurrencyField placeholder
-            // (tipOutPlaceholderCents/salesPlaceholderCents) — a hint to tap
-            // into, never a committed value. Still worth surfacing when one
-            // exists, though — auto-expand rather than hide it.
-            if hoursWorked != nil || clockIn != nil || clockOut != nil || tipOutPlaceholderCents != nil || salesPlaceholderCents != nil { showMoreDetails = true }
+            // silently attach last Friday's tip-out to tonight. They only
+            // ever surface as a CompactCurrencyField placeholder
+            // (tipOutPlaceholderCents/salesPlaceholderCents, read by
+            // shiftDetailsCard below) — a hint to tap into, never a
+            // committed value.
         case .edit(let entry):
             // A fact about the whole shift, not this one entry — resolve
             // across every entry in the shift, same convention liveSaveEdit
@@ -200,7 +202,7 @@ struct LogTipSheet: View {
             shiftPeriod = resolved.shiftPeriod
             clockIn = resolved.clockIn
             clockOut = resolved.clockOut
-            showMoreDetails = hoursWorked != nil || tipOutCents > 0 || salesCents > 0 || shiftPeriod != nil || clockIn != nil || clockOut != nil
+            serverCount = resolved.serverCount
         }
     }
 
@@ -216,6 +218,13 @@ struct LogTipSheet: View {
         return allEntries.filter { $0.shiftID == nil && Calendar.current.isDate($0.date, inSameDayAs: entry.date) }
     }
 
+    /// Top to bottom, this sheet is ordered by a deliberate hierarchy:
+    /// MONEY first (shiftAmountContent — the reason the sheet exists at
+    /// all), then the shift's own defining facts and economics
+    /// (shiftDetailsCard — when, which shift, what times, what tip-out and
+    /// sales), then bookkeeping (noteCard — the least important input on
+    /// the whole sheet), and destructive last (Delete Shift, edit only).
+    /// Every row below money is optional; nothing here is ever nagged for.
     var body: some View {
         NavigationStack {
             Group {
@@ -235,8 +244,8 @@ struct LogTipSheet: View {
                         VStack(spacing: 24) {
                             shiftAmountContent
 
-                            detailsCard
-                            moreDetailsCard
+                            shiftDetailsCard
+                            noteCard
 
                             if isEditing {
                                 Button(role: .destructive) { showDeleteConfirmation = true } label: {
@@ -317,15 +326,18 @@ struct LogTipSheet: View {
                 if clockIn != nil, clockOut != nil { hoursWorked = ShiftTimes.hours(clockIn: clockIn, clockOut: clockOut) }
                 liveSaveEdit()
             }
+            .onChange(of: serverCount) { _, _ in liveSaveEdit() }
             .onAppear { seedShiftDetailDefaults() }
             .onDisappear { pruneZeroedRows() }
         }
         // Fixed height for the common case, plus .large as an escape hatch so
         // content is never clipped on smaller iPhones with the keypad up.
+        // Taller than before now that shiftDetailsCard is always expanded —
+        // Shift/Started/Ended/Tip-out need to be visible without a scroll.
         // Screenshot/QA hook: -DebugNoAutoFocus also opens straight to the
-        // .large detent, so the full scrollable sheet — details group
-        // included — is visible without needing a drag gesture to expand it.
-        .presentationDetents(debugSuppressAutoFocus ? [.large] : [.height(isEditing ? 480 : 520), .large])
+        // .large detent, so the full scrollable sheet is visible without
+        // needing a drag gesture to expand it.
+        .presentationDetents(debugSuppressAutoFocus ? [.large] : [.height(isEditing ? 560 : 600), .large])
         .presentationDragIndicator(.visible)
         .presentationBackground(PaydayColor.background)
         #if DEBUG
@@ -384,31 +396,127 @@ struct LogTipSheet: View {
         }
     }
 
-    /// Next cycles Cash -> Credit -> (Tip-out -> Sales, only when the
-    /// details group is actually open — those fields don't exist on screen
-    /// otherwise) -> back to Cash. Collapsed, it stays the old Cash <->
-    /// Credit toggle.
+    /// Next always cycles Cash -> Credit -> Tip-out -> Sales -> back to
+    /// Cash. The shift-details card is always visible now (no disclosure
+    /// to open first), so every field is reachable every time.
     private func nextFocusField(after field: CurrencyRowField) -> CurrencyRowField {
         switch field {
         case .cash: return .credit
-        case .credit: return showMoreDetails ? .tipOut : .cash
+        case .credit: return .tipOut
         case .tipOut: return .sales
         case .sales: return .cash
         }
     }
 
-    // MARK: Shared date + note
+    // MARK: Shift details — the facts that define this closeout
 
-    private var detailsCard: some View {
+    /// The shift's own identity and economics — date, period, times,
+    /// tip-out, sales, headcount — sit closest to the money and are always
+    /// visible now: no disclosure to tap through, no toggle to remember
+    /// whether a row is holding a real value. Never required: leaving
+    /// every row at its default logs exactly what the app always logged.
+    /// Date answers "which day"; Shift period drives the Started/Ended
+    /// "Set" buttons' time defaults right below it.
+    private var shiftDetailsCard: some View {
         card {
-            HStack {
-                Text("Date")
-                Spacer()
-                DatePicker("", selection: $date, in: ...Date.now, displayedComponents: .date)
+            VStack(spacing: 0) {
+                HStack {
+                    Text("Date")
+                    Spacer()
+                    DatePicker("", selection: $date, in: ...Date.now, displayedComponents: .date)
+                        .labelsHidden()
+                }
+                .padding(.vertical, 14)
+                Divider()
+                // Lunch or dinner — the defining period of this one
+                // closeout. A "double" isn't a toggle anymore: you just log
+                // a second shift for the day, and the two closeouts make
+                // the double.
+                HStack {
+                    Text("Shift")
+                    Spacer()
+                    Picker("", selection: $shiftPeriod) {
+                        Text("Lunch").tag(ShiftPeriod?.some(.lunch))
+                        Text("Dinner").tag(ShiftPeriod?.some(.dinner))
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(width: 180)
                     .labelsHidden()
+                }
+                .padding(.vertical, 14)
+                Divider()
+                HStack {
+                    Text("Started")
+                    Spacer()
+                    if clockIn != nil {
+                        DatePicker("", selection: clockInBinding, displayedComponents: .hourAndMinute)
+                            .labelsHidden()
+                    } else {
+                        Button("Set") { clockIn = defaultClockIn }
+                    }
+                }
+                .padding(.vertical, 14)
+                Divider()
+                HStack {
+                    Text("Ended")
+                    Spacer()
+                    if clockOut != nil {
+                        DatePicker("", selection: clockOutBinding, displayedComponents: .hourAndMinute)
+                            .labelsHidden()
+                    } else {
+                        Button("Set") { clockOut = defaultClockOut }
+                    }
+                }
+                .padding(.vertical, 14)
+                if let hoursWorked {
+                    Text("That's \(Self.hoursLabel(hoursWorked)).")
+                        .font(PaydayFont.caption)
+                        .foregroundStyle(PaydayColor.textSecondary)
+                        .padding(.top, 8)
+                }
+                Divider().padding(.top, 14)
+                HStack {
+                    Text("Tip-out")
+                    Spacer()
+                    CompactCurrencyField(cents: $tipOutCents, field: .tipOut, focusedField: $focusedCurrencyField, autoFocus: debugAutoFocusTipOut, placeholderCents: tipOutPlaceholderCents)
+                }
+                .padding(.vertical, 14)
+                Divider()
+                HStack {
+                    Text("Sales")
+                    Spacer()
+                    CompactCurrencyField(cents: $salesCents, field: .sales, focusedField: $focusedCurrencyField, placeholderCents: salesPlaceholderCents)
+                }
+                .padding(.vertical, 14)
+                Divider()
+                // Capture-only, no engine analysis yet — how many servers
+                // were on the floor changes section size and split
+                // economics, worth having on record before there's enough
+                // history to actually say something about it. A stepper,
+                // not the keyboard chain: nothing to type, just count up.
+                HStack {
+                    Text("Servers")
+                    Spacer()
+                    Stepper(value: serverCountBinding, in: 0...30, step: 1) {
+                        Text(serverCount.map { "\($0)" } ?? "Not logged")
+                            .foregroundStyle(PaydayColor.textSecondary)
+                    }
+                }
+                .padding(.vertical, 14)
             }
             .padding()
-            Divider()
+            .tint(PaydayColor.textPrimary)
+        }
+    }
+
+    // MARK: Note — bookkeeping, not a shift-defining fact
+
+    /// The least important input on the whole sheet, by design: a place to
+    /// remember something in a sentence, nothing more. Everything that
+    /// actually defines the shift lives in shiftDetailsCard above, closer
+    /// to the money.
+    private var noteCard: some View {
+        card {
             HStack {
                 Text("Note")
                 Spacer()
@@ -416,81 +524,6 @@ struct LogTipSheet: View {
                     .multilineTextAlignment(.trailing)
             }
             .padding()
-            Divider()
-            // Lunch or dinner — the defining period of this one closeout,
-            // always visible (pre-selected from the clock for today). A
-            // "double" isn't a toggle anymore: you just log a second shift
-            // for the day, and the two closeouts make the double.
-            HStack {
-                Text("Shift")
-                Spacer()
-                Picker("", selection: $shiftPeriod) {
-                    Text("Lunch").tag(ShiftPeriod?.some(.lunch))
-                    Text("Dinner").tag(ShiftPeriod?.some(.dinner))
-                }
-                .pickerStyle(.segmented)
-                .frame(width: 180)
-                .labelsHidden()
-            }
-            .padding()
-        }
-    }
-
-    /// Optional shift details, collapsed by default unless already set —
-    /// times, tip-out and sales. Never required: leaving this closed logs
-    /// exactly what the app always logged.
-    private var moreDetailsCard: some View {
-        card {
-            DisclosureGroup("Time, tip-out, sales", isExpanded: $showMoreDetails) {
-                VStack(spacing: 0) {
-                    Divider().padding(.top, 14)
-                    HStack {
-                        Text("Started")
-                        Spacer()
-                        if clockIn != nil {
-                            DatePicker("", selection: clockInBinding, displayedComponents: .hourAndMinute)
-                                .labelsHidden()
-                        } else {
-                            Button("Set") { clockIn = defaultClockIn }
-                        }
-                    }
-                    .padding(.vertical, 14)
-                    Divider()
-                    HStack {
-                        Text("Ended")
-                        Spacer()
-                        if clockOut != nil {
-                            DatePicker("", selection: clockOutBinding, displayedComponents: .hourAndMinute)
-                                .labelsHidden()
-                        } else {
-                            Button("Set") { clockOut = defaultClockOut }
-                        }
-                    }
-                    .padding(.vertical, 14)
-                    if let hoursWorked {
-                        Text("That's \(Self.hoursLabel(hoursWorked)).")
-                            .font(PaydayFont.caption)
-                            .foregroundStyle(PaydayColor.textSecondary)
-                            .padding(.top, 8)
-                    }
-                    Divider().padding(.top, 14)
-                    HStack {
-                        Text("Tip-out")
-                        Spacer()
-                        CompactCurrencyField(cents: $tipOutCents, field: .tipOut, focusedField: $focusedCurrencyField, autoFocus: debugAutoFocusTipOut, placeholderCents: tipOutPlaceholderCents)
-                    }
-                    .padding(.vertical, 14)
-                    Divider()
-                    HStack {
-                        Text("Sales")
-                        Spacer()
-                        CompactCurrencyField(cents: $salesCents, field: .sales, focusedField: $focusedCurrencyField, placeholderCents: salesPlaceholderCents)
-                    }
-                    .padding(.vertical, 14)
-                }
-            }
-            .padding()
-            .tint(PaydayColor.textPrimary)
         }
     }
 
@@ -514,6 +547,15 @@ struct LogTipSheet: View {
 
     private var clockOutBinding: Binding<Date> {
         Binding(get: { clockOut ?? defaultClockOut }, set: { clockOut = $0 })
+    }
+
+    /// Same zero-means-nil sentinel the old hours stepper used: dragging
+    /// back down to 0 clears the fact instead of committing "zero servers."
+    private var serverCountBinding: Binding<Int> {
+        Binding(
+            get: { serverCount ?? 0 },
+            set: { serverCount = $0 > 0 ? $0 : nil }
+        )
     }
 
     /// Screenshot/QA hook only: lets a launch argument force the keyboard
@@ -601,7 +643,7 @@ struct LogTipSheet: View {
         }
         // Shift-level details land on one canonical entry (credit
         // preferred), never split across both — see ShiftDetails.
-        ShiftDetails.write(hoursWorked: hoursWorked, tipOutCents: effectiveTipOutCents, salesCents: effectiveSalesCents, shiftPeriod: shiftPeriod, clockIn: clockIn, clockOut: clockOut, into: newEntries)
+        ShiftDetails.write(hoursWorked: hoursWorked, tipOutCents: effectiveTipOutCents, salesCents: effectiveSalesCents, shiftPeriod: shiftPeriod, clockIn: clockIn, clockOut: clockOut, serverCount: serverCount, into: newEntries)
 
         revealResult = reveal
         revealGrossAndTipOut = effectiveTipOutCents.map { (grossCents: totalCents, tipOutCents: $0) }
@@ -654,6 +696,7 @@ struct LogTipSheet: View {
             shiftPeriod: shiftPeriod,
             clockIn: clockIn,
             clockOut: clockOut,
+            serverCount: serverCount,
             into: rows
         )
 

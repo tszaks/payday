@@ -16,7 +16,7 @@ enum ShiftDetails {
     /// covering one shift, resolved from whichever entry actually holds
     /// it — credit first, falling back to cash — and NEVER summed across
     /// entries.
-    static func resolve(from entries: [TipEntry]) -> (hoursWorked: Double?, tipOutCents: Int?, salesCents: Int?, shiftPeriod: ShiftPeriod?, clockIn: Date?, clockOut: Date?) {
+    static func resolve(from entries: [TipEntry]) -> (hoursWorked: Double?, tipOutCents: Int?, salesCents: Int?, shiftPeriod: ShiftPeriod?, clockIn: Date?, clockOut: Date?, serverCount: Int?) {
         let credit = entries.first { $0.kind == .credit }
         let cash = entries.first { $0.kind == .cash }
         return (
@@ -25,17 +25,19 @@ enum ShiftDetails {
             salesCents: credit?.salesCents ?? cash?.salesCents,
             shiftPeriod: credit?.shiftPeriod ?? cash?.shiftPeriod,
             clockIn: credit?.clockIn ?? cash?.clockIn,
-            clockOut: credit?.clockOut ?? cash?.clockOut
+            clockOut: credit?.clockOut ?? cash?.clockOut,
+            serverCount: credit?.serverCount ?? cash?.serverCount
         )
     }
 
-    /// Writes hours/tip-out/sales/shift-period/clockIn/clockOut onto the
-    /// one canonical entry for a shift (credit when one exists, else the
-    /// first entry) and clears them from every other entry in that shift —
-    /// self-healing any data where a value ended up set on more than one
-    /// entry. clockIn/clockOut default to nil so existing call sites (and
-    /// tests) that only care about the original four fields keep compiling.
-    static func write(hoursWorked: Double?, tipOutCents: Int?, salesCents: Int?, shiftPeriod: ShiftPeriod?, clockIn: Date? = nil, clockOut: Date? = nil, into entries: [TipEntry]) {
+    /// Writes hours/tip-out/sales/shift-period/clockIn/clockOut/serverCount
+    /// onto the one canonical entry for a shift (credit when one exists,
+    /// else the first entry) and clears them from every other entry in
+    /// that shift — self-healing any data where a value ended up set on
+    /// more than one entry. clockIn/clockOut/serverCount default to nil so
+    /// existing call sites (and tests) that only care about the earlier
+    /// fields keep compiling.
+    static func write(hoursWorked: Double?, tipOutCents: Int?, salesCents: Int?, shiftPeriod: ShiftPeriod?, clockIn: Date? = nil, clockOut: Date? = nil, serverCount: Int? = nil, into entries: [TipEntry]) {
         guard let primary = entries.first(where: { $0.kind == .credit }) ?? entries.first else { return }
         for entry in entries where entry.id != primary.id {
             entry.hoursWorked = nil
@@ -44,6 +46,7 @@ enum ShiftDetails {
             entry.shiftPeriod = nil
             entry.clockIn = nil
             entry.clockOut = nil
+            entry.serverCount = nil
         }
         primary.hoursWorked = hoursWorked
         primary.tipOutCents = tipOutCents
@@ -51,5 +54,6 @@ enum ShiftDetails {
         primary.shiftPeriod = shiftPeriod
         primary.clockIn = clockIn
         primary.clockOut = clockOut
+        primary.serverCount = serverCount
     }
 }

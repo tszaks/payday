@@ -217,6 +217,11 @@ struct DashboardView: View {
             }
             #if DEBUG
             .onAppear {
+                // Screenshot/QA hook only — opens the most recent period
+                // entry, no kind argument. Named distinctly from
+                // MainTabView's "-OpenEditSheetKind <kind>" hook so passing
+                // one can never accidentally also satisfy the other and
+                // double-present a sheet.
                 if ProcessInfo.processInfo.arguments.contains("-OpenEditSheet"), let first = facts.periodEntries.first {
                     sheetTarget = .edit(first)
                 }
