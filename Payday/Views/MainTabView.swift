@@ -83,8 +83,12 @@ struct MainTabView: View {
             // Screenshot/QA hook only: open the edit sheet directly for the
             // most recent entry of a given kind, so a cash+credit night's
             // shared shift details can be verified from both tabs without
-            // needing UI automation to tap into it.
-            if let index = args.firstIndex(of: "-OpenEditSheet"), args.count > index + 1,
+            // needing UI automation to tap into it. Named distinctly from
+            // DashboardView's own "-OpenEditSheet" (no kind arg) hook below
+            // — the two used to share a flag name and could both fire off
+            // the same launch args, each presenting its own sheet and
+            // tripping a "already presenting" SwiftUI/UIKit conflict.
+            if let index = args.firstIndex(of: "-OpenEditSheetKind"), args.count > index + 1,
                let kind = TipKind(rawValue: args[index + 1]) {
                 let descriptor = FetchDescriptor<TipEntry>(sortBy: [SortDescriptor(\.date, order: .reverse)])
                 if let entry = (try? modelContext.fetch(descriptor))?.first(where: { $0.kind == kind }) {

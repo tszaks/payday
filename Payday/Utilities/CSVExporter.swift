@@ -6,14 +6,14 @@ import Foundation
 /// double day produces two rows, one per closeout, distinguished by the
 /// Shift column and both flagged Double.
 ///
-/// Hours/Start/End/Tip-Out/Sales are shift-level facts, not per-entry ones:
-/// each column reflects ShiftDetails.resolve's single canonical value
-/// (credit entry preferred, else cash), never a sum across the shift's
-/// entries — a shift with a stray value on both entries (legacy data) still
-/// reports one number here, matching every other reader in the app, rather
-/// than double-counting it.
+/// Hours/Start/End/Tip-Out/Sales/Servers are shift-level facts, not
+/// per-entry ones: each column reflects ShiftDetails.resolve's single
+/// canonical value (credit entry preferred, else cash), never a sum across
+/// the shift's entries — a shift with a stray value on both entries (legacy
+/// data) still reports one number here, matching every other reader in the
+/// app, rather than double-counting it.
 enum CSVExporter {
-    static let header = "Date,Shift,Cash,Credit,Tip-Out,Net,Hours,Start,End,Sales,Double,Note,Period,Paycheck"
+    static let header = "Date,Shift,Cash,Credit,Tip-Out,Net,Hours,Start,End,Sales,Servers,Double,Note,Period,Paycheck"
 
     static func export(entries: [TipEntry], paycheckRecords: [PaycheckRecord], calculator: PayPeriodCalculator, calendar: Calendar = .current) -> String {
         let shifts = ShiftDays.groupedByShift(entries, shiftID: \.shiftID, date: \.date, period: \.shiftPeriod, calendar: calendar)
@@ -45,6 +45,7 @@ enum CSVExporter {
         let startField: String = shiftDetails.clockIn.map { time24($0, calendar: calendar) } ?? ""
         let endField: String = shiftDetails.clockOut.map { time24($0, calendar: calendar) } ?? ""
         let salesField: String = shiftDetails.salesCents.map(dollars) ?? ""
+        let serversField: String = shiftDetails.serverCount.map(String.init) ?? ""
         let paycheckField: String = paycheck.map { dollars($0.paidTipsCents) } ?? ""
         let periodField = "\(isoDate(period.start)) to \(isoDate(period.end))"
 
@@ -59,6 +60,7 @@ enum CSVExporter {
             startField,
             endField,
             salesField,
+            serversField,
             dayHasMultipleShifts ? "Y" : "N",
             escape(note),
             periodField,

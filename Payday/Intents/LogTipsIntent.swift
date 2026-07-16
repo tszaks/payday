@@ -122,7 +122,7 @@ struct LogTipsIntent: AppIntent {
             // period/clock times a completed-into shift already carried.
             let shiftRows = completingShiftID != nil ? todaysEntries.filter { $0.shiftID == shiftID } + [entry] : [entry]
             let resolved = ShiftDetails.resolve(from: shiftRows)
-            ShiftDetails.write(hoursWorked: resolved.hoursWorked, tipOutCents: tipOutCents, salesCents: resolved.salesCents, shiftPeriod: resolved.shiftPeriod, clockIn: resolved.clockIn, clockOut: resolved.clockOut, into: shiftRows)
+            ShiftDetails.write(hoursWorked: resolved.hoursWorked, tipOutCents: tipOutCents, salesCents: resolved.salesCents, shiftPeriod: resolved.shiftPeriod, clockIn: resolved.clockIn, clockOut: resolved.clockOut, serverCount: resolved.serverCount, into: shiftRows)
         }
 
         try context.save()

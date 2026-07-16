@@ -36,7 +36,7 @@ private func duplicateShift(_ entries: [TipEntry], into context: ModelContext) {
     // becomes an emergent second shift. Copying every stored field per row
     // (rather than re-deriving the shift-level ones) automatically preserves
     // the canonical rule: only the row that held hours/tip-out/sales/period/
-    // clock times in the source still holds them in the copy.
+    // clock times/server-count in the source still holds them in the copy.
     let shiftID = UUID()
     for entry in entries {
         let copy = TipEntry(
@@ -51,7 +51,8 @@ private func duplicateShift(_ entries: [TipEntry], into context: ModelContext) {
             shiftPeriod: entry.shiftPeriod,
             shiftID: shiftID,
             clockIn: entry.clockIn,
-            clockOut: entry.clockOut
+            clockOut: entry.clockOut,
+            serverCount: entry.serverCount
         )
         context.insert(copy)
     }

@@ -42,6 +42,12 @@ struct TipRecord: Sendable, Hashable {
     let clockIn: Date?
     let clockOut: Date?
 
+    /// How many servers were on the floor this shift — shift-level like
+    /// clockIn/clockOut, captured for future floor-size insights. No
+    /// analytics reads this yet; it's here purely so the engine's mirror of
+    /// TipEntry stays faithful once that analysis exists.
+    let serverCount: Int?
+
     /// Gross minus any tip-out — "what you walked with." Every analytical
     /// sum in this engine (nightly totals, pace, insights totals) uses
     /// this, never amountCents directly, so a logged tip-out always nets
@@ -50,7 +56,7 @@ struct TipRecord: Sendable, Hashable {
     /// how tip percent is measured everywhere in the industry.
     var netCents: Int { amountCents - (tipOutCents ?? 0) }
 
-    init(date: Date, amountCents: Int, kind: TipKind, isDouble: Bool, recordedAt: Date? = nil, hoursWorked: Double? = nil, tipOutCents: Int? = nil, salesCents: Int? = nil, shiftPeriod: ShiftPeriod? = nil, shiftID: UUID? = nil, clockIn: Date? = nil, clockOut: Date? = nil) {
+    init(date: Date, amountCents: Int, kind: TipKind, isDouble: Bool, recordedAt: Date? = nil, hoursWorked: Double? = nil, tipOutCents: Int? = nil, salesCents: Int? = nil, shiftPeriod: ShiftPeriod? = nil, shiftID: UUID? = nil, clockIn: Date? = nil, clockOut: Date? = nil, serverCount: Int? = nil) {
         self.date = date
         self.amountCents = amountCents
         self.kind = kind
@@ -63,12 +69,13 @@ struct TipRecord: Sendable, Hashable {
         self.shiftID = shiftID
         self.clockIn = clockIn
         self.clockOut = clockOut
+        self.serverCount = serverCount
     }
 }
 
 extension TipRecord {
     init(entry: TipEntry) {
-        self.init(date: entry.date, amountCents: entry.amountCents, kind: entry.kind, isDouble: entry.isDouble, recordedAt: entry.recordedAt, hoursWorked: entry.hoursWorked, tipOutCents: entry.tipOutCents, salesCents: entry.salesCents, shiftPeriod: entry.shiftPeriod, shiftID: entry.shiftID, clockIn: entry.clockIn, clockOut: entry.clockOut)
+        self.init(date: entry.date, amountCents: entry.amountCents, kind: entry.kind, isDouble: entry.isDouble, recordedAt: entry.recordedAt, hoursWorked: entry.hoursWorked, tipOutCents: entry.tipOutCents, salesCents: entry.salesCents, shiftPeriod: entry.shiftPeriod, shiftID: entry.shiftID, clockIn: entry.clockIn, clockOut: entry.clockOut, serverCount: entry.serverCount)
     }
 }
 
@@ -127,6 +134,9 @@ private struct ShiftFacts {
     /// below.
     let clockIn: Date?
     let clockOut: Date?
+    /// How many servers were on the floor — resolved the same
+    /// credit-preferred way, no analytics reads it yet (see TipRecord).
+    let serverCount: Int?
 
     /// Gross minus the one canonical tip-out for the shift — see the type
     /// doc above for why this is never a per-record sum.
@@ -172,7 +182,8 @@ struct StatsEngine {
                     shiftPeriod: credit?.shiftPeriod ?? cash?.shiftPeriod,
                     recordedAt: credit?.recordedAt ?? cash?.recordedAt,
                     clockIn: credit?.clockIn ?? cash?.clockIn,
-                    clockOut: credit?.clockOut ?? cash?.clockOut
+                    clockOut: credit?.clockOut ?? cash?.clockOut,
+                    serverCount: credit?.serverCount ?? cash?.serverCount
                 )
             }
             .sorted { $0.date < $1.date }
