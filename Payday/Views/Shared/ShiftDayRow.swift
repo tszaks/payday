@@ -25,11 +25,10 @@ struct ShiftDayRow: View {
         } else {
             parts.append(entries.first?.kind.displayName ?? "")
         }
-        // A tip-out is why net is below gross — always shown so the number
-        // to its right is never unexplained.
-        if breakdown.tipOutCents > 0 {
-            parts.append("Tipped out \(Money.string(fromCents: breakdown.tipOutCents))")
-        }
+        // Tip-out is deliberately not shown per-row: the amount to the right
+        // is already net (what you kept), and a tip-out isn't income worth
+        // repeating on every glance. It stays visible/editable in the shift's
+        // own sheet, and the period hero still reconciles it.
         if entries.contains(where: \.isDouble) {
             parts.append("double")
         }
