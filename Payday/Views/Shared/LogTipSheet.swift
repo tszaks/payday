@@ -385,7 +385,7 @@ struct LogTipSheet: View {
             if !isDouble {
                 Divider()
                 HStack {
-                    Text("Lunch or dinner")
+                    Text("Shift")
                     Spacer()
                     Picker("", selection: $shiftPeriod) {
                         Text("Lunch").tag(ShiftPeriod?.some(.lunch))
