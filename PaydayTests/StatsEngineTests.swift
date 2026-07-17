@@ -470,6 +470,17 @@ struct MovesTests {
         #expect(leader?.title.contains("Friday") == true)
     }
 
+    @Test("rate leader stays silent when the best weekday has only 1 night of rate history — a coincidence, not a pattern")
+    func rateLeaderSilencedAtOneNight() {
+        var records: [TipRecord] = []
+        records.append(record(2026, 7, 3, cents: 20000, hoursWorked: 4)) // Friday, $50/hr, only 1 night
+        for week in 0..<3 {
+            records.append(record(2026, 6, 29 + week * 7, cents: 10000, hoursWorked: 5)) // Monday, $20/hr, 3 nights
+        }
+        let engine = StatsEngine(records: records)
+        #expect(engine.moves(referenceDate: date(2026, 7, 24)).first { $0.id == "rateLeader" } == nil)
+    }
+
     @Test("tip percent signal fires when one weekday clearly tips a higher percent")
     func tipPercentSignalFires() {
         var records: [TipRecord] = []
@@ -481,6 +492,17 @@ struct MovesTests {
         let signal = engine.moves(referenceDate: date(2026, 7, 24)).first { $0.id == "tipPercentSignal" }
         #expect(signal != nil)
         #expect(signal?.title.contains("Friday") == true)
+    }
+
+    @Test("tip percent signal stays silent when the best weekday has only 1 night of sales history — a coincidence, not a pattern")
+    func tipPercentSignalSilencedAtOneNight() {
+        var records: [TipRecord] = []
+        records.append(record(2026, 7, 3, cents: 15000, salesCents: 50000)) // Friday, 30%, only 1 night
+        for week in 0..<3 {
+            records.append(record(2026, 6, 29 + week * 7, cents: 5000, salesCents: 50000)) // Monday, 10%, 3 nights
+        }
+        let engine = StatsEngine(records: records)
+        #expect(engine.moves(referenceDate: date(2026, 7, 24)).first { $0.id == "tipPercentSignal" } == nil)
     }
 
     @Test("moves caps at 3 and ranks by annualized impact, descending")

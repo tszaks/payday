@@ -200,21 +200,27 @@ private struct PeriodRow: View {
                     .foregroundStyle(PaydayColor.textTertiary)
             }
             Spacer(minLength: 0)
-            if let paycheck {
-                // Match PaycheckComparisonView: credit if any, else fall back
-                // to total (legacy all-cash periods have no credit to compare).
-                let comparedCents = loggedCreditCents > 0 ? loggedCreditCents : loggedCents
-                let delta = paycheck.paidTipsCents - comparedCents
-                VStack(alignment: .trailing, spacing: 2) {
-                    Text(deltaString(delta))
-                        .font(PaydayFont.displaySmall)
-                        .monospacedDigit()
-                        .foregroundStyle(delta < 0 ? PaydayColor.error : PaydayColor.primary)
-                    Text("checked")
-                        .font(PaydayFont.caption2)
-                        .foregroundStyle(PaydayColor.textTertiary)
+            // Every row here is a NavigationLink — the disclosure chevron
+            // shows on all of them now, not just the one row that happens
+            // to have no paycheck comparison yet, so tappability reads
+            // consistently regardless of what else is showing.
+            HStack(spacing: 6) {
+                if let paycheck {
+                    // Match PaycheckComparisonView: credit if any, else fall
+                    // back to total (legacy all-cash periods have no credit
+                    // to compare).
+                    let comparedCents = loggedCreditCents > 0 ? loggedCreditCents : loggedCents
+                    let delta = paycheck.paidTipsCents - comparedCents
+                    VStack(alignment: .trailing, spacing: 2) {
+                        Text(deltaString(delta))
+                            .font(PaydayFont.displaySmall)
+                            .monospacedDigit()
+                            .foregroundStyle(delta < 0 ? PaydayColor.error : PaydayColor.primary)
+                        Text("checked")
+                            .font(PaydayFont.caption2)
+                            .foregroundStyle(PaydayColor.textTertiary)
+                    }
                 }
-            } else {
                 Image(systemName: "chevron.right")
                     .font(PaydayFont.caption)
                     .foregroundStyle(PaydayColor.textTertiary)

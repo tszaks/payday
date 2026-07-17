@@ -88,12 +88,19 @@ struct FirstRunSetupView: View {
                 .background(PaydayColor.background)
             }
             .background(PaydayColor.background)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { save() }
-                        .buttonStyle(.glassProminent)
-                        .tint(.accentColor)
-                }
+            // A welcome screen's commit control needs one-thumb reach and to
+            // unmistakably read as "the next step," not as an edit screen's
+            // small top-right Done — full-width and pinned above the safe
+            // area, the app's standard prominent button style.
+            .safeAreaInset(edge: .bottom) {
+                Button("Get Started") { save() }
+                    .frame(maxWidth: .infinity)
+                    .buttonStyle(.glassProminent)
+                    .tint(PaydayColor.primary)
+                    .padding(.horizontal)
+                    .padding(.top, 12)
+                    .padding(.bottom, 8)
+                    .background(PaydayColor.background)
             }
         }
     }
