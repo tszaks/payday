@@ -160,6 +160,23 @@ struct LogTipSheet: View {
         return suggestedSalesCents(for: date)
     }
 
+    /// Same per-weekday memory as tip-out and sales, for server count.
+    private func suggestedServerCount(for date: Date) -> Int? {
+        let calendar = Calendar.current
+        let weekday = calendar.component(.weekday, from: date)
+        return allEntries
+            .filter { $0.serverCount != nil && calendar.component(.weekday, from: $0.date) == weekday }
+            .sorted { $0.date > $1.date }
+            .first?.serverCount
+    }
+
+    /// Same reasoning as tipOutPlaceholderCents/salesPlaceholderCents, for
+    /// server count.
+    private var serversPlaceholderCount: Int? {
+        guard case .new = target else { return nil }
+        return suggestedServerCount(for: date)
+    }
+
     /// Pulled out of the view body's onAppear closure — inlining this much
     /// logic directly in a chained-modifier closure was slow enough to trip
     /// the type checker's time budget.
@@ -287,9 +304,9 @@ struct LogTipSheet: View {
                                 .disabled(!canSave)
                         }
                     }
-                    // The whole flow — Cash through Sales — is reachable
+                    // The whole flow — Cash through Servers — is reachable
                     // without a hand ever leaving the bottom of the screen:
-                    // Next cycles every currency field in the sheet, and
+                    // Next cycles every numberPad field in the sheet, and
                     // Save/Done sits right beside it so a rushed one-handed
                     // log never has to reach up to the nav bar.
                     if let focusedCurrencyField {
@@ -396,15 +413,16 @@ struct LogTipSheet: View {
         }
     }
 
-    /// Next always cycles Cash -> Credit -> Tip-out -> Sales -> back to
-    /// Cash. The shift-details card is always visible now (no disclosure
-    /// to open first), so every field is reachable every time.
+    /// Next always cycles Cash -> Credit -> Tip-out -> Sales -> Servers ->
+    /// back to Cash. The shift-details card is always visible now (no
+    /// disclosure to open first), so every field is reachable every time.
     private func nextFocusField(after field: CurrencyRowField) -> CurrencyRowField {
         switch field {
         case .cash: return .credit
         case .credit: return .tipOut
         case .tipOut: return .sales
-        case .sales: return .cash
+        case .sales: return .servers
+        case .servers: return .cash
         }
     }
 
@@ -492,15 +510,14 @@ struct LogTipSheet: View {
                 // Capture-only, no engine analysis yet — how many servers
                 // were on the floor changes section size and split
                 // economics, worth having on record before there's enough
-                // history to actually say something about it. A stepper,
-                // not the keyboard chain: nothing to type, just count up.
+                // history to actually say something about it. A count is a
+                // number, so it uses the same typed-field language as
+                // Tip-out and Sales right above it, not a different kind
+                // of control for what's really the same kind of fact.
                 HStack {
                     Text("Servers")
                     Spacer()
-                    Stepper(value: serverCountBinding, in: 0...30, step: 1) {
-                        Text(serverCount.map { "\($0)" } ?? "Not logged")
-                            .foregroundStyle(PaydayColor.textSecondary)
-                    }
+                    CompactCountField(count: serverCountBinding, field: .servers, focusedField: $focusedCurrencyField, autoFocus: debugAutoFocusServers, placeholderCount: serversPlaceholderCount)
                 }
                 .padding(.vertical, 14)
             }
@@ -549,8 +566,10 @@ struct LogTipSheet: View {
         Binding(get: { clockOut ?? defaultClockOut }, set: { clockOut = $0 })
     }
 
-    /// Same zero-means-nil sentinel the old hours stepper used: dragging
-    /// back down to 0 clears the fact instead of committing "zero servers."
+    /// Same zero-means-nil sentinel used elsewhere in this file (see
+    /// clockInBinding/clockOutBinding): typing back down to 0 — or an
+    /// empty field, which CompactCountField reads as 0 — clears the fact
+    /// instead of committing "zero servers."
     private var serverCountBinding: Binding<Int> {
         Binding(
             get: { serverCount ?? 0 },
@@ -564,6 +583,15 @@ struct LogTipSheet: View {
     private var debugAutoFocusTipOut: Bool {
         #if DEBUG
         ProcessInfo.processInfo.arguments.contains("-DebugFocusTipOut")
+        #else
+        false
+        #endif
+    }
+
+    /// Same reasoning as debugAutoFocusTipOut, for the Servers field.
+    private var debugAutoFocusServers: Bool {
+        #if DEBUG
+        ProcessInfo.processInfo.arguments.contains("-DebugFocusServers")
         #else
         false
         #endif
@@ -738,7 +766,9 @@ struct LogTipSheet: View {
 /// digit-shift-from-the-right technique as CurrencyAmountRow, including its
 /// focused-ring treatment (scaled down to fit inline in a row) and the same
 /// externally-driven FocusState (so the keyboard toolbar's Next button can
-/// cycle through Tip-out and Sales too, not just Cash/Credit).
+/// cycle through Tip-out and Sales too, not just Cash/Credit). See
+/// CompactCountField just below for the plain-integer sibling this powers
+/// (Servers).
 private struct CompactCurrencyField: View {
     @Binding var cents: Int
     let field: CurrencyRowField
@@ -797,6 +827,70 @@ private struct CompactCurrencyField: View {
             let filtered = String(newValue.filter(\.isNumber).prefix(Self.maxDigits))
             if filtered != newValue { digitsText = filtered }
             cents = Int(filtered) ?? 0
+        }
+    }
+}
+
+/// CompactCurrencyField's plain-integer sibling — same digit-shift field,
+/// same focus-ring and externally-driven FocusState, same placeholder
+/// treatment, but for a count rather than money: no currency formatting,
+/// no unit suffix (the row's own label already says "Servers"), capped at
+/// 2 digits. A count reads as a fact worth stating plainly or not at all —
+/// unlike an amount, which always shows $0.00 even unset, a count with
+/// neither a real value nor a placeholder shows nothing rather than a
+/// misleading "0" (a real "worked with zero servers" fact this app has no
+/// way to distinguish from "never asked" if it rendered the same as unset).
+private struct CompactCountField: View {
+    @Binding var count: Int
+    let field: CurrencyRowField
+    var focusedField: FocusState<CurrencyRowField?>.Binding
+    var autoFocus: Bool = false
+    var placeholderCount: Int? = nil
+    @State private var digitsText: String = ""
+
+    private static let maxDigits = 2
+    private var isFocused: Bool { focusedField.wrappedValue == field }
+
+    var body: some View {
+        ZStack(alignment: .trailing) {
+            if count == 0, let placeholderCount {
+                Text("\(placeholderCount)")
+                    .font(PaydayFont.body)
+                    .monospacedDigit()
+                    .foregroundStyle(PaydayColor.textTertiary)
+                    .accessibilityHidden(true)
+            } else if count > 0 {
+                Text("\(count)")
+                    .font(PaydayFont.body)
+                    .monospacedDigit()
+                    .foregroundStyle(PaydayColor.textPrimary)
+                    .contentTransition(.numericText())
+                    .accessibilityHidden(true)
+            }
+            TextField("", text: $digitsText)
+                .keyboardType(.numberPad)
+                .focused(focusedField, equals: field)
+                .opacity(0.01)
+                .multilineTextAlignment(.trailing)
+                .accessibilityValue(count == 0 ? "Not logged" : "\(count)")
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .frame(minWidth: 92, alignment: .trailing)
+        .overlay(
+            RoundedRectangle(cornerRadius: PaydayRadius.sm)
+                .strokeBorder(isFocused ? PaydayColor.primary : Color.clear, lineWidth: 2)
+        )
+        .contentShape(Rectangle())
+        .onTapGesture { focusedField.wrappedValue = field }
+        .onAppear {
+            digitsText = count == 0 ? "" : String(count)
+            if autoFocus { focusedField.wrappedValue = field }
+        }
+        .onChange(of: digitsText) { _, newValue in
+            let filtered = String(newValue.filter(\.isNumber).prefix(Self.maxDigits))
+            if filtered != newValue { digitsText = filtered }
+            count = Int(filtered) ?? 0
         }
     }
 }
