@@ -30,17 +30,30 @@ struct SettingsView: View {
         _appearance = State(initialValue: .system)
     }
 
+    /// Standardizes on inline captions (a caption `Text` living right under its
+    /// control) instead of Section footers — a footer can only belong to one
+    /// Section, which is exactly what forced this screen into eight separate
+    /// single-row sections with wide gaps between them in the first place.
+    /// Inline captions let related controls share one grouped Section while
+    /// each one keeps its own explanation, matching Apple's own grouped-list
+    /// pattern (e.g. Settings.app's own toggle rows).
+    @ViewBuilder
+    private func captionedRow<Content: View>(_ caption: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            content()
+            Text(caption)
+                .font(PaydayFont.footnote)
+                .foregroundStyle(PaydayColor.textSecondary)
+        }
+    }
+
     var body: some View {
         NavigationStack {
             Form {
-                Section("Your name") {
+                Section("Profile") {
                     TextField("First name", text: $firstName)
                         .textInputAutocapitalization(.words)
                         .autocorrectionDisabled()
-                }
-                .listRowBackground(PaydayColor.fieldBackground)
-
-                Section("Appearance") {
                     Picker("Appearance", selection: $appearance) {
                         ForEach(AppAppearance.allCases) { option in
                             Text(option.displayName).tag(option)
@@ -50,67 +63,47 @@ struct SettingsView: View {
                 }
                 .listRowBackground(PaydayColor.fieldBackground)
 
-                Section {
-                    Toggle("Require Face ID", isOn: $isFaceIDLockEnabled)
-                } footer: {
-                    Text("Locks Payday when it's in the background. Uses your device passcode as a fallback.")
+                Section("Notifications & Security") {
+                    captionedRow("Locks Payday when it's in the background. Uses your device passcode as a fallback.") {
+                        Toggle("Require Face ID", isOn: $isFaceIDLockEnabled)
+                    }
+                    captionedRow("A single \"How was tonight?\" notification on a usual work night, only if nothing's logged yet.") {
+                        Toggle("Remind me to log", isOn: $isSmartNudgeEnabled)
+                    }
                 }
                 .listRowBackground(PaydayColor.fieldBackground)
 
-                Section {
-                    Toggle("Remind me to log", isOn: $isSmartNudgeEnabled)
-                } footer: {
-                    Text("A single \"How was tonight?\" notification on a usual work night, only if nothing's logged yet.")
-                }
-                .listRowBackground(PaydayColor.fieldBackground)
-
-                Section("Pay frequency") {
+                Section("Pay Schedule") {
                     Picker("Frequency", selection: $frequency) {
                         ForEach(PayFrequency.allCases) { freq in
                             Text(freq.displayName).tag(freq)
                         }
                     }
-                }
-                .listRowBackground(PaydayColor.fieldBackground)
-
-                Section {
-                    DatePicker("Payday", selection: $mostRecentPayday, in: ...Date.now, displayedComponents: .date)
-                } header: {
-                    Text("Most recent payday")
-                } footer: {
-                    Text("The day that paycheck actually landed in your account.")
+                    captionedRow("The day that paycheck actually landed in your account.") {
+                        DatePicker("Payday", selection: $mostRecentPayday, in: ...Date.now, displayedComponents: .date)
+                    }
+                    captionedRow("The last day of work that paycheck covered. Everything is grouped around this, not the payday itself.") {
+                        DatePicker("Last day covered", selection: $periodEndDate, in: ...mostRecentPayday, displayedComponents: .date)
+                    }
+                    if frequency == .twiceMonthly {
+                        Text("Periods run the 1st–15th and 16th–end of every month.")
+                            .font(PaydayFont.footnote)
+                            .foregroundStyle(PaydayColor.textSecondary)
+                    }
                 }
                 .listRowBackground(PaydayColor.fieldBackground)
                 .onChange(of: mostRecentPayday) { _, newValue in
                     if periodEndDate > newValue { periodEndDate = newValue }
                 }
 
-                Section {
-                    DatePicker("Last day covered", selection: $periodEndDate, in: ...mostRecentPayday, displayedComponents: .date)
-                } header: {
-                    Text("What that check paid you for")
-                } footer: {
-                    Text("The last day of work that paycheck covered. Everything is grouped around this, not the payday itself.")
-                }
-                .listRowBackground(PaydayColor.fieldBackground)
-
-                if frequency == .twiceMonthly {
-                    Text("Periods run the 1st–15th and 16th–end of every month.")
-                        .font(PaydayFont.footnote)
-                        .foregroundStyle(PaydayColor.textSecondary)
-                        .listRowBackground(PaydayColor.fieldBackground)
-                }
-
-                Section {
-                    Picker("First day", selection: $firstWeekday) {
-                        ForEach(1...7, id: \.self) { day in
-                            Text(weekdaySymbols[day - 1]).tag(day)
+                Section("Calendar") {
+                    captionedRow("Sets which day the calendar grid begins on.") {
+                        Picker("First day", selection: $firstWeekday) {
+                            ForEach(1...7, id: \.self) { day in
+                                Text(weekdaySymbols[day - 1]).tag(day)
+                            }
                         }
                     }
-                } header: {
-                    Text("Week starts on")
-                } footer: {
-                    Text("Sets which day the calendar grid begins on.")
                 }
                 .listRowBackground(PaydayColor.fieldBackground)
 
@@ -154,6 +147,12 @@ struct SettingsView: View {
             }
             .onChange(of: isSmartNudgeEnabled) { _, newValue in
                 preferencesStore.isSmartNudgeEnabled = newValue
+                // Turning this ON is the other deliberate moment (besides
+                // the first logged shift) this app ever asks for
+                // notification permission — see SmartNudgeScheduler.
+                if newValue {
+                    Task { await SmartNudgeScheduler.requestAuthorizationIfNeeded() }
+                }
             }
             .onAppear {
                 firstName = preferencesStore.firstName ?? ""

@@ -218,16 +218,25 @@ struct PaydayPremiumShadowModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         if colorScheme == .light {
-            // Light Mode: 3-layer "Cloudy Day" diffusion.
+            // Light Mode: 3-layer "Cloudy Day" diffusion. These opacities run
+            // noticeably stronger than Vero's own literal values (byte-for-byte
+            // ported here originally) — on Payday's actual white-card-on-#FAFAFA
+            // surfaces, the ported numbers read as no elevation at all, cards
+            // and the page background were indistinguishable. VERO_VISION's own
+            // meta-rule licenses this: "if following a rule literally makes a
+            // screen worse, the rule is being applied wrong — look at the
+            // render." The background/card hex tokens themselves are correct
+            // law and untouched; only the shadow needed to actually show up.
             content
-                // Layer 1: Ambient occlusion (very large, very subtle)
-                .shadow(color: Color.black.opacity(0.02), radius: 40, x: 0, y: 20)
-                // Layer 2: Gravity (medium spread)
-                .shadow(color: Color.black.opacity(0.03), radius: 16, x: 0, y: 8)
+                // Layer 1: Ambient occlusion (large, soft)
+                .shadow(color: Color.black.opacity(0.04), radius: 32, x: 0, y: 16)
+                // Layer 2: Gravity (the primary "lifted off the page" cue)
+                .shadow(color: Color.black.opacity(0.08), radius: 12, x: 0, y: 4)
                 // Layer 3: Contact patch (tiny, sharp)
-                .shadow(color: Color.black.opacity(0.05), radius: 1, x: 0, y: 1)
+                .shadow(color: Color.black.opacity(0.10), radius: 1, x: 0, y: 1)
         } else {
-            // Dark Mode: minimal — darkness is the shadow.
+            // Dark Mode: minimal — darkness is the shadow. Already correct
+            // (obsidian cards read clearly against #050505); untouched.
             content
                 .shadow(color: Color.black.opacity(0.3), radius: 20, x: 0, y: 10)
                 .shadow(color: Color.black.opacity(0.2), radius: 1, x: 0, y: 1)

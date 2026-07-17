@@ -108,12 +108,26 @@ struct InsightsView: View {
 
                 // Moves come next and are always fresh — deterministic
                 // math, not narration, so there's nothing to wait on.
-                ForEach(moves) { move in
+                // moves() already returns them ranked by annualized impact,
+                // descending — the eye should land on the first one, so
+                // only it gets the stronger "TOP MOVE" kicker. Restrained on
+                // purpose: one clear lead, not a rainbow of emphasis.
+                ForEach(Array(moves.enumerated()), id: \.element.id) { index, move in
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("MOVE")
-                            .font(PaydayFont.caption2)
-                            .tracking(0.8)
-                            .foregroundStyle(PaydayColor.primary)
+                        if index == 0 {
+                            Text("TOP MOVE")
+                                .font(PaydayFont.caption2)
+                                .tracking(0.8)
+                                .foregroundStyle(PaydayColor.onPrimary)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .background(PaydayColor.primary, in: Capsule())
+                        } else {
+                            Text("MOVE")
+                                .font(PaydayFont.caption2)
+                                .tracking(0.8)
+                                .foregroundStyle(PaydayColor.primary)
+                        }
                         Text(move.title)
                             .font(PaydayFont.headline)
                             .foregroundStyle(PaydayColor.textPrimary)

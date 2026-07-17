@@ -766,6 +766,13 @@ struct StatsEngine {
         static let minimumWeekdaySwapDeltaCents = 1500
         static let minimumRateDeltaCents = 300
         static let minimumTipPercentDelta = 3.0
+        /// rateLeaderMove and tipPercentSignalMove each pick a "best"
+        /// weekday from whichever weekday has the highest average — but an
+        /// average of ONE night isn't a pattern, it's a coincidence dressed
+        /// up as one ("Sunday pays best... across 1 night" is not a
+        /// recommendation, it's noise). Both gate their cited weekday's own
+        /// night count against this floor before firing.
+        static let minimumWeekdayNightsForCitedMove = 2
         static let lapsedWindowDays = 21
         /// Every weekday-keyed move (swap, lapsed winner, rate leader)
         /// already requires >= 3 nights of history for that weekday before
@@ -913,7 +920,7 @@ struct StatsEngine {
         let allRates = nightlyRates()
         let weekdayRates = allRates.filter { calendar.component(.weekday, from: $0.date) == best.weekday }
         let otherRates = allRates.filter { calendar.component(.weekday, from: $0.date) != best.weekday }
-        guard !weekdayRates.isEmpty, !otherRates.isEmpty else { return nil }
+        guard weekdayRates.count >= MoveThresholds.minimumWeekdayNightsForCitedMove, !otherRates.isEmpty else { return nil }
 
         // Same variance guard as weekdaySwapMove, applied to $/hr instead
         // of $/night: pools this weekday's per-night rates against every
@@ -1001,7 +1008,7 @@ struct StatsEngine {
         guard deltaPercent >= MoveThresholds.minimumTipPercentDelta else { return nil }
 
         let weekdaySales = nightlySalesRates().filter { calendar.component(.weekday, from: $0.date) == best.weekday }
-        guard !weekdaySales.isEmpty else { return nil }
+        guard weekdaySales.count >= MoveThresholds.minimumWeekdayNightsForCitedMove else { return nil }
         let avgSales = Double(weekdaySales.reduce(0) { $0 + $1.salesCents }) / Double(weekdaySales.count)
         let annualImpact = Int((deltaPercent / 100) * avgSales * MoveThresholds.assumedWeeksPerYear)
         guard annualImpact >= MoveThresholds.minimumAnnualImpactCents else { return nil }

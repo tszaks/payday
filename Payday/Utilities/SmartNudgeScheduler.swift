@@ -15,7 +15,11 @@ enum SmartNudgeScheduler {
     /// Called whenever there's a natural moment to re-check: the app
     /// coming to the foreground, and right after every tip log (sheet or
     /// Siri) — logging tonight is exactly what should cancel tonight's
-    /// nudge and queue up the next usual night's instead.
+    /// nudge and queue up the next usual night's instead. Deliberately
+    /// never prompts for permission itself — only schedules if
+    /// authorization is ALREADY granted. Asking is a separate, explicit
+    /// call (requestAuthorizationIfNeeded below) made only at a moment of
+    /// actual relevant value, never on launch.
     static func reschedule(preferencesStore: UserPreferencesStore, allEntries: [TipEntry]) {
         Task {
             await performReschedule(preferencesStore: preferencesStore, allEntries: allEntries)
@@ -34,7 +38,7 @@ enum SmartNudgeScheduler {
               let fireDate = nextFireDate(usualWeekdays: rhythm.usualWeekdays, typicalLogHour: typicalLogHour, allEntries: allEntries)
         else { return }
 
-        guard await isAuthorized(center: center) else { return }
+        guard await isCurrentlyAuthorized(center: center) else { return }
         schedule(at: fireDate, center: center)
     }
 
@@ -59,18 +63,31 @@ enum SmartNudgeScheduler {
         return nil
     }
 
-    /// Contextual, not upfront: permission is only ever requested the
-    /// first time there's an actual usual-work-night worth nudging about.
-    private static func isAuthorized(center: UNUserNotificationCenter) async -> Bool {
+    /// Read-only status check — never prompts. See requestAuthorizationIfNeeded
+    /// for the one deliberate place that's allowed to.
+    private static func isCurrentlyAuthorized(center: UNUserNotificationCenter) async -> Bool {
         let settings = await center.notificationSettings()
         switch settings.authorizationStatus {
         case .authorized, .provisional:
             return true
-        case .notDetermined:
-            return (try? await center.requestAuthorization(options: [.alert, .sound])) ?? false
         default:
             return false
         }
+    }
+
+    /// The only place this app ever asks iOS for notification permission —
+    /// called at a moment of actual relevant value (the first shift ever
+    /// logged, in LogTipSheet; or turning "Remind me to log" on in
+    /// Settings), never on launch. Apple's own system dialog only ever
+    /// appears once, while the status is still .notDetermined — once a
+    /// person has answered (either way), this is a silent no-op, so
+    /// callers can invoke it freely without tracking whether they've
+    /// already asked.
+    static func requestAuthorizationIfNeeded() async {
+        let center = UNUserNotificationCenter.current()
+        let settings = await center.notificationSettings()
+        guard settings.authorizationStatus == .notDetermined else { return }
+        _ = try? await center.requestAuthorization(options: [.alert, .sound])
     }
 
     private static func schedule(at date: Date, center: UNUserNotificationCenter) {

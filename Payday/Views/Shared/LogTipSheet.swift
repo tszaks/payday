@@ -244,108 +244,124 @@ struct LogTipSheet: View {
     /// Every row below money is optional; nothing here is ever nagged for.
     var body: some View {
         NavigationStack {
-            Group {
-                if let revealResult {
-                    RevealCardView(result: revealResult, grossAndTipOut: revealGrossAndTipOut, onDismiss: { dismiss() })
-                } else {
-                    // Scrollable rather than a fixed VStack: expanding the
-                    // details group used to compress every row toward zero
-                    // height once the keyboard was up, badly enough that
-                    // the amount could render overlapping the nav title.
-                    // A ScrollView absorbs that extra height by scrolling
-                    // instead of squeezing, keeps the header stable in
-                    // every state, and (with the system's own keyboard
-                    // avoidance) keeps a focused field visible above the
-                    // keyboard automatically.
-                    ScrollView {
-                        VStack(spacing: 24) {
-                            shiftAmountContent
-
-                            shiftDetailsCard
-                            noteCard
-
-                            if isEditing {
-                                Button(role: .destructive) { showDeleteConfirmation = true } label: {
-                                    Text("Delete Shift")
-                                        .frame(maxWidth: .infinity)
-                                }
-                                .buttonStyle(.glassProminent)
-                                .tint(PaydayColor.error)
-                                .padding(.horizontal)
-                                .padding(.top, 4)
-                                .confirmationDialog("Delete this shift?", isPresented: $showDeleteConfirmation, titleVisibility: .visible) {
-                                    Button("Delete Shift", role: .destructive) { delete() }
-                                }
-                            }
-                        }
-                        .padding(.top, 20)
-                        .padding(.bottom, 32)
-                    }
-                    .scrollDismissesKeyboard(.interactively)
-                }
-            }
-            .background(PaydayColor.background)
-            .navigationTitle(revealResult != nil ? "" : (isEditing ? "Edit Shift" : "Log Shift"))
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                if revealResult == nil {
-                    if isEditing {
-                        ToolbarItem(placement: .confirmationAction) {
-                            Button("Done") { dismiss() }
-                                .buttonStyle(.glassProminent)
-                        }
+            // The system's own keyboard avoidance keeps the LAST-focused
+            // field roughly on screen, but Next can hop straight from Cash
+            // to Tip-out/Sales/Servers — rows that were never near the
+            // keyboard's edge to begin with, so avoidance alone doesn't
+            // reliably surface them. ScrollViewReader + an explicit
+            // scrollTo on every focus change is the one mechanism that
+            // covers the whole Cash→Servers chain, not just whichever
+            // field happened to be closest.
+            ScrollViewReader { proxy in
+                Group {
+                    if let revealResult {
+                        RevealCardView(result: revealResult, grossAndTipOut: revealGrossAndTipOut, onDismiss: { dismiss() })
                     } else {
-                        ToolbarItem(placement: .cancellationAction) {
-                            Button("Cancel") { dismiss() }
-                        }
-                        ToolbarItem(placement: .confirmationAction) {
-                            Button("Save") { saveNew() }
-                                .buttonStyle(.glassProminent)
-                                .disabled(!canSave)
-                        }
-                    }
-                    // The whole flow — Cash through Servers — is reachable
-                    // without a hand ever leaving the bottom of the screen:
-                    // Next cycles every numberPad field in the sheet, and
-                    // Save/Done sits right beside it so a rushed one-handed
-                    // log never has to reach up to the nav bar.
-                    if let focusedCurrencyField {
-                        ToolbarItemGroup(placement: .keyboard) {
-                            Spacer()
-                            Button("Next") {
-                                self.focusedCurrencyField = nextFocusField(after: focusedCurrencyField)
-                            }
-                            Button(isEditing ? "Done" : "Save") {
+                        // Scrollable rather than a fixed VStack: expanding the
+                        // details group used to compress every row toward zero
+                        // height once the keyboard was up, badly enough that
+                        // the amount could render overlapping the nav title.
+                        // A ScrollView absorbs that extra height by scrolling
+                        // instead of squeezing, keeps the header stable in
+                        // every state, and (with the system's own keyboard
+                        // avoidance) keeps a focused field visible above the
+                        // keyboard automatically.
+                        ScrollView {
+                            VStack(spacing: 24) {
+                                shiftAmountContent
+
+                                shiftDetailsCard
+                                noteCard
+
                                 if isEditing {
-                                    dismiss()
-                                } else {
-                                    saveNew()
+                                    Button(role: .destructive) { showDeleteConfirmation = true } label: {
+                                        Text("Delete Shift")
+                                            .frame(maxWidth: .infinity)
+                                    }
+                                    .buttonStyle(.glassProminent)
+                                    .tint(PaydayColor.error)
+                                    .padding(.horizontal)
+                                    .padding(.top, 4)
+                                    .confirmationDialog("Delete this shift?", isPresented: $showDeleteConfirmation, titleVisibility: .visible) {
+                                        Button("Delete Shift", role: .destructive) { delete() }
+                                    }
                                 }
                             }
-                            .disabled(!isEditing && !canSave)
+                            .padding(.top, 20)
+                            .padding(.bottom, 32)
+                        }
+                        .scrollDismissesKeyboard(.interactively)
+                    }
+                }
+                .background(PaydayColor.background)
+                .navigationTitle(revealResult != nil ? "" : (isEditing ? "Edit Shift" : "Log Shift"))
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    if revealResult == nil {
+                        if isEditing {
+                            ToolbarItem(placement: .confirmationAction) {
+                                Button("Done") { dismiss() }
+                                    .buttonStyle(.glassProminent)
+                            }
+                        } else {
+                            ToolbarItem(placement: .cancellationAction) {
+                                Button("Cancel") { dismiss() }
+                            }
+                            ToolbarItem(placement: .confirmationAction) {
+                                Button("Save") { saveNew() }
+                                    .buttonStyle(.glassProminent)
+                                    .disabled(!canSave)
+                            }
+                        }
+                        // The whole flow — Cash through Servers — is reachable
+                        // without a hand ever leaving the bottom of the screen:
+                        // Next cycles every numberPad field in the sheet, and
+                        // Save/Done sits right beside it so a rushed one-handed
+                        // log never has to reach up to the nav bar.
+                        if let focusedCurrencyField {
+                            ToolbarItemGroup(placement: .keyboard) {
+                                Spacer()
+                                Button("Next") {
+                                    self.focusedCurrencyField = nextFocusField(after: focusedCurrencyField)
+                                }
+                                Button(isEditing ? "Done" : "Save") {
+                                    if isEditing {
+                                        dismiss()
+                                    } else {
+                                        saveNew()
+                                    }
+                                }
+                                .disabled(!isEditing && !canSave)
+                            }
                         }
                     }
                 }
+                .onChange(of: cashCents) { _, _ in liveSaveEdit() }
+                .onChange(of: creditCents) { _, _ in liveSaveEdit() }
+                .onChange(of: date) { _, _ in liveSaveEdit() }
+                .onChange(of: note) { _, _ in liveSaveEdit() }
+                .onChange(of: hoursWorked) { _, _ in liveSaveEdit() }
+                .onChange(of: tipOutCents) { _, _ in liveSaveEdit() }
+                .onChange(of: salesCents) { _, _ in liveSaveEdit() }
+                .onChange(of: shiftPeriod) { _, _ in liveSaveEdit() }
+                .onChange(of: clockIn) { _, _ in
+                    if clockIn != nil, clockOut != nil { hoursWorked = ShiftTimes.hours(clockIn: clockIn, clockOut: clockOut) }
+                    liveSaveEdit()
+                }
+                .onChange(of: clockOut) { _, _ in
+                    if clockIn != nil, clockOut != nil { hoursWorked = ShiftTimes.hours(clockIn: clockIn, clockOut: clockOut) }
+                    liveSaveEdit()
+                }
+                .onChange(of: serverCount) { _, _ in liveSaveEdit() }
+                .onChange(of: focusedCurrencyField) { _, newField in
+                    guard let newField else { return }
+                    withAnimation(PaydayAnimation.premiumSpring) {
+                        proxy.scrollTo(newField, anchor: .center)
+                    }
+                }
+                .onAppear { seedShiftDetailDefaults() }
+                .onDisappear { pruneZeroedRows() }
             }
-            .onChange(of: cashCents) { _, _ in liveSaveEdit() }
-            .onChange(of: creditCents) { _, _ in liveSaveEdit() }
-            .onChange(of: date) { _, _ in liveSaveEdit() }
-            .onChange(of: note) { _, _ in liveSaveEdit() }
-            .onChange(of: hoursWorked) { _, _ in liveSaveEdit() }
-            .onChange(of: tipOutCents) { _, _ in liveSaveEdit() }
-            .onChange(of: salesCents) { _, _ in liveSaveEdit() }
-            .onChange(of: shiftPeriod) { _, _ in liveSaveEdit() }
-            .onChange(of: clockIn) { _, _ in
-                if clockIn != nil, clockOut != nil { hoursWorked = ShiftTimes.hours(clockIn: clockIn, clockOut: clockOut) }
-                liveSaveEdit()
-            }
-            .onChange(of: clockOut) { _, _ in
-                if clockIn != nil, clockOut != nil { hoursWorked = ShiftTimes.hours(clockIn: clockIn, clockOut: clockOut) }
-                liveSaveEdit()
-            }
-            .onChange(of: serverCount) { _, _ in liveSaveEdit() }
-            .onAppear { seedShiftDetailDefaults() }
-            .onDisappear { pruneZeroedRows() }
         }
         // Fixed height for the common case, plus .large as an escape hatch so
         // content is never clipped on smaller iPhones with the keypad up.
@@ -406,8 +422,16 @@ struct LogTipSheet: View {
             }
 
             VStack(spacing: 12) {
-                CurrencyAmountRow(label: "Cash", cents: $cashCents, field: .cash, focusedField: $focusedCurrencyField, autoFocus: !isEditing && !prefersCreditFirst)
-                CurrencyAmountRow(label: "Credit", cents: $creditCents, field: .credit, focusedField: $focusedCurrencyField, autoFocus: !isEditing && prefersCreditFirst)
+                // The debug hooks below (-DebugFocusTipOut/-DebugFocusServers)
+                // exist to screenshot ONE specific field focused above the
+                // keyboard — Cash's own default autofocus would otherwise
+                // race it, since both fire from an onAppear and whichever
+                // view happens to mount last wins. Deferring to the debug
+                // hooks here makes that deterministic instead of luck.
+                CurrencyAmountRow(label: "Cash", cents: $cashCents, field: .cash, focusedField: $focusedCurrencyField, autoFocus: !isEditing && !prefersCreditFirst && !debugAutoFocusTipOut && !debugAutoFocusServers)
+                    .id(CurrencyRowField.cash)
+                CurrencyAmountRow(label: "Credit", cents: $creditCents, field: .credit, focusedField: $focusedCurrencyField, autoFocus: !isEditing && prefersCreditFirst && !debugAutoFocusTipOut && !debugAutoFocusServers)
+                    .id(CurrencyRowField.credit)
             }
             .padding(.horizontal)
         }
@@ -499,6 +523,7 @@ struct LogTipSheet: View {
                     CompactCurrencyField(cents: $tipOutCents, field: .tipOut, focusedField: $focusedCurrencyField, autoFocus: debugAutoFocusTipOut, placeholderCents: tipOutPlaceholderCents)
                 }
                 .padding(.vertical, 14)
+                .id(CurrencyRowField.tipOut)
                 Divider()
                 HStack {
                     Text("Sales")
@@ -506,6 +531,7 @@ struct LogTipSheet: View {
                     CompactCurrencyField(cents: $salesCents, field: .sales, focusedField: $focusedCurrencyField, placeholderCents: salesPlaceholderCents)
                 }
                 .padding(.vertical, 14)
+                .id(CurrencyRowField.sales)
                 Divider()
                 // Capture-only, no engine analysis yet — how many servers
                 // were on the floor changes section size and split
@@ -520,6 +546,7 @@ struct LogTipSheet: View {
                     CompactCountField(count: serverCountBinding, field: .servers, focusedField: $focusedCurrencyField, autoFocus: debugAutoFocusServers, placeholderCount: serversPlaceholderCount)
                 }
                 .padding(.vertical, 14)
+                .id(CurrencyRowField.servers)
             }
             .padding()
             .tint(PaydayColor.textPrimary)
@@ -634,6 +661,13 @@ struct LogTipSheet: View {
     /// exactly so callers can pass tonight's history and total separately).
     private func saveNew() {
         guard case .new = target else { return }
+        // Apple's own guidance: ask for notification permission at a moment
+        // of actual relevant value, not on launch before anyone's seen
+        // anything worth being reminded about. The first shift ever logged
+        // is that moment. `allEntries` still reflects state from before
+        // this save's inserts land below (SwiftData's @Query hasn't
+        // refreshed mid-call), so isEmpty here means genuinely the first.
+        let isFirstShiftEver = allEntries.isEmpty
         // Clamp to today: the picker already blocks future dates, but never
         // trust the initial/bound value to enforce it.
         let normalizedDate = Calendar.current.startOfDay(for: min(date, .now))
@@ -680,6 +714,9 @@ struct LogTipSheet: View {
         // refreshed within this same call, so the just-inserted entries
         // are appended explicitly rather than relied on to already be in it.
         SmartNudgeScheduler.reschedule(preferencesStore: preferencesStore, allEntries: allEntries + newEntries)
+        if isFirstShiftEver {
+            Task { await SmartNudgeScheduler.requestAuthorizationIfNeeded() }
+        }
         PaydayWidgetRefresh.request()
     }
 
