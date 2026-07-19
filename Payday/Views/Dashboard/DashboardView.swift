@@ -21,8 +21,19 @@ private struct DashboardFacts {
     let periodEntries: [TipEntry]
     let breakdown: TipBreakdown
     let totalCents: Int
-    let totalTipOutCents: Int
     let daysRemaining: Int
+    /// The period the hero number represents — usually the current one, but
+    /// the just-finished one on the morning after a close, while the new
+    /// period is still empty, so a $0.00 hero never sits above a "complete"
+    /// card.
+    let heroPeriod: PayPeriod
+    let heroLabel: String
+    let heroTotalCents: Int
+    let heroPayDate: Date
+    let heroIsCurrent: Bool
+    /// The `end` of the period the payday moment is showing, so the dismiss
+    /// button can remember which one was closed.
+    let paydayPeriodEnd: Date?
     let shiftCount: Int
     let shiftDays: [(day: Date, shiftID: UUID, items: [TipEntry])]
     /// Calendar days that hold 2+ shifts — a "double" — so a row can label
@@ -37,7 +48,7 @@ private struct DashboardFacts {
     let predictedPayDate: Date
     let tonightLine: String?
 
-    init(allEntries: [TipEntry], schedule: PaySchedule?, now: Date, forcePaydayMoment: Bool) {
+    init(allEntries: [TipEntry], schedule: PaySchedule?, now: Date, forcePaydayMoment: Bool, dismissedPaydayEnd: Date?) {
         let calendar = Calendar.current
         calculator = PayPeriodCalculator(schedule: schedule ?? .fallback)
         let period = calculator.period(containing: now)
@@ -55,11 +66,6 @@ private struct DashboardFacts {
         var dayCounts: [Date: Int] = [:]
         for shift in shiftDays { dayCounts[shift.day, default: 0] += 1 }
         multiShiftDays = Set(dayCounts.filter { $0.value >= 2 }.keys)
-        // One canonical tip-out per shift (never a per-entry sum — see
-        // ShiftDetails), summed across the period — the gross/net gap the
-        // caption below has to explain.
-        totalTipOutCents = shiftDays.reduce(0) { $0 + (ShiftDetails.resolve(from: $1.items).tipOutCents ?? 0) }
-
         let statsEngine = StatsEngine(records: allEntries.map(TipRecord.init))
         // Net of any tip-out, same rule as every other analytical total —
         // breakdown above stays gross, purely for the cash/credit subtitle.
@@ -74,35 +80,81 @@ private struct DashboardFacts {
         }
         projectedTotalCents = statsEngine.projectedPeriodTotal(period: period, asOf: now, rhythm: statsEngine.workRhythm(referenceDate: now))
 
-        isPaydayMoment = forcePaydayMoment || (daysRemaining == 0 && totalCents > 0)
-        bestNightThisPeriod = statsEngine.bestNight(in: period)
-
-        // Only claims "best period yet" when there's at least one completed
-        // period in history to actually beat.
-        if let earliestEntryDate = allEntries.map(\.date).min() {
-            var cursor = period
-            var comparedAny = false
-            var isBest = true
-            for _ in 0..<24 {
-                guard let previousEnd = calendar.date(byAdding: .day, value: -1, to: cursor.start),
-                      previousEnd >= earliestEntryDate
-                else { break }
-                cursor = calculator.period(containing: previousEnd)
-                comparedAny = true
-                if statsEngine.periodToDateTotal(period: cursor, asOf: cursor.end) >= totalCents {
-                    isBest = false
-                    break
-                }
-            }
-            isBestPeriodEver = comparedAny && isBest
+        // The "period complete" moment belongs to a FINISHED period whose
+        // check is still pending — the day after its last shift, never a day
+        // still workable (see PaydayMoment). forcePaydayMoment is the DEBUG
+        // screenshot hook and pins it to the current period regardless.
+        let finished: PayPeriod?
+        if forcePaydayMoment {
+            finished = period
         } else {
-            isBestPeriodEver = false
+            finished = PaydayMoment.finishedPeriod(now: now, calculator: calculator, dismissedEnd: dismissedPaydayEnd)
         }
+        // Nothing to celebrate if that period had no earnings.
+        let paydayPeriod = finished.flatMap { statsEngine.periodToDateTotal(period: $0, asOf: $0.end) > 0 ? $0 : nil }
+        isPaydayMoment = paydayPeriod != nil
+        paydayPeriodEnd = paydayPeriod?.end
 
-        // Credit tips are what land on a stub; cash never does. Gross, like
-        // PaycheckComparisonView — a stub reports gross, not net income.
-        predictedPaycheckCents = breakdown.creditCents > 0 ? breakdown.creditCents : breakdown.grossTotalCents
-        predictedPayDate = calculator.payDate(for: period)
+        if let pay = paydayPeriod {
+            let payEntries = allEntries.filter { $0.date >= pay.start && $0.date <= pay.end }
+            let payBreakdown = TipBreakdown.total(of: payEntries)
+            let payNetCents = statsEngine.periodToDateTotal(period: pay, asOf: pay.end)
+            bestNightThisPeriod = statsEngine.bestNight(in: pay)
+            // Credit tips are what land on a stub; cash never does. Gross, like
+            // PaycheckComparisonView — a stub reports gross, not net income.
+            predictedPaycheckCents = payBreakdown.creditCents > 0 ? payBreakdown.creditCents : payBreakdown.grossTotalCents
+            predictedPayDate = calculator.payDate(for: pay)
+
+            // Only claims "best period yet" when there's at least one completed
+            // period in history to actually beat.
+            if let earliestEntryDate = allEntries.map(\.date).min() {
+                var cursor = pay
+                var comparedAny = false
+                var isBest = true
+                for _ in 0..<24 {
+                    guard let previousEnd = calendar.date(byAdding: .day, value: -1, to: cursor.start),
+                          previousEnd >= earliestEntryDate
+                    else { break }
+                    cursor = calculator.period(containing: previousEnd)
+                    comparedAny = true
+                    if statsEngine.periodToDateTotal(period: cursor, asOf: cursor.end) >= payNetCents {
+                        isBest = false
+                        break
+                    }
+                }
+                isBestPeriodEver = comparedAny && isBest
+            } else {
+                isBestPeriodEver = false
+            }
+
+            // On the morning after a close the new period is still empty; lead
+            // with the period that just finished so a $0.00 hero never sits
+            // above its own "complete" card. Once the new period has earnings,
+            // the hero follows it and the completed card rides along below.
+            if totalCents == 0 && pay != period {
+                heroPeriod = pay
+                heroLabel = "Last pay period"
+                heroTotalCents = payNetCents
+                heroPayDate = predictedPayDate
+                heroIsCurrent = false
+            } else {
+                heroPeriod = period
+                heroLabel = "This pay period"
+                heroTotalCents = totalCents
+                heroPayDate = calculator.payDate(for: period)
+                heroIsCurrent = true
+            }
+        } else {
+            bestNightThisPeriod = statsEngine.bestNight(in: period)
+            isBestPeriodEver = false
+            predictedPaycheckCents = breakdown.creditCents > 0 ? breakdown.creditCents : breakdown.grossTotalCents
+            predictedPayDate = calculator.payDate(for: period)
+            heroPeriod = period
+            heroLabel = "This pay period"
+            heroTotalCents = totalCents
+            heroPayDate = calculator.payDate(for: period)
+            heroIsCurrent = true
+        }
 
         // Echo of tonight's reveal verdict, for the most recently logged
         // shift today — consistent with the per-shift reveal shown at log
@@ -138,6 +190,10 @@ struct DashboardView: View {
     @State private var showSettings = false
     @State private var undoState = UndoDeleteToastState()
     @State private var progressTrackDrawn = false
+    /// The `end` (as a reference-date interval) of the period whose completion
+    /// card the person dismissed; 0 means none. Kept so the card stays gone
+    /// once closed, without reappearing on the next launch.
+    @AppStorage("dismissedPaydayPeriodEnd") private var dismissedPaydayEndRaw: Double = 0
 
     private static let maxShiftRows = 5
 
@@ -162,7 +218,8 @@ struct DashboardView: View {
     private let paydayVerificationTip = PaydayVerificationTip()
 
     var body: some View {
-        let facts = DashboardFacts(allEntries: allEntries, schedule: scheduleStore.schedule, now: .now, forcePaydayMoment: forcePaydayMoment)
+        let dismissedPaydayEnd = dismissedPaydayEndRaw == 0 ? nil : Date(timeIntervalSinceReferenceDate: dismissedPaydayEndRaw)
+        let facts = DashboardFacts(allEntries: allEntries, schedule: scheduleStore.schedule, now: .now, forcePaydayMoment: forcePaydayMoment, dismissedPaydayEnd: dismissedPaydayEnd)
         NavigationStack {
             List {
                 Section {
@@ -242,18 +299,20 @@ struct DashboardView: View {
     private func heroCard(_ facts: DashboardFacts) -> some View {
         VStack(spacing: PaydaySpacing.p20) {
             VStack(spacing: 6) {
-                Text("This pay period")
+                Text(facts.heroLabel)
                     .font(PaydayFont.subheadline)
                     .foregroundStyle(PaydayColor.textSecondary)
-                Text(Money.string(fromCents: facts.totalCents))
+                Text(Money.string(fromCents: facts.heroTotalCents))
                     .font(PaydayFont.displayXXL)
                     .monospacedDigit()
                     .foregroundStyle(PaydayColor.textPrimary)
                     .contentTransition(.numericText())
-                    .animation(PaydayAnimation.premiumSpring, value: facts.totalCents)
+                    .animation(PaydayAnimation.premiumSpring, value: facts.heroTotalCents)
                     .lineLimit(1)
                     .minimumScaleFactor(0.5)
-                if let paceDeltaCents = facts.paceDeltaCents {
+                // Pace only makes sense for the period still in progress —
+                // a finished period isn't racing anything.
+                if facts.heroIsCurrent, let paceDeltaCents = facts.paceDeltaCents {
                     // The screen's one color moment: ahead is green because
                     // being ahead is the act. Behind stays quiet gray — red
                     // is reserved for a shorted paycheck, never for pace.
@@ -270,13 +329,6 @@ struct DashboardView: View {
                 // two. (Still computed for the widget/Insights.)
             }
 
-            if facts.totalCents > 0 {
-                Text(captionLine(for: facts))
-                    .font(PaydayFont.caption)
-                    .foregroundStyle(PaydayColor.textSecondary)
-                    .monospacedDigit()
-            }
-
             progressTrack(facts)
 
             if facts.isPaydayMoment {
@@ -287,20 +339,15 @@ struct DashboardView: View {
         .paydayCard(padding: PaydaySpacing.p24)
     }
 
-    /// The hero total above is net; this is gross's one-glance-away
-    /// explanation whenever a tip-out actually moved the two apart — never
-    /// silently letting cash+credit stop equaling the big number with no
-    /// cue why.
-    private func captionLine(for facts: DashboardFacts) -> String {
-        let base = "Cash \(Money.string(fromCents: facts.breakdown.cashCents)) · Credit \(Money.string(fromCents: facts.breakdown.creditCents))"
-        guard facts.totalTipOutCents > 0 else { return base }
-        return "\(base) · Tipped out \(Money.string(fromCents: facts.totalTipOutCents))"
+    private func progressAccessibilityValue(_ facts: DashboardFacts) -> String {
+        guard facts.heroIsCurrent else { return "Period complete" }
+        return facts.daysRemaining == 0 ? "Last day" : "\(facts.daysRemaining) days left"
     }
 
     /// The period itself, drawn: fills as days pass, ends at payday. This
     /// carries "days left" without a number — a glance shows where you are.
     private func progressTrack(_ facts: DashboardFacts) -> some View {
-        let fraction = facts.calculator.progress(through: .now, in: facts.currentPeriod)
+        let fraction = facts.calculator.progress(through: .now, in: facts.heroPeriod)
         return VStack(spacing: 6) {
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
@@ -314,14 +361,14 @@ struct DashboardView: View {
             .frame(height: 4)
             .accessibilityElement()
             .accessibilityLabel("Pay period progress")
-            .accessibilityValue(facts.daysRemaining == 0 ? "Last day" : "\(facts.daysRemaining) days left")
+            .accessibilityValue(progressAccessibilityValue(facts))
 
             // The bar already shows how far through the period you are, so
             // "N days left" was the same fact twice — only the payday date
             // remains, labeling where the bar ends.
             HStack {
                 Spacer()
-                Text("Payday · \(facts.predictedPayDate.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day()))")
+                Text("Payday · \(facts.heroPayDate.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day()))")
                     .font(PaydayFont.caption2)
                     .foregroundStyle(PaydayColor.textSecondary)
             }
@@ -344,6 +391,7 @@ struct DashboardView: View {
                 Text("Period complete")
                     .font(PaydayFont.subheadline)
                     .foregroundStyle(PaydayColor.textSecondary)
+                    .accessibilityAddTraits(.isHeader)
                 if let bestNightThisPeriod = facts.bestNightThisPeriod {
                     Text("Best night: \(Money.string(fromCents: bestNightThisPeriod.cents)) on \(bestNightThisPeriod.date.formatted(.dateTime.month(.abbreviated).day()))")
                         .font(PaydayFont.footnote)
@@ -370,6 +418,27 @@ struct DashboardView: View {
                     .foregroundStyle(PaydayColor.textSecondary)
             }
             .popoverTip(paydayVerificationTip)
+        }
+        .frame(maxWidth: .infinity)
+        .overlay(alignment: .topTrailing) {
+            // The card clears on its own after a day or two, but let the
+            // person close it the moment they've seen it — it won't return
+            // for this period once dismissed.
+            if let end = facts.paydayPeriodEnd {
+                Button {
+                    withAnimation(PaydayAnimation.premiumSpring) {
+                        dismissedPaydayEndRaw = end.timeIntervalSinceReferenceDate
+                    }
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(PaydayColor.textTertiary)
+                        .frame(width: 28, height: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Dismiss period summary")
+            }
         }
     }
 
