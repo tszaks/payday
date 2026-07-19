@@ -200,6 +200,8 @@ struct DashboardView: View {
     @State private var showSettings = false
     @State private var undoState = UndoDeleteToastState()
     @State private var progressTrackDrawn = false
+    /// Whether the cash/credit breakdown drawer tucked under the hero is open.
+    @State private var breakdownExpanded = false
     /// The `end` (as a reference-date interval) of the period whose completion
     /// card the person dismissed; 0 means none. Kept so the card stays gone
     /// once closed, without reappearing on the next launch.
@@ -233,7 +235,7 @@ struct DashboardView: View {
         NavigationStack {
             List {
                 Section {
-                    heroCard(facts)
+                    heroWithDrawer(facts)
                 }
                 .listRowInsets(EdgeInsets(top: 8, leading: PaydaySpacing.p16, bottom: 8, trailing: PaydaySpacing.p16))
                 .listRowBackground(Color.clear)
@@ -295,6 +297,9 @@ struct DashboardView: View {
                 if ProcessInfo.processInfo.arguments.contains("-OpenSettings") {
                     showSettings = true
                 }
+                if ProcessInfo.processInfo.arguments.contains("-DebugExpandBreakdown") {
+                    breakdownExpanded = true
+                }
             }
             #endif
             .sheet(isPresented: $showSettings) {
@@ -302,6 +307,97 @@ struct DashboardView: View {
             }
         }
         .undoDeleteToast(undoState, context: modelContext)
+    }
+
+    // MARK: Hero card + breakdown drawer
+
+    /// The hero card with a cash/credit drawer tucked behind it — same peek +
+    /// slide treatment as Vero's coverage drawer. The drawer's collapsed lip
+    /// shows the cash/credit split at rest; tapping the hero slides it open to
+    /// the full reconciliation (cash + credit − tip-out = take-home), which is
+    /// where the tip-out lives now instead of cluttering the card face.
+    @ViewBuilder
+    private func heroWithDrawer(_ facts: DashboardFacts) -> some View {
+        let hasBreakdown = facts.heroCashCents > 0 || facts.heroCreditCents > 0
+        VStack(spacing: 0) {
+            heroCard(facts)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    guard hasBreakdown else { return }
+                    withAnimation(PaydayAnimation.premiumSpring) {
+                        breakdownExpanded.toggle()
+                    }
+                }
+                .zIndex(1)
+
+            if hasBreakdown {
+                breakdownDrawer(facts)
+                    .padding(.top, -PaydayRadius.xl + 2)
+                    .zIndex(0)
+            }
+        }
+    }
+
+    /// Card tucked behind the hero. Collapsed: a lip showing the cash/credit
+    /// split with a chevron. Expanded: the itemized reconciliation. Square top,
+    /// rounded bottom, recessed fill so it reads as sliding out from under.
+    private func breakdownDrawer(_ facts: DashboardFacts) -> some View {
+        // The figure that makes the split reconcile to take-home, derived so it
+        // always adds up regardless of how tip-out was logged across a shift.
+        let tipOutCents = max(0, facts.heroCashCents + facts.heroCreditCents - facts.heroTotalCents)
+        let drawerShape = UnevenRoundedRectangle(
+            cornerRadii: .init(topLeading: 0, bottomLeading: PaydayRadius.xl,
+                               bottomTrailing: PaydayRadius.xl, topTrailing: 0),
+            style: .continuous
+        )
+        return VStack(spacing: 0) {
+            // Collapsed lip: cash/credit at a glance, and the tap affordance.
+            // Extra top padding clears the slice tucked behind the hero.
+            HStack(spacing: PaydaySpacing.p8) {
+                Text("Cash \(Money.string(fromCents: facts.heroCashCents)) · Credit \(Money.string(fromCents: facts.heroCreditCents))")
+                    .font(PaydayFont.caption)
+                    .foregroundStyle(PaydayColor.textSecondary)
+                    .monospacedDigit()
+                Spacer(minLength: 0)
+                Image(systemName: breakdownExpanded ? "chevron.up" : "chevron.down")
+                    .font(PaydayFont.caption2)
+                    .foregroundStyle(PaydayColor.textTertiary)
+            }
+            .padding(.horizontal, PaydaySpacing.p20)
+            .padding(.top, PaydayRadius.xl + PaydaySpacing.p12)
+            .padding(.bottom, breakdownExpanded ? PaydaySpacing.p12 : PaydaySpacing.p16)
+
+            if breakdownExpanded {
+                VStack(spacing: PaydaySpacing.p8) {
+                    breakdownRow("Cash", cents: facts.heroCashCents)
+                    breakdownRow("Credit", cents: facts.heroCreditCents)
+                    if tipOutCents > 0 {
+                        breakdownRow("Tipped out", cents: -tipOutCents)
+                    }
+                    Divider()
+                    breakdownRow("Take-home", cents: facts.heroTotalCents, emphasized: true)
+                }
+                .padding(.horizontal, PaydaySpacing.p20)
+                .padding(.bottom, PaydaySpacing.p20)
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(drawerShape.fill(PaydayColor.fieldBackground))
+        .clipShape(drawerShape)
+    }
+
+    private func breakdownRow(_ label: String, cents: Int, emphasized: Bool = false) -> some View {
+        HStack {
+            Text(label)
+                .font(emphasized ? PaydayFont.subheadline : PaydayFont.footnote)
+                .foregroundStyle(emphasized ? PaydayColor.textPrimary : PaydayColor.textSecondary)
+            Spacer(minLength: 0)
+            Text(cents < 0 ? "−\(Money.string(fromCents: -cents))" : Money.string(fromCents: cents))
+                .font(emphasized ? PaydayFont.subheadline : PaydayFont.footnote)
+                .foregroundStyle(emphasized ? PaydayColor.textPrimary : PaydayColor.textSecondary)
+                .monospacedDigit()
+        }
     }
 
     // MARK: Hero card
@@ -337,15 +433,6 @@ struct DashboardView: View {
                 // grounded in real logged history on both sides and it's the
                 // screen's one green moment; projection was the softer of the
                 // two. (Still computed for the widget/Insights.)
-            }
-
-            if facts.heroCashCents > 0 || facts.heroCreditCents > 0 {
-                // Cash vs credit at a glance. Gross, and intentionally without
-                // a tip-out line — Tyler asked to keep the split but not that.
-                Text("Cash \(Money.string(fromCents: facts.heroCashCents)) · Credit \(Money.string(fromCents: facts.heroCreditCents))")
-                    .font(PaydayFont.caption)
-                    .foregroundStyle(PaydayColor.textSecondary)
-                    .monospacedDigit()
             }
 
             progressTrack(facts)
