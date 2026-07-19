@@ -269,6 +269,10 @@ enum PaydayAnimation {
     static let paperSpring: Animation = .snappy
     /// Premium spring (smooth) — gentle transitions, e.g. amounts rolling.
     static let premiumSpring: Animation = .smooth
+    /// Drawer spring — visible overshoot so a drawer lands with a small,
+    /// playful bounce: livelier than snappy (bounce 0.15), shy of the
+    /// full .bouncy preset (0.3) so it never reads as cartoonish.
+    static let drawerSpring: Animation = .spring(duration: 0.5, bounce: 0.24)
 }
 
 // MARK: - Haptic Feedback
