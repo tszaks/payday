@@ -44,6 +44,15 @@ struct CalendarView: View {
             .reduce(0) { $0 + $1.netCents }
     }
 
+    /// The displayed month's best day — the heatmap's full-intensity anchor,
+    /// so every month self-normalizes and always shows its own hottest day
+    /// at full heat.
+    private var displayedMonthMaxCents: Int {
+        dailyTotals
+            .filter { calendar.isDate($0.key, equalTo: displayedMonth, toGranularity: .month) }
+            .values.max() ?? 0
+    }
+
     private var gridDays: [Date] {
         guard let monthInterval = calendar.dateInterval(of: .month, for: displayedMonth) else { return [] }
         let firstWeekday = calendar.component(.weekday, from: monthInterval.start)
@@ -86,6 +95,7 @@ struct CalendarView: View {
                                     DayCell(
                                         day: day,
                                         totalCents: dailyTotals[day],
+                                        monthMaxCents: displayedMonthMaxCents,
                                         isCurrentMonth: calendar.isDate(day, equalTo: displayedMonth, toGranularity: .month),
                                         isToday: calendar.isDateInToday(day),
                                         isInCurrentPeriod: day >= currentPeriod.start && day <= currentPeriod.end
@@ -167,6 +177,9 @@ struct CalendarView: View {
 private struct DayCell: View {
     let day: Date
     let totalCents: Int?
+    /// The best day of the displayed month — full heat. Each month
+    /// self-normalizes so its own hottest day always reads at full intensity.
+    let monthMaxCents: Int
     let isCurrentMonth: Bool
     let isToday: Bool
     let isInCurrentPeriod: Bool
@@ -212,12 +225,32 @@ private struct DayCell: View {
         return "\(dateText), \(Money.string(fromCents: totalCents)) logged"
     }
 
-    /// Days with tips read strongest; the rest of the current pay period gets
-    /// a soft wash so the range shows as a continuous band of tinted tiles
-    /// instead of disconnected underlines.
+    /// Worked days are a heatmap — intensity scales with the day's take
+    /// relative to the month's best day, so hot and slow days separate at a
+    /// glance. The rest of the current pay period keeps its soft wash so the
+    /// range still shows as a continuous band.
     private var cellFill: Color {
-        if hasTips { return Color.accentColor.opacity(0.18) }
+        if hasTips, let totalCents {
+            let fraction = monthMaxCents > 0 ? min(1.0, Double(totalCents) / Double(monthMaxCents)) : 1.0
+            return Self.heat(fraction: fraction)
+        }
         if isInCurrentPeriod { return Color.accentColor.opacity(0.07) }
         return .clear
+    }
+
+    /// Temperature scale, Tyler's pick over a single-hue green ramp (2026-07-19):
+    /// a hue walk from red (slow) through yellow (mid) to Vero green (best),
+    /// opacity rising with heat for shade depth within each hue. A deliberate,
+    /// contained exception to the one-green design law — the calendar is the
+    /// app's one at-a-glance pattern surface, and on a tightly clustered month
+    /// hue separates days that a green ramp leaves looking identical. True red
+    /// only appears when a day lands far below the month's best, so it reads
+    /// as information, not judgment.
+    private static func heat(fraction f: Double) -> Color {
+        // Hue walk: red (0.02) through yellow (0.13) to Vero green (0.40).
+        let hue = f < 0.5
+            ? 0.02 + (0.13 - 0.02) * (f / 0.5)
+            : 0.13 + (0.40 - 0.13) * ((f - 0.5) / 0.5)
+        return Color(hue: hue, saturation: 0.72, brightness: 0.88).opacity(0.35 + 0.25 * f)
     }
 }
