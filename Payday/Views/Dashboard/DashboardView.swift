@@ -29,6 +29,10 @@ private struct DashboardFacts {
     let heroPeriod: PayPeriod
     let heroLabel: String
     let heroTotalCents: Int
+    /// Gross cash/credit for the hero period, for the one-glance split under
+    /// the total. Tip-out is deliberately not shown here.
+    let heroCashCents: Int
+    let heroCreditCents: Int
     let heroPayDate: Date
     let heroIsCurrent: Bool
     /// The `end` of the period the payday moment is showing, so the dismiss
@@ -135,12 +139,16 @@ private struct DashboardFacts {
                 heroPeriod = pay
                 heroLabel = "Last pay period"
                 heroTotalCents = payNetCents
+                heroCashCents = payBreakdown.cashCents
+                heroCreditCents = payBreakdown.creditCents
                 heroPayDate = predictedPayDate
                 heroIsCurrent = false
             } else {
                 heroPeriod = period
                 heroLabel = "This pay period"
                 heroTotalCents = totalCents
+                heroCashCents = breakdown.cashCents
+                heroCreditCents = breakdown.creditCents
                 heroPayDate = calculator.payDate(for: period)
                 heroIsCurrent = true
             }
@@ -152,6 +160,8 @@ private struct DashboardFacts {
             heroPeriod = period
             heroLabel = "This pay period"
             heroTotalCents = totalCents
+            heroCashCents = breakdown.cashCents
+            heroCreditCents = breakdown.creditCents
             heroPayDate = calculator.payDate(for: period)
             heroIsCurrent = true
         }
@@ -327,6 +337,15 @@ struct DashboardView: View {
                 // grounded in real logged history on both sides and it's the
                 // screen's one green moment; projection was the softer of the
                 // two. (Still computed for the widget/Insights.)
+            }
+
+            if facts.heroCashCents > 0 || facts.heroCreditCents > 0 {
+                // Cash vs credit at a glance. Gross, and intentionally without
+                // a tip-out line — Tyler asked to keep the split but not that.
+                Text("Cash \(Money.string(fromCents: facts.heroCashCents)) · Credit \(Money.string(fromCents: facts.heroCreditCents))")
+                    .font(PaydayFont.caption)
+                    .foregroundStyle(PaydayColor.textSecondary)
+                    .monospacedDigit()
             }
 
             progressTrack(facts)
