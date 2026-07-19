@@ -233,16 +233,19 @@ struct DashboardView: View {
         let dismissedPaydayEnd = dismissedPaydayEndRaw == 0 ? nil : Date(timeIntervalSinceReferenceDate: dismissedPaydayEndRaw)
         let facts = DashboardFacts(allEntries: allEntries, schedule: scheduleStore.schedule, now: .now, forcePaydayMoment: forcePaydayMoment, dismissedPaydayEnd: dismissedPaydayEnd)
         NavigationStack {
-            List {
-                Section {
+            // A ScrollView, deliberately NOT a List: the hero's drawer changes
+            // height when it opens, and a List (UIKit-backed) animates the row
+            // resize on its own clock while the drawer's spring runs on
+            // another — everything below visibly stutters. Pure SwiftUI layout
+            // keeps the whole column on one animation, which is exactly how
+            // Vero's budget drawer stays smooth.
+            ScrollView {
+                VStack(spacing: PaydaySpacing.p8) {
                     heroWithDrawer(facts)
-                }
-                .listRowInsets(EdgeInsets(top: 8, leading: PaydaySpacing.p16, bottom: 8, trailing: PaydaySpacing.p16))
-                .listRowBackground(Color.clear)
-                .listRowSeparator(.hidden)
+                        .padding(.horizontal, PaydaySpacing.p16)
+                        .padding(.top, 8)
 
-                if let tonightLine = facts.tonightLine {
-                    Section {
+                    if let tonightLine = facts.tonightLine {
                         Text(tonightLine)
                             .font(PaydayFont.subheadline)
                             .foregroundStyle(PaydayColor.textSecondary)
@@ -250,25 +253,17 @@ struct DashboardView: View {
                             .frame(maxWidth: .infinity, alignment: .center)
                             .multilineTextAlignment(.center)
                             .padding(.horizontal, PaydaySpacing.p24)
+                            .padding(.vertical, PaydaySpacing.p4)
                     }
-                    .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
-                }
 
-                if facts.periodEntries.isEmpty {
-                    Section {
+                    if facts.periodEntries.isEmpty {
                         emptyState
+                    } else {
+                        shiftsSection(facts)
+                            .padding(.horizontal, PaydaySpacing.p16)
                     }
-                    .listRowInsets(EdgeInsets())
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
-                } else {
-                    shiftsSection(facts)
                 }
             }
-            .listStyle(.plain)
-            .scrollContentBackground(.hidden)
             .background(PaydayColor.background)
             .contentMargins(.bottom, 88, for: .scrollContent) // clear the floating + button
             .navigationTitle(greeting)
@@ -300,6 +295,16 @@ struct DashboardView: View {
                 if ProcessInfo.processInfo.arguments.contains("-DebugExpandBreakdown") {
                     breakdownExpanded = true
                 }
+                // Screenshot-only: opens the drawer in slow motion so a
+                // frame-capture pass can inspect mid-animation layout for
+                // jumps — a real tap animates too fast to catch over simctl.
+                if ProcessInfo.processInfo.arguments.contains("-DebugDrawerSlowMotion") {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                        withAnimation(.linear(duration: 4)) {
+                            breakdownExpanded = true
+                        }
+                    }
+                }
             }
             #endif
             .sheet(isPresented: $showSettings) {
@@ -324,7 +329,10 @@ struct DashboardView: View {
                 .contentShape(Rectangle())
                 .onTapGesture {
                     guard hasBreakdown else { return }
-                    withAnimation(PaydayAnimation.premiumSpring) {
+                    PaydayHaptics.lightTap()
+                    // paperSpring (.snappy), matching Vero's drawer feel —
+                    // premiumSpring is too slow here and reads as lag.
+                    withAnimation(PaydayAnimation.paperSpring) {
                         breakdownExpanded.toggle()
                     }
                 }
@@ -359,13 +367,24 @@ struct DashboardView: View {
                     .foregroundStyle(PaydayColor.textSecondary)
                     .monospacedDigit()
                 Spacer(minLength: 0)
-                Image(systemName: breakdownExpanded ? "chevron.up" : "chevron.down")
+                Image(systemName: "chevron.down")
                     .font(PaydayFont.caption2)
                     .foregroundStyle(PaydayColor.textTertiary)
+                    // Rotate rather than swap symbols — a symbol swap pops
+                    // mid-animation; a rotation rides the same spring.
+                    .rotationEffect(.degrees(breakdownExpanded ? 180 : 0))
             }
             .padding(.horizontal, PaydaySpacing.p20)
             .padding(.top, PaydayRadius.xl + PaydaySpacing.p12)
-            .padding(.bottom, breakdownExpanded ? PaydaySpacing.p12 : PaydaySpacing.p16)
+            // Constant in both states — a padding that changes with the toggle
+            // is one more thing shifting mid-animation.
+            .padding(.bottom, PaydaySpacing.p12)
+            // Opaque cover, same fill as the drawer, floated above the reveal:
+            // the expanding rows slide UNDER the lip the way the drawer slides
+            // under the hero. Without this the .move transition drags the rows
+            // straight through the lip text — visible mid-animation overlap.
+            .background(Rectangle().fill(PaydayColor.fieldBackground))
+            .zIndex(1)
 
             if breakdownExpanded {
                 VStack(spacing: PaydaySpacing.p8) {
@@ -380,6 +399,7 @@ struct DashboardView: View {
                 .padding(.horizontal, PaydaySpacing.p20)
                 .padding(.bottom, PaydaySpacing.p20)
                 .transition(.opacity.combined(with: .move(edge: .top)))
+                .zIndex(0)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -551,11 +571,25 @@ struct DashboardView: View {
     // MARK: Shifts
 
     private func shiftsSection(_ facts: DashboardFacts) -> some View {
-        Section {
-            ForEach(facts.shiftDays.prefix(Self.maxShiftRows), id: \.shiftID) { group in
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("Shifts")
+                    .font(PaydayFont.subheadline)
+                    .foregroundStyle(PaydayColor.textSecondary)
+                Spacer()
+                Text(facts.shiftCount == 1 ? "1 this period" : "\(facts.shiftCount) this period")
+                    .font(PaydayFont.caption)
+                    .foregroundStyle(PaydayColor.textTertiary)
+            }
+            .padding(.top, PaydaySpacing.p16)
+            .padding(.bottom, PaydaySpacing.p8)
+
+            ForEach(Array(facts.shiftDays.prefix(Self.maxShiftRows).enumerated()), id: \.element.shiftID) { index, group in
+                if index > 0 { Divider() }
                 shiftRow(for: group, multiShiftDays: facts.multiShiftDays)
             }
             if facts.shiftDays.count > Self.maxShiftRows {
+                Divider()
                 Button {
                     // "See all" used to just switch tabs and leave the
                     // person staring at the periods LIST — the shifts they
@@ -567,18 +601,9 @@ struct DashboardView: View {
                     Text("See all")
                         .font(PaydayFont.subheadline)
                         .foregroundStyle(PaydayColor.primary)
+                        .padding(.vertical, PaydaySpacing.p12)
                 }
                 .buttonStyle(.plain)
-                .listRowBackground(PaydayColor.background)
-            }
-        } header: {
-            HStack {
-                Text("Shifts")
-                Spacer()
-                Text(facts.shiftCount == 1 ? "1 this period" : "\(facts.shiftCount) this period")
-                    .textCase(nil)
-                    .font(PaydayFont.caption)
-                    .foregroundStyle(PaydayColor.textTertiary)
             }
         }
     }
@@ -591,21 +616,18 @@ struct DashboardView: View {
         // edit sheet is shaped like a shift regardless of how many TipEntry
         // rows it took to log it, so there's no separate "open this shift's
         // entries" destination anymore.
+        // Swipe-to-delete went with the List conversion (swipeActions is
+        // List-only); delete stays one long-press away via the context menu,
+        // with the same undo toast, and PeriodDetailView still swipes.
         if let anchor = group.items.first {
             Button {
                 sheetTarget = .edit(anchor)
             } label: {
                 ShiftDayRow(day: group.day, period: period, dayHasMultipleShifts: dayHasMultiple, entries: group.items)
+                    .padding(.vertical, PaydaySpacing.p12)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .listRowBackground(PaydayColor.background)
-            .swipeActions(edge: .trailing) {
-                Button(role: .destructive) {
-                    undoState.delete(group.items, in: modelContext)
-                } label: {
-                    Label("Delete", systemImage: "trash")
-                }
-            }
             .shiftContextMenu(group.items, sheetTarget: $sheetTarget, undoState: undoState, context: modelContext)
         }
     }
