@@ -11,7 +11,7 @@ private func date(_ year: Int, _ month: Int, _ day: Int) -> Date {
     return calendar.date(from: DateComponents(year: year, month: month, day: day))!
 }
 
-private func record(_ year: Int, _ month: Int, _ day: Int, cents: Int, kind: TipKind = .cash, isDouble: Bool = false, recordedHour: Int? = nil, hoursWorked: Double? = nil, tipOutCents: Int? = nil, salesCents: Int? = nil, shiftPeriod: ShiftPeriod? = nil, shiftID: UUID? = nil, clockInHour: Int? = nil, clockOutHour: Int? = nil) -> TipRecord {
+private func record(_ year: Int, _ month: Int, _ day: Int, cents: Int, kind: TipKind = .cash, isDouble: Bool = false, recordedHour: Int? = nil, hoursWorked: Double? = nil, tipOutCents: Int? = nil, salesCents: Int? = nil, shiftPeriod: ShiftPeriod? = nil, shiftID: UUID? = nil, clockInHour: Int? = nil, clockOutHour: Int? = nil, note: String? = nil) -> TipRecord {
     let shiftDate = date(year, month, day)
     var calendar = Calendar(identifier: .gregorian)
     calendar.timeZone = TimeZone.current
@@ -24,7 +24,7 @@ private func record(_ year: Int, _ month: Int, _ day: Int, cents: Int, kind: Tip
     let clockOut = clockOutHour.flatMap { hour in
         calendar.date(bySettingHour: hour, minute: 0, second: 0, of: shiftDate)
     }
-    return TipRecord(date: shiftDate, amountCents: cents, kind: kind, isDouble: isDouble, recordedAt: recordedAt, hoursWorked: hoursWorked, tipOutCents: tipOutCents, salesCents: salesCents, shiftPeriod: shiftPeriod, shiftID: shiftID, clockIn: clockIn, clockOut: clockOut)
+    return TipRecord(date: shiftDate, amountCents: cents, kind: kind, isDouble: isDouble, recordedAt: recordedAt, hoursWorked: hoursWorked, tipOutCents: tipOutCents, salesCents: salesCents, shiftPeriod: shiftPeriod, shiftID: shiftID, clockIn: clockIn, clockOut: clockOut, note: note)
 }
 
 /// Two distinct shift ids for building emergent "double" days in tests — a
@@ -1140,6 +1140,61 @@ struct InsightsFactsTests {
         records.append(record(2025, 1, 1, cents: 99999))
         let engine = StatsEngine(records: records)
         #expect(engine.insightsFacts(referenceDate: date(2026, 7, 10))?.shiftCount == 5)
+    }
+
+    @Test("notes pass through newest-first, trimmed, deduped, window-bound")
+    func notesPassThrough() {
+        var records = [
+            record(2026, 7, 1, cents: 1000, note: "  POS outage, lunch tips paid at dinner  "),
+            record(2026, 7, 2, cents: 2000, note: ""),
+            record(2026, 7, 3, cents: 3000, note: "slow night, private party"),
+            // Same day + same note on both rows of one closeout — one NoteFact.
+            record(2026, 7, 4, cents: 4000, kind: .cash, note: "new manager"),
+            record(2026, 7, 4, cents: 500, kind: .credit, note: "new manager"),
+            record(2026, 7, 5, cents: 5000)
+        ]
+        // A noted shift outside the recent window must not leak in.
+        records.append(record(2024, 1, 1, cents: 1000, note: "ancient note"))
+        let engine = StatsEngine(records: records)
+        let notes = engine.insightsFacts(referenceDate: date(2026, 7, 10))?.notes ?? []
+        #expect(notes.map(\.text) == ["new manager", "slow night, private party", "POS outage, lunch tips paid at dinner"])
+    }
+
+    @Test("a single hot night never crowns a best-paying weekday")
+    func weekdayBestNeedsRealSample() {
+        // Jun 29 + Jul 6/13/20 2026 are Mondays, Jul 7 is a Tuesday.
+        // Four ordinary Mondays vs one spectacular Tuesday: with the >= 3
+        // nights floor, Tuesday (n=1) may not win — and with only one
+        // qualifying weekday there is no runner-up, so no claim at all.
+        let records = [
+            record(2026, 6, 29, cents: 9500, hoursWorked: 5),
+            record(2026, 7, 6, cents: 10000, hoursWorked: 5),
+            record(2026, 7, 13, cents: 11000, hoursWorked: 5),
+            record(2026, 7, 20, cents: 10500, hoursWorked: 5),
+            record(2026, 7, 7, cents: 25000, hoursWorked: 5)
+        ]
+        let engine = StatsEngine(records: records)
+        let rate = engine.insightsFacts(referenceDate: date(2026, 7, 21))?.rate
+        #expect(rate != nil)
+        #expect(rate?.bestWeekday == nil)
+    }
+
+    @Test("doubles facts include the per-shift number that makes the comparison fair")
+    func doublesPerShift() {
+        let records = [
+            // One double day: two shifts totaling $500.
+            record(2026, 7, 1, cents: 20000, shiftID: lunchShift),
+            record(2026, 7, 1, cents: 30000, shiftID: dinnerShift),
+            // Two single-shift days at $200 each.
+            record(2026, 7, 2, cents: 20000, shiftID: UUID()),
+            record(2026, 7, 3, cents: 20000, shiftID: UUID()),
+            record(2026, 7, 4, cents: 20000, shiftID: UUID())
+        ]
+        let engine = StatsEngine(records: records)
+        let doubles = engine.insightsFacts(referenceDate: date(2026, 7, 10))?.doublesSolo
+        #expect(doubles?.doubleAverageCents == 50000)
+        #expect(doubles?.doublePerShiftCents == 25000)
+        #expect(doubles?.soloAverageCents == 20000)
     }
 
     @Test("lunch vs dinner splits at 4pm and excludes backfilled entries recorded on a different day")

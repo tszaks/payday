@@ -47,19 +47,47 @@ enum InsightsFactsCopy {
         return InsightSection(title: "Top Earning Days", body: body)
     }
 
+    /// Never "credit was the larger share" — that's true for nearly every
+    /// server and says nothing. The useful fact is the cash share and what
+    /// the split means: cash went home night-of, credit rides the paycheck.
     private static func cashVsCredit(_ facts: InsightsFacts) -> InsightSection {
-        let body = "You made \(Money.string(fromCents: facts.creditCents)) from credit tips versus \(Money.string(fromCents: facts.cashCents)) from cash."
+        let grossCents = facts.cashCents + facts.creditCents
+        let body: String
+        if grossCents <= 0 {
+            body = "No cash or credit tips logged in this window yet."
+        } else if facts.cashCents == 0 {
+            body = "All \(Money.string(fromCents: facts.creditCents)) of your tips came in on cards, so all of it arrives on your paycheck."
+        } else if facts.creditCents == 0 {
+            body = "All \(Money.string(fromCents: facts.cashCents)) of your tips came in cash, taken home the nights you earned it."
+        } else {
+            let cashPercent = Int((Double(facts.cashCents) / Double(grossCents) * 100).rounded())
+            body = "About \(cashPercent)% of your tips came in cash: \(Money.string(fromCents: facts.cashCents)) you took home night-of. The other \(Money.string(fromCents: facts.creditCents)) came in on cards and lands on your paycheck."
+        }
         return InsightSection(title: "Cash vs Credit", body: body)
     }
 
+    /// Per-shift averages, never raw totals — the shift counts differ, and
+    /// "dinner out-earned lunch 4 to 1" off totals is the wrong conclusion
+    /// when per-shift it's 2 to 1.
     private static func lunchVsDinner(_ facts: LunchDinnerFacts) -> InsightSection {
-        let body = "Dinner shifts brought in \(Money.string(fromCents: facts.dinnerCents)) across \(facts.dinnerShiftCount) shifts. Lunch shifts brought in \(Money.string(fromCents: facts.lunchCents)) across \(facts.lunchShiftCount) shifts."
+        let lunchAvg = facts.lunchShiftCount > 0 ? facts.lunchCents / facts.lunchShiftCount : 0
+        let dinnerAvg = facts.dinnerShiftCount > 0 ? facts.dinnerCents / facts.dinnerShiftCount : 0
+        let body = "Dinner averaged \(Money.string(fromCents: dinnerAvg)) per shift across \(shiftsPhrase(facts.dinnerShiftCount)). Lunch averaged \(Money.string(fromCents: lunchAvg)) per shift across \(shiftsPhrase(facts.lunchShiftCount))."
         return InsightSection(title: "Lunch vs Dinner", body: body)
     }
 
+    /// A double day out-earning a single shift is arithmetic, not a finding —
+    /// the honest comparison is per shift.
     private static func doublesVsSolo(_ facts: DoublesSoloFacts) -> InsightSection {
-        let body = "Double shifts averaged \(Money.string(fromCents: facts.doubleAverageCents)) across \(facts.doubleCount) shifts. Solo shifts averaged \(Money.string(fromCents: facts.soloAverageCents)) across \(facts.soloCount) shifts."
+        var body = "A double day brought in \(Money.string(fromCents: facts.doubleAverageCents)) on average across \(facts.doubleCount == 1 ? "1 day" : "\(facts.doubleCount) days"), which works out to \(Money.string(fromCents: facts.doublePerShiftCents)) per shift. Single-shift days averaged \(Money.string(fromCents: facts.soloAverageCents))."
+        if facts.doublePerShiftCents > 0, facts.soloAverageCents > 0, facts.doublePerShiftCents < facts.soloAverageCents {
+            body += " Per shift, your singles are actually out-earning your doubles so far."
+        }
         return InsightSection(title: "Doubles vs Solo", body: body)
+    }
+
+    private static func shiftsPhrase(_ count: Int) -> String {
+        count == 1 ? "1 shift" : "\(count) shifts"
     }
 
     private static func nightsPhrase(_ count: Int) -> String {

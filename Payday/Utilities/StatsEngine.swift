@@ -48,6 +48,12 @@ struct TipRecord: Sendable, Hashable {
     /// TipEntry stays faithful once that analysis exists.
     let serverCount: Int?
 
+    /// The worker's own note for this shift, passed through to Insights as
+    /// context — a note like "POS outage, lunch tips paid out at dinner" is
+    /// the difference between explaining an anomalous day and reading a
+    /// pattern into it. Never used for arithmetic.
+    let note: String?
+
     /// Gross minus any tip-out — "what you walked with." Every analytical
     /// sum in this engine (nightly totals, pace, insights totals) uses
     /// this, never amountCents directly, so a logged tip-out always nets
@@ -56,7 +62,7 @@ struct TipRecord: Sendable, Hashable {
     /// how tip percent is measured everywhere in the industry.
     var netCents: Int { amountCents - (tipOutCents ?? 0) }
 
-    init(date: Date, amountCents: Int, kind: TipKind, isDouble: Bool, recordedAt: Date? = nil, hoursWorked: Double? = nil, tipOutCents: Int? = nil, salesCents: Int? = nil, shiftPeriod: ShiftPeriod? = nil, shiftID: UUID? = nil, clockIn: Date? = nil, clockOut: Date? = nil, serverCount: Int? = nil) {
+    init(date: Date, amountCents: Int, kind: TipKind, isDouble: Bool, recordedAt: Date? = nil, hoursWorked: Double? = nil, tipOutCents: Int? = nil, salesCents: Int? = nil, shiftPeriod: ShiftPeriod? = nil, shiftID: UUID? = nil, clockIn: Date? = nil, clockOut: Date? = nil, serverCount: Int? = nil, note: String? = nil) {
         self.date = date
         self.amountCents = amountCents
         self.kind = kind
@@ -70,12 +76,13 @@ struct TipRecord: Sendable, Hashable {
         self.clockIn = clockIn
         self.clockOut = clockOut
         self.serverCount = serverCount
+        self.note = note
     }
 }
 
 extension TipRecord {
     init(entry: TipEntry) {
-        self.init(date: entry.date, amountCents: entry.amountCents, kind: entry.kind, isDouble: entry.isDouble, recordedAt: entry.recordedAt, hoursWorked: entry.hoursWorked, tipOutCents: entry.tipOutCents, salesCents: entry.salesCents, shiftPeriod: entry.shiftPeriod, shiftID: entry.shiftID, clockIn: entry.clockIn, clockOut: entry.clockOut, serverCount: entry.serverCount)
+        self.init(date: entry.date, amountCents: entry.amountCents, kind: entry.kind, isDouble: entry.isDouble, recordedAt: entry.recordedAt, hoursWorked: entry.hoursWorked, tipOutCents: entry.tipOutCents, salesCents: entry.salesCents, shiftPeriod: entry.shiftPeriod, shiftID: entry.shiftID, clockIn: entry.clockIn, clockOut: entry.clockOut, serverCount: entry.serverCount, note: entry.note)
     }
 }
 
@@ -564,6 +571,10 @@ struct StatsEngine {
     /// than noise — same >= 3 floor every other weekday-keyed comparison
     /// in this file already requires.
     static let minimumShiftsPerStartBucket = 3
+    /// A "best-paying weekday" claim needs at least this many nights on that
+    /// weekday. One $50/hr Tuesday is an anecdote, not a pattern — Insights
+    /// once told Tyler to "seek Tuesday shifts" off a single night.
+    static let minimumNightsForWeekdayBest = 3
 
     /// Every number Insights is allowed to talk about — computed here, not
     /// by the model. "The stats engine computes facts; the model narrates
@@ -590,6 +601,22 @@ struct StatsEngine {
         // count it twice here too.
         let totalTipOutCents = shifts.compactMap(\.tipOutCents).reduce(0, +)
 
+        // The worker's own notes, newest first — context the narration can
+        // use to explain an anomalous day instead of reading a pattern into
+        // it (a POS outage note beats any inference). Deduped per day+text
+        // (a shift's rows share one note), capped in count and length so
+        // the prompt stays bounded.
+        var seenNoteKeys = Set<String>()
+        let notes: [InsightsFacts.NoteFact] = recent
+            .sorted { $0.date > $1.date }
+            .compactMap { record in
+                guard let raw = record.note?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { return nil }
+                let text = String(raw.prefix(200))
+                let key = "\(record.date.timeIntervalSinceReferenceDate)|\(text)"
+                guard seenNoteKeys.insert(key).inserted else { return nil }
+                return InsightsFacts.NoteFact(date: record.date, text: text)
+            }
+
         return InsightsFacts(
             totalCents: totalCents,
             shiftCount: shifts.count,
@@ -602,7 +629,8 @@ struct StatsEngine {
             totalTipOutCents: totalTipOutCents,
             rate: rateFacts(from: shifts),
             sales: salesFacts(from: shifts),
-            startTime: startTimeFacts(from: shifts)
+            startTime: startTimeFacts(from: shifts),
+            notes: Array(notes.prefix(10))
         )
     }
 
@@ -638,7 +666,10 @@ struct StatsEngine {
             guard let percent = blendedTipPercent(matching) else { return nil }
             return (weekday, percent, matching.count)
         }
-        let bestWeekday = weekdayPercents.count >= 2 ? weekdayPercents.max { $0.percent < $1.percent } : nil
+        // Only weekdays with a real sample can compete for "best", and a
+        // winner needs a runner-up to beat — see minimumNightsForWeekdayBest.
+        let qualifiedPercents = weekdayPercents.filter { $0.count >= Self.minimumNightsForWeekdayBest }
+        let bestWeekday = qualifiedPercents.count >= 2 ? qualifiedPercents.max { $0.percent < $1.percent } : nil
 
         return SalesFacts(
             overallTipPercent: overall,
@@ -666,7 +697,10 @@ struct StatsEngine {
             guard let r = rate(matching) else { return nil }
             return (weekday, r, matching.count)
         }
-        let bestWeekday = weekdayRates.count >= 2 ? weekdayRates.max { $0.rate < $1.rate } : nil
+        // Same sample floor as salesFacts' weekday-best — a single hot night
+        // must never crown a weekday (see minimumNightsForWeekdayBest).
+        let qualifiedRates = weekdayRates.filter { $0.count >= Self.minimumNightsForWeekdayBest }
+        let bestWeekday = qualifiedRates.count >= 2 ? qualifiedRates.max { $0.rate < $1.rate } : nil
 
         // A "double" is a calendar day with 2+ shifts; split rates by whether
         // the shift was worked on such a day.
@@ -1057,11 +1091,13 @@ struct StatsEngine {
         func dayNet(_ group: [ShiftFacts]) -> Int { group.reduce(0) { $0 + $1.netCents } }
         let doubleTotal = doubleDays.values.reduce(0) { $0 + dayNet($1) }
         let soloTotal = soloDays.values.reduce(0) { $0 + dayNet($1) }
+        let doubleShiftCount = doubleDays.values.reduce(0) { $0 + $1.count }
         return DoublesSoloFacts(
             doubleAverageCents: doubleTotal / doubleDays.count,
             doubleCount: doubleDays.count,
             soloAverageCents: soloTotal / soloDays.count,
-            soloCount: soloDays.count
+            soloCount: soloDays.count,
+            doublePerShiftCents: doubleShiftCount > 0 ? doubleTotal / doubleShiftCount : 0
         )
     }
 
@@ -1235,6 +1271,13 @@ struct InsightsFacts: Equatable, Codable, Sendable {
         let cents: Int
     }
 
+    /// A shift note passed through verbatim (dated, trimmed, length-capped) —
+    /// the worker's own context for why a number looks the way it does.
+    struct NoteFact: Equatable, Codable, Sendable {
+        let date: Date
+        let text: String
+    }
+
     let totalCents: Int
     let shiftCount: Int
     let averagePerShiftCents: Int
@@ -1252,6 +1295,9 @@ struct InsightsFacts: Equatable, Codable, Sendable {
     var rate: RateFacts? = nil
     var sales: SalesFacts? = nil
     var startTime: StartTimeFacts? = nil
+    /// Newest-first, one per noted shift, capped — context for the narration,
+    /// never an arithmetic input.
+    var notes: [NoteFact] = []
 }
 
 struct LunchDinnerFacts: Equatable, Codable, Sendable {
@@ -1266,6 +1312,12 @@ struct DoublesSoloFacts: Equatable, Codable, Sendable {
     let doubleCount: Int
     let soloAverageCents: Int
     let soloCount: Int
+    /// The double-day take divided by the shifts worked those days — the only
+    /// fair way to compare against a single shift. "A double day beats a solo
+    /// shift" is arithmetic (you worked twice), not an insight; per-shift is
+    /// where a real difference would show. var + default so pre-existing
+    /// hand-built fixtures keep compiling (see InsightsFacts note above).
+    var doublePerShiftCents: Int = 0
 }
 
 /// $/hr facts — only ever built from nights that actually have hours
