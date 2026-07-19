@@ -379,12 +379,6 @@ struct DashboardView: View {
             // Constant in both states — a padding that changes with the toggle
             // is one more thing shifting mid-animation.
             .padding(.bottom, PaydaySpacing.p12)
-            // Opaque cover, same fill as the drawer, floated above the reveal:
-            // the expanding rows slide UNDER the lip the way the drawer slides
-            // under the hero. Without this the .move transition drags the rows
-            // straight through the lip text — visible mid-animation overlap.
-            .background(Rectangle().fill(PaydayColor.fieldBackground))
-            .zIndex(1)
 
             if breakdownExpanded {
                 VStack(spacing: PaydaySpacing.p8) {
@@ -398,8 +392,13 @@ struct DashboardView: View {
                 }
                 .padding(.horizontal, PaydaySpacing.p20)
                 .padding(.bottom, PaydaySpacing.p20)
-                .transition(.opacity.combined(with: .move(edge: .top)))
-                .zIndex(0)
+                // Opacity ONLY — no .move. The rows must not travel: they sit
+                // fixed inside the drawer while the grey shape's bottom edge
+                // slides down past them (the clipShape does the revealing).
+                // With .move the rows became their own sliding layer, which
+                // read as a SECOND drawer emerging from under the lip instead
+                // of the one grey drawer simply opening all the way.
+                .transition(.opacity)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
