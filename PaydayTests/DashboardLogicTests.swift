@@ -89,6 +89,65 @@ struct ShiftDayGroupingTests {
     }
 }
 
+@Suite("Payday moment timing")
+struct PaydayMomentTests {
+    // Weekly close on Sunday Jul 19, paid the following Friday (5-day lag).
+    private func weeklyPaidFriday() -> PayPeriodCalculator {
+        PayPeriodCalculator(
+            schedule: PaySchedule(frequency: .weekly, anchorPeriodEnd: date(2026, 7, 19), payDelayDays: 5, firstWeekday: nil)
+        )
+    }
+
+    @Test("does not show on the last work day of the period")
+    func notOnLastDay() {
+        // Sunday Jul 19 is the last shift day — still workable, so no card.
+        let finished = PaydayMoment.finishedPeriod(now: date(2026, 7, 19, hour: 20), calculator: weeklyPaidFriday())
+        #expect(finished == nil)
+    }
+
+    @Test("shows the day after the period closes")
+    func showsMonday() {
+        let finished = PaydayMoment.finishedPeriod(now: date(2026, 7, 20, hour: 9), calculator: weeklyPaidFriday())
+        #expect(finished?.end == date(2026, 7, 19))
+    }
+
+    @Test("still shows two days after the close")
+    func showsTuesday() {
+        let finished = PaydayMoment.finishedPeriod(now: date(2026, 7, 21, hour: 9), calculator: weeklyPaidFriday())
+        #expect(finished?.end == date(2026, 7, 19))
+    }
+
+    @Test("clears after the linger window, before payday")
+    func clearsWednesday() {
+        // Paid Friday Jul 24, but the card is gone by Wednesday — it lingers a
+        // day or two, it doesn't camp until the check lands.
+        let finished = PaydayMoment.finishedPeriod(now: date(2026, 7, 22, hour: 9), calculator: weeklyPaidFriday())
+        #expect(finished == nil)
+    }
+
+    @Test("dismissing a period keeps its card from returning")
+    func dismissed() {
+        let finished = PaydayMoment.finishedPeriod(
+            now: date(2026, 7, 20, hour: 9),
+            calculator: weeklyPaidFriday(),
+            dismissedEnd: date(2026, 7, 19)
+        )
+        #expect(finished == nil)
+    }
+
+    @Test("with no payroll lag it shows on the last day itself")
+    func noLagShowsLastDay() {
+        let sameDay = PayPeriodCalculator(
+            schedule: PaySchedule(frequency: .weekly, anchorPeriodEnd: date(2026, 7, 19), payDelayDays: 0, firstWeekday: nil)
+        )
+        let onLastDay = PaydayMoment.finishedPeriod(now: date(2026, 7, 19, hour: 20), calculator: sameDay)
+        #expect(onLastDay?.end == date(2026, 7, 19))
+        // ...and it's gone the next day, since there's no gap to wait through.
+        let nextDay = PaydayMoment.finishedPeriod(now: date(2026, 7, 20, hour: 9), calculator: sameDay)
+        #expect(nextDay == nil)
+    }
+}
+
 @Suite("Tonight line")
 struct TonightLineTests {
     // date(2026, 7, 14) is a Tuesday → Gregorian weekday 3.
