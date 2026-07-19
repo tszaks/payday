@@ -330,9 +330,9 @@ struct DashboardView: View {
                 .onTapGesture {
                     guard hasBreakdown else { return }
                     PaydayHaptics.lightTap()
-                    // paperSpring (.snappy), matching Vero's drawer feel —
-                    // premiumSpring is too slow here and reads as lag.
-                    withAnimation(PaydayAnimation.paperSpring) {
+                    // drawerSpring: a touch of overshoot so the drawer lands
+                    // with a small bounce — poppy, not dramatic (Tyler's call).
+                    withAnimation(PaydayAnimation.drawerSpring) {
                         breakdownExpanded.toggle()
                     }
                 }
