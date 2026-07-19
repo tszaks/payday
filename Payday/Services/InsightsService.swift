@@ -112,15 +112,17 @@ enum InsightsService {
             let days = facts.topDays.map { "\(Money.string(fromCents: $0.cents)) on \($0.date.formatted(.dateTime.month(.wide).day()))" }
             lines.append("TOP EARNING DAYS: " + days.joined(separator: ", ") + ".")
         }
-        lines.append("CASH VS CREDIT: \(Money.string(fromCents: facts.cashCents)) cash, \(Money.string(fromCents: facts.creditCents)) credit (this split is gross, before any tip-out).")
+        lines.append("CASH VS CREDIT: \(Money.string(fromCents: facts.cashCents)) cash, \(Money.string(fromCents: facts.creditCents)) credit (this split is gross, before any tip-out). Credit exceeding cash is normal in a card-heavy restaurant and is NOT a finding - never present 'credit was the larger share' as an insight. If this section is worth writing at all, say what the split means: cash went home the night it was earned; credit arrives on the paycheck.")
         if facts.totalTipOutCents > 0 {
             lines.append("TIP-OUTS: \(Money.string(fromCents: facts.totalTipOutCents)) total tipped out - already subtracted from OVERALL above.")
         }
         if let lunchDinner = facts.lunchDinner {
-            lines.append("LUNCH VS DINNER: lunch \(Money.string(fromCents: lunchDinner.lunchCents)) across \(lunchDinner.lunchShiftCount) shifts, dinner \(Money.string(fromCents: lunchDinner.dinnerCents)) across \(lunchDinner.dinnerShiftCount) shifts.")
+            let lunchAvg = lunchDinner.lunchShiftCount > 0 ? lunchDinner.lunchCents / lunchDinner.lunchShiftCount : 0
+            let dinnerAvg = lunchDinner.dinnerShiftCount > 0 ? lunchDinner.dinnerCents / lunchDinner.dinnerShiftCount : 0
+            lines.append("LUNCH VS DINNER: lunch \(Money.string(fromCents: lunchDinner.lunchCents)) across \(lunchDinner.lunchShiftCount) shifts (\(Money.string(fromCents: lunchAvg)) per shift), dinner \(Money.string(fromCents: lunchDinner.dinnerCents)) across \(lunchDinner.dinnerShiftCount) shifts (\(Money.string(fromCents: dinnerAvg)) per shift). Compare PER-SHIFT averages, never the raw totals - the shift counts differ.")
         }
         if let doublesSolo = facts.doublesSolo {
-            lines.append("DOUBLES VS SOLO: doubles averaged \(Money.string(fromCents: doublesSolo.doubleAverageCents)) across \(doublesSolo.doubleCount) shifts, solo averaged \(Money.string(fromCents: doublesSolo.soloAverageCents)) across \(doublesSolo.soloCount) shifts.")
+            lines.append("DOUBLE DAYS VS SINGLE-SHIFT DAYS: a day with two shifts brought in \(Money.string(fromCents: doublesSolo.doubleAverageCents)) on average (\(Money.string(fromCents: doublesSolo.doublePerShiftCents)) per shift) across \(doublesSolo.doubleCount) such days; single-shift days averaged \(Money.string(fromCents: doublesSolo.soloAverageCents)) across \(doublesSolo.soloCount) days. A double day out-earning a single shift is arithmetic (two shifts were worked), NOT a finding - only the per-shift comparison can support any claim about doubles.")
         }
         if let rate = facts.rate {
             var rateLine = "RATE: averaging \(Money.wholeDollarString(fromCents: Int((rate.overallDollarsPerHour * 100).rounded())))/hr across \(rate.nightsWithHours) shifts with hours logged."
@@ -145,6 +147,13 @@ enum InsightsService {
             let worstRate = Money.wholeDollarString(fromCents: Int((startTime.worstDollarsPerHour * 100).rounded()))
             lines.append("START TIMES: shifts starting around \(bestHour) average \(bestRate)/hr across \(startTime.bestShiftCount == 1 ? "1 shift" : "\(startTime.bestShiftCount) shifts"); around \(worstHour) average \(worstRate)/hr across \(startTime.worstShiftCount == 1 ? "1 shift" : "\(startTime.worstShiftCount) shifts").")
         }
+
+        if !facts.notes.isEmpty {
+            let noteLines = facts.notes.map { "\($0.date.formatted(.dateTime.month(.abbreviated).day())): \"\($0.text)\"" }
+            lines.append("SHIFT NOTES (the worker's own words, context only - never arithmetic): " + noteLines.joined(separator: " | ") + " - When a note explains an unusual number (a POS outage, tips carried between shifts, a comped night), prefer the note's explanation over reading meaning into that number, and say so plainly. Quote or paraphrase only what is actually written; never invent notes.")
+        }
+
+        lines.append("SAMPLE SIZE RULES (apply to every section): a pattern claim (weekday, lunch vs dinner, doubles, start times) backed by fewer than 3 shifts is an anecdote - mention it only with an explicit early-read hedge naming the count, and NEVER base a recommendation on it. If no pattern clears 3 shifts, the suggestion section should say plainly that a couple more weeks of logging will make the patterns trustworthy - do not invent strategy from thin data.")
 
         if let topMove {
             lines.append("TOP MOVE (already shown to the reader as its own card, above everything you write - do not repeat it as a section; only weave it into the final suggestion section if it genuinely strengthens it): \(topMove.title) - \(topMove.body)")
