@@ -27,9 +27,9 @@ struct ShiftDayRow: View {
         if breakdown.cashCents > 0, breakdown.creditCents > 0 {
             parts.append("Cash \(Money.string(fromCents: breakdown.cashCents)) · Credit \(Money.string(fromCents: breakdown.creditCents))")
         } else if breakdown.creditCents > 0 {
-            parts.append("Credit")
+            parts.append("Credit \(Money.string(fromCents: breakdown.creditCents))")
         } else if breakdown.cashCents > 0 {
-            parts.append("Cash")
+            parts.append("Cash \(Money.string(fromCents: breakdown.cashCents))")
         } else {
             parts.append(entries.first?.kind.displayName ?? "")
         }
@@ -37,9 +37,7 @@ struct ShiftDayRow: View {
         // is already net (what you kept), and a tip-out isn't income worth
         // repeating on every glance. It stays visible/editable in the shift's
         // own sheet, and the period hero still reconciles it.
-        if let note = entries.compactMap(\.note).first(where: { !$0.isEmpty }) {
-            parts.append(note)
-        }
+        // Notes stay off list rows on purpose — they live in the shift's own sheet.
         return parts.joined(separator: " · ")
     }
 
