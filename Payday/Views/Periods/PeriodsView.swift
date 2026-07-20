@@ -105,9 +105,10 @@ struct PeriodsView: View {
     var body: some View {
         NavigationStack(path: $path) {
             ScrollView {
-                LazyVStack(spacing: PaydaySpacing.p12) {
+                LazyVStack(spacing: 0) {
                     if !yearToDateNights.isEmpty {
                         yearToDateCard
+                        Divider()
                     }
                     ForEach(periods.indices, id: \.self) { index in
                         let period = periods[index]
@@ -125,6 +126,9 @@ struct PeriodsView: View {
                             )
                         }
                         .buttonStyle(PressableButtonStyle())
+                        if index < periods.count - 1 {
+                            Divider()
+                        }
                     }
                 }
                 .padding(.horizontal, PaydaySpacing.p16)
@@ -176,6 +180,9 @@ struct PeriodsView: View {
 }
 
 extension PeriodsView {
+    /// A distinct header block, not a card — type hierarchy (the display-size
+    /// amount) is what marks this as the year's headline figure, the same way
+    /// the rest of this budget pass replaces elevation with typography.
     fileprivate var yearToDateCard: some View {
         let totalCents = yearToDateNights.reduce(0) { $0 + $1.cents } + (yearToDateWages?.totalCents ?? 0)
         let year = Calendar.current.component(.year, from: .now)
@@ -195,7 +202,7 @@ extension PeriodsView {
                 .font(PaydayFont.caption)
                 .foregroundStyle(PaydayColor.textSecondary)
         }
-        .paydayCard()
+        .padding(.vertical, PaydaySpacing.p12)
     }
 }
 
@@ -264,7 +271,7 @@ private struct PeriodRow: View {
                     .foregroundStyle(PaydayColor.textTertiary)
             }
         }
-        .paydayCard()
+        .padding(.vertical, PaydaySpacing.p12)
     }
 
     private var dateRangeString: String {

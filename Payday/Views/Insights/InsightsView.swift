@@ -87,7 +87,9 @@ struct InsightsView: View {
             VStack(spacing: PaydaySpacing.p16) {
                 // Follow-ups lead — a verdict on a past recommendation
                 // outranks a fresh one, since it answers "did that actually
-                // work" instead of just proposing something new.
+                // work" instead of just proposing something new. Flattened:
+                // a section on the surface, not a card — the chart below is
+                // this screen's one object.
                 ForEach(followUps) { followUp in
                     VStack(alignment: .leading, spacing: 6) {
                         Text("SINCE THEN")
@@ -103,7 +105,7 @@ struct InsightsView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .paydayCard()
+                    Divider()
                 }
 
                 // Moves come next and are always fresh — deterministic
@@ -137,17 +139,22 @@ struct InsightsView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .paydayCard()
+                    Divider()
                 }
 
-                // Chart card — the one visual, contained like every other
-                // surface. The chart owns its own label (it doubles as the
-                // scrub readout), so no separate header here.
+                // Chart card — the one visual, and this screen's object: it
+                // keeps its card while everything else here goes flat. The
+                // chart owns its own label (it doubles as the scrub
+                // readout), so no separate header here.
                 NightlyEarningsChart(nights: recentNights)
                     .paydayCard()
 
-                // Narrated sections, each its own card with a green kicker.
-                ForEach(sections(for: facts)) { section in
+                // Narrated sections, flattened to sections on the surface
+                // with a green uppercase kicker, separated by dividers.
+                ForEach(Array(sections(for: facts).enumerated()), id: \.element.id) { index, section in
+                    if index > 0 {
+                        Divider()
+                    }
                     VStack(alignment: .leading, spacing: 6) {
                         Text(section.title.uppercased())
                             .font(PaydayFont.caption2)
@@ -158,7 +165,7 @@ struct InsightsView: View {
                             .foregroundStyle(PaydayColor.textPrimary)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .paydayCard()
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
                 if isModelAvailable {

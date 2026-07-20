@@ -96,9 +96,10 @@ struct DayDetailSheet: View {
     }
 
     /// The sheet's one hero — same grammar as the Dashboard/Period-detail
-    /// heroes (caption above a big monospaced number), replacing the old
-    /// lozenge row so this sheet reads like the rest of the app instead of
-    /// a bespoke total bar.
+    /// heroes (caption above a big monospaced number), floating directly on
+    /// the sheet's background rather than inside its own card: this sheet
+    /// has no second object competing for attention, so a shadow here would
+    /// mark nothing.
     private var heroCard: some View {
         VStack(spacing: 6) {
             Text("Total")
@@ -112,7 +113,7 @@ struct DayDetailSheet: View {
                 .animation(PaydayAnimation.premiumSpring, value: totalCents)
         }
         .frame(maxWidth: .infinity)
-        .paydayCard(padding: PaydaySpacing.p24)
+        .padding(.top, PaydaySpacing.p24)
     }
 
     @ViewBuilder
