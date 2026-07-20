@@ -99,6 +99,7 @@ struct PeriodsView: View {
                                 isCurrent: index == 0,
                                 loggedCents: periodBreakdown.netTotalCents + (periodWages?.totalCents ?? 0),
                                 loggedCreditCents: periodBreakdown.creditCents,
+                                tipsNetCents: periodBreakdown.netTotalCents,
                                 payDate: calculator.payDate(for: period),
                                 paycheck: paycheck(for: period)
                             )
@@ -182,6 +183,10 @@ private struct PeriodRow: View {
     let isCurrent: Bool
     let loggedCents: Int
     let loggedCreditCents: Int
+    /// Tips-only net (no wages), for the "checked" comparison's all-cash
+    /// fallback below — a paycheck's tips line never includes wages, so
+    /// that comparison can't use the wage-inclusive loggedCents either.
+    let tipsNetCents: Int
     let payDate: Date
     let paycheck: PaycheckRecord?
 
@@ -217,9 +222,11 @@ private struct PeriodRow: View {
             HStack(spacing: 6) {
                 if let paycheck {
                     // Match PaycheckComparisonView: credit if any, else fall
-                    // back to total (legacy all-cash periods have no credit
-                    // to compare).
-                    let comparedCents = loggedCreditCents > 0 ? loggedCreditCents : loggedCents
+                    // back to the tips-only total (legacy all-cash periods
+                    // have no credit to compare) — never the wage-inclusive
+                    // loggedCents, since a paycheck's tips line never
+                    // includes wages either.
+                    let comparedCents = loggedCreditCents > 0 ? loggedCreditCents : tipsNetCents
                     let delta = paycheck.paidTipsCents - comparedCents
                     VStack(alignment: .trailing, spacing: 2) {
                         Text(deltaString(delta))
