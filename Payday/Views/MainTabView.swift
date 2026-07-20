@@ -80,6 +80,13 @@ struct MainTabView: View {
             if args.contains("-OpenLogSheet") {
                 deepLink.pendingLogTarget = .new(defaultDate: .now)
             }
+            // Screenshot/QA hook only: land straight inside the current
+            // period's detail (the same jump Dashboard's "See all" makes)
+            // so it can be captured without tapping through the Periods list.
+            if args.contains("-OpenCurrentPeriodDetail") {
+                tabRouter.pendingCurrentPeriodDetail = true
+                tabRouter.selected = .periods
+            }
             // Screenshot/QA hook only: open the edit sheet directly for the
             // most recent entry of a given kind, so a cash+credit night's
             // shared shift details can be verified from both tabs without

@@ -1,14 +1,25 @@
 import SwiftUI
 import Charts
 
-/// Nightly earnings, Health-app style: drag across bars to inspect a
-/// night's exact total, with a selection haptic on every change. Bars fade
-/// through a single-green opacity ramp — relative size only, never a second
-/// hue, per design law.
+/// Daily earnings, Health-app style: drag across bars to inspect a day's
+/// exact total, with a selection haptic on every change. This is a DAILY
+/// chart — a double (two shifts, same day) sums into one bar, not two. Bars
+/// fade through a single-green opacity ramp — relative size only, never a
+/// second hue, per design law.
 struct NightlyEarningsChart: View {
     let nights: [(date: Date, cents: Int)]
+    /// Anchors the x-axis to the whole period so days off render as labeled
+    /// empty slots instead of ambiguous gaps. Optional because InsightsView's
+    /// rolling recent-nights window crosses period boundaries and has no
+    /// single period to anchor to — falls back to the nights' own date range.
+    let period: PayPeriod?
 
     @State private var selectedDate: Date?
+
+    init(nights: [(date: Date, cents: Int)], period: PayPeriod? = nil) {
+        self.nights = nights
+        self.period = period
+    }
 
     private var maxCents: Int {
         nights.map(\.cents).max() ?? 0
@@ -24,6 +35,17 @@ struct NightlyEarningsChart: View {
         }
     }
 
+    private var xDomain: ClosedRange<Date> {
+        let calendar = Calendar.current
+        guard let period else {
+            let dates = nights.map(\.date)
+            let start = dates.min() ?? Date()
+            let end = calendar.date(byAdding: .day, value: 1, to: dates.max() ?? start) ?? start
+            return start...end
+        }
+        return period.start...(calendar.date(byAdding: .day, value: 1, to: period.end) ?? period.end)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             headerText
@@ -35,9 +57,24 @@ struct NightlyEarningsChart: View {
                 )
                 .foregroundStyle(PaydayColor.primary.opacity(barOpacity(for: night)))
                 .cornerRadius(3)
+                .annotation(position: .top, spacing: 2) {
+                    if selectedDate == nil, maxCents > 0, night.cents == maxCents {
+                        Text(Money.wholeDollarString(fromCents: night.cents))
+                            .font(PaydayFont.caption3)
+                            .foregroundStyle(PaydayColor.textSecondary)
+                            .monospacedDigit()
+                    }
+                }
             }
             .chartXSelection(value: $selectedDate)
-            .chartXAxis(.hidden)
+            .chartXScale(domain: xDomain)
+            .chartXAxis {
+                AxisMarks(values: .stride(by: .day)) {
+                    AxisValueLabel(format: .dateTime.weekday(.narrow))
+                        .font(PaydayFont.caption3)
+                        .foregroundStyle(PaydayColor.textTertiary)
+                }
+            }
             .chartYAxis(.hidden)
             .frame(height: 120)
         }
@@ -51,9 +88,9 @@ struct NightlyEarningsChart: View {
     private var headerText: some View {
         Group {
             if let selectedNight {
-                Text("\(Money.string(fromCents: selectedNight.cents)) on \(selectedNight.date.formatted(.dateTime.month(.abbreviated).day()))")
+                Text("\(Money.string(fromCents: selectedNight.cents)) on \(selectedNight.date.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day()))")
             } else {
-                Text("Nightly earnings")
+                Text("Daily earnings")
             }
         }
         .font(PaydayFont.subheadline)
