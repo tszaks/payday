@@ -120,6 +120,8 @@ struct CalendarView: View {
         ScrollView {
             VStack(spacing: PaydaySpacing.p16) {
                 VStack(spacing: PaydaySpacing.p16) {
+                    monthNavRow
+
                     VStack(spacing: 2) {
                         Text(Money.string(fromCents: monthTotalCents))
                             .font(PaydayFont.displayLarge)
@@ -163,25 +165,6 @@ struct CalendarView: View {
         }
         .contentMargins(.bottom, 88, for: .scrollContent)
         .background(PaydayColor.background)
-        .navigationTitle(monthTitle)
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                Button {
-                    withAnimation(.easeOut(duration: PaydayAnimation.standardDuration)) { shiftMonth(by: -1) }
-                } label: {
-                    Image(systemName: "chevron.left")
-                }
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    withAnimation(.easeOut(duration: PaydayAnimation.standardDuration)) { shiftMonth(by: 1) }
-                } label: {
-                    Image(systemName: "chevron.right")
-                }
-            }
-        }
-        .tint(PaydayColor.primary)
         .sheet(item: $daySelection) { selection in
             DayDetailSheet(date: selection.date)
         }
@@ -207,6 +190,34 @@ struct CalendarView: View {
                     shiftMonth(by: horizontal < 0 ? 1 : -1)
                 }
             }
+    }
+
+    /// Month navigation lives inside the card, not the nav bar — the nav
+    /// bar's title is the fixed "History" chrome shared with the Periods
+    /// lens now, so paging the month can't live there. A compact quiet row,
+    /// not big floating nav buttons: chevrons small enough to read as an
+    /// in-card control, not a second navigation bar.
+    private var monthNavRow: some View {
+        HStack {
+            Button {
+                withAnimation(.easeOut(duration: PaydayAnimation.standardDuration)) { shiftMonth(by: -1) }
+            } label: {
+                Image(systemName: "chevron.left")
+                    .font(PaydayFont.subheadline)
+            }
+            Spacer()
+            Text(monthTitle)
+                .font(PaydayFont.headline)
+                .foregroundStyle(PaydayColor.textPrimary)
+            Spacer()
+            Button {
+                withAnimation(.easeOut(duration: PaydayAnimation.standardDuration)) { shiftMonth(by: 1) }
+            } label: {
+                Image(systemName: "chevron.right")
+                    .font(PaydayFont.subheadline)
+            }
+        }
+        .tint(PaydayColor.primary)
     }
 
     private var weekdayHeader: some View {
