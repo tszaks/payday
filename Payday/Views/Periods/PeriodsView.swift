@@ -72,12 +72,32 @@ struct PeriodsView: View {
         paycheckRecords.first { $0.periodEnd >= period.start && $0.periodEnd <= period.end }
     }
 
-    /// This calendar year's entries only, net of any tip-outs — same rule
-    /// StatsEngine applies everywhere else money gets summed.
-    private var yearToDateNights: [(date: Date, cents: Int)] {
+    /// This calendar year's entries — every YTD figure below reads from
+    /// this single filtered set.
+    private var yearToDateEntries: [TipEntry] {
         let year = Calendar.current.component(.year, from: .now)
-        let yearEntries = allEntries.filter { Calendar.current.component(.year, from: $0.date) == year }
-        return StatsEngine(records: yearEntries.map(TipRecord.init)).nightlyTotals()
+        return allEntries.filter { Calendar.current.component(.year, from: $0.date) == year }
+    }
+
+    /// Net of any tip-outs — same rule StatsEngine applies everywhere else
+    /// money gets summed. Tips-only; wages are added in separately below.
+    private var yearToDateNights: [(date: Date, cents: Int)] {
+        StatsEngine(records: yearToDateEntries.map(TipRecord.init)).nightlyTotals()
+    }
+
+    /// Base wage + overtime across the whole year, computed ONCE over all of
+    /// the year's entries (not per period) so overtime buckets by calendar
+    /// workweek exactly like a real paycheck, regardless of pay-period
+    /// boundaries — same definition of period income every other total here
+    /// uses, just widened to the year.
+    private var yearToDateWages: PeriodIncome.Wages? {
+        PeriodIncome.wages(entries: yearToDateEntries, wageCentsPerHour: preferencesStore.baseHourlyWageCents, firstWeekday: scheduleStore.schedule?.firstWeekday)
+    }
+
+    /// A shift, not a day — a double day is 2 shifts, same counting rule the
+    /// Dashboard's Shifts section uses.
+    private var yearToDateShiftCount: Int {
+        ShiftDays.groupedByShift(yearToDateEntries, shiftID: \.shiftID, date: \.date, period: \.shiftPeriod).count
     }
 
     @State private var path = NavigationPath()
@@ -157,8 +177,9 @@ struct PeriodsView: View {
 
 extension PeriodsView {
     fileprivate var yearToDateCard: some View {
-        let totalCents = yearToDateNights.reduce(0) { $0 + $1.cents }
+        let totalCents = yearToDateNights.reduce(0) { $0 + $1.cents } + (yearToDateWages?.totalCents ?? 0)
         let year = Calendar.current.component(.year, from: .now)
+        let shiftCount = yearToDateShiftCount
         return HStack {
             VStack(alignment: .leading, spacing: 3) {
                 Text("\(String(year)) Year to Date")
@@ -170,7 +191,7 @@ extension PeriodsView {
                     .foregroundStyle(PaydayColor.textPrimary)
             }
             Spacer(minLength: 0)
-            Text("\(yearToDateNights.count) shifts")
+            Text(shiftCount == 1 ? "1 shift" : "\(shiftCount) shifts")
                 .font(PaydayFont.caption)
                 .foregroundStyle(PaydayColor.textSecondary)
         }
@@ -210,7 +231,7 @@ private struct PeriodRow: View {
                     .font(PaydayFont.subheadline)
                     .monospacedDigit()
                     .foregroundStyle(PaydayColor.textSecondary)
-                Text("Paid \(payDate.formatted(.dateTime.month(.abbreviated).day()))")
+                Text(PaydayCopy.payDateText(payDate: payDate))
                     .font(PaydayFont.caption2)
                     .foregroundStyle(PaydayColor.textTertiary)
             }

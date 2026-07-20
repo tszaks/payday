@@ -59,4 +59,19 @@ struct ShiftDaysTests {
         #expect(lunch == "Today · Lunch")
         #expect(dinner == "Today · Dinner")
     }
+
+    @Test("5 worked days with 2 doubles count as 7 shifts, not 5 days — the YTD card's counting rule")
+    func fiveDaysTwoDoublesCountSevenShifts() {
+        let records = [
+            TipRecord(date: day(2026, 1, 5), amountCents: 5000, kind: .cash, isDouble: false, shiftID: UUID()),
+            TipRecord(date: day(2026, 1, 6), amountCents: 5000, kind: .cash, isDouble: true, shiftPeriod: .lunch, shiftID: UUID()),
+            TipRecord(date: day(2026, 1, 6), amountCents: 5000, kind: .cash, isDouble: true, shiftPeriod: .dinner, shiftID: UUID()),
+            TipRecord(date: day(2026, 1, 7), amountCents: 5000, kind: .cash, isDouble: false, shiftID: UUID()),
+            TipRecord(date: day(2026, 1, 8), amountCents: 5000, kind: .cash, isDouble: true, shiftPeriod: .lunch, shiftID: UUID()),
+            TipRecord(date: day(2026, 1, 8), amountCents: 5000, kind: .cash, isDouble: true, shiftPeriod: .dinner, shiftID: UUID()),
+            TipRecord(date: day(2026, 1, 9), amountCents: 5000, kind: .cash, isDouble: false, shiftID: UUID())
+        ]
+        let groups = ShiftDays.groupedByShift(records, shiftID: \.shiftID, date: \.date, period: \.shiftPeriod)
+        #expect(groups.count == 7)
+    }
 }
