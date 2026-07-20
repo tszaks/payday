@@ -48,10 +48,12 @@ enum InsightsError: LocalizedError {
 /// itself, never sees raw entries. Calls a small serverless proxy
 /// (payday-website's app/api/insights-narrate) that holds the OpenAI key
 /// server-side and owns the model/instructions/schema; the app never sees
-/// or ships a provider key, same pattern Vero uses. InsightsView falls
-/// back to InsightsFactsCopy's deterministic sections whenever this fails
-/// (not deployed yet, no network, rate limited) — the facts "must stand
-/// alone anyway."
+/// or ships a provider key, same pattern Vero uses. This is deliberately
+/// the smaller half of the page now: InsightsView's THE NUMBERS grid reads
+/// InsightsFacts directly and needs no narration at all, so when this call
+/// fails (not deployed yet, no network, rate limited) or simply has
+/// nothing worth flagging, InsightsView renders no WORTH KNOWING section —
+/// the grid "must stand alone anyway."
 enum InsightsService {
     /// Set once the payday-website Vercel deployment's production domain
     /// is confirmed — the proxy route already exists
@@ -96,10 +98,11 @@ enum InsightsService {
             throw InsightsError.generationFailed("Couldn't read the analysis.")
         }
 
+        // Empty is a legitimate answer now, not a failure — the prompt
+        // below explicitly permits returning nothing when there's no
+        // anomaly, caveat, or synthesis worth surfacing, and InsightsView
+        // renders no WORTH KNOWING section in that case.
         let narration = try JSONDecoder().decode(InsightsNarration.self, from: jsonData)
-        guard !narration.sections.isEmpty else {
-            throw InsightsError.generationFailed("Couldn't read the analysis.")
-        }
         return narration.sections
     }
 
@@ -153,15 +156,17 @@ enum InsightsService {
             lines.append("SHIFT NOTES (the worker's own words, context only - never arithmetic): " + noteLines.joined(separator: " | ") + " - When a note explains an unusual number (a POS outage, tips carried between shifts, a comped night), prefer the note's explanation over reading meaning into that number, and say so plainly. Quote or paraphrase only what is actually written; never invent notes.")
         }
 
-        lines.append("SAMPLE SIZE RULES (apply to every section): a pattern claim (weekday, lunch vs dinner, doubles, start times) backed by fewer than 3 shifts is an anecdote - mention it only with an explicit early-read hedge naming the count, and NEVER base a recommendation on it. If no pattern clears 3 shifts, the suggestion section should say plainly that a couple more weeks of logging will make the patterns trustworthy - do not invent strategy from thin data.")
+        lines.append("SAMPLE SIZE RULES: a pattern claim (weekday, lunch vs dinner, doubles, start times) backed by fewer than 3 shifts is an anecdote - if you mention it at all, hedge it explicitly by naming the count, and NEVER base a claim on it otherwise.")
 
         if let topMove {
-            lines.append("TOP MOVE (already shown to the reader as its own card, above everything you write - do not repeat it as a section; only weave it into the final suggestion section if it genuinely strengthens it): \(topMove.title) - \(topMove.body)")
+            lines.append("TOP MOVE (already shown to the reader as its own card, above everything you write - never repeat it as an item): \(topMove.title) - \(topMove.body)")
         }
 
         if let latestFollowUp {
-            lines.append("SINCE THEN (a follow-up on a past Move, already shown to the reader as its own card, above everything you write, including TOP MOVE - do not repeat it as a section; only weave it into the final suggestion section if it genuinely strengthens it): \(latestFollowUp.title) - \(latestFollowUp.body)")
+            lines.append("SINCE THEN (a follow-up on a past Move, already shown to the reader as its own card, above everything you write, including TOP MOVE - never repeat it as an item): \(latestFollowUp.title) - \(latestFollowUp.body)")
         }
+
+        lines.append("THE READER ALREADY SEES ALL OF THE ABOVE AS NUMBERS ON SCREEN, in a stat grid directly below TOP MOVE/SINCE THEN: hourly rate, tip percent, lunch vs dinner per shift, doubles vs solo per shift, cash share, and start times, each already hedged there when the sample is thin. Your job is NOT to restate any of those figures and NOT to write one item per fact / narrate section-by-section - the grid already does that job better than prose can. Return 1 to 3 items in the sections array, and only when something is actually worth flagging beyond the numbers themselves: (a) an explanation for an anomaly or unusual number - especially one grounded in a SHIFT NOTE above - (b) a caveat about how to read the data (e.g. why a figure is thin or noisy) that the grid's own hedge doesn't already cover, or (c) one synthesis connecting two or more of the facts above into a takeaway the grid doesn't spell out on its own. Each item's title must be 4 words or fewer; each item's body must be 1-2 sentences, never more. If nothing above actually clears that bar, return an empty sections array rather than padding it with a restated number or a generic remark.")
 
         var promptSections = ["NEW FACTS TO REFLECT:", lines.joined(separator: "\n")]
         if let previousSections, !previousSections.isEmpty {
