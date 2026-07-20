@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import UIKit
 
 private struct DaySelection: Identifiable {
     let date: Date
@@ -20,14 +21,6 @@ struct CalendarView: View {
         var c = Calendar.current
         c.firstWeekday = scheduleStore.schedule?.resolvedFirstWeekday ?? c.firstWeekday
         return c
-    }
-
-    private var calculator: PayPeriodCalculator {
-        PayPeriodCalculator(schedule: scheduleStore.schedule ?? .fallback)
-    }
-
-    private var currentPeriod: PayPeriod {
-        calculator.period(containing: .now)
     }
 
     // Net everywhere — every income number in the app is net of any logged
@@ -64,9 +57,55 @@ struct CalendarView: View {
     /// so every month self-normalizes and always shows its own hottest day
     /// at full heat.
     private var displayedMonthMaxCents: Int {
+        monthDailyTotals.map(\.cents).max() ?? 0
+    }
+
+    /// This month's per-day all-in totals — the same figures the grid tiles
+    /// show — feeding both the heat normalization and the summary block
+    /// below, so "Best day" always agrees with the hottest tile on screen.
+    private var monthDailyTotals: [(day: Date, cents: Int)] {
         dailyTotals
             .filter { calendar.isDate($0.key, equalTo: displayedMonth, toGranularity: .month) }
-            .values.max() ?? 0
+            .map { (day: $0.key, cents: $0.value) }
+    }
+
+    private var monthShiftGroups: [(day: Date, shiftID: UUID, items: [TipEntry])] {
+        let monthEntries = allEntries.filter { calendar.isDate($0.date, equalTo: displayedMonth, toGranularity: .month) }
+        return ShiftDays.groupedByShift(monthEntries, shiftID: \.shiftID, date: \.date, period: \.shiftPeriod, calendar: calendar)
+    }
+
+    private var daysWorkedCount: Int { monthDailyTotals.count }
+
+    /// Exact punch hours (never rounded to the quarter) for every shift this
+    /// month, via the same canonical-hours rule WageEstimate reads for the
+    /// wage figures folded into monthDailyTotals.
+    private var monthLoggedHours: Double {
+        WageEstimate.loggedHours(shiftGroups: monthShiftGroups.map(\.items))
+    }
+
+    private var bestDay: (day: Date, cents: Int)? {
+        monthDailyTotals.max { $0.cents < $1.cents }
+    }
+
+    /// Cents summed by weekday across every week in the displayed month —
+    /// the mini bar row's data, aligned to orderedWeekdaySymbols below via
+    /// the same firstWeekday rotation.
+    private var weekdayTotals: [Int: Int] {
+        var totals: [Int: Int] = [:]
+        for entry in monthDailyTotals {
+            let weekday = calendar.component(.weekday, from: entry.day)
+            totals[weekday, default: 0] += entry.cents
+        }
+        return totals
+    }
+
+    private var orderedWeekdayTotals: [Int] {
+        let totals = weekdayTotals
+        let start = calendar.firstWeekday
+        return (0..<7).map { offset in
+            let weekday = ((start - 1 + offset) % 7) + 1
+            return totals[weekday] ?? 0
+        }
     }
 
     private var gridDays: [Date] {
@@ -82,13 +121,15 @@ struct CalendarView: View {
         return (0..<totalDays).compactMap { calendar.date(byAdding: .day, value: $0, to: gridStart) }
     }
 
+    private var monthTitle: String {
+        displayedMonth.formatted(.dateTime.month(.wide).year())
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: PaydaySpacing.p16) {
                     VStack(spacing: PaydaySpacing.p16) {
-                        monthHeader
-
                         VStack(spacing: 2) {
                             Text(Money.string(fromCents: monthTotalCents))
                                 .font(PaydayFont.displayLarge)
@@ -113,8 +154,7 @@ struct CalendarView: View {
                                         totalCents: dailyTotals[day],
                                         monthMaxCents: displayedMonthMaxCents,
                                         isCurrentMonth: calendar.isDate(day, equalTo: displayedMonth, toGranularity: .month),
-                                        isToday: calendar.isDateInToday(day),
-                                        isInCurrentPeriod: day >= currentPeriod.start && day <= currentPeriod.end
+                                        isToday: calendar.isDateInToday(day)
                                     )
                                 }
                                 .buttonStyle(PressableButtonStyle())
@@ -122,6 +162,9 @@ struct CalendarView: View {
                         }
                         .id(displayedMonth)
                         .transition(.opacity)
+                        .gesture(monthSwipeGesture)
+
+                        monthSummarySection
                     }
                     .paydayCard(padding: PaydaySpacing.p20)
                 }
@@ -130,7 +173,25 @@ struct CalendarView: View {
             }
             .contentMargins(.bottom, 88, for: .scrollContent)
             .background(PaydayColor.background)
-            .navigationTitle("Calendar")
+            .navigationTitle(monthTitle)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        withAnimation(.easeOut(duration: PaydayAnimation.standardDuration)) { shiftMonth(by: -1) }
+                    } label: {
+                        Image(systemName: "chevron.left")
+                    }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        withAnimation(.easeOut(duration: PaydayAnimation.standardDuration)) { shiftMonth(by: 1) }
+                    } label: {
+                        Image(systemName: "chevron.right")
+                    }
+                }
+            }
+            .tint(PaydayColor.primary)
             .sheet(item: $daySelection) { selection in
                 DayDetailSheet(date: selection.date)
             }
@@ -144,25 +205,19 @@ struct CalendarView: View {
         }
     }
 
-    private var monthHeader: some View {
-        HStack {
-            Button {
-                withAnimation(.easeOut(duration: PaydayAnimation.standardDuration)) { shiftMonth(by: -1) }
-            } label: {
-                Image(systemName: "chevron.left")
+    /// Horizontal drag on the grid pages the month, same as the chevrons —
+    /// only fires when the drag is dominantly horizontal so it never steals
+    /// the ScrollView's vertical scroll.
+    private var monthSwipeGesture: some Gesture {
+        DragGesture(minimumDistance: 40)
+            .onEnded { value in
+                let horizontal = value.translation.width
+                let vertical = value.translation.height
+                guard abs(horizontal) > abs(vertical), abs(horizontal) > 50 else { return }
+                withAnimation(.easeOut(duration: PaydayAnimation.standardDuration)) {
+                    shiftMonth(by: horizontal < 0 ? 1 : -1)
+                }
             }
-            Spacer()
-            Text(displayedMonth.formatted(.dateTime.month(.wide).year()))
-                .font(PaydayFont.headline)
-                .foregroundStyle(PaydayColor.textPrimary)
-            Spacer()
-            Button {
-                withAnimation(.easeOut(duration: PaydayAnimation.standardDuration)) { shiftMonth(by: 1) }
-            } label: {
-                Image(systemName: "chevron.right")
-            }
-        }
-        .tint(PaydayColor.primary)
     }
 
     private var weekdayHeader: some View {
@@ -183,6 +238,60 @@ struct CalendarView: View {
         return Array(symbols[start...] + symbols[..<start])
     }
 
+    /// The month's second surface: exact hours worked, its best day (all-in,
+    /// matching the tiles above), and a quiet weekday shape. Collapses to a
+    /// single line when nothing's logged yet so an empty month never shows
+    /// zeroed-out stats.
+    @ViewBuilder
+    private var monthSummarySection: some View {
+        if monthDailyTotals.isEmpty {
+            Text("Nothing logged this month yet.")
+                .font(PaydayFont.footnote)
+                .foregroundStyle(PaydayColor.textSecondary)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.top, PaydaySpacing.p4)
+        } else {
+            VStack(spacing: PaydaySpacing.p12) {
+                Divider()
+
+                VStack(spacing: 4) {
+                    Text("\(daysWorkedCount) day\(daysWorkedCount == 1 ? "" : "s") worked · \(WageEstimate.hoursLabel(monthLoggedHours))")
+                        .font(PaydayFont.subheadline)
+                        .foregroundStyle(PaydayColor.textPrimary)
+                        .monospacedDigit()
+                    if let bestDay {
+                        Text("Best day: \(bestDay.day.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day())) · \(Money.string(fromCents: bestDay.cents))")
+                            .font(PaydayFont.footnote)
+                            .foregroundStyle(PaydayColor.textSecondary)
+                            .monospacedDigit()
+                    }
+                }
+
+                weekdayBars
+            }
+        }
+    }
+
+    private var weekdayBars: some View {
+        let totals = orderedWeekdayTotals
+        let maxTotal = max(totals.max() ?? 0, 1)
+        return HStack(alignment: .bottom, spacing: 6) {
+            ForEach(Array(zip(orderedWeekdaySymbols, totals).enumerated()), id: \.offset) { _, pair in
+                let (symbol, cents) = pair
+                VStack(spacing: 4) {
+                    Capsule()
+                        .fill(PaydayColor.primary.opacity(cents > 0 ? 1 : 0.15))
+                        .frame(height: max(4, 28 * Double(max(0, cents)) / Double(maxTotal)))
+                    Text(symbol)
+                        .font(PaydayFont.caption3)
+                        .foregroundStyle(PaydayColor.textSecondary)
+                }
+                .frame(maxWidth: .infinity)
+            }
+        }
+        .frame(height: 40, alignment: .bottom)
+    }
+
     private func shiftMonth(by delta: Int) {
         if let newMonth = calendar.date(byAdding: .month, value: delta, to: displayedMonth) {
             displayedMonth = newMonth
@@ -198,7 +307,6 @@ private struct DayCell: View {
     let monthMaxCents: Int
     let isCurrentMonth: Bool
     let isToday: Bool
-    let isInCurrentPeriod: Bool
 
     private var dayNumber: Int {
         Calendar.current.component(.day, from: day)
@@ -208,31 +316,52 @@ private struct DayCell: View {
         (totalCents ?? 0) > 0
     }
 
+    private var heatFraction: Double {
+        guard hasTips, let totalCents else { return 0 }
+        return monthMaxCents > 0 ? min(1.0, Double(totalCents) / Double(monthMaxCents)) : 1.0
+    }
+
     var body: some View {
         VStack(spacing: 2) {
-            Text("\(dayNumber)")
-                .font(.system(.callout, design: .rounded))
-                .fontWeight(isToday ? .bold : .regular)
-                .foregroundStyle(PaydayColor.textPrimary)
+            dayNumberLabel
             if hasTips, let totalCents {
                 Text(Money.wholeDollarString(fromCents: totalCents))
                     .font(PaydayFont.caption3)
                     .monospacedDigit()
-                    .foregroundStyle(PaydayColor.textPrimary)
+                    .foregroundStyle(Self.heatTextColor(fraction: heatFraction))
                     .lineLimit(1)
                     .minimumScaleFactor(0.6)
             }
         }
         .frame(maxWidth: .infinity, minHeight: 46)
-        .background(cellFill, in: RoundedRectangle(cornerRadius: PaydayRadius.sm))
-        .overlay(
-            RoundedRectangle(cornerRadius: PaydayRadius.sm)
-                .strokeBorder(isToday ? Color.accentColor : Color.clear, lineWidth: 1.5)
-        )
+        .background(hasTips ? Self.heat(fraction: heatFraction) : Color.clear, in: RoundedRectangle(cornerRadius: PaydayRadius.sm))
+        .overlay {
+            if isToday && hasTips {
+                RoundedRectangle(cornerRadius: PaydayRadius.sm)
+                    .strokeBorder(PaydayColor.primary, lineWidth: 2)
+            }
+        }
         .opacity(isCurrentMonth ? 1 : 0.3)
         .contentShape(Rectangle())
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityLabel)
+    }
+
+    /// The numeral, with a bare ring for "today" when the day has no tile to
+    /// carry it — the ring rides the day itself, not a background it doesn't
+    /// have.
+    private var dayNumberLabel: some View {
+        ZStack {
+            if isToday && !hasTips {
+                Circle()
+                    .strokeBorder(PaydayColor.primary, lineWidth: 2)
+                    .frame(width: 26, height: 26)
+            }
+            Text("\(dayNumber)")
+                .font(.system(.callout, design: .rounded))
+                .fontWeight(hasTips || isToday ? .bold : .regular)
+                .foregroundStyle(hasTips ? Self.heatTextColor(fraction: heatFraction) : PaydayColor.textSecondary)
+        }
     }
 
     private var accessibilityLabel: String {
@@ -241,32 +370,41 @@ private struct DayCell: View {
         return "\(dateText), \(Money.string(fromCents: totalCents)) logged"
     }
 
-    /// Worked days are a heatmap — intensity scales with the day's take
-    /// relative to the month's best day, so hot and slow days separate at a
-    /// glance. The rest of the current pay period keeps its soft wash so the
-    /// range still shows as a continuous band.
-    private var cellFill: Color {
-        if hasTips, let totalCents {
-            let fraction = monthMaxCents > 0 ? min(1.0, Double(totalCents) / Double(monthMaxCents)) : 1.0
-            return Self.heat(fraction: fraction)
-        }
-        if isInCurrentPeriod { return Color.accentColor.opacity(0.07) }
-        return .clear
-    }
-
     /// Temperature scale, Tyler's pick over a single-hue green ramp (2026-07-19):
-    /// a hue walk from red (slow) through yellow (mid) to Vero green (best),
-    /// opacity rising with heat for shade depth within each hue. A deliberate,
-    /// contained exception to the one-green design law — the calendar is the
-    /// app's one at-a-glance pattern surface, and on a tightly clustered month
-    /// hue separates days that a green ramp leaves looking identical. True red
-    /// only appears when a day lands far below the month's best, so it reads
-    /// as information, not judgment.
-    private static func heat(fraction f: Double) -> Color {
-        // Hue walk: red (0.02) through yellow (0.13) to Vero green (0.40).
+    /// a hue walk from red (slow) through yellow (mid) to Vero green (best).
+    /// Committed color (2026-07-20): opacity is no longer how heat shows —
+    /// every worked tile is fully opaque, and saturation/brightness deepen
+    /// with heat instead, so light mode never washes out to pastel. A
+    /// deliberate, contained exception to the one-green design law — the
+    /// calendar is the app's one at-a-glance pattern surface, and on a
+    /// tightly clustered month hue separates days that a green ramp leaves
+    /// looking identical. True red only appears when a day lands far below
+    /// the month's best, so it reads as information, not judgment.
+    private static func heatComponents(fraction f: Double) -> (hue: Double, saturation: Double, brightness: Double) {
         let hue = f < 0.5
             ? 0.02 + (0.13 - 0.02) * (f / 0.5)
             : 0.13 + (0.40 - 0.13) * ((f - 0.5) / 0.5)
-        return Color(hue: hue, saturation: 0.72, brightness: 0.88).opacity(0.35 + 0.25 * f)
+        let saturation = 0.62 + 0.18 * f
+        let brightness = 0.70 - 0.30 * f
+        return (hue, saturation, brightness)
+    }
+
+    private static func heat(fraction f: Double) -> Color {
+        let c = heatComponents(fraction: f)
+        return Color(hue: c.hue, saturation: c.saturation, brightness: c.brightness)
+    }
+
+    /// White reads on most of the ramp, but the hue walk crosses yellow —
+    /// bright enough on its own that white can fail there even after the
+    /// darkening above. Computed from the same HSB the tile actually paints
+    /// (relative luminance, ITU-R BT.601 weights) rather than a fixed
+    /// "white unless near yellow" guess, so the choice is correct at every
+    /// point on the ramp, not just the one this was checked at.
+    private static func heatTextColor(fraction f: Double) -> Color {
+        let c = heatComponents(fraction: f)
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        UIColor(hue: c.hue, saturation: c.saturation, brightness: c.brightness, alpha: 1).getRed(&r, green: &g, blue: &b, alpha: &a)
+        let luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b
+        return luminance > 0.55 ? .black : .white
     }
 }
