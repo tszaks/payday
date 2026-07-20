@@ -22,12 +22,10 @@ struct PeriodDetailView: View {
     }
 
     /// Tense-honest: the money isn't there yet before payDate arrives, so
-    /// this can't say "Paid" until it actually is.
+    /// this can't say "Paid" until it actually is. Shared with PeriodsView's
+    /// list rows via PaydayCopy so the rule can't fork between the two.
     private var payDateText: String {
-        if isPayDateUpcoming {
-            return "Payday · \(payDate.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day()))"
-        }
-        return "Paid \(payDate.formatted(.dateTime.month(.abbreviated).day()))"
+        PaydayCopy.payDateText(payDate: payDate)
     }
 
     private var entries: [TipEntry] {
