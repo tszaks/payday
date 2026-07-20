@@ -75,6 +75,8 @@ targets:
       - path: Payday/Utilities/TipBreakdown.swift
       - path: Payday/Utilities/StatsEngine.swift
       - path: Payday/Utilities/ShiftDays.swift
+      - path: Payday/Utilities/ShiftDetails.swift
+      - path: Payday/Utilities/PeriodIncome.swift
       - path: Payday/Utilities/AppGroup.swift
       - path: Payday/Utilities/SharedModelContainer.swift
       - path: Payday/Utilities/DeepLinkCoordinator.swift

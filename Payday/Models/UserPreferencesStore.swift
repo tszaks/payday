@@ -29,8 +29,16 @@ final class UserPreferencesStore {
     private static let appearanceKey = "com.szakacsmedia.payday.appearance"
     private static let faceIDLockKey = "com.szakacsmedia.payday.faceIDLock"
     private static let smartNudgeKey = "com.szakacsmedia.payday.smartNudge"
-    private static let baseHourlyWageCentsKey = "com.szakacsmedia.payday.baseHourlyWageCents"
+    private static let baseHourlyWageCentsKey = AppGroup.baseHourlyWageCentsKey
+    /// Set once migration to the app-group suite has run, so a wage the user
+    /// later clears (removeObject on the suite key) is never mistaken for
+    /// "never migrated" and copied back from a stale standard-defaults value.
+    private static let baseHourlyWageMigratedKey = "com.szakacsmedia.payday.baseHourlyWageMigratedToAppGroup"
     private let defaults: UserDefaults
+    /// The widget can't reach `.standard` (a different process's container),
+    /// so the wage — the one preference it needs — lives in the app-group
+    /// suite instead. Everything else here stays on `.standard`.
+    private let wageDefaults: UserDefaults
 
     var firstName: String? {
         didSet { persistName() }
@@ -62,14 +70,39 @@ final class UserPreferencesStore {
         didSet { defaults.set(isSmartNudgeEnabled, forKey: Self.smartNudgeKey) }
     }
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = .standard, wageDefaults: UserDefaults = AppGroup.defaults) {
         self.defaults = defaults
+        self.wageDefaults = wageDefaults
         self.firstName = defaults.string(forKey: Self.nameKey)
         self.appearance = defaults.string(forKey: Self.appearanceKey)
             .flatMap(AppAppearance.init(rawValue:)) ?? .system
         self.isFaceIDLockEnabled = defaults.bool(forKey: Self.faceIDLockKey)
         self.isSmartNudgeEnabled = defaults.object(forKey: Self.smartNudgeKey) == nil ? true : defaults.bool(forKey: Self.smartNudgeKey)
-        self.baseHourlyWageCents = defaults.object(forKey: Self.baseHourlyWageCentsKey) == nil ? nil : defaults.integer(forKey: Self.baseHourlyWageCentsKey)
+
+        Self.migrateBaseHourlyWageCentsIfNeeded(from: defaults, to: wageDefaults)
+        self.baseHourlyWageCents = wageDefaults.object(forKey: Self.baseHourlyWageCentsKey) == nil ? nil : wageDefaults.integer(forKey: Self.baseHourlyWageCentsKey)
+    }
+
+    /// One-time copy of the wage from `.standard` (where it used to live)
+    /// into the app-group suite. Runs at most once per install — gated on
+    /// `baseHourlyWageMigratedKey` in the suite, not on whether the suite's
+    /// wage key is currently set, since clearing the wage after migration
+    /// also removes that key and must not look like "never migrated."
+    private static func migrateBaseHourlyWageCentsIfNeeded(from standard: UserDefaults, to suite: UserDefaults) {
+        guard !suite.bool(forKey: baseHourlyWageMigratedKey) else { return }
+        // When the app-group container is unavailable, AppGroup.defaults
+        // falls back to `.standard` itself — the same store passed in as
+        // `standard` here. Copying then removing in that case would erase
+        // the value it just "migrated" into itself.
+        guard standard !== suite else {
+            suite.set(true, forKey: baseHourlyWageMigratedKey)
+            return
+        }
+        if let legacyValue = standard.object(forKey: baseHourlyWageCentsKey) as? Int {
+            suite.set(legacyValue, forKey: baseHourlyWageCentsKey)
+        }
+        standard.removeObject(forKey: baseHourlyWageCentsKey)
+        suite.set(true, forKey: baseHourlyWageMigratedKey)
     }
 
     private func persistName() {
@@ -86,9 +119,9 @@ final class UserPreferencesStore {
 
     private func persistBaseHourlyWageCents() {
         if let baseHourlyWageCents {
-            defaults.set(baseHourlyWageCents, forKey: Self.baseHourlyWageCentsKey)
+            wageDefaults.set(baseHourlyWageCents, forKey: Self.baseHourlyWageCentsKey)
         } else {
-            defaults.removeObject(forKey: Self.baseHourlyWageCentsKey)
+            wageDefaults.removeObject(forKey: Self.baseHourlyWageCentsKey)
         }
     }
 }

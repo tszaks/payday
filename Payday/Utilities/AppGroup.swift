@@ -15,4 +15,13 @@ enum AppGroup {
     static var defaults: UserDefaults {
         UserDefaults(suiteName: identifier) ?? .standard
     }
+
+    /// Shared with the widget and Siri intent, which read the wage straight
+    /// out of `defaults` rather than going through UserPreferencesStore.
+    static let baseHourlyWageCentsKey = "com.szakacsmedia.payday.baseHourlyWageCents"
+
+    /// nil means the wage feature is off — never treated as a $0/hr rate.
+    static var baseHourlyWageCents: Int? {
+        defaults.object(forKey: baseHourlyWageCentsKey) == nil ? nil : defaults.integer(forKey: baseHourlyWageCentsKey)
+    }
 }

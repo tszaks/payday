@@ -8,6 +8,7 @@ private struct DaySelection: Identifiable {
 
 struct CalendarView: View {
     @Environment(PayScheduleStore.self) private var scheduleStore
+    @Environment(UserPreferencesStore.self) private var preferencesStore
     @Query private var allEntries: [TipEntry]
 
     @State private var displayedMonth: Date = Calendar.current.startOfDay(for: .now)
@@ -38,10 +39,17 @@ struct CalendarView: View {
             .mapValues { entries in entries.reduce(0) { $0 + $1.netCents } }
     }
 
+    // Wage-inclusive, matching the Dashboard/Period-detail/Periods-list
+    // totals: net tips + base wage + overtime. Overtime is computed per
+    // calendar workweek (see PeriodIncome), so a week straddling this
+    // month's boundary attributes its whole overtime to whichever month
+    // the filter below happens to include — an acceptable imprecision,
+    // not worth splitting a week's OT across two months for.
     private var monthTotalCents: Int {
-        allEntries
-            .filter { calendar.isDate($0.date, equalTo: displayedMonth, toGranularity: .month) }
-            .reduce(0) { $0 + $1.netCents }
+        let monthEntries = allEntries.filter { calendar.isDate($0.date, equalTo: displayedMonth, toGranularity: .month) }
+        let tipsCents = monthEntries.reduce(0) { $0 + $1.netCents }
+        let wages = PeriodIncome.wages(entries: monthEntries, wageCentsPerHour: preferencesStore.baseHourlyWageCents, firstWeekday: scheduleStore.schedule?.firstWeekday)
+        return tipsCents + (wages?.totalCents ?? 0)
     }
 
     /// The displayed month's best day — the heatmap's full-intensity anchor,
