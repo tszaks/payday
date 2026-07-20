@@ -119,46 +119,43 @@ struct CalendarView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: PaydaySpacing.p16) {
-                VStack(spacing: PaydaySpacing.p16) {
-                    monthNavRow
+                monthNavRow
 
-                    VStack(spacing: 2) {
-                        Text(Money.string(fromCents: monthTotalCents))
-                            .font(PaydayFont.displayLarge)
-                            .monospacedDigit()
-                            .foregroundStyle(PaydayColor.textPrimary)
-                            .contentTransition(.numericText())
-                            .animation(PaydayAnimation.premiumSpring, value: monthTotalCents)
-                        Text("this month")
-                            .font(PaydayFont.caption)
-                            .foregroundStyle(PaydayColor.textSecondary)
-                    }
-
-                    weekdayHeader
-
-                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 7), spacing: 6) {
-                        ForEach(gridDays, id: \.self) { day in
-                            Button {
-                                daySelection = DaySelection(date: day)
-                            } label: {
-                                DayCell(
-                                    day: day,
-                                    totalCents: dailyTotals[day],
-                                    monthMaxCents: displayedMonthMaxCents,
-                                    isCurrentMonth: calendar.isDate(day, equalTo: displayedMonth, toGranularity: .month),
-                                    isToday: calendar.isDateInToday(day)
-                                )
-                            }
-                            .buttonStyle(PressableButtonStyle())
-                        }
-                    }
-                    .id(displayedMonth)
-                    .transition(.opacity)
-                    .gesture(monthSwipeGesture)
-
-                    monthSummarySection
+                VStack(spacing: 2) {
+                    Text(Money.string(fromCents: monthTotalCents))
+                        .font(PaydayFont.displayLarge)
+                        .monospacedDigit()
+                        .foregroundStyle(PaydayColor.textPrimary)
+                        .contentTransition(.numericText())
+                        .animation(PaydayAnimation.premiumSpring, value: monthTotalCents)
+                    Text("this month")
+                        .font(PaydayFont.caption)
+                        .foregroundStyle(PaydayColor.textSecondary)
                 }
-                .paydayCard(padding: PaydaySpacing.p20)
+
+                weekdayHeader
+
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 7), spacing: 6) {
+                    ForEach(gridDays, id: \.self) { day in
+                        Button {
+                            daySelection = DaySelection(date: day)
+                        } label: {
+                            DayCell(
+                                day: day,
+                                totalCents: dailyTotals[day],
+                                monthMaxCents: displayedMonthMaxCents,
+                                isCurrentMonth: calendar.isDate(day, equalTo: displayedMonth, toGranularity: .month),
+                                isToday: calendar.isDateInToday(day)
+                            )
+                        }
+                        .buttonStyle(PressableButtonStyle())
+                    }
+                }
+                .id(displayedMonth)
+                .transition(.opacity)
+                .gesture(monthSwipeGesture)
+
+                monthSummarySection
             }
             .padding(.horizontal, PaydaySpacing.p16)
             .padding(.top, PaydaySpacing.p8)
@@ -192,11 +189,11 @@ struct CalendarView: View {
             }
     }
 
-    /// Month navigation lives inside the card, not the nav bar — the nav
+    /// Month navigation lives in the content, not the nav bar — the nav
     /// bar's title is the fixed "History" chrome shared with the Periods
     /// lens now, so paging the month can't live there. A compact quiet row,
     /// not big floating nav buttons: chevrons small enough to read as an
-    /// in-card control, not a second navigation bar.
+    /// in-page control, not a second navigation bar.
     private var monthNavRow: some View {
         HStack {
             Button {
