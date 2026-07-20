@@ -267,41 +267,12 @@ struct CalendarView: View {
                     }
                 }
 
-                weekdayBars
+                // Weekday mini-bars deleted (Tyler, 2026-07-20): the heatmap
+                // grid directly above already tells the which-days story —
+                // re-encoding it smaller looked goofy at any styling. The two
+                // text lines are the summary.
             }
         }
-    }
-
-    /// A sparkline, not a bar chart: fixed hairline-thin bars so the shape
-    /// reads quietly rather than blobby capsules competing with the grid
-    /// above. Zero-total weekdays get no fill at all — just the baseline
-    /// track — instead of a faint capsule pretending to be a bar.
-    private var weekdayBars: some View {
-        let totals = orderedWeekdayTotals
-        let maxTotal = max(totals.max() ?? 0, 1)
-        return HStack(alignment: .bottom, spacing: 6) {
-            ForEach(Array(zip(orderedWeekdaySymbols, totals).enumerated()), id: \.offset) { _, pair in
-                let (symbol, cents) = pair
-                VStack(spacing: 4) {
-                    ZStack(alignment: .bottom) {
-                        Rectangle()
-                            .fill(PaydayColor.textTertiary.opacity(0.15))
-                            .frame(width: 4, height: 1)
-                        if cents > 0 {
-                            RoundedRectangle(cornerRadius: 1)
-                                .fill(PaydayColor.primary)
-                                .frame(width: 4, height: max(2, 28 * Double(cents) / Double(maxTotal)))
-                        }
-                    }
-                    .frame(height: 28, alignment: .bottom)
-                    Text(symbol)
-                        .font(PaydayFont.caption3)
-                        .foregroundStyle(PaydayColor.textTertiary)
-                }
-                .frame(maxWidth: .infinity)
-            }
-        }
-        .frame(height: 40, alignment: .bottom)
     }
 
     private func shiftMonth(by delta: Int) {
@@ -347,8 +318,11 @@ private struct DayCell: View {
         }
         .frame(maxWidth: .infinity, minHeight: 46)
         .background(hasTips ? Self.heat(fraction: heatFraction) : Color.clear, in: RoundedRectangle(cornerRadius: PaydayRadius.sm))
+        // Today always rings the full cell in the same rounded-square
+        // geometry as the tiles — a tight circle around the numeral read as
+        // a stray dot, not a state (Tyler, 2026-07-20).
         .overlay {
-            if isToday && hasTips {
+            if isToday {
                 RoundedRectangle(cornerRadius: PaydayRadius.sm)
                     .strokeBorder(PaydayColor.primary, lineWidth: 2)
             }
@@ -359,21 +333,11 @@ private struct DayCell: View {
         .accessibilityLabel(accessibilityLabel)
     }
 
-    /// The numeral, with a bare ring for "today" when the day has no tile to
-    /// carry it — the ring rides the day itself, not a background it doesn't
-    /// have.
     private var dayNumberLabel: some View {
-        ZStack {
-            if isToday && !hasTips {
-                Circle()
-                    .strokeBorder(PaydayColor.primary, lineWidth: 2)
-                    .frame(width: 26, height: 26)
-            }
-            Text("\(dayNumber)")
-                .font(.system(.callout, design: .rounded))
-                .fontWeight(hasTips || isToday ? .bold : .regular)
-                .foregroundStyle(hasTips ? Self.heatTextColor(fraction: heatFraction) : PaydayColor.textSecondary)
-        }
+        Text("\(dayNumber)")
+            .font(.system(.callout, design: .rounded))
+            .fontWeight(hasTips || isToday ? .bold : .regular)
+            .foregroundStyle(hasTips ? Self.heatTextColor(fraction: heatFraction) : PaydayColor.textSecondary)
     }
 
     private var accessibilityLabel: String {
