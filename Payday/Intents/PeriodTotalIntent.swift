@@ -19,7 +19,13 @@ struct PeriodTotalIntent: AppIntent {
 
         let entries = try SharedModelContainer.shared.mainContext.fetch(FetchDescriptor<TipEntry>())
         let engine = StatsEngine(records: entries.map(TipRecord.init))
-        let total = engine.periodToDateTotal(period: period, asOf: .now)
+        let tipsTotal = engine.periodToDateTotal(period: period, asOf: .now)
+
+        // Same wage-inclusive total the dashboard hero shows — the spoken
+        // number must match what's on screen.
+        let periodEntries = entries.filter { $0.date >= period.start && $0.date <= period.end }
+        let wages = PeriodIncome.wages(entries: periodEntries, wageCentsPerHour: AppGroup.baseHourlyWageCents, firstWeekday: schedule.firstWeekday)
+        let total = tipsTotal + (wages?.totalCents ?? 0)
 
         return .result(dialog: IntentDialog("You've made \(Money.string(fromCents: total)) so far this pay period."))
     }

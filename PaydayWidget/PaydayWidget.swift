@@ -50,7 +50,13 @@ struct PaydayWidgetProvider: TimelineProvider {
         let context = ModelContext(SharedModelContainer.shared)
         let allEntries = (try? context.fetch(FetchDescriptor<TipEntry>())) ?? []
         let engine = StatsEngine(records: allEntries.map(TipRecord.init))
-        let total = engine.periodToDateTotal(period: period, asOf: date)
+        let tipsTotal = engine.periodToDateTotal(period: period, asOf: date)
+
+        // Same wage-inclusive total the dashboard hero shows — a widget
+        // number that disagreed with the app would be worse than none.
+        let periodEntries = allEntries.filter { $0.date >= period.start && $0.date <= period.end }
+        let wages = PeriodIncome.wages(entries: periodEntries, wageCentsPerHour: AppGroup.baseHourlyWageCents, firstWeekday: schedule.firstWeekday)
+        let total = tipsTotal + (wages?.totalCents ?? 0)
 
         let previousDay = calendar.date(byAdding: .day, value: -1, to: period.start) ?? period.start
         let priorPeriod = calculator.period(containing: previousDay)
