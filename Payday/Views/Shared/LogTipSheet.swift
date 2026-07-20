@@ -511,10 +511,20 @@ struct LogTipSheet: View {
                 }
                 .padding(.vertical, 14)
                 if let hoursWorked {
-                    Text("That's \(Self.hoursLabel(hoursWorked)).")
-                        .font(PaydayFont.caption)
-                        .foregroundStyle(PaydayColor.textSecondary)
-                        .padding(.top, 8)
+                    // Base rate only — overtime is a weekly calculation that
+                    // can't be attributed to a single shift, so this caption
+                    // never claims OT.
+                    if let wageCents = WageEstimate.cents(wageCentsPerHour: preferencesStore.baseHourlyWageCents, hours: hoursWorked) {
+                        Text("That's \(Self.hoursLabel(hoursWorked)). About \(Money.string(fromCents: wageCents)) in wages.")
+                            .font(PaydayFont.caption)
+                            .foregroundStyle(PaydayColor.textSecondary)
+                            .padding(.top, 8)
+                    } else {
+                        Text("That's \(Self.hoursLabel(hoursWorked)).")
+                            .font(PaydayFont.caption)
+                            .foregroundStyle(PaydayColor.textSecondary)
+                            .padding(.top, 8)
+                    }
                 }
                 Divider().padding(.top, 14)
                 HStack {
