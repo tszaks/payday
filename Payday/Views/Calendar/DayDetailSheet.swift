@@ -38,6 +38,14 @@ struct DayDetailSheet: View {
         TipBreakdown.total(of: dayEntries).netTotalCents + dayWageCents
     }
 
+    /// Always "Wed, Jul 15" — weekday abbrev, month, day. ShiftDays.humanLabel
+    /// (which this sheet used to show) collapses recent days to "Today" /
+    /// bare "Wednesday", which reads fine in a list of shifts but not as a
+    /// sheet title naming one specific day.
+    private var titleText: String {
+        date.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day())
+    }
+
     var body: some View {
         NavigationStack {
             List {
@@ -46,24 +54,12 @@ struct DayDetailSheet: View {
                         .foregroundStyle(PaydayColor.textSecondary)
                         .listRowSeparator(.hidden)
                 } else {
-                    if shifts.count > 1 {
-                        Section {
-                            HStack {
-                                Text("Total")
-                                    .font(PaydayFont.subheadline)
-                                    .foregroundStyle(PaydayColor.textSecondary)
-                                Spacer()
-                                Text(Money.string(fromCents: totalCents))
-                                    .font(PaydayFont.displaySmall)
-                                    .monospacedDigit()
-                                    .foregroundStyle(PaydayColor.textPrimary)
-                            }
-                            .paydayCard()
-                        }
-                        .listRowInsets(EdgeInsets(top: 4, leading: PaydaySpacing.p16, bottom: 4, trailing: PaydaySpacing.p16))
-                        .listRowBackground(Color.clear)
-                        .listRowSeparator(.hidden)
+                    Section {
+                        heroCard
                     }
+                    .listRowInsets(EdgeInsets(top: 4, leading: PaydaySpacing.p16, bottom: 4, trailing: PaydaySpacing.p16))
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
 
                     Section("Shifts") {
                         ForEach(shifts, id: \.shiftID) { group in
@@ -76,7 +72,7 @@ struct DayDetailSheet: View {
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
             .background(PaydayColor.background)
-            .navigationTitle(ShiftDays.humanLabel(for: date))
+            .navigationTitle(titleText)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -97,6 +93,26 @@ struct DayDetailSheet: View {
         .undoDeleteToast(undoState, context: modelContext)
         .presentationDetents([.medium, .large])
         .presentationBackground(PaydayColor.background)
+    }
+
+    /// The sheet's one hero — same grammar as the Dashboard/Period-detail
+    /// heroes (caption above a big monospaced number), replacing the old
+    /// lozenge row so this sheet reads like the rest of the app instead of
+    /// a bespoke total bar.
+    private var heroCard: some View {
+        VStack(spacing: 6) {
+            Text("Total")
+                .font(PaydayFont.subheadline)
+                .foregroundStyle(PaydayColor.textSecondary)
+            Text(Money.string(fromCents: totalCents))
+                .font(PaydayFont.displayLarge)
+                .monospacedDigit()
+                .foregroundStyle(PaydayColor.textPrimary)
+                .contentTransition(.numericText())
+                .animation(PaydayAnimation.premiumSpring, value: totalCents)
+        }
+        .frame(maxWidth: .infinity)
+        .paydayCard(padding: PaydaySpacing.p24)
     }
 
     @ViewBuilder
