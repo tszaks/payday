@@ -11,15 +11,27 @@ struct ShiftDayRow: View {
     let period: ShiftPeriod?
     let dayHasMultipleShifts: Bool
     let entries: [TipEntry]
+    /// Base hourly rate, when the person has one set — folds this shift's
+    /// wages (rate x its canonical hours, never OT) into the trailing
+    /// amount. Nil means the wage feature is off; the row then reads exactly
+    /// as it always has.
+    var wageCentsPerHour: Int?
 
     private var breakdown: TipBreakdown {
         TipBreakdown.total(of: entries)
     }
 
-    /// Net — the income number. Matches the hero total and the reveal,
-    /// which are both net, so one shift never shows two numbers.
+    /// This shift's base-rate wages, from its one canonical hoursWorked
+    /// value (ShiftDetails.resolve) — never per-entry, never OT.
+    private var wageCents: Int {
+        let hoursWorked = ShiftDetails.resolve(from: entries).hoursWorked ?? 0
+        return WageEstimate.cents(wageCentsPerHour: wageCentsPerHour, hours: hoursWorked) ?? 0
+    }
+
+    /// Net tips plus this shift's wages — matches the hero total, the
+    /// sheet's own total, and every other shift/day surface in the app.
     private var netCents: Int {
-        breakdown.netTotalCents
+        breakdown.netTotalCents + wageCents
     }
 
     private var subtitle: String {
