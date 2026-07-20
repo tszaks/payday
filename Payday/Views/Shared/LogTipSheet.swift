@@ -580,11 +580,12 @@ struct LogTipSheet: View {
     /// to the money.
     private var noteCard: some View {
         card {
-            HStack {
+            VStack(alignment: .leading, spacing: 8) {
                 Text("Note")
-                Spacer()
-                TextField("Optional", text: $note)
-                    .multilineTextAlignment(.trailing)
+                    .font(PaydayFont.caption)
+                    .foregroundStyle(PaydayColor.textSecondary)
+                TextField("Optional", text: $note, axis: .vertical)
+                    .lineLimit(2...6)
             }
             .padding()
         }
