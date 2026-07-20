@@ -19,6 +19,7 @@ struct SettingsView: View {
     @State private var periodEndDate: Date
     @State private var firstWeekday: Int
     @State private var wageDigitsText: String = ""
+    @FocusState private var isWageFieldFocused: Bool
 
     private let weekdaySymbols = Calendar.current.weekdaySymbols // [Sunday…Saturday]
     private static let maxWageDigits = 4 // caps at $99.99/hr
@@ -105,12 +106,15 @@ struct SettingsView: View {
                                 TextField("", text: $wageDigitsText)
                                     .keyboardType(.numberPad)
                                     .multilineTextAlignment(.trailing)
+                                    .focused($isWageFieldFocused)
                                     .opacity(0.01)
                                     .frame(maxWidth: 90)
                                     .accessibilityLabel("Hourly wage")
                                     .accessibilityValue(preferencesStore.baseHourlyWageCents.map { Money.string(fromCents: $0) } ?? "Not set")
                             }
                         }
+                        .contentShape(Rectangle())
+                        .onTapGesture { isWageFieldFocused = true }
                     }
                 }
                 .listRowBackground(PaydayColor.fieldBackground)
@@ -156,6 +160,12 @@ struct SettingsView: View {
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
+                }
+                if isWageFieldFocused {
+                    ToolbarItemGroup(placement: .keyboard) {
+                        Spacer()
+                        Button("Done") { isWageFieldFocused = false }
+                    }
                 }
             }
             .onChange(of: frequency) { _, _ in save() }
