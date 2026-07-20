@@ -126,83 +126,81 @@ struct CalendarView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
+        ScrollView {
+            VStack(spacing: PaydaySpacing.p16) {
                 VStack(spacing: PaydaySpacing.p16) {
-                    VStack(spacing: PaydaySpacing.p16) {
-                        VStack(spacing: 2) {
-                            Text(Money.string(fromCents: monthTotalCents))
-                                .font(PaydayFont.displayLarge)
-                                .monospacedDigit()
-                                .foregroundStyle(PaydayColor.textPrimary)
-                                .contentTransition(.numericText())
-                                .animation(PaydayAnimation.premiumSpring, value: monthTotalCents)
-                            Text("this month")
-                                .font(PaydayFont.caption)
-                                .foregroundStyle(PaydayColor.textSecondary)
-                        }
+                    VStack(spacing: 2) {
+                        Text(Money.string(fromCents: monthTotalCents))
+                            .font(PaydayFont.displayLarge)
+                            .monospacedDigit()
+                            .foregroundStyle(PaydayColor.textPrimary)
+                            .contentTransition(.numericText())
+                            .animation(PaydayAnimation.premiumSpring, value: monthTotalCents)
+                        Text("this month")
+                            .font(PaydayFont.caption)
+                            .foregroundStyle(PaydayColor.textSecondary)
+                    }
 
-                        weekdayHeader
+                    weekdayHeader
 
-                        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 7), spacing: 6) {
-                            ForEach(gridDays, id: \.self) { day in
-                                Button {
-                                    daySelection = DaySelection(date: day)
-                                } label: {
-                                    DayCell(
-                                        day: day,
-                                        totalCents: dailyTotals[day],
-                                        monthMaxCents: displayedMonthMaxCents,
-                                        isCurrentMonth: calendar.isDate(day, equalTo: displayedMonth, toGranularity: .month),
-                                        isToday: calendar.isDateInToday(day)
-                                    )
-                                }
-                                .buttonStyle(PressableButtonStyle())
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 7), spacing: 6) {
+                        ForEach(gridDays, id: \.self) { day in
+                            Button {
+                                daySelection = DaySelection(date: day)
+                            } label: {
+                                DayCell(
+                                    day: day,
+                                    totalCents: dailyTotals[day],
+                                    monthMaxCents: displayedMonthMaxCents,
+                                    isCurrentMonth: calendar.isDate(day, equalTo: displayedMonth, toGranularity: .month),
+                                    isToday: calendar.isDateInToday(day)
+                                )
                             }
+                            .buttonStyle(PressableButtonStyle())
                         }
-                        .id(displayedMonth)
-                        .transition(.opacity)
-                        .gesture(monthSwipeGesture)
+                    }
+                    .id(displayedMonth)
+                    .transition(.opacity)
+                    .gesture(monthSwipeGesture)
 
-                        monthSummarySection
-                    }
-                    .paydayCard(padding: PaydaySpacing.p20)
+                    monthSummarySection
                 }
-                .padding(.horizontal, PaydaySpacing.p16)
-                .padding(.top, PaydaySpacing.p8)
+                .paydayCard(padding: PaydaySpacing.p20)
             }
-            .contentMargins(.bottom, 88, for: .scrollContent)
-            .background(PaydayColor.background)
-            .navigationTitle(monthTitle)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button {
-                        withAnimation(.easeOut(duration: PaydayAnimation.standardDuration)) { shiftMonth(by: -1) }
-                    } label: {
-                        Image(systemName: "chevron.left")
-                    }
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        withAnimation(.easeOut(duration: PaydayAnimation.standardDuration)) { shiftMonth(by: 1) }
-                    } label: {
-                        Image(systemName: "chevron.right")
-                    }
-                }
-            }
-            .tint(PaydayColor.primary)
-            .sheet(item: $daySelection) { selection in
-                DayDetailSheet(date: selection.date)
-            }
-            #if DEBUG
-            .onAppear {
-                if ProcessInfo.processInfo.arguments.contains("-OpenDaySheet") {
-                    daySelection = DaySelection(date: .now)
-                }
-            }
-            #endif
+            .padding(.horizontal, PaydaySpacing.p16)
+            .padding(.top, PaydaySpacing.p8)
         }
+        .contentMargins(.bottom, 88, for: .scrollContent)
+        .background(PaydayColor.background)
+        .navigationTitle(monthTitle)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button {
+                    withAnimation(.easeOut(duration: PaydayAnimation.standardDuration)) { shiftMonth(by: -1) }
+                } label: {
+                    Image(systemName: "chevron.left")
+                }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    withAnimation(.easeOut(duration: PaydayAnimation.standardDuration)) { shiftMonth(by: 1) }
+                } label: {
+                    Image(systemName: "chevron.right")
+                }
+            }
+        }
+        .tint(PaydayColor.primary)
+        .sheet(item: $daySelection) { selection in
+            DayDetailSheet(date: selection.date)
+        }
+        #if DEBUG
+        .onAppear {
+            if ProcessInfo.processInfo.arguments.contains("-OpenDaySheet") {
+                daySelection = DaySelection(date: .now)
+            }
+        }
+        #endif
     }
 
     /// Horizontal drag on the grid pages the month, same as the chevrons —

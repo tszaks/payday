@@ -100,70 +100,71 @@ struct PeriodsView: View {
         ShiftDays.groupedByShift(yearToDateEntries, shiftID: \.shiftID, date: \.date, period: \.shiftPeriod).count
     }
 
-    @State private var path = NavigationPath()
+    /// Owned by HistoryView's single NavigationStack — passed down rather
+    /// than @State here so pushes from this lens and the QA/deep-link hooks
+    /// below land on the same stack the Calendar lens shares.
+    @Binding var path: NavigationPath
 
     var body: some View {
-        NavigationStack(path: $path) {
-            ScrollView {
-                LazyVStack(spacing: 0) {
-                    if !yearToDateNights.isEmpty {
-                        yearToDateCard
+        ScrollView {
+            LazyVStack(spacing: 0) {
+                if !yearToDateNights.isEmpty {
+                    yearToDateCard
+                    Divider()
+                }
+                ForEach(periods.indices, id: \.self) { index in
+                    let period = periods[index]
+                    let periodBreakdown = breakdown(for: period)
+                    let periodWages = wages(for: period)
+                    NavigationLink(value: period) {
+                        PeriodRow(
+                            period: period,
+                            isCurrent: index == 0,
+                            loggedCents: periodBreakdown.netTotalCents + (periodWages?.totalCents ?? 0),
+                            loggedCreditCents: periodBreakdown.creditCents,
+                            tipsNetCents: periodBreakdown.netTotalCents,
+                            payDate: calculator.payDate(for: period),
+                            paycheck: paycheck(for: period)
+                        )
+                    }
+                    .buttonStyle(PressableButtonStyle())
+                    if index < periods.count - 1 {
                         Divider()
                     }
-                    ForEach(periods.indices, id: \.self) { index in
-                        let period = periods[index]
-                        let periodBreakdown = breakdown(for: period)
-                        let periodWages = wages(for: period)
-                        NavigationLink(value: period) {
-                            PeriodRow(
-                                period: period,
-                                isCurrent: index == 0,
-                                loggedCents: periodBreakdown.netTotalCents + (periodWages?.totalCents ?? 0),
-                                loggedCreditCents: periodBreakdown.creditCents,
-                                tipsNetCents: periodBreakdown.netTotalCents,
-                                payDate: calculator.payDate(for: period),
-                                paycheck: paycheck(for: period)
-                            )
-                        }
-                        .buttonStyle(PressableButtonStyle())
-                        if index < periods.count - 1 {
-                            Divider()
-                        }
-                    }
-                }
-                .padding(.horizontal, PaydaySpacing.p16)
-                .padding(.top, PaydaySpacing.p8)
-            }
-            .contentMargins(.bottom, 88, for: .scrollContent)
-            .background(PaydayColor.background)
-            .navigationTitle("Periods")
-            .toolbar {
-                ToolbarItem(placement: .primaryAction) {
-                    // The CSV itself is only built and written to disk when
-                    // the share sheet actually asks for the file's data
-                    // (inside CSVExport's FileRepresentation closure) —
-                    // never on a plain render of this toolbar item.
-                    ShareLink(
-                        item: CSVExport(entries: allEntries, paycheckRecords: paycheckRecords, calculator: calculator),
-                        preview: SharePreview("Payday-Export.csv")
-                    ) {
-                        Image(systemName: "square.and.arrow.up")
-                    }
                 }
             }
-            #if DEBUG
-            .onAppear {
-                if ProcessInfo.processInfo.arguments.contains("-OpenPeriodWithPaycheck"), path.isEmpty,
-                   let periodWithPaycheck = periods.first(where: { paycheck(for: $0) != nil }) {
-                    path.append(periodWithPaycheck)
+            .padding(.horizontal, PaydaySpacing.p16)
+            .padding(.top, PaydaySpacing.p8)
+        }
+        .contentMargins(.bottom, 88, for: .scrollContent)
+        .background(PaydayColor.background)
+        .navigationTitle("History")
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                // The CSV itself is only built and written to disk when
+                // the share sheet actually asks for the file's data
+                // (inside CSVExport's FileRepresentation closure) —
+                // never on a plain render of this toolbar item.
+                ShareLink(
+                    item: CSVExport(entries: allEntries, paycheckRecords: paycheckRecords, calculator: calculator),
+                    preview: SharePreview("Payday-Export.csv")
+                ) {
+                    Image(systemName: "square.and.arrow.up")
                 }
             }
-            #endif
-            .onAppear { consumePendingCurrentPeriodDetail() }
-            .onChange(of: tabRouter.pendingCurrentPeriodDetail) { _, _ in consumePendingCurrentPeriodDetail() }
-            .navigationDestination(for: PayPeriod.self) { period in
-                PeriodDetailView(period: period)
+        }
+        #if DEBUG
+        .onAppear {
+            if ProcessInfo.processInfo.arguments.contains("-OpenPeriodWithPaycheck"), path.isEmpty,
+               let periodWithPaycheck = periods.first(where: { paycheck(for: $0) != nil }) {
+                path.append(periodWithPaycheck)
             }
+        }
+        #endif
+        .onAppear { consumePendingCurrentPeriodDetail() }
+        .onChange(of: tabRouter.pendingCurrentPeriodDetail) { _, _ in consumePendingCurrentPeriodDetail() }
+        .navigationDestination(for: PayPeriod.self) { period in
+            PeriodDetailView(period: period)
         }
     }
 
