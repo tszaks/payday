@@ -61,6 +61,26 @@ struct PeriodDetailView: View {
         nightsInPeriod.reduce(0) { $0 + $1.cents }
     }
 
+    /// Chart-only: nightsInPeriod with each day's base-rate wages folded in
+    /// (never OT — that's a weekly figure, unattributable to one day), so
+    /// the bars agree with the tiles and shift rows on screen. tipsNetCents/
+    /// heroTotalCents above deliberately keep reading the tips-only
+    /// nightsInPeriod — period wages (incl. OT) are already added in there
+    /// once, at the period level; folding wages in twice here too would
+    /// double-count them.
+    private var chartNightsInPeriod: [(date: Date, cents: Int)] {
+        guard let wageCentsPerHour = preferencesStore.baseHourlyWageCents else { return nightsInPeriod }
+        var wagesByDay: [Date: Int] = [:]
+        for shift in shiftDays {
+            let hours = ShiftDetails.resolve(from: shift.items).hoursWorked ?? 0
+            guard hours > 0 else { continue }
+            wagesByDay[shift.day, default: 0] += WageEstimate.cents(wageCentsPerHour: wageCentsPerHour, hours: hours) ?? 0
+        }
+        return nightsInPeriod.map { night in
+            (date: night.date, cents: night.cents + (wagesByDay[night.date] ?? 0))
+        }
+    }
+
     /// Base wage + overtime for this period's shifts — folds into the hero
     /// total and the true $/hr rate below, but StatsEngine/TipBreakdown/
     /// nightsInPeriod above never see it.
@@ -143,7 +163,7 @@ struct PeriodDetailView: View {
 
             if !nightsInPeriod.isEmpty {
                 Section {
-                    NightlyEarningsChart(nights: nightsInPeriod, period: period)
+                    NightlyEarningsChart(nights: chartNightsInPeriod, period: period)
                         .paydayCard()
                 }
                 .listRowInsets(EdgeInsets(top: 4, leading: PaydaySpacing.p16, bottom: 4, trailing: PaydaySpacing.p16))
@@ -238,7 +258,7 @@ struct PeriodDetailView: View {
             Button {
                 sheetTarget = .edit(anchor)
             } label: {
-                ShiftDayRow(day: group.day, period: period, dayHasMultipleShifts: dayHasMultiple, entries: group.items)
+                ShiftDayRow(day: group.day, period: period, dayHasMultipleShifts: dayHasMultiple, entries: group.items, wageCentsPerHour: preferencesStore.baseHourlyWageCents)
             }
             .buttonStyle(.plain)
             .swipeActions(edge: .trailing) {

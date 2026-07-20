@@ -662,7 +662,7 @@ struct DashboardView: View {
             Button {
                 sheetTarget = .edit(anchor)
             } label: {
-                ShiftDayRow(day: group.day, period: period, dayHasMultipleShifts: dayHasMultiple, entries: group.items)
+                ShiftDayRow(day: group.day, period: period, dayHasMultipleShifts: dayHasMultiple, entries: group.items, wageCentsPerHour: preferencesStore.baseHourlyWageCents)
                     .padding(.vertical, PaydaySpacing.p12)
                     .contentShape(Rectangle())
             }

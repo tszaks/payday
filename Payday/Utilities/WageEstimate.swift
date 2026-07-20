@@ -21,6 +21,15 @@ enum WageEstimate {
         shiftGroups.reduce(0) { $0 + (ShiftDetails.resolve(from: $1).hoursWorked ?? 0) }
     }
 
+    /// The LogTipSheet header total: cash + credit, net of tip-out, plus
+    /// this shift's base-rate wages (rate x hoursWorked — never OT, which
+    /// only exists weekly). The one place that math lives, so it's testable
+    /// independent of the view.
+    static func shiftTotalCents(cashCents: Int, creditCents: Int, tipOutCents: Int, wageCentsPerHour: Int?, hoursWorked: Double?) -> Int {
+        let wage = hoursWorked.flatMap { cents(wageCentsPerHour: wageCentsPerHour, hours: $0) } ?? 0
+        return cashCents + creditCents - tipOutCents + wage
+    }
+
     /// Compact hour label for inline captions ("41.5h"), quarter-hour
     /// precision matching LogTipSheet's own hours display, trailing zeros
     /// trimmed.

@@ -99,6 +99,15 @@ struct LogTipSheet: View {
         cashCents > 0 || creditCents > 0
     }
 
+    /// The header figure: cash + credit, net of tip-out, plus this shift's
+    /// base-rate wages — the same "total = cash + credit - tip-out + wages"
+    /// law every other shift/day surface in the app now follows. Live as
+    /// every field changes, same as the header always was. Math lives in
+    /// WageEstimate.shiftTotalCents so it's testable independent of this view.
+    private var shiftTotalCents: Int {
+        WageEstimate.shiftTotalCents(cashCents: cashCents, creditCents: creditCents, tipOutCents: tipOutCents, wageCentsPerHour: preferencesStore.baseHourlyWageCents, hoursWorked: hoursWorked)
+    }
+
     /// A server who's never once logged cash and has enough credit history
     /// to call it a pattern gets the credit field focused first instead of
     /// the usual cash-first default.
@@ -393,24 +402,24 @@ struct LogTipSheet: View {
                 Text("Shift total")
                     .font(PaydayFont.subheadline)
                     .foregroundStyle(PaydayColor.textSecondary)
-                Text(Money.string(fromCents: cashCents + creditCents))
+                Text(Money.string(fromCents: shiftTotalCents))
                     .font(PaydayFont.displayXL)
                     .monospacedDigit()
-                    .foregroundStyle(cashCents + creditCents == 0 ? PaydayColor.textSecondary : PaydayColor.textPrimary)
+                    .foregroundStyle(shiftTotalCents == 0 ? PaydayColor.textSecondary : PaydayColor.textPrimary)
                     .contentTransition(.numericText())
-                    .animation(PaydayAnimation.premiumSpring, value: cashCents + creditCents)
+                    .animation(PaydayAnimation.premiumSpring, value: shiftTotalCents)
                     .lineLimit(1)
                     .minimumScaleFactor(0.5)
-                // Live $/hr, computed as the fields change — and NET of any
-                // tip-out, by product ruling: a tip-out is recorded because
-                // it's an important fact, but it is never income. Not in
-                // your total, not in your hourly, not in anything that
-                // means you keep the money. Only appears once the shift has
-                // a length (times set, or legacy hours).
+                // Live $/hr, computed as the fields change, off the same
+                // all-in numerator as the total above (net of tip-out, plus
+                // wages) — a tip-out is recorded because it's an important
+                // fact, but it is never income; wages are income, so they
+                // belong in the rate same as they belong in the total.
+                // Only appears once the shift has a length (times set, or
+                // legacy hours).
                 if let hoursWorked, hoursWorked > 0 {
-                    let netCents = cashCents + creditCents - tipOutCents
-                    if netCents > 0 {
-                        let rateCentsPerHour = Int((Double(netCents) / hoursWorked).rounded())
+                    if shiftTotalCents > 0 {
+                        let rateCentsPerHour = Int((Double(shiftTotalCents) / hoursWorked).rounded())
                         Text(tipOutCents > 0
                              ? "\(Money.wholeDollarString(fromCents: rateCentsPerHour))/hr after tip-out"
                              : "\(Money.wholeDollarString(fromCents: rateCentsPerHour))/hr")

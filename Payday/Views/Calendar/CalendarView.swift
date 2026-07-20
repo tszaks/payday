@@ -33,10 +33,22 @@ struct CalendarView: View {
     // Net everywhere — every income number in the app is net of any logged
     // tip-out (see PRODUCT.md), and this grid used to be the one place still
     // summing gross amountCents, silently disagreeing with the Dashboard and
-    // Period detail totals for the same days.
+    // Period detail totals for the same days. Wages (base rate x each
+    // shift's canonical hours, never OT — that's a weekly figure) are added
+    // per day so the tiles and the heat normalization below both agree with
+    // the row/sheet totals for the same day.
     private var dailyTotals: [Date: Int] {
-        Dictionary(grouping: allEntries, by: { calendar.startOfDay(for: $0.date) })
+        let tipsByDay = Dictionary(grouping: allEntries, by: { calendar.startOfDay(for: $0.date) })
             .mapValues { entries in entries.reduce(0) { $0 + $1.netCents } }
+        guard let wageCentsPerHour = preferencesStore.baseHourlyWageCents else { return tipsByDay }
+        let shifts = ShiftDays.groupedByShift(allEntries, shiftID: \.shiftID, date: \.date, period: \.shiftPeriod, calendar: calendar)
+        var wagesByDay: [Date: Int] = [:]
+        for shift in shifts {
+            let hours = ShiftDetails.resolve(from: shift.items).hoursWorked ?? 0
+            guard hours > 0 else { continue }
+            wagesByDay[shift.day, default: 0] += WageEstimate.cents(wageCentsPerHour: wageCentsPerHour, hours: hours) ?? 0
+        }
+        return tipsByDay.merging(wagesByDay, uniquingKeysWith: +)
     }
 
     // Wage-inclusive, matching the Dashboard/Period-detail/Periods-list

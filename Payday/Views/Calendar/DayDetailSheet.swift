@@ -4,6 +4,7 @@ import SwiftData
 struct DayDetailSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
+    @Environment(UserPreferencesStore.self) private var preferencesStore
     @Query private var allEntries: [TipEntry]
 
     let date: Date
@@ -22,11 +23,18 @@ struct DayDetailSheet: View {
         ShiftDays.groupedByShift(dayEntries, shiftID: \.shiftID, date: \.date, period: \.shiftPeriod)
     }
 
-    /// Net — the income number, matching the hero total and every other
-    /// total in the app (fixes a gross-vs-net mismatch this sheet used to
-    /// have with the rest of the app).
+    /// This day's base-rate wages — each shift's canonical hours x rate,
+    /// summed; never OT, which only exists at the period level.
+    private var dayWageCents: Int {
+        let hours = WageEstimate.loggedHours(shiftGroups: shifts.map(\.items))
+        return WageEstimate.cents(wageCentsPerHour: preferencesStore.baseHourlyWageCents, hours: hours) ?? 0
+    }
+
+    /// Net tips plus wages — the income number, matching the hero total and
+    /// every other total in the app (fixes a gross-vs-net mismatch this
+    /// sheet used to have with the rest of the app).
     private var totalCents: Int {
-        TipBreakdown.total(of: dayEntries).netTotalCents
+        TipBreakdown.total(of: dayEntries).netTotalCents + dayWageCents
     }
 
     var body: some View {
@@ -97,7 +105,7 @@ struct DayDetailSheet: View {
             Button {
                 sheetTarget = .edit(anchor)
             } label: {
-                ShiftDayRow(day: group.day, period: period, dayHasMultipleShifts: shifts.count >= 2, entries: group.items)
+                ShiftDayRow(day: group.day, period: period, dayHasMultipleShifts: shifts.count >= 2, entries: group.items, wageCentsPerHour: preferencesStore.baseHourlyWageCents)
             }
             .buttonStyle(.plain)
             .swipeActions(edge: .trailing) {

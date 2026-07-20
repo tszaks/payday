@@ -63,3 +63,31 @@ struct WageEstimateLoggedHoursTests {
         #expect(WageEstimate.loggedHours(shiftGroups: []) == 0)
     }
 }
+
+@Suite("WageEstimate shiftTotalCents")
+struct WageEstimateShiftTotalCentsTests {
+    @Test("cash + credit, net of tip-out, plus base-rate wages for the hours logged")
+    func cashCreditTipOutAndWages() {
+        // Credit 38400, tip-out 6408, 6 hours at $2.83/hr -> 1698 cents wages.
+        let cents = WageEstimate.shiftTotalCents(cashCents: 0, creditCents: 38400, tipOutCents: 6408, wageCentsPerHour: 283, hoursWorked: 6)
+        #expect(cents == 38400 - 6408 + 1698)
+    }
+
+    @Test("no hours logged yet: no wages, total is just cash + credit net of tip-out")
+    func noHoursNoWages() {
+        let cents = WageEstimate.shiftTotalCents(cashCents: 10000, creditCents: 5000, tipOutCents: 2000, wageCentsPerHour: 2000, hoursWorked: nil)
+        #expect(cents == 13000)
+    }
+
+    @Test("nil wage rate degrades to today's tips-only math exactly")
+    func nilRateDegradesToTipsOnly() {
+        let cents = WageEstimate.shiftTotalCents(cashCents: 10000, creditCents: 5000, tipOutCents: 2000, wageCentsPerHour: nil, hoursWorked: 6)
+        #expect(cents == 13000)
+    }
+
+    @Test("zero tip-out and zero wage rate: total is just the gross")
+    func noTipOutNoWage() {
+        let cents = WageEstimate.shiftTotalCents(cashCents: 10000, creditCents: 5000, tipOutCents: 0, wageCentsPerHour: nil, hoursWorked: nil)
+        #expect(cents == 15000)
+    }
+}
