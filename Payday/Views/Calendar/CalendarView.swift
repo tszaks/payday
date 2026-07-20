@@ -272,6 +272,10 @@ struct CalendarView: View {
         }
     }
 
+    /// A sparkline, not a bar chart: fixed hairline-thin bars so the shape
+    /// reads quietly rather than blobby capsules competing with the grid
+    /// above. Zero-total weekdays get no fill at all — just the baseline
+    /// track — instead of a faint capsule pretending to be a bar.
     private var weekdayBars: some View {
         let totals = orderedWeekdayTotals
         let maxTotal = max(totals.max() ?? 0, 1)
@@ -279,12 +283,20 @@ struct CalendarView: View {
             ForEach(Array(zip(orderedWeekdaySymbols, totals).enumerated()), id: \.offset) { _, pair in
                 let (symbol, cents) = pair
                 VStack(spacing: 4) {
-                    Capsule()
-                        .fill(PaydayColor.primary.opacity(cents > 0 ? 1 : 0.15))
-                        .frame(height: max(4, 28 * Double(max(0, cents)) / Double(maxTotal)))
+                    ZStack(alignment: .bottom) {
+                        Rectangle()
+                            .fill(PaydayColor.textTertiary.opacity(0.15))
+                            .frame(width: 4, height: 1)
+                        if cents > 0 {
+                            RoundedRectangle(cornerRadius: 1)
+                                .fill(PaydayColor.primary)
+                                .frame(width: 4, height: max(2, 28 * Double(cents) / Double(maxTotal)))
+                        }
+                    }
+                    .frame(height: 28, alignment: .bottom)
                     Text(symbol)
                         .font(PaydayFont.caption3)
-                        .foregroundStyle(PaydayColor.textSecondary)
+                        .foregroundStyle(PaydayColor.textTertiary)
                 }
                 .frame(maxWidth: .infinity)
             }
