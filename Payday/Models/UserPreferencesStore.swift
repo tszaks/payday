@@ -29,10 +29,19 @@ final class UserPreferencesStore {
     private static let appearanceKey = "com.szakacsmedia.payday.appearance"
     private static let faceIDLockKey = "com.szakacsmedia.payday.faceIDLock"
     private static let smartNudgeKey = "com.szakacsmedia.payday.smartNudge"
+    private static let baseHourlyWageCentsKey = "com.szakacsmedia.payday.baseHourlyWageCents"
     private let defaults: UserDefaults
 
     var firstName: String? {
         didSet { persistName() }
+    }
+
+    /// The tipped base wage, in cents — money is stored in cents everywhere
+    /// in this app, never Double dollars. Used ONLY to estimate the wages
+    /// line on a paycheck expectation; nil means the feature is off, and
+    /// this value is never counted as tip income anywhere.
+    var baseHourlyWageCents: Int? {
+        didSet { persistBaseHourlyWageCents() }
     }
 
     var appearance: AppAppearance {
@@ -60,6 +69,7 @@ final class UserPreferencesStore {
             .flatMap(AppAppearance.init(rawValue:)) ?? .system
         self.isFaceIDLockEnabled = defaults.bool(forKey: Self.faceIDLockKey)
         self.isSmartNudgeEnabled = defaults.object(forKey: Self.smartNudgeKey) == nil ? true : defaults.bool(forKey: Self.smartNudgeKey)
+        self.baseHourlyWageCents = defaults.object(forKey: Self.baseHourlyWageCentsKey) == nil ? nil : defaults.integer(forKey: Self.baseHourlyWageCentsKey)
     }
 
     private func persistName() {
@@ -72,5 +82,13 @@ final class UserPreferencesStore {
 
     private func persistAppearance() {
         defaults.set(appearance.rawValue, forKey: Self.appearanceKey)
+    }
+
+    private func persistBaseHourlyWageCents() {
+        if let baseHourlyWageCents {
+            defaults.set(baseHourlyWageCents, forKey: Self.baseHourlyWageCentsKey)
+        } else {
+            defaults.removeObject(forKey: Self.baseHourlyWageCentsKey)
+        }
     }
 }

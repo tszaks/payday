@@ -4,6 +4,8 @@ import SwiftData
 struct PaycheckEntrySheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
+    @Environment(UserPreferencesStore.self) private var preferencesStore
+    @Query private var allEntries: [TipEntry]
 
     let period: PayPeriod
     let existing: PaycheckRecord?
@@ -19,10 +21,28 @@ struct PaycheckEntrySheet: View {
         _note = State(initialValue: existing?.note ?? "")
     }
 
+    /// Hours logged for this period, for the wages footnote only — never fed
+    /// into the tips amount this sheet records.
+    private var loggedHours: Double {
+        let periodEntries = allEntries.filter { $0.date >= period.start && $0.date <= period.end }
+        let shiftGroups = ShiftDays.groupedByShift(periodEntries, shiftID: \.shiftID, date: \.date, period: \.shiftPeriod).map(\.items)
+        return WageEstimate.loggedHours(shiftGroups: shiftGroups)
+    }
+
+    private var explainerText: String {
+        let base = "Enter the tips amount from the pay stub — not the check total."
+        guard let wageEstimateCents = WageEstimate.cents(wageCentsPerHour: preferencesStore.baseHourlyWageCents, hours: loggedHours) else {
+            return base
+        }
+        let wages = Money.wholeDollarString(fromCents: wageEstimateCents)
+        let hours = WageEstimate.hoursLabel(loggedHours)
+        return "\(base) Your stub should also show about \(wages) in wages for \(hours); don't include that here."
+    }
+
     var body: some View {
         NavigationStack {
             VStack(spacing: 24) {
-                Text("Enter the tips amount from the pay stub — not the check total.")
+                Text(explainerText)
                     .font(PaydayFont.footnote)
                     .foregroundStyle(PaydayColor.textSecondary)
                     .multilineTextAlignment(.center)
