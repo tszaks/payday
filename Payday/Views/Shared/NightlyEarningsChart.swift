@@ -70,7 +70,10 @@ struct NightlyEarningsChart: View {
             .chartXScale(domain: xDomain)
             .chartXAxis {
                 AxisMarks(values: .stride(by: .day)) {
-                    AxisValueLabel(format: .dateTime.weekday(.narrow))
+                    // centered: true aligns each letter under the middle of
+                    // its day band — bars are band-centered, so without this
+                    // every label sits a half-step left of its bar.
+                    AxisValueLabel(format: .dateTime.weekday(.narrow), centered: true)
                         .font(PaydayFont.caption3)
                         .foregroundStyle(PaydayColor.textTertiary)
                 }
