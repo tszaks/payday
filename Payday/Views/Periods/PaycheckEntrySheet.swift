@@ -41,45 +41,47 @@ struct PaycheckEntrySheet: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 24) {
-                Text(explainerText)
-                    .font(PaydayFont.footnote)
-                    .foregroundStyle(PaydayColor.textSecondary)
-                    .multilineTextAlignment(.center)
+            ScrollView {
+                VStack(spacing: 24) {
+                    Text(explainerText)
+                        .font(PaydayFont.footnote)
+                        .foregroundStyle(PaydayColor.textSecondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal)
+
+                    CurrencyAmountField(cents: $amountCents)
+                        .padding(.top, 8)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Note")
+                            .font(PaydayFont.caption)
+                            .foregroundStyle(PaydayColor.textSecondary)
+                        TextField("Optional", text: $note, axis: .vertical)
+                            .lineLimit(2...6)
+                    }
+                    .padding()
+                    .background(PaydayColor.fieldBackground)
+                    .clipShape(RoundedRectangle(cornerRadius: PaydayRadius.lg))
                     .padding(.horizontal)
 
-                CurrencyAmountField(cents: $amountCents)
-                    .padding(.top, 8)
+                    if existing != nil {
+                        Button(role: .destructive) { showDeleteConfirmation = true } label: {
+                            Text("Remove Paycheck")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.glassProminent)
+                        .tint(PaydayColor.error)
+                        .padding(.horizontal)
+                        .padding(.top, 4)
+                        .confirmationDialog("Remove this paycheck?", isPresented: $showDeleteConfirmation, titleVisibility: .visible) {
+                            Button("Remove Paycheck", role: .destructive) { delete() }
+                        }
+                    }
 
-                HStack {
-                    Text("Note")
-                        .foregroundStyle(PaydayColor.textPrimary)
                     Spacer()
-                    TextField("Optional", text: $note)
-                        .multilineTextAlignment(.trailing)
                 }
-                .padding()
-                .background(PaydayColor.fieldBackground)
-                .clipShape(RoundedRectangle(cornerRadius: PaydayRadius.lg))
-                .padding(.horizontal)
-
-                if existing != nil {
-                    Button(role: .destructive) { showDeleteConfirmation = true } label: {
-                        Text("Remove Paycheck")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.glassProminent)
-                    .tint(PaydayColor.error)
-                    .padding(.horizontal)
-                    .padding(.top, 4)
-                    .confirmationDialog("Remove this paycheck?", isPresented: $showDeleteConfirmation, titleVisibility: .visible) {
-                        Button("Remove Paycheck", role: .destructive) { delete() }
-                    }
-                }
-
-                Spacer()
+                .padding(.top, 16)
             }
-            .padding(.top, 16)
             .background(PaydayColor.background)
             .navigationTitle("Paycheck")
             .navigationBarTitleDisplayMode(.inline)
@@ -94,7 +96,7 @@ struct PaycheckEntrySheet: View {
                 }
             }
         }
-        .presentationDetents([.medium])
+        .presentationDetents([.medium, .large])
         .presentationBackground(PaydayColor.background)
     }
 
