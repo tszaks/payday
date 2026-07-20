@@ -136,9 +136,9 @@ struct PeriodDetailView: View {
         guard let wageEstimateCents else {
             return "Payday \(verb) \(predicted) around \(dateText). Enter the tips line from your stub to check it."
         }
-        let wages = Money.wholeDollarString(fromCents: wageEstimateCents)
+        let wages = Money.string(fromCents: wageEstimateCents)
         let hours = WageEstimate.hoursLabel(loggedHours)
-        return "Payday \(verb) \(predicted) in card tips around \(dateText), plus about \(wages) in wages for the \(hours) you logged (before taxes). Enter the tips line from your stub to check it."
+        return "Payday \(verb) \(predicted) in card tips around \(dateText), plus \(wages) in wages for the \(hours) you logged (before taxes). Enter the tips line from your stub to check it."
     }
 
     private var paycheck: PaycheckRecord? {

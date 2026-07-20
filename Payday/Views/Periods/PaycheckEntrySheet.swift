@@ -34,9 +34,9 @@ struct PaycheckEntrySheet: View {
         guard let wageEstimateCents = WageEstimate.cents(wageCentsPerHour: preferencesStore.baseHourlyWageCents, hours: loggedHours) else {
             return base
         }
-        let wages = Money.wholeDollarString(fromCents: wageEstimateCents)
+        let wages = Money.string(fromCents: wageEstimateCents)
         let hours = WageEstimate.hoursLabel(loggedHours)
-        return "\(base) Your stub should also show about \(wages) in wages for \(hours); don't include that here."
+        return "\(base) Your stub should also show \(wages) in wages for \(hours); don't include that here."
     }
 
     var body: some View {

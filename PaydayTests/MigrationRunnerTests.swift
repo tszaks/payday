@@ -9,6 +9,12 @@ private func day(_ year: Int, _ month: Int, _ d: Int) -> Date {
     return calendar.date(from: DateComponents(year: year, month: month, day: d))!
 }
 
+private func time(_ year: Int, _ month: Int, _ d: Int, _ hour: Int, _ minute: Int) -> Date {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone.current
+    return calendar.date(from: DateComponents(year: year, month: month, day: d, hour: hour, minute: minute))!
+}
+
 @MainActor
 private func makeContext() throws -> ModelContext {
     let config = ModelConfiguration(isStoredInMemoryOnly: true)
@@ -67,5 +73,77 @@ struct MigrationRunnerTests {
 
         let all = try context.fetch(FetchDescriptor<TipEntry>())
         #expect(all.allSatisfy { $0.shiftID == existing })
+    }
+}
+
+@Suite("Migration: exact-hours recompute")
+@MainActor
+struct MigrationRunnerExactHoursTests {
+    @Test("a punch-backed shift stored with legacy quarter-rounded hours gets recomputed exactly")
+    func recomputesPunchBackedShift() throws {
+        let context = try makeContext()
+        // Legacy row: 10:04 AM-4:27 PM (383 minutes) was stored quarter-rounded
+        // to 6.5h before this rule existed; recompute should land on 6.3833...h.
+        let entry = TipEntry(
+            date: day(2026, 7, 1), amountCents: 5000, kind: .credit,
+            hoursWorked: 6.5,
+            clockIn: time(2026, 7, 1, 10, 4), clockOut: time(2026, 7, 1, 16, 27)
+        )
+        context.insert(entry)
+        try context.save()
+
+        MigrationRunner.recomputeExactHours(in: context)
+
+        let all = try context.fetch(FetchDescriptor<TipEntry>())
+        #expect(abs((all.first?.hoursWorked ?? 0) - 383.0 / 60.0) < 0.0001)
+    }
+
+    @Test("manual hours with no punches are left exactly as entered")
+    func manualHoursUntouched() throws {
+        let context = try makeContext()
+        let entry = TipEntry(date: day(2026, 7, 1), amountCents: 5000, kind: .credit, hoursWorked: 6.5)
+        context.insert(entry)
+        try context.save()
+
+        MigrationRunner.recomputeExactHours(in: context)
+
+        let all = try context.fetch(FetchDescriptor<TipEntry>())
+        #expect(all.first?.hoursWorked == 6.5)
+    }
+
+    @Test("recompute is idempotent across repeated runs")
+    func idempotent() throws {
+        let context = try makeContext()
+        let entry = TipEntry(
+            date: day(2026, 7, 1), amountCents: 5000, kind: .credit,
+            hoursWorked: 6.5,
+            clockIn: time(2026, 7, 1, 10, 4), clockOut: time(2026, 7, 1, 16, 27)
+        )
+        context.insert(entry)
+        try context.save()
+
+        MigrationRunner.recomputeExactHours(in: context)
+        let firstRun = try context.fetch(FetchDescriptor<TipEntry>()).first?.hoursWorked
+        MigrationRunner.recomputeExactHours(in: context)
+        let secondRun = try context.fetch(FetchDescriptor<TipEntry>()).first?.hoursWorked
+        #expect(firstRun == secondRun)
+    }
+
+    @Test("an overnight punch still wraps and recomputes correctly")
+    func overnightPunch() throws {
+        let context = try makeContext()
+        // 10:00 PM-2:13 AM wraps across midnight: 253 minutes = 4.2166...h.
+        let entry = TipEntry(
+            date: day(2026, 7, 1), amountCents: 5000, kind: .credit,
+            hoursWorked: 4.25,
+            clockIn: time(2026, 7, 1, 22, 0), clockOut: time(2026, 7, 1, 2, 13)
+        )
+        context.insert(entry)
+        try context.save()
+
+        MigrationRunner.recomputeExactHours(in: context)
+
+        let all = try context.fetch(FetchDescriptor<TipEntry>())
+        #expect(abs((all.first?.hoursWorked ?? 0) - 253.0 / 60.0) < 0.0001)
     }
 }

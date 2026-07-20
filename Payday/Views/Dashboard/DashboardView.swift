@@ -577,7 +577,7 @@ struct DashboardView: View {
                     .font(PaydayFont.caption2)
                     .foregroundStyle(PaydayColor.textSecondary)
                 if let wageCents = WageEstimate.cents(wageCentsPerHour: preferencesStore.baseHourlyWageCents, hours: facts.paydayLoggedHours) {
-                    Text("Plus about \(Money.wholeDollarString(fromCents: wageCents)) in wages for \(WageEstimate.hoursLabel(facts.paydayLoggedHours)) (before taxes).")
+                    Text("Plus \(Money.string(fromCents: wageCents)) in wages for \(WageEstimate.hoursLabel(facts.paydayLoggedHours)) (before taxes).")
                         .font(PaydayFont.caption2)
                         .foregroundStyle(PaydayColor.textSecondary)
                 }

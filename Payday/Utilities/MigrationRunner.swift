@@ -38,4 +38,28 @@ enum MigrationRunner {
         }
         try? context.save()
     }
+
+    /// Recomputes hoursWorked from clockIn/clockOut using ShiftTimes' exact,
+    /// never-quarter-rounded rule (Tyler's law: every minute, every penny).
+    /// Only rows that actually carry BOTH punches are touched — those are
+    /// always a shift's one canonical ShiftDetails entry (clockIn/clockOut/
+    /// hoursWorked all live together there), never split across rows, so no
+    /// shift-grouping is needed here. A shift with no punches — manual
+    /// hours, entered some other way — is left exactly as entered.
+    /// Naturally idempotent: recomputing the same punches always yields the
+    /// same answer, so this is safe to run on every launch with no separate
+    /// "already migrated" flag.
+    static func recomputeExactHours(in context: ModelContext, calendar: Calendar = .current) {
+        let descriptor = FetchDescriptor<TipEntry>(
+            predicate: #Predicate { $0.clockIn != nil && $0.clockOut != nil }
+        )
+        guard let punchBacked = try? context.fetch(descriptor), !punchBacked.isEmpty else { return }
+        for entry in punchBacked {
+            guard let exact = ShiftTimes.hours(clockIn: entry.clockIn, clockOut: entry.clockOut, calendar: calendar) else { continue }
+            if entry.hoursWorked != exact {
+                entry.hoursWorked = exact
+            }
+        }
+        try? context.save()
+    }
 }

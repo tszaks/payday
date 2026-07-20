@@ -524,12 +524,12 @@ struct LogTipSheet: View {
                     // can't be attributed to a single shift, so this caption
                     // never claims OT.
                     if let wageCents = WageEstimate.cents(wageCentsPerHour: preferencesStore.baseHourlyWageCents, hours: hoursWorked) {
-                        Text("That's \(Self.hoursLabel(hoursWorked)). About \(Money.string(fromCents: wageCents)) in wages.")
+                        Text("That's \(WageEstimate.hoursLabel(hoursWorked)). \(Money.string(fromCents: wageCents)) in wages.")
                             .font(PaydayFont.caption)
                             .foregroundStyle(PaydayColor.textSecondary)
                             .padding(.top, 8)
                     } else {
-                        Text("That's \(Self.hoursLabel(hoursWorked)).")
+                        Text("That's \(WageEstimate.hoursLabel(hoursWorked)).")
                             .font(PaydayFont.caption)
                             .foregroundStyle(PaydayColor.textSecondary)
                             .padding(.top, 8)
@@ -653,16 +653,6 @@ struct LogTipSheet: View {
         #else
         false
         #endif
-    }
-
-    private static func hoursLabel(_ hours: Double) -> String {
-        // Quarter-hour precision, matching what ShiftTimes computes from the
-        // Started/Ended pair — a 9:30-5:15 shift must caption as 7.75, not
-        // round itself up to 8 while the times right above say otherwise.
-        var formatted = String(format: "%.2f", (hours * 4).rounded() / 4)
-        while formatted.hasSuffix("0") { formatted.removeLast() }
-        if formatted.hasSuffix(".") { formatted.removeLast() }
-        return "\(formatted) hrs"
     }
 
     private func card<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
