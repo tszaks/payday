@@ -4,6 +4,7 @@ import SwiftData
 struct PeriodDetailView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(PayScheduleStore.self) private var scheduleStore
+    @Environment(UserPreferencesStore.self) private var preferencesStore
     @Query private var allEntries: [TipEntry]
     @Query private var paycheckRecords: [PaycheckRecord]
 
@@ -75,11 +76,27 @@ struct PeriodDetailView: View {
         breakdown.creditCents > 0 ? breakdown.creditCents : breakdown.grossTotalCents
     }
 
+    /// Logged hours for this period's shifts, for the wages estimate below —
+    /// tip analytics (breakdown, netCents, averageDollarsPerHour) never touch
+    /// this; it exists only to feed WageEstimate.
+    private var loggedHours: Double {
+        WageEstimate.loggedHours(shiftGroups: shiftDays.map(\.items))
+    }
+
+    private var wageEstimateCents: Int? {
+        WageEstimate.cents(wageCentsPerHour: preferencesStore.baseHourlyWageCents, hours: loggedHours)
+    }
+
     private var noPaycheckCaption: String {
         let predicted = Money.string(fromCents: predictedPaycheckCents)
         let dateText = payDate.formatted(.dateTime.month(.abbreviated).day())
         let verb = isPayDateUpcoming ? "expects" : "expected"
-        return "Payday \(verb) \(predicted) around \(dateText). Enter the tips line from your stub to check it."
+        guard let wageEstimateCents else {
+            return "Payday \(verb) \(predicted) around \(dateText). Enter the tips line from your stub to check it."
+        }
+        let wages = Money.wholeDollarString(fromCents: wageEstimateCents)
+        let hours = WageEstimate.hoursLabel(loggedHours)
+        return "Payday \(verb) \(predicted) in card tips around \(dateText), plus about \(wages) in wages for the \(hours) you logged (before taxes). Enter the tips line from your stub to check it."
     }
 
     private var paycheck: PaycheckRecord? {

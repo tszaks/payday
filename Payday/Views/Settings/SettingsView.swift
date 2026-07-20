@@ -18,8 +18,10 @@ struct SettingsView: View {
     @State private var mostRecentPayday: Date
     @State private var periodEndDate: Date
     @State private var firstWeekday: Int
+    @State private var wageDigitsText: String = ""
 
     private let weekdaySymbols = Calendar.current.weekdaySymbols // [Sunday…Saturday]
+    private static let maxWageDigits = 4 // caps at $99.99/hr
 
     init(schedule: PaySchedule) {
         _frequency = State(initialValue: schedule.frequency)
@@ -90,10 +92,35 @@ struct SettingsView: View {
                             .font(PaydayFont.footnote)
                             .foregroundStyle(PaydayColor.textSecondary)
                     }
+                    captionedRow("Your base pay before tips (tipped minimum is a few dollars an hour in many states). Payday uses it only to estimate the wages line on your paycheck.") {
+                        HStack {
+                            Text("Hourly wage")
+                                .foregroundStyle(PaydayColor.textPrimary)
+                            Spacer()
+                            ZStack(alignment: .trailing) {
+                                Text(preferencesStore.baseHourlyWageCents.map { Money.string(fromCents: $0) } ?? "$0.00")
+                                    .foregroundStyle(preferencesStore.baseHourlyWageCents == nil ? PaydayColor.textSecondary : PaydayColor.textPrimary)
+                                    .monospacedDigit()
+                                    .accessibilityHidden(true)
+                                TextField("", text: $wageDigitsText)
+                                    .keyboardType(.numberPad)
+                                    .multilineTextAlignment(.trailing)
+                                    .opacity(0.01)
+                                    .frame(maxWidth: 90)
+                                    .accessibilityLabel("Hourly wage")
+                                    .accessibilityValue(preferencesStore.baseHourlyWageCents.map { Money.string(fromCents: $0) } ?? "Not set")
+                            }
+                        }
+                    }
                 }
                 .listRowBackground(PaydayColor.fieldBackground)
                 .onChange(of: mostRecentPayday) { _, newValue in
                     if periodEndDate > newValue { periodEndDate = newValue }
+                }
+                .onChange(of: wageDigitsText) { _, newValue in
+                    let filtered = String(newValue.filter(\.isNumber).prefix(Self.maxWageDigits))
+                    if filtered != newValue { wageDigitsText = filtered }
+                    preferencesStore.baseHourlyWageCents = filtered.isEmpty ? nil : Int(filtered)
                 }
 
                 Section("Calendar") {
@@ -159,6 +186,7 @@ struct SettingsView: View {
                 appearance = preferencesStore.appearance
                 isFaceIDLockEnabled = preferencesStore.isFaceIDLockEnabled
                 isSmartNudgeEnabled = preferencesStore.isSmartNudgeEnabled
+                wageDigitsText = preferencesStore.baseHourlyWageCents.map(String.init) ?? ""
             }
         }
         .presentationBackground(PaydayColor.background)

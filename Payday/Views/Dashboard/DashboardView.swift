@@ -50,6 +50,9 @@ private struct DashboardFacts {
     let isBestPeriodEver: Bool
     let predictedPaycheckCents: Int
     let predictedPayDate: Date
+    /// Hours logged in the payday-moment period, for the wages estimate
+    /// caption only — tip analytics elsewhere in these facts never touch it.
+    let paydayLoggedHours: Double
     let tonightLine: String?
 
     init(allEntries: [TipEntry], schedule: PaySchedule?, now: Date, forcePaydayMoment: Bool, dismissedPaydayEnd: Date?) {
@@ -108,6 +111,8 @@ private struct DashboardFacts {
             // PaycheckComparisonView — a stub reports gross, not net income.
             predictedPaycheckCents = payBreakdown.creditCents > 0 ? payBreakdown.creditCents : payBreakdown.grossTotalCents
             predictedPayDate = calculator.payDate(for: pay)
+            let payShiftGroups = ShiftDays.groupedByShift(payEntries, shiftID: \.shiftID, date: \.date, period: \.shiftPeriod).map(\.items)
+            paydayLoggedHours = WageEstimate.loggedHours(shiftGroups: payShiftGroups)
 
             // Only claims "best period yet" when there's at least one completed
             // period in history to actually beat.
@@ -157,6 +162,7 @@ private struct DashboardFacts {
             isBestPeriodEver = false
             predictedPaycheckCents = breakdown.creditCents > 0 ? breakdown.creditCents : breakdown.grossTotalCents
             predictedPayDate = calculator.payDate(for: period)
+            paydayLoggedHours = 0
             heroPeriod = period
             heroLabel = "This pay period"
             heroTotalCents = totalCents
@@ -541,6 +547,11 @@ struct DashboardView: View {
                 Text("Expect it around \(facts.predictedPayDate.formatted(.dateTime.month(.abbreviated).day()))")
                     .font(PaydayFont.caption2)
                     .foregroundStyle(PaydayColor.textSecondary)
+                if let wageCents = WageEstimate.cents(wageCentsPerHour: preferencesStore.baseHourlyWageCents, hours: facts.paydayLoggedHours) {
+                    Text("Plus about \(Money.wholeDollarString(fromCents: wageCents)) in wages for \(WageEstimate.hoursLabel(facts.paydayLoggedHours)) (before taxes).")
+                        .font(PaydayFont.caption2)
+                        .foregroundStyle(PaydayColor.textSecondary)
+                }
             }
             .popoverTip(paydayVerificationTip)
         }
