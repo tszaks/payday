@@ -92,6 +92,30 @@ struct WageEstimateShiftTotalCentsTests {
     }
 }
 
+@Suite("WageEstimate hoursLabel")
+struct WageEstimateHoursLabelTests {
+    @Test("exact minutes, never quarter-rounded — 383 minutes labels as 6h 23m")
+    func exactMinutesLabel() {
+        #expect(WageEstimate.hoursLabel(383.0 / 60.0) == "6h 23m")
+    }
+
+    @Test("whole hours omit the minutes part entirely")
+    func wholeHoursOmitMinutes() {
+        #expect(WageEstimate.hoursLabel(6.0) == "6h")
+    }
+
+    @Test("a half hour labels its minutes, not a decimal")
+    func halfHour() {
+        #expect(WageEstimate.hoursLabel(0.5) == "0h 30m")
+    }
+
+    @Test("rounds to the nearest minute for display")
+    func roundsToNearestMinute() {
+        // 250 minutes exactly = 4h 10m (4.1666...h), not 4h 9m or 4h 11m.
+        #expect(WageEstimate.hoursLabel(250.0 / 60.0) == "4h 10m")
+    }
+}
+
 @Suite("WageEstimate centsSummedPerShift")
 struct WageEstimateCentsSummedPerShiftTests {
     @Test("rounds EACH shift's wage individually, then sums — not the other way around")

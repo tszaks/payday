@@ -116,9 +116,8 @@ enum DebugSeeder {
         // holds hoursWorked — the canonical rule ShiftDetails enforces for
         // real logging, since only one record per shift ever carries these
         // shift-level facts. Lunch starts ~11:00, dinner starts ~17:00, and
-        // every clockOut below is picked so ShiftTimes' quarter-hour math
-        // reproduces the exact hoursWorked already in these fixtures — no
-        // rounding surprises.
+        // every clockOut below is picked so ShiftTimes' exact-minute math
+        // reproduces the hoursWorked already in these fixtures.
         func clockTime(hour: Int, minute: Int, on day: Date) -> Date {
             calendar.date(bySettingHour: hour, minute: minute, second: 0, of: day) ?? day
         }

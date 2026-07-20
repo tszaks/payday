@@ -246,10 +246,19 @@ into a defaulted non-optional.
   amounts. Delete/Duplicate/Undo act on whole shifts.
 - **Hours are computed, never counted (2026-07-16).** `clockIn`/`clockOut`
   on `TipEntry` (shift-level, via ShiftDetails); `ShiftTimes.hours` measures
-  the pair wrap-aware (overnight closeouts work) at quarter-hour precision
-  and writes `hoursWorked`, which stays the analytical source of truth for
-  $/hr. Started/Ended rows replaced the hours stepper; per-weekday time
-  suggestions replaced hour suggestions.
+  the pair wrap-aware (overnight closeouts work) and writes `hoursWorked`,
+  which stays the analytical source of truth for $/hr. Started/Ended rows
+  replaced the hours stepper; per-weekday time suggestions replaced hour
+  suggestions.
+- **Punches are literal; every minute, every penny (2026-07-19).**
+  `ShiftTimes.hours` dropped its quarter-hour rounding — a 10:04 AM-4:27 PM
+  punch is exactly 6.3833...h, not rounded to 6.5h, because wages compute
+  off this value and rounding it would round pay too. User-facing hour
+  labels show "6h 23m" (exact minutes, never a decimal), and wage captions
+  show exact cents with no "about" hedge — a punch is a fact, not an
+  estimate. A one-time launch migration recomputes hoursWorked for any
+  existing shift that has both punches stored; manual hours (no punches)
+  are left exactly as entered.
 - **A shift = one closeout, a day = a collection of shifts (2026-07-16).**
   Servers close out after each shift, so a "double" is not a toggle — it's
   simply two shifts logged the same day (a lunch closeout, then a dinner

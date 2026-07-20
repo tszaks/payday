@@ -20,9 +20,16 @@ struct ShiftTimesTests {
         #expect(ShiftTimes.hours(clockIn: time(17, 0), clockOut: time(1, 30)) == 8.5)
     }
 
-    @Test("minutes round to the nearest quarter hour")
-    func quarterHourRounding() {
-        #expect(ShiftTimes.hours(clockIn: time(10, 0), clockOut: time(14, 10)) == 4.25)
+    @Test("hours are exact to the minute, never rounded to the nearest quarter hour")
+    func exactMinutes() {
+        // 10:04 AM-4:27 PM = 383 minutes = 6.3833...h, period.
+        let hours = ShiftTimes.hours(clockIn: time(10, 4), clockOut: time(16, 27))
+        #expect(hours != nil)
+        #expect(abs(hours! - 383.0 / 60.0) < 0.0001)
+        // 10:00-14:10 is 250 minutes = 4.1666...h, not quarter-rounded to 4.25.
+        let notRounded = ShiftTimes.hours(clockIn: time(10, 0), clockOut: time(14, 10))
+        #expect(abs(notRounded! - 250.0 / 60.0) < 0.0001)
+        #expect(notRounded != 4.25)
     }
 
     @Test("equal clock-in and clock-out reads as not set, not a 24-hour shift")

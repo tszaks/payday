@@ -48,13 +48,15 @@ enum WageEstimate {
         }
     }
 
-    /// Compact hour label for inline captions ("41.5h"), quarter-hour
-    /// precision matching LogTipSheet's own hours display, trailing zeros
-    /// trimmed.
+    /// Exact hour label ("6h 23m") for every user-facing hours display —
+    /// the one shared implementation LogTipSheet and every wage caption in
+    /// the app reads, so a shift's length is never shown two different ways.
+    /// Minutes are omitted only when they're exactly zero ("6h"), never
+    /// rounded away otherwise: a punch is literal (Tyler's law).
     static func hoursLabel(_ hours: Double) -> String {
-        var formatted = String(format: "%.2f", (hours * 4).rounded() / 4)
-        while formatted.hasSuffix("0") { formatted.removeLast() }
-        if formatted.hasSuffix(".") { formatted.removeLast() }
-        return "\(formatted)h"
+        let totalMinutes = Int((hours * 60).rounded())
+        let wholeHours = totalMinutes / 60
+        let minutes = totalMinutes % 60
+        return minutes == 0 ? "\(wholeHours)h" : "\(wholeHours)h \(minutes)m"
     }
 }
