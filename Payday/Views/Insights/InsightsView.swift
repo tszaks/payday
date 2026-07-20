@@ -142,31 +142,54 @@ struct InsightsView: View {
                     Divider()
                 }
 
-                // Chart card — the one visual, and this screen's object: it
-                // keeps its card while everything else here goes flat. The
-                // chart owns its own label (it doubles as the scrub
-                // readout), so no separate header here.
-                NightlyEarningsChart(nights: recentNights)
-                    .paydayCard()
-
-                // Narrated sections, flattened to sections on the surface
-                // with a green uppercase kicker, separated by dividers.
-                ForEach(Array(sections(for: facts).enumerated()), id: \.element.id) { index, section in
-                    if index > 0 {
-                        Divider()
+                // THE NUMBERS — a flat, deterministic stat grid straight
+                // off InsightsFacts. On screen instantly; never waits on
+                // narration, and never conflicts with the totals law since
+                // every figure here is a per-shift average, a rate, or a
+                // share, not a total.
+                let numberRows = InsightsNumbersGrid.rows(for: facts)
+                if !numberRows.isEmpty {
+                    VStack(spacing: PaydaySpacing.p16) {
+                        ForEach(Array(numberRows.enumerated()), id: \.offset) { _, row in
+                            HStack(spacing: PaydaySpacing.p16) {
+                                ForEach(row) { tile in
+                                    statTile(tile)
+                                }
+                            }
+                        }
                     }
+                    Divider()
+                }
+
+                // WORTH KNOWING — narration, trimmed to anomaly
+                // explanations, caveats, or one synthesis (see
+                // InsightsService's prompt). Never restates the grid above.
+                // No fallback: when narration isn't available yet, this
+                // section simply doesn't render and the grid stands alone.
+                ForEach(worthKnowingSections) { section in
                     VStack(alignment: .leading, spacing: 6) {
-                        Text(section.title.uppercased())
+                        Text("WORTH KNOWING")
                             .font(PaydayFont.caption2)
                             .tracking(0.8)
                             .foregroundStyle(PaydayColor.primary)
+                        Text(section.title)
+                            .font(PaydayFont.headline)
+                            .foregroundStyle(PaydayColor.textPrimary)
                         Text(section.body)
                             .font(PaydayFont.bodyRegular)
                             .foregroundStyle(PaydayColor.textPrimary)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    Divider()
                 }
+
+                // Chart card — the one visual, and this screen's object: it
+                // keeps its card while everything else here goes flat. The
+                // chart owns its own label (it doubles as the scrub
+                // readout), so no separate header here.
+                NightlyEarningsChart(nights: recentNights)
+                    .paydayCard()
 
                 if isModelAvailable {
                     if isLoading {
@@ -210,16 +233,35 @@ struct InsightsView: View {
         .padding(.top, PaydaySpacing.p4)
     }
 
-    /// Whatever narration exists keeps showing — stale or not — rather
-    /// than falling back to the plain facts the moment new data arrives.
-    /// The plain facts are only ever a first-run fallback, before any
-    /// narration has been generated at all (or when narration isn't
-    /// configured).
-    private func sections(for facts: InsightsFacts) -> [InsightSection] {
-        if let snapshot = insightsStore.snapshot {
-            return snapshot.sections
+    /// Whatever narration exists keeps showing — stale or not — rather than
+    /// disappearing the moment new data arrives. Unlike THE NUMBERS grid
+    /// (always on, computed straight from facts), there is no fallback
+    /// here: before any narration has been generated, or when narration
+    /// isn't configured, this is simply empty and the grid stands alone.
+    private var worthKnowingSections: [InsightSection] {
+        insightsStore.snapshot?.sections ?? []
+    }
+
+    /// One tile in THE NUMBERS grid: a green uppercase label, a big
+    /// monospaced value, and a caption context line underneath.
+    private func statTile(_ tile: InsightsNumberTile) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(tile.label)
+                .font(PaydayFont.caption2)
+                .tracking(0.8)
+                .foregroundStyle(PaydayColor.primary)
+            Text(tile.value)
+                .font(PaydayFont.displayCompact)
+                .foregroundStyle(PaydayColor.textPrimary)
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            Text(tile.context)
+                .font(PaydayFont.caption2)
+                .foregroundStyle(PaydayColor.textSecondary)
+                .lineLimit(2)
         }
-        return InsightsFactsCopy.sections(for: facts)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var emptyState: some View {

@@ -99,15 +99,6 @@ struct CalendarView: View {
         return totals
     }
 
-    private var orderedWeekdayTotals: [Int] {
-        let totals = weekdayTotals
-        let start = calendar.firstWeekday
-        return (0..<7).map { offset in
-            let weekday = ((start - 1 + offset) % 7) + 1
-            return totals[weekday] ?? 0
-        }
-    }
-
     private var gridDays: [Date] {
         guard let monthInterval = calendar.dateInterval(of: .month, for: displayedMonth) else { return [] }
         let firstWeekday = calendar.component(.weekday, from: monthInterval.start)
