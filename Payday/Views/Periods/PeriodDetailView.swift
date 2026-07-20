@@ -16,6 +16,19 @@ struct PeriodDetailView: View {
         PayPeriodCalculator(schedule: scheduleStore.schedule ?? .fallback).payDate(for: period)
     }
 
+    private var isPayDateUpcoming: Bool {
+        Calendar.current.startOfDay(for: payDate) >= Calendar.current.startOfDay(for: Date())
+    }
+
+    /// Tense-honest: the money isn't there yet before payDate arrives, so
+    /// this can't say "Paid" until it actually is.
+    private var payDateText: String {
+        if isPayDateUpcoming {
+            return "Payday · \(payDate.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day()))"
+        }
+        return "Paid \(payDate.formatted(.dateTime.month(.abbreviated).day()))"
+    }
+
     private var entries: [TipEntry] {
         allEntries
             .filter { $0.date >= period.start && $0.date <= period.end }
@@ -52,6 +65,23 @@ struct PeriodDetailView: View {
         StatsEngine(records: entries.map(TipRecord.init)).averageDollarsPerHour()
     }
 
+    private var heroCaptionLine: String {
+        guard let averageDollarsPerHour else { return payDateText }
+        let rate = Money.wholeDollarString(fromCents: Int((averageDollarsPerHour * 100).rounded()))
+        return "Averaging \(rate)/hr · \(payDateText)"
+    }
+
+    private var predictedPaycheckCents: Int {
+        breakdown.creditCents > 0 ? breakdown.creditCents : breakdown.grossTotalCents
+    }
+
+    private var noPaycheckCaption: String {
+        let predicted = Money.string(fromCents: predictedPaycheckCents)
+        let dateText = payDate.formatted(.dateTime.month(.abbreviated).day())
+        let verb = isPayDateUpcoming ? "expects" : "expected"
+        return "Payday \(verb) \(predicted) around \(dateText). Enter the tips line from your stub to check it."
+    }
+
     private var paycheck: PaycheckRecord? {
         // Match by the paycheck's end date landing inside this period rather
         // than exact boundary equality, so paychecks re-home to the right
@@ -70,7 +100,7 @@ struct PeriodDetailView: View {
 
             if !nightsInPeriod.isEmpty {
                 Section {
-                    NightlyEarningsChart(nights: nightsInPeriod)
+                    NightlyEarningsChart(nights: nightsInPeriod, period: period)
                         .paydayCard()
                 }
                 .listRowInsets(EdgeInsets(top: 4, leading: PaydaySpacing.p16, bottom: 4, trailing: PaydaySpacing.p16))
@@ -92,17 +122,21 @@ struct PeriodDetailView: View {
                         Label("Enter paycheck amount", systemImage: "banknote")
                     }
                     .listRowBackground(PaydayColor.background)
+                    Text(noPaycheckCaption)
+                        .font(PaydayFont.caption)
+                        .foregroundStyle(PaydayColor.textSecondary)
+                        .listRowBackground(PaydayColor.background)
                 }
             }
 
             if shiftDays.isEmpty {
                 Section {
-                    Text("No entries in this period.")
+                    Text("No shifts in this period.")
                         .foregroundStyle(PaydayColor.textSecondary)
                 }
                 .listRowBackground(PaydayColor.background)
             } else {
-                Section("Entries") {
+                Section("Shifts") {
                     ForEach(shiftDays, id: \.shiftID) { group in
                         shiftRow(for: group)
                     }
@@ -113,7 +147,7 @@ struct PeriodDetailView: View {
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
         .background(PaydayColor.background)
-        .navigationTitle("Period")
+        .navigationTitle(periodTitle)
         .navigationBarTitleDisplayMode(.inline)
         .sheet(item: $sheetTarget) { target in
             LogTipSheet(target: target)
@@ -126,9 +160,6 @@ struct PeriodDetailView: View {
 
     private var heroCard: some View {
         VStack(spacing: 10) {
-            Text(dateRangeString)
-                .font(PaydayFont.subheadline)
-                .foregroundStyle(PaydayColor.textSecondary)
             Text(Money.string(fromCents: netCents))
                 .font(PaydayFont.displayXL)
                 .monospacedDigit()
@@ -141,14 +172,9 @@ struct PeriodDetailView: View {
             .font(PaydayFont.footnote)
             .monospacedDigit()
             .foregroundStyle(PaydayColor.textSecondary)
-            if let averageDollarsPerHour {
-                Text("Averaging \(Money.wholeDollarString(fromCents: Int((averageDollarsPerHour * 100).rounded())))/hr")
-                    .font(PaydayFont.caption)
-                    .monospacedDigit()
-                    .foregroundStyle(PaydayColor.textSecondary)
-            }
-            Text("Paid \(payDate.formatted(.dateTime.month(.wide).day()))")
+            Text(heroCaptionLine)
                 .font(PaydayFont.caption)
+                .monospacedDigit()
                 .foregroundStyle(PaydayColor.textSecondary)
         }
         .frame(maxWidth: .infinity)
@@ -177,8 +203,18 @@ struct PeriodDetailView: View {
         }
     }
 
-    private var dateRangeString: String {
-        "\(period.start.formatted(.dateTime.month(.wide).day())) – \(period.end.formatted(.dateTime.month(.wide).day().year()))"
+    /// The card used to carry its own date range as a caption; folding it
+    /// into the nav title instead frees that space for the payday/rate line.
+    /// The year only shows when the period crosses into one other than the
+    /// current one — most periods live entirely inside a single year.
+    private var periodTitle: String {
+        let currentYear = Calendar.current.component(.year, from: Date())
+        let endYear = Calendar.current.component(.year, from: period.end)
+        let start = period.start.formatted(.dateTime.month(.abbreviated).day())
+        if endYear != currentYear {
+            return "\(start) – \(period.end.formatted(.dateTime.month(.abbreviated).day().year()))"
+        }
+        return "\(start) – \(period.end.formatted(.dateTime.month(.abbreviated).day()))"
     }
 }
 
