@@ -30,6 +30,24 @@ enum WageEstimate {
         return cashCents + creditCents - tipOutCents + wage
     }
 
+    /// Sum of each shift's INDIVIDUALLY ROUNDED base-rate wage cents across a
+    /// set of shift groups — the one pattern every day/period wage-inclusive
+    /// surface (CalendarView tiles, PeriodDetailView's chart, DayDetailSheet's
+    /// day total) must use so it agrees with the sum of those same shifts'
+    /// own per-shift wage figures (ShiftDayRow, the sheet header). Rounding
+    /// once off the combined hours instead (loggedHours(...) then a single
+    /// cents(...) call) can land a cent off that sum — e.g. a 4.25h shift and
+    /// a 5.5h shift at $2.83/hr: round(283*4.25) + round(283*5.5) = 2760¢,
+    /// but round(283*9.75) = 2759¢.
+    static func centsSummedPerShift(shiftGroups: [[TipEntry]], wageCentsPerHour: Int?) -> Int {
+        guard let wageCentsPerHour else { return 0 }
+        return shiftGroups.reduce(0) { total, group in
+            let hours = ShiftDetails.resolve(from: group).hoursWorked ?? 0
+            guard hours > 0 else { return total }
+            return total + (cents(wageCentsPerHour: wageCentsPerHour, hours: hours) ?? 0)
+        }
+    }
+
     /// Compact hour label for inline captions ("41.5h"), quarter-hour
     /// precision matching LogTipSheet's own hours display, trailing zeros
     /// trimmed.
