@@ -25,6 +25,7 @@ private struct CSVExport: Transferable {
 struct PeriodsView: View {
     @Environment(PayScheduleStore.self) private var scheduleStore
     @Environment(TabRouter.self) private var tabRouter
+    @Environment(UserPreferencesStore.self) private var preferencesStore
     @Query private var allEntries: [TipEntry]
     @Query private var paycheckRecords: [PaycheckRecord]
 
@@ -57,6 +58,14 @@ struct PeriodsView: View {
         TipBreakdown.total(of: allEntries.filter { $0.date >= period.start && $0.date <= period.end })
     }
 
+    /// Base wage + overtime for a period's shifts, same definition of period
+    /// income the dashboard hero and period detail use — nil when no rate
+    /// is set.
+    private func wages(for period: PayPeriod) -> PeriodIncome.Wages? {
+        let periodEntries = allEntries.filter { $0.date >= period.start && $0.date <= period.end }
+        return PeriodIncome.wages(entries: periodEntries, wageCentsPerHour: preferencesStore.baseHourlyWageCents, firstWeekday: scheduleStore.schedule?.firstWeekday)
+    }
+
     private func paycheck(for period: PayPeriod) -> PaycheckRecord? {
         // Containment match (see PeriodDetailView) so paychecks survive a
         // schedule change instead of orphaning on exact-boundary equality.
@@ -83,11 +92,12 @@ struct PeriodsView: View {
                     ForEach(periods.indices, id: \.self) { index in
                         let period = periods[index]
                         let periodBreakdown = breakdown(for: period)
+                        let periodWages = wages(for: period)
                         NavigationLink(value: period) {
                             PeriodRow(
                                 period: period,
                                 isCurrent: index == 0,
-                                loggedCents: periodBreakdown.netTotalCents,
+                                loggedCents: periodBreakdown.netTotalCents + (periodWages?.totalCents ?? 0),
                                 loggedCreditCents: periodBreakdown.creditCents,
                                 payDate: calculator.payDate(for: period),
                                 paycheck: paycheck(for: period)

@@ -35,6 +35,10 @@ private struct DashboardFacts {
     let heroCreditCents: Int
     let heroPayDate: Date
     let heroIsCurrent: Bool
+    /// Base wage + overtime for the hero period, folded into heroTotalCents
+    /// and broken back out for the drawer's reconciliation rows. nil when no
+    /// rate is set — the wage feature is off.
+    let heroWages: PeriodIncome.Wages?
     /// The `end` of the period the payday moment is showing, so the dismiss
     /// button can remember which one was closed.
     let paydayPeriodEnd: Date?
@@ -55,7 +59,7 @@ private struct DashboardFacts {
     let paydayLoggedHours: Double
     let tonightLine: String?
 
-    init(allEntries: [TipEntry], schedule: PaySchedule?, now: Date, forcePaydayMoment: Bool, dismissedPaydayEnd: Date?) {
+    init(allEntries: [TipEntry], schedule: PaySchedule?, now: Date, forcePaydayMoment: Bool, dismissedPaydayEnd: Date?, wageCentsPerHour: Int?) {
         let calendar = Calendar.current
         calculator = PayPeriodCalculator(schedule: schedule ?? .fallback)
         let period = calculator.period(containing: now)
@@ -102,6 +106,9 @@ private struct DashboardFacts {
         isPaydayMoment = paydayPeriod != nil
         paydayPeriodEnd = paydayPeriod?.end
 
+        // Tips-only net for whichever period becomes the hero — wages fold
+        // in below, after heroPeriod is settled.
+        let heroTipsNetCents: Int
         if let pay = paydayPeriod {
             let payEntries = allEntries.filter { $0.date >= pay.start && $0.date <= pay.end }
             let payBreakdown = TipBreakdown.total(of: payEntries)
@@ -143,7 +150,7 @@ private struct DashboardFacts {
             if totalCents == 0 && pay != period {
                 heroPeriod = pay
                 heroLabel = "Last pay period"
-                heroTotalCents = payNetCents
+                heroTipsNetCents = payNetCents
                 heroCashCents = payBreakdown.cashCents
                 heroCreditCents = payBreakdown.creditCents
                 heroPayDate = predictedPayDate
@@ -151,7 +158,7 @@ private struct DashboardFacts {
             } else {
                 heroPeriod = period
                 heroLabel = "This pay period"
-                heroTotalCents = totalCents
+                heroTipsNetCents = totalCents
                 heroCashCents = breakdown.cashCents
                 heroCreditCents = breakdown.creditCents
                 heroPayDate = calculator.payDate(for: period)
@@ -165,12 +172,24 @@ private struct DashboardFacts {
             paydayLoggedHours = 0
             heroPeriod = period
             heroLabel = "This pay period"
-            heroTotalCents = totalCents
+            heroTipsNetCents = totalCents
             heroCashCents = breakdown.cashCents
             heroCreditCents = breakdown.creditCents
             heroPayDate = calculator.payDate(for: period)
             heroIsCurrent = true
         }
+
+        // Wages fold into the hero total (and get broken back out for the
+        // drawer) but never touch totalCents/breakdown/statsEngine above —
+        // those stay the tips-only figures every other analytic reads.
+        // heroPeriod's bounds are captured into locals first — referencing a
+        // stored property from inside a closure here, before every stored
+        // property is initialized, is a definite-initialization error.
+        let heroPeriodStart = heroPeriod.start
+        let heroPeriodEnd = heroPeriod.end
+        let heroEntries = allEntries.filter { $0.date >= heroPeriodStart && $0.date <= heroPeriodEnd }
+        heroWages = PeriodIncome.wages(entries: heroEntries, wageCentsPerHour: wageCentsPerHour, firstWeekday: schedule?.firstWeekday)
+        heroTotalCents = heroTipsNetCents + (heroWages?.totalCents ?? 0)
 
         // Echo of tonight's reveal verdict, for the most recently logged
         // shift today — consistent with the per-shift reveal shown at log
@@ -237,7 +256,7 @@ struct DashboardView: View {
 
     var body: some View {
         let dismissedPaydayEnd = dismissedPaydayEndRaw == 0 ? nil : Date(timeIntervalSinceReferenceDate: dismissedPaydayEndRaw)
-        let facts = DashboardFacts(allEntries: allEntries, schedule: scheduleStore.schedule, now: .now, forcePaydayMoment: forcePaydayMoment, dismissedPaydayEnd: dismissedPaydayEnd)
+        let facts = DashboardFacts(allEntries: allEntries, schedule: scheduleStore.schedule, now: .now, forcePaydayMoment: forcePaydayMoment, dismissedPaydayEnd: dismissedPaydayEnd, wageCentsPerHour: preferencesStore.baseHourlyWageCents)
         NavigationStack {
             // A ScrollView, deliberately NOT a List: the hero's drawer changes
             // height when it opens, and a List (UIKit-backed) animates the row
@@ -356,9 +375,13 @@ struct DashboardView: View {
     /// split with a chevron. Expanded: the itemized reconciliation. Square top,
     /// rounded bottom, recessed fill so it reads as sliding out from under.
     private func breakdownDrawer(_ facts: DashboardFacts) -> some View {
-        // The figure that makes the split reconcile to take-home, derived so it
-        // always adds up regardless of how tip-out was logged across a shift.
-        let tipOutCents = max(0, facts.heroCashCents + facts.heroCreditCents - facts.heroTotalCents)
+        // The figure that makes the split reconcile to Total, derived so it
+        // always adds up regardless of how tip-out was logged across a
+        // shift. Wages sit outside cash/credit entirely, so tip-out is
+        // measured against the tips-only net, not the combined Total.
+        let wagesTotalCents = facts.heroWages?.totalCents ?? 0
+        let tipsNetCents = facts.heroTotalCents - wagesTotalCents
+        let tipOutCents = max(0, facts.heroCashCents + facts.heroCreditCents - tipsNetCents)
         let drawerShape = UnevenRoundedRectangle(
             cornerRadii: .init(topLeading: 0, bottomLeading: PaydayRadius.xl,
                                bottomTrailing: PaydayRadius.xl, topTrailing: 0),
@@ -393,8 +416,14 @@ struct DashboardView: View {
                     if tipOutCents > 0 {
                         breakdownRow("Tipped out", cents: -tipOutCents)
                     }
+                    if let wages = facts.heroWages {
+                        breakdownRow("Wages", cents: wages.regularCents)
+                        if wages.overtimeCents > 0 {
+                            breakdownRow("Overtime", cents: wages.overtimeCents)
+                        }
+                    }
                     Divider()
-                    breakdownRow("Take-home", cents: facts.heroTotalCents, emphasized: true)
+                    breakdownRow("Total", cents: facts.heroTotalCents, emphasized: true)
                 }
                 .padding(.horizontal, PaydaySpacing.p20)
                 .padding(.bottom, PaydaySpacing.p20)

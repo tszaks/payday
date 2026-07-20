@@ -55,21 +55,47 @@ struct PeriodDetailView: View {
     }
 
     /// Sum of this period's nights, which nightlyTotals() already nets
-    /// against any logged tip-out — the headline this hero shows.
-    private var netCents: Int {
+    /// against any logged tip-out — tips-only, same figure every other
+    /// analytic on this screen (breakdown, nightsInPeriod) reads.
+    private var tipsNetCents: Int {
         nightsInPeriod.reduce(0) { $0 + $1.cents }
     }
 
-    /// Only this period's own entries feed the rate — a different period's
-    /// $/hr belongs on that period's detail screen, not this one.
-    private var averageDollarsPerHour: Double? {
-        StatsEngine(records: entries.map(TipRecord.init)).averageDollarsPerHour()
+    /// Base wage + overtime for this period's shifts — folds into the hero
+    /// total and the true $/hr rate below, but StatsEngine/TipBreakdown/
+    /// nightsInPeriod above never see it.
+    private var wages: PeriodIncome.Wages? {
+        PeriodIncome.wages(entries: entries, wageCentsPerHour: preferencesStore.baseHourlyWageCents, firstWeekday: scheduleStore.schedule?.firstWeekday)
+    }
+
+    /// The hero figure: tips net plus wages, the same "period income"
+    /// definition the dashboard hero and periods list now share.
+    private var heroTotalCents: Int {
+        tipsNetCents + (wages?.totalCents ?? 0)
+    }
+
+    /// TRUE hourly — (net tips + wages) / logged hours — computed locally so
+    /// StatsEngine.averageDollarsPerHour (tips-only, used elsewhere) stays
+    /// untouched.
+    private var trueDollarsPerHour: Double? {
+        guard loggedHours > 0 else { return nil }
+        return Double(heroTotalCents) / 100 / loggedHours
     }
 
     private var heroCaptionLine: String {
-        guard let averageDollarsPerHour else { return payDateText }
-        let rate = Money.wholeDollarString(fromCents: Int((averageDollarsPerHour * 100).rounded()))
+        guard let trueDollarsPerHour else { return payDateText }
+        let rate = Money.wholeDollarString(fromCents: Int((trueDollarsPerHour * 100).rounded()))
         return "Averaging \(rate)/hr · \(payDateText)"
+    }
+
+    /// Shown under the Cash · Credit line only when wages exist — the
+    /// dollar amount actually folded into heroTotalCents above.
+    private var wagesCaptionLine: String? {
+        guard let wages else { return nil }
+        let total = Money.wholeDollarString(fromCents: wages.totalCents)
+        guard wages.overtimeCents > 0 else { return "Wages \(total)" }
+        let overtime = Money.wholeDollarString(fromCents: wages.overtimeCents)
+        return "Wages \(total) · incl. \(overtime) overtime"
     }
 
     private var predictedPaycheckCents: Int {
@@ -77,8 +103,8 @@ struct PeriodDetailView: View {
     }
 
     /// Logged hours for this period's shifts, for the wages estimate below —
-    /// tip analytics (breakdown, netCents, averageDollarsPerHour) never touch
-    /// this; it exists only to feed WageEstimate.
+    /// tip analytics (breakdown, tipsNetCents) never touch this; it exists
+    /// only to feed WageEstimate/PeriodIncome.
     private var loggedHours: Double {
         WageEstimate.loggedHours(shiftGroups: shiftDays.map(\.items))
     }
@@ -177,7 +203,7 @@ struct PeriodDetailView: View {
 
     private var heroCard: some View {
         VStack(spacing: 10) {
-            Text(Money.string(fromCents: netCents))
+            Text(Money.string(fromCents: heroTotalCents))
                 .font(PaydayFont.displayXL)
                 .monospacedDigit()
                 .foregroundStyle(PaydayColor.textPrimary)
@@ -189,6 +215,12 @@ struct PeriodDetailView: View {
             .font(PaydayFont.footnote)
             .monospacedDigit()
             .foregroundStyle(PaydayColor.textSecondary)
+            if let wagesCaptionLine {
+                Text(wagesCaptionLine)
+                    .font(PaydayFont.footnote)
+                    .monospacedDigit()
+                    .foregroundStyle(PaydayColor.textSecondary)
+            }
             Text(heroCaptionLine)
                 .font(PaydayFont.caption)
                 .monospacedDigit()
