@@ -2,21 +2,22 @@ import SwiftUI
 import SwiftData
 
 enum AppTab: String, CaseIterable, Identifiable {
-    case dashboard, calendar, periods, insights, logTips
+    case dashboard, history, insights, logTips
     var id: String { rawValue }
 }
 
 /// Lets any tab's content switch the selected tab (e.g. Dashboard's "days
-/// left" tile jumping to Calendar) without MainTabView needing to know about
+/// left" tile jumping to History) without MainTabView needing to know about
 /// every screen that wants to do that.
 @Observable
 final class TabRouter {
     var selected: AppTab = .dashboard
-    /// Set alongside `selected = .periods` by anything that wants to land
-    /// inside the CURRENT period's detail, not just the periods list —
-    /// PeriodsView clears it once it's consumed the request. A plain enum
-    /// case rather than a full deep-link target because periods is the only
-    /// screen anything currently jumps this deep into.
+    /// Set alongside `selected = .history` (and the periods lens) by
+    /// anything that wants to land inside the CURRENT period's detail, not
+    /// just the periods list — HistoryView/PeriodsView clears it once it's
+    /// consumed the request. A plain enum case rather than a full deep-link
+    /// target because periods is the only screen anything currently jumps
+    /// this deep into.
     var pendingCurrentPeriodDetail = false
 }
 
@@ -37,11 +38,8 @@ struct MainTabView: View {
             Tab("Dashboard", systemImage: "house.fill", value: .dashboard) {
                 DashboardView()
             }
-            Tab("Calendar", systemImage: "calendar", value: .calendar) {
-                CalendarView()
-            }
-            Tab("Periods", systemImage: "banknote.fill", value: .periods) {
-                PeriodsView()
+            Tab("History", systemImage: "clock.arrow.circlepath", value: .history) {
+                HistoryView()
             }
             Tab("Insights", systemImage: "chart.line.uptrend.xyaxis", value: .insights) {
                 InsightsView()
@@ -73,9 +71,22 @@ struct MainTabView: View {
         #if DEBUG
         .onAppear {
             let args = ProcessInfo.processInfo.arguments
-            if let index = args.firstIndex(of: "-InitialTab"), args.count > index + 1,
-               let tab = AppTab(rawValue: args[index + 1]) {
-                tabRouter.selected = tab
+            // "periods"/"calendar" are legacy tab names from before the
+            // History merge — mapped to the merged tab plus the matching
+            // lens so old QA scripts keep working unmodified.
+            if let index = args.firstIndex(of: "-InitialTab"), args.count > index + 1 {
+                switch args[index + 1] {
+                case "periods":
+                    HistoryLens.periods.select()
+                    tabRouter.selected = .history
+                case "calendar":
+                    HistoryLens.calendar.select()
+                    tabRouter.selected = .history
+                case let raw:
+                    if let tab = AppTab(rawValue: raw) {
+                        tabRouter.selected = tab
+                    }
+                }
             }
             if args.contains("-OpenLogSheet") {
                 deepLink.pendingLogTarget = .new(defaultDate: .now)
@@ -85,7 +96,8 @@ struct MainTabView: View {
             // so it can be captured without tapping through the Periods list.
             if args.contains("-OpenCurrentPeriodDetail") {
                 tabRouter.pendingCurrentPeriodDetail = true
-                tabRouter.selected = .periods
+                HistoryLens.periods.select()
+                tabRouter.selected = .history
             }
             // Screenshot/QA hook only: open the edit sheet directly for the
             // most recent entry of a given kind, so a cash+credit night's
