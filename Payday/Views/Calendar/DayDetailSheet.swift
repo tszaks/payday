@@ -23,11 +23,12 @@ struct DayDetailSheet: View {
         ShiftDays.groupedByShift(dayEntries, shiftID: \.shiftID, date: \.date, period: \.shiftPeriod)
     }
 
-    /// This day's base-rate wages — each shift's canonical hours x rate,
-    /// summed; never OT, which only exists at the period level.
+    /// This day's base-rate wages — never OT, which only exists at the
+    /// period level. Matches the sum of the ShiftDayRow amounts listed right
+    /// below this total, and CalendarView/PeriodDetailView's per-day wages
+    /// for the same day (see WageEstimate.centsSummedPerShift).
     private var dayWageCents: Int {
-        let hours = WageEstimate.loggedHours(shiftGroups: shifts.map(\.items))
-        return WageEstimate.cents(wageCentsPerHour: preferencesStore.baseHourlyWageCents, hours: hours) ?? 0
+        WageEstimate.centsSummedPerShift(shiftGroups: shifts.map(\.items), wageCentsPerHour: preferencesStore.baseHourlyWageCents)
     }
 
     /// Net tips plus wages — the income number, matching the hero total and

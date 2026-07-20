@@ -91,3 +91,37 @@ struct WageEstimateShiftTotalCentsTests {
         #expect(cents == 15000)
     }
 }
+
+@Suite("WageEstimate centsSummedPerShift")
+struct WageEstimateCentsSummedPerShiftTests {
+    @Test("rounds EACH shift's wage individually, then sums — not the other way around")
+    func roundsPerShiftNotPerTotal() {
+        // $2.83/hr: a 4.25h shift and a 5.5h shift.
+        // Per-shift-then-sum: round(283*4.25) + round(283*5.5) = 1203 + 1557 = 2760.
+        // Round-of-combined-hours would give round(283*9.75) = 2759 instead —
+        // this must produce the former, matching the sum of the same two
+        // shifts' own individually-displayed wage figures.
+        let shiftOne = [TipEntry(date: Date(timeIntervalSinceReferenceDate: 0), amountCents: 5000, kind: .credit, hoursWorked: 4.25)]
+        let shiftTwo = [TipEntry(date: Date(timeIntervalSinceReferenceDate: 0), amountCents: 6000, kind: .credit, hoursWorked: 5.5)]
+        let cents = WageEstimate.centsSummedPerShift(shiftGroups: [shiftOne, shiftTwo], wageCentsPerHour: 283)
+        #expect(cents == 2760)
+        #expect(cents != 2759)
+    }
+
+    @Test("nil wage rate sums to zero")
+    func nilRateIsZero() {
+        let shift = [TipEntry(date: Date(timeIntervalSinceReferenceDate: 0), amountCents: 5000, kind: .credit, hoursWorked: 5)]
+        #expect(WageEstimate.centsSummedPerShift(shiftGroups: [shift], wageCentsPerHour: nil) == 0)
+    }
+
+    @Test("a shift with no logged hours contributes zero")
+    func noHoursContributesZero() {
+        let shift = [TipEntry(date: Date(timeIntervalSinceReferenceDate: 0), amountCents: 5000, kind: .cash)]
+        #expect(WageEstimate.centsSummedPerShift(shiftGroups: [shift], wageCentsPerHour: 283) == 0)
+    }
+
+    @Test("empty input sums to zero")
+    func emptyInputIsZero() {
+        #expect(WageEstimate.centsSummedPerShift(shiftGroups: [], wageCentsPerHour: 283) == 0)
+    }
+}

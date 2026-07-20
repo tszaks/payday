@@ -42,12 +42,8 @@ struct CalendarView: View {
             .mapValues { entries in entries.reduce(0) { $0 + $1.netCents } }
         guard let wageCentsPerHour = preferencesStore.baseHourlyWageCents else { return tipsByDay }
         let shifts = ShiftDays.groupedByShift(allEntries, shiftID: \.shiftID, date: \.date, period: \.shiftPeriod, calendar: calendar)
-        var wagesByDay: [Date: Int] = [:]
-        for shift in shifts {
-            let hours = ShiftDetails.resolve(from: shift.items).hoursWorked ?? 0
-            guard hours > 0 else { continue }
-            wagesByDay[shift.day, default: 0] += WageEstimate.cents(wageCentsPerHour: wageCentsPerHour, hours: hours) ?? 0
-        }
+        let shiftsByDay = Dictionary(grouping: shifts, by: \.day)
+        let wagesByDay = shiftsByDay.mapValues { WageEstimate.centsSummedPerShift(shiftGroups: $0.map(\.items), wageCentsPerHour: wageCentsPerHour) }
         return tipsByDay.merging(wagesByDay, uniquingKeysWith: +)
     }
 
