@@ -1,7 +1,7 @@
 import Foundation
 import UserNotifications
 
-/// "How was tonight?" — the one smart nudge PRODUCT.md asks for. Learned
+/// "How was your shift?" — the one smart nudge PRODUCT.md asks for. Learned
 /// from history, never configured beyond an off-switch: if today (or the
 /// next usual work night) hasn't been logged by ~45 minutes past the
 /// typical log time, one local notification deep-links to the log sheet.
@@ -92,8 +92,8 @@ enum SmartNudgeScheduler {
 
     private static func schedule(at date: Date, center: UNUserNotificationCenter) {
         let content = UNMutableNotificationContent()
-        content.title = "How was tonight?"
-        content.body = "Log tonight's tips in Payday."
+        content.title = "How was your shift?"
+        content.body = "Log your tips in Payday."
         content.sound = .default
 
         let components = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: date)

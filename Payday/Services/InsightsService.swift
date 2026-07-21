@@ -115,7 +115,7 @@ enum InsightsService {
             let days = facts.topDays.map { "\(Money.string(fromCents: $0.cents)) on \($0.date.formatted(.dateTime.month(.wide).day()))" }
             lines.append("TOP EARNING DAYS: " + days.joined(separator: ", ") + ".")
         }
-        lines.append("CASH VS CREDIT: \(Money.string(fromCents: facts.cashCents)) cash, \(Money.string(fromCents: facts.creditCents)) credit (this split is gross, before any tip-out). Credit exceeding cash is normal in a card-heavy restaurant and is NOT a finding - never present 'credit was the larger share' as an insight. If this section is worth writing at all, say what the split means: cash went home the night it was earned; credit arrives on the paycheck.")
+        lines.append("CASH VS CREDIT: \(Money.string(fromCents: facts.cashCents)) cash, \(Money.string(fromCents: facts.creditCents)) credit (this split is gross, before any tip-out). Credit exceeding cash is normal in a card-heavy restaurant and is NOT a finding - never present 'credit was the larger share' as an insight. If this section is worth writing at all, say what the split means: cash went home the day it was earned; credit arrives on the paycheck.")
         if facts.totalTipOutCents > 0 {
             lines.append("TIP-OUTS: \(Money.string(fromCents: facts.totalTipOutCents)) total tipped out - already subtracted from OVERALL above.")
         }
@@ -131,7 +131,7 @@ enum InsightsService {
             var rateLine = "RATE: averaging \(Money.wholeDollarString(fromCents: Int((rate.overallDollarsPerHour * 100).rounded())))/hr across \(rate.nightsWithHours) shifts with hours logged."
             if let bestWeekday = rate.bestWeekday, let bestRate = rate.bestWeekdayDollarsPerHour, let count = rate.bestWeekdayNightCount {
                 let weekdayName = Calendar.current.weekdaySymbols[bestWeekday - 1]
-                rateLine += " Best-paying weekday: \(weekdayName) at \(Money.wholeDollarString(fromCents: Int((bestRate * 100).rounded())))/hr across \(count == 1 ? "1 night" : "\(count) nights")."
+                rateLine += " Best-paying weekday: \(weekdayName) at \(Money.wholeDollarString(fromCents: Int((bestRate * 100).rounded())))/hr across \(count == 1 ? "1 shift" : "\(count) shifts")."
             }
             lines.append(rateLine)
         }
@@ -139,7 +139,7 @@ enum InsightsService {
             var salesLine = "TIP PERCENT: averaging \(String(format: "%.1f", sales.overallTipPercent))% of sales across \(sales.nightsWithSales) shifts with sales logged."
             if let bestWeekday = sales.bestWeekday, let bestPercent = sales.bestWeekdayTipPercent, let count = sales.bestWeekdayNightCount {
                 let weekdayName = Calendar.current.weekdaySymbols[bestWeekday - 1]
-                salesLine += " Best weekday: \(weekdayName) at \(String(format: "%.1f", bestPercent))% across \(count == 1 ? "1 night" : "\(count) nights")."
+                salesLine += " Best weekday: \(weekdayName) at \(String(format: "%.1f", bestPercent))% across \(count == 1 ? "1 shift" : "\(count) shifts")."
             }
             lines.append(salesLine)
         }
@@ -153,10 +153,12 @@ enum InsightsService {
 
         if !facts.notes.isEmpty {
             let noteLines = facts.notes.map { "\($0.date.formatted(.dateTime.month(.abbreviated).day())): \"\($0.text)\"" }
-            lines.append("SHIFT NOTES (the worker's own words, context only - never arithmetic): " + noteLines.joined(separator: " | ") + " - When a note explains an unusual number (a POS outage, tips carried between shifts, a comped night), prefer the note's explanation over reading meaning into that number, and say so plainly. Quote or paraphrase only what is actually written; never invent notes.")
+            lines.append("SHIFT NOTES (the worker's own words, context only - never arithmetic): " + noteLines.joined(separator: " | ") + " - When a note explains an unusual number (a POS outage, tips carried between shifts, a comped shift), prefer the note's explanation over reading meaning into that number, and say so plainly. Quote or paraphrase only what is actually written; never invent notes.")
         }
 
         lines.append("SAMPLE SIZE RULES: a pattern claim (weekday, lunch vs dinner, doubles, start times) backed by fewer than 3 shifts is an anecdote - if you mention it at all, hedge it explicitly by naming the count, and NEVER base a claim on it otherwise.")
+
+        lines.append("VOCABULARY: never use 'night' as a generic stand-in for a shift or a day - a shift can be lunch, dinner, or unspecified, and it may be logged and read back at any hour. Say lunch, dinner, shift, or day, matching what the data actually reflects.")
 
         if let topMove {
             lines.append("TOP MOVE (already shown to the reader as its own card, above everything you write - never repeat it as an item): \(topMove.title) - \(topMove.body)")

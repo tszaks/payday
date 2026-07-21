@@ -49,7 +49,7 @@ enum InsightsFactsCopy {
 
     /// Never "credit was the larger share" — that's true for nearly every
     /// server and says nothing. The useful fact is the cash share and what
-    /// the split means: cash went home night-of, credit rides the paycheck.
+    /// the split means: cash went home day-of, credit rides the paycheck.
     private static func cashVsCredit(_ facts: InsightsFacts) -> InsightSection {
         let grossCents = facts.cashCents + facts.creditCents
         let body: String
@@ -58,10 +58,10 @@ enum InsightsFactsCopy {
         } else if facts.cashCents == 0 {
             body = "All \(Money.string(fromCents: facts.creditCents)) of your tips came in on cards, so all of it arrives on your paycheck."
         } else if facts.creditCents == 0 {
-            body = "All \(Money.string(fromCents: facts.cashCents)) of your tips came in cash, taken home the nights you earned it."
+            body = "All \(Money.string(fromCents: facts.cashCents)) of your tips came in cash, taken home the day you earned it."
         } else {
             let cashPercent = Int((Double(facts.cashCents) / Double(grossCents) * 100).rounded())
-            body = "About \(cashPercent)% of your tips came in cash: \(Money.string(fromCents: facts.cashCents)) you took home night-of. The other \(Money.string(fromCents: facts.creditCents)) came in on cards and lands on your paycheck."
+            body = "About \(cashPercent)% of your tips came in cash: \(Money.string(fromCents: facts.cashCents)) you took home day-of. The other \(Money.string(fromCents: facts.creditCents)) came in on cards and lands on your paycheck."
         }
         return InsightSection(title: "Cash vs Credit", body: body)
     }
@@ -90,15 +90,11 @@ enum InsightsFactsCopy {
         count == 1 ? "1 shift" : "\(count) shifts"
     }
 
-    private static func nightsPhrase(_ count: Int) -> String {
-        count == 1 ? "1 night" : "\(count) nights"
-    }
-
     private static func hourlyRate(_ facts: RateFacts) -> InsightSection {
         var body = "You're averaging \(Money.wholeDollarString(fromCents: Int((facts.overallDollarsPerHour * 100).rounded())))/hr across \(facts.nightsWithHours) shifts with hours logged."
         if let bestWeekday = facts.bestWeekday, let bestRate = facts.bestWeekdayDollarsPerHour, let count = facts.bestWeekdayNightCount {
             let weekdayName = Calendar.current.weekdaySymbols[bestWeekday - 1]
-            body += " \(weekdayName) pays best at \(Money.wholeDollarString(fromCents: Int((bestRate * 100).rounded())))/hr across \(nightsPhrase(count))."
+            body += " \(weekdayName) pays best at \(Money.wholeDollarString(fromCents: Int((bestRate * 100).rounded())))/hr across \(shiftsPhrase(count))."
         }
         return InsightSection(title: "Your Hourly Rate", body: body)
     }
@@ -107,7 +103,7 @@ enum InsightsFactsCopy {
         var body = "You're averaging \(String(format: "%.1f", facts.overallTipPercent))% of sales across \(facts.nightsWithSales) shifts with sales logged."
         if let bestWeekday = facts.bestWeekday, let bestPercent = facts.bestWeekdayTipPercent, let count = facts.bestWeekdayNightCount {
             let weekdayName = Calendar.current.weekdaySymbols[bestWeekday - 1]
-            body += " \(weekdayName) tips best at \(String(format: "%.1f", bestPercent))% across \(nightsPhrase(count))."
+            body += " \(weekdayName) tips best at \(String(format: "%.1f", bestPercent))% across \(shiftsPhrase(count))."
         }
         return InsightSection(title: "Tip Percent", body: body)
     }
@@ -116,7 +112,7 @@ enum InsightsFactsCopy {
     /// within it — so this is honestly a shift-vs-shift comparison by start
     /// hour, never a claim about a specific minute (see StartTimeFacts).
     private static func startTimes(_ facts: StartTimeFacts) -> InsightSection {
-        let body = "Shifts starting around \(hourLabel(facts.bestStartHour)) average \(Money.wholeDollarString(fromCents: Int((facts.bestDollarsPerHour * 100).rounded())))/hr across \(nightsPhrase(facts.bestShiftCount)). Shifts starting around \(hourLabel(facts.worstStartHour)) average \(Money.wholeDollarString(fromCents: Int((facts.worstDollarsPerHour * 100).rounded())))/hr across \(nightsPhrase(facts.worstShiftCount))."
+        let body = "Shifts starting around \(hourLabel(facts.bestStartHour)) average \(Money.wholeDollarString(fromCents: Int((facts.bestDollarsPerHour * 100).rounded())))/hr across \(shiftsPhrase(facts.bestShiftCount)). Shifts starting around \(hourLabel(facts.worstStartHour)) average \(Money.wholeDollarString(fromCents: Int((facts.worstDollarsPerHour * 100).rounded())))/hr across \(shiftsPhrase(facts.worstShiftCount))."
         return InsightSection(title: "Start Times", body: body)
     }
 

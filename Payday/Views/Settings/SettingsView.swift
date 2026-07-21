@@ -70,7 +70,7 @@ struct SettingsView: View {
                     captionedRow("Locks Payday when it's in the background. Uses your device passcode as a fallback.") {
                         Toggle("Require Face ID", isOn: $isFaceIDLockEnabled)
                     }
-                    captionedRow("A single \"How was tonight?\" notification on a usual work night, only if nothing's logged yet.") {
+                    captionedRow("A single \"How was your shift?\" notification on a usual work day, only if nothing's logged yet.") {
                         Toggle("Remind me to log", isOn: $isSmartNudgeEnabled)
                     }
                 }

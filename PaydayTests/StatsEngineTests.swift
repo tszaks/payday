@@ -1028,16 +1028,37 @@ struct RevealTests {
 
 @Suite("Reveal copy")
 struct RevealCopyTests {
-    @Test("headline formats the shift total")
+    @Test("headline formats the shift total, naming tips rather than the day")
     func headlineFormat() {
-        #expect(RevealCopy.headline(cents: 18600) == "$186.00 today.")
+        #expect(RevealCopy.headline(cents: 18600) == "$186.00 in tips this shift.")
     }
 
-    @Test("all-time record copy names the previous best")
+    @Test("all-time record copy names the previous best, falling back to 'shift' when the period is unknown")
     func allTimeRecordCopy() {
         let text = RevealCopy.comparison(for: .allTimeRecord(previousBestCents: 5000))
-        #expect(text.contains("Best night ever"))
+        #expect(text.contains("Best shift ever"))
         #expect(text.contains("$50.00"))
+    }
+
+    @Test("all-time record copy names lunch or dinner when the shift's period is known")
+    func allTimeRecordCopyNamesKnownPeriod() {
+        let lunch = RevealCopy.comparison(for: .allTimeRecord(previousBestCents: 5000), period: .lunch)
+        #expect(lunch.contains("Best lunch ever"))
+        let dinner = RevealCopy.comparison(for: .allTimeRecord(previousBestCents: 5000), period: .dinner)
+        #expect(dinner.contains("Best dinner ever"))
+    }
+
+    @Test("quietest-recently copy names the shift's period when known, else falls back to 'shift'")
+    func slowestRecentlyCopy() {
+        #expect(RevealCopy.comparison(for: .slowestRecently) == "Your quietest shift in a while.")
+        #expect(RevealCopy.comparison(for: .slowestRecently, period: .lunch) == "Your quietest lunch in a while.")
+        #expect(RevealCopy.comparison(for: .slowestRecently, period: .dinner) == "Your quietest dinner in a while.")
+    }
+
+    @Test("first logged copy never says 'night'")
+    func firstNightLoggedCopyNamesShift() {
+        #expect(RevealCopy.comparison(for: .firstNightLogged) == "Your first logged shift. Nice start.")
+        #expect(RevealCopy.comparison(for: .firstNightLogged, period: .lunch) == "Your first logged lunch. Nice start.")
     }
 
     @Test("first weekday logged copy never claims a $0.00 average")
@@ -1052,7 +1073,13 @@ struct RevealCopyTests {
     func weekdayAverageWithRank() {
         let text = RevealCopy.comparison(for: .weekdayAverage(weekday: 2, deltaCents: 3400, periodRank: 3, periodNightCount: 5, sampleCount: 8))
         #expect(text.contains("above your"))
-        #expect(text.contains("Third-best night this period."))
+        #expect(text.contains("Third-best shift this period."))
+    }
+
+    @Test("weekday average copy names lunch or dinner in the period rank clincher when known")
+    func weekdayAverageRankNamesKnownPeriod() {
+        let text = RevealCopy.comparison(for: .weekdayAverage(weekday: 2, deltaCents: 3400, periodRank: 1, periodNightCount: 5, sampleCount: 8), period: .dinner)
+        #expect(text.contains("Best dinner this period."))
     }
 
     @Test("weekday average copy omits the clincher when the rank doesn't qualify")
@@ -1509,6 +1536,6 @@ struct InsightsFactsCopyTests {
         // correct regardless of the test runner's locale/region.
         let bestHourLabel = Calendar.current.date(bySettingHour: 17, minute: 0, second: 0, of: .now)!.formatted(.dateTime.hour())
         #expect(body.contains(bestHourLabel))
-        #expect(body.contains("6 nights")) // matches the nightsPhrase convention every other section here uses
+        #expect(body.contains("6 shifts")) // matches the shiftsPhrase convention every other section here uses
     }
 }
