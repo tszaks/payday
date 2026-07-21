@@ -264,7 +264,7 @@ struct LogTipSheet: View {
             ScrollViewReader { proxy in
                 Group {
                     if let revealResult {
-                        RevealCardView(result: revealResult, grossAndTipOut: revealGrossAndTipOut, onDismiss: { dismiss() })
+                        RevealCardView(result: revealResult, period: shiftPeriod, grossAndTipOut: revealGrossAndTipOut, onDismiss: { dismiss() })
                     } else {
                         // Scrollable rather than a fixed VStack: expanding the
                         // details group used to compress every row toward zero
@@ -948,6 +948,9 @@ private struct CompactCountField: View {
 /// with the save's success haptic. No confetti, no looping animation.
 private struct RevealCardView: View {
     let result: RevealResult
+    /// The shift's lunch/dinner, when captured — lets the comparison below
+    /// name it instead of falling back to the generic "shift".
+    let period: ShiftPeriod?
     /// Non-nil only when a tip-out was logged — the headline above is
     /// already net; this makes the gross it came from one glance away.
     let grossAndTipOut: (grossCents: Int, tipOutCents: Int)?
@@ -962,7 +965,7 @@ private struct RevealCardView: View {
                 .font(PaydayFont.displayXL)
                 .monospacedDigit()
                 .foregroundStyle(result.isRecord && isRevealed ? PaydayColor.primary : PaydayColor.textPrimary)
-            Text(RevealCopy.comparison(for: result.comparison))
+            Text(RevealCopy.comparison(for: result.comparison, period: period))
                 .font(PaydayFont.subheadline)
                 .foregroundStyle(PaydayColor.textSecondary)
                 .multilineTextAlignment(.center)

@@ -48,7 +48,7 @@ enum LogTipsAmountValidation {
 /// a spoken confirmation is the equivalent "verdict" for a hands-free log.
 struct LogTipsIntent: AppIntent {
     static let title: LocalizedStringResource = "Log Tips"
-    static let description = IntentDescription("Log tonight's tips in Payday.")
+    static let description = IntentDescription("Log today's tips in Payday.")
     static var openAppWhenRun: Bool { false }
 
     @Parameter(title: "Amount", requestValueDialog: IntentDialog("How much did you make?"))
@@ -133,7 +133,7 @@ struct LogTipsIntent: AppIntent {
 
         let kindText = kind.tipKind.displayName.lowercased()
         return .result(dialog: completingShiftID != nil
-            ? IntentDialog("Added \(Money.string(fromCents: cents)) in \(kindText) tips to tonight's shift.")
+            ? IntentDialog("Added \(Money.string(fromCents: cents)) in \(kindText) tips to today's shift.")
             : IntentDialog("Logged \(Money.string(fromCents: cents)) in \(kindText) tips."))
     }
 }

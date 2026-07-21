@@ -203,7 +203,8 @@ private struct DashboardFacts {
             let cents = TipBreakdown.total(of: latest.items).netTotalCents
             let today = calendar.startOfDay(for: now)
             let result = statsEngine.reveal(forNightAt: today, cents: cents, period: period, shiftID: latest.shiftID)
-            tonightRevealText = "\(RevealCopy.headline(cents: cents)) \(RevealCopy.comparison(for: result.comparison))"
+            let shiftPeriod = ShiftDetails.resolve(from: latest.items).shiftPeriod
+            tonightRevealText = "\(RevealCopy.headline(cents: cents)) \(RevealCopy.comparison(for: result.comparison, period: shiftPeriod))"
         }
         tonightLine = TonightLine.compose(
             rhythm: statsEngine.workRhythm(),
@@ -553,7 +554,7 @@ struct DashboardView: View {
                     .foregroundStyle(PaydayColor.textSecondary)
                     .accessibilityAddTraits(.isHeader)
                 if let bestNightThisPeriod = facts.bestNightThisPeriod {
-                    Text("Best night: \(Money.string(fromCents: bestNightThisPeriod.cents)) on \(bestNightThisPeriod.date.formatted(.dateTime.month(.abbreviated).day()))")
+                    Text("Best day: \(Money.string(fromCents: bestNightThisPeriod.cents)) on \(bestNightThisPeriod.date.formatted(.dateTime.month(.abbreviated).day()))")
                         .font(PaydayFont.footnote)
                         .foregroundStyle(PaydayColor.textSecondary)
                         .monospacedDigit()
@@ -676,7 +677,7 @@ struct DashboardView: View {
         ContentUnavailableView(
             "Nothing logged yet this period",
             systemImage: "tray",
-            description: Text("Log tonight's tips and watch the total build toward payday.")
+            description: Text("Log your tips and watch the total build toward payday.")
         )
         .padding(.vertical, 16)
     }

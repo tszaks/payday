@@ -866,7 +866,7 @@ struct StatsEngine {
         return Move(
             id: "weekdaySwap",
             title: "\(bestName) Beats \(worstName)",
-            body: "\(bestName) nights average \(Money.string(fromCents: Int(best.avg.rounded()))) across \(best.count) \(bestName)s, against \(Money.string(fromCents: Int(worst.avg.rounded()))) across \(worst.count) \(worstName)s. Over a year of regular shifts, that gap is worth about \(Money.wholeDollarString(fromCents: annualImpact)).",
+            body: "\(bestName)s average \(Money.string(fromCents: Int(best.avg.rounded()))) across \(best.count) \(bestName)s, against \(Money.string(fromCents: Int(worst.avg.rounded()))) across \(worst.count) \(worstName)s. Over a year of regular shifts, that gap is worth about \(Money.wholeDollarString(fromCents: annualImpact)).",
             annualImpactCents: annualImpact
         )
     }
@@ -905,7 +905,7 @@ struct StatsEngine {
         return Move(
             id: "lapsedWinner",
             title: "\(weekdayName) Has Gone Quiet",
-            body: "You haven't worked a \(weekdayName) in a few weeks, but it's one of your best - averaging \(Money.string(fromCents: Int(best.avg.rounded()))) a night across \(best.count) \(weekdayName)s. Getting back to a regular \(weekdayName) is worth about \(Money.wholeDollarString(fromCents: annualImpact)) a year.",
+            body: "You haven't worked a \(weekdayName) in a few weeks, but it's one of your best - averaging \(Money.string(fromCents: Int(best.avg.rounded()))) a day across \(best.count) \(weekdayName)s. Getting back to a regular \(weekdayName) is worth about \(Money.wholeDollarString(fromCents: annualImpact)) a year.",
             annualImpactCents: annualImpact
         )
     }
@@ -975,7 +975,7 @@ struct StatsEngine {
         return Move(
             id: "rateLeader",
             title: "\(weekdayName) Pays Best Per Hour",
-            body: "\(weekdayName)s average \(Money.wholeDollarString(fromCents: Int((best.rate * 100).rounded())))/hr across \(countPhrase(weekdayRates.count, singular: "night", plural: "nights")), against \(Money.wholeDollarString(fromCents: Int((overallRate * 100).rounded())))/hr overall. Working \(weekdayName)s regularly is worth about \(Money.wholeDollarString(fromCents: annualImpact)) a year over your average rate.",
+            body: "\(weekdayName)s average \(Money.wholeDollarString(fromCents: Int((best.rate * 100).rounded())))/hr across \(countPhrase(weekdayRates.count, singular: "shift", plural: "shifts")), against \(Money.wholeDollarString(fromCents: Int((overallRate * 100).rounded())))/hr overall. Working \(weekdayName)s regularly is worth about \(Money.wholeDollarString(fromCents: annualImpact)) a year over your average rate.",
             annualImpactCents: annualImpact
         )
     }
@@ -1051,7 +1051,7 @@ struct StatsEngine {
         return Move(
             id: "tipPercentSignal",
             title: "\(weekdayName) Tips Best",
-            body: "You're tipped \(String(format: "%.1f", best.percent))% of sales on \(weekdayName)s across \(countPhrase(weekdaySales.count, singular: "night", plural: "nights")), against \(String(format: "%.1f", overallPercent))% overall. At that rate on a typical \(weekdayName), the difference is worth about \(Money.wholeDollarString(fromCents: annualImpact)) a year.",
+            body: "You're tipped \(String(format: "%.1f", best.percent))% of sales on \(weekdayName)s across \(countPhrase(weekdaySales.count, singular: "shift", plural: "shifts")), against \(String(format: "%.1f", overallPercent))% overall. At that rate on a typical \(weekdayName), the difference is worth about \(Money.wholeDollarString(fromCents: annualImpact)) a year.",
             annualImpactCents: annualImpact
         )
     }
@@ -1400,18 +1400,30 @@ enum RevealCopy {
         Calendar.current.weekdaySymbols[weekday - 1]
     }
 
-    // "today," not "tonight," so a lunch shift logged at 2pm — or this
-    // line read back on the dashboard hours later — never reads wrong.
-    static func headline(cents: Int) -> String {
-        "\(Money.string(fromCents: cents)) today."
+    /// Names the shift when its ShiftPeriod is known, so a comparison never
+    /// falls back to the generic "night" — lunch and dinner both fire this
+    /// same reveal. "shift" is the honest fallback for legacy/unset periods.
+    private static func shiftWord(_ period: ShiftPeriod?) -> String {
+        switch period {
+        case .lunch: return "lunch"
+        case .dinner: return "dinner"
+        case nil: return "shift"
+        }
     }
 
-    static func comparison(for result: RevealComparison) -> String {
+    // Names its unit (tips, net per shift) rather than "today" — a lunch
+    // shift logged at 2pm, or this line read back hours later, must never
+    // look like the all-in "Today" total shown elsewhere on the Dashboard.
+    static func headline(cents: Int) -> String {
+        "\(Money.string(fromCents: cents)) in tips this shift."
+    }
+
+    static func comparison(for result: RevealComparison, period: ShiftPeriod? = nil) -> String {
         switch result {
         case .firstNightLogged:
-            return "Your first logged night. Nice start."
+            return "Your first logged \(shiftWord(period)). Nice start."
         case .allTimeRecord(let previousBestCents):
-            return allTimeRecordText(previousBestCents: previousBestCents)
+            return allTimeRecordText(previousBestCents: previousBestCents, period: period)
         case .firstShiftOfPeriod:
             return "First shift of the period."
         case .weekdayRecord(let weekday, let previousBestCents):
@@ -1419,14 +1431,14 @@ enum RevealCopy {
         case .firstWeekdayLogged(let weekday):
             return "Your first logged \(weekdayName(weekday))."
         case .slowestRecently:
-            return "Your quietest night in a while."
+            return "Your quietest \(shiftWord(period)) in a while."
         case .weekdayAverage(let weekday, let deltaCents, let periodRank, let periodNightCount, let sampleCount):
-            return weekdayAverageText(weekday: weekday, deltaCents: deltaCents, periodRank: periodRank, periodNightCount: periodNightCount, sampleCount: sampleCount)
+            return weekdayAverageText(weekday: weekday, deltaCents: deltaCents, periodRank: periodRank, periodNightCount: periodNightCount, sampleCount: sampleCount, period: period)
         }
     }
 
-    private static func allTimeRecordText(previousBestCents: Int) -> String {
-        "Best night ever, topping your previous record of \(Money.string(fromCents: previousBestCents))."
+    private static func allTimeRecordText(previousBestCents: Int, period: ShiftPeriod?) -> String {
+        "Best \(shiftWord(period)) ever, topping your previous record of \(Money.string(fromCents: previousBestCents))."
     }
 
     private static func weekdayRecordText(weekday: Int, previousBestCents: Int) -> String {
@@ -1438,7 +1450,7 @@ enum RevealCopy {
     /// stated honestly, not hidden behind confident-sounding phrasing.
     private static let minimumSampleForCleanAverage = 5
 
-    private static func weekdayAverageText(weekday: Int, deltaCents: Int, periodRank: Int?, periodNightCount: Int, sampleCount: Int) -> String {
+    private static func weekdayAverageText(weekday: Int, deltaCents: Int, periodRank: Int?, periodNightCount: Int, sampleCount: Int, period: ShiftPeriod?) -> String {
         let isAbove = deltaCents >= 0
         var base = "\(Money.string(fromCents: abs(deltaCents))) \(isAbove ? "above" : "below") your \(weekdayName(weekday)) average."
         if sampleCount < minimumSampleForCleanAverage {
@@ -1447,9 +1459,9 @@ enum RevealCopy {
         guard let periodRank else { return base }
         let rankText: String
         switch periodRank {
-        case 1: rankText = "Best night this period."
-        case 2: rankText = "Second-best night this period."
-        case 3: rankText = "Third-best night this period."
+        case 1: rankText = "Best \(shiftWord(period)) this period."
+        case 2: rankText = "Second-best \(shiftWord(period)) this period."
+        case 3: rankText = "Third-best \(shiftWord(period)) this period."
         default: return base
         }
         return "\(base) \(rankText)"
