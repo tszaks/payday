@@ -61,10 +61,10 @@ struct InsightsView: View {
         NavigationStack {
             Group {
                 if let facts = pageFacts.facts {
-                    resultList(facts, moves: pageFacts.moves, followUps: pageFacts.followUps, recentNights: pageFacts.recentNights)
+                    resultList(facts, moves: pageFacts.moves, followUps: pageFacts.followUps, recentNights: pageFacts.recentNights, unlocks: pageFacts.unlocks)
                 } else {
                     ScrollView {
-                        emptyState
+                        emptyState(unlocks: pageFacts.unlocks, shiftCount: pageFacts.shiftCount)
                             .frame(maxWidth: .infinity)
                             .padding()
                     }
@@ -82,7 +82,8 @@ struct InsightsView: View {
         }
     }
 
-    private func resultList(_ facts: InsightsFacts, moves: [Move], followUps: [FollowUp], recentNights: [(date: Date, cents: Int)]) -> some View {
+    private func resultList(_ facts: InsightsFacts, moves: [Move], followUps: [FollowUp], recentNights: [(date: Date, cents: Int)], unlocks: [Unlock]) -> some View {
+        ScrollViewReader { proxy in
         ScrollView {
             VStack(spacing: PaydaySpacing.p16) {
                 // Follow-ups lead — a verdict on a past recommendation
@@ -191,6 +192,26 @@ struct InsightsView: View {
                 NightlyEarningsChart(nights: recentNights)
                     .paydayCard()
 
+                // Anticipation, not a finding — flat like the sections
+                // above, but deliberately never a card and never followed
+                // by a divider, so it can't outrank the chart as this
+                // screen's one object.
+                if !unlocks.isEmpty {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("NEXT UP")
+                            .font(PaydayFont.caption2)
+                            .tracking(0.8)
+                            .foregroundStyle(PaydayColor.primary)
+                        ForEach(unlocks) { unlock in
+                            Text(unlock.line)
+                                .font(PaydayFont.bodyRegular)
+                                .foregroundStyle(PaydayColor.textSecondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
                 if isModelAvailable {
                     if isLoading {
                         HStack(spacing: 8) {
@@ -208,11 +229,23 @@ struct InsightsView: View {
 
                     footnote(for: facts)
                 }
+
+                Color.clear.frame(height: 1).id("insights-bottom")
             }
             .padding(.horizontal, PaydaySpacing.p16)
             .padding(.top, PaydaySpacing.p8)
         }
         .contentMargins(.bottom, 88, for: .scrollContent)
+        // QA-only, same launch-arg pattern as -InitialTab: simctl can
+        // screenshot but not scroll, so screenshot QA of below-the-fold
+        // content (the NEXT UP section) needs the view to scroll itself.
+        .onAppear {
+            guard ProcessInfo.processInfo.arguments.contains("-ScrollInsightsBottom") else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                withAnimation(nil) { proxy.scrollTo("insights-bottom", anchor: .bottom) }
+            }
+        }
+        }
     }
 
     @ViewBuilder
@@ -264,7 +297,7 @@ struct InsightsView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var emptyState: some View {
+    private func emptyState(unlocks: [Unlock], shiftCount: Int) -> some View {
         VStack(spacing: 16) {
             Image(systemName: "chart.line.uptrend.xyaxis")
                 .font(PaydayFont.iconXL)
@@ -272,10 +305,28 @@ struct InsightsView: View {
             Text("See where and when you earn the most.")
                 .font(PaydayFont.headline)
                 .foregroundStyle(PaydayColor.textPrimary)
-            Text("Log \(StatsEngine.minimumShiftsForInsights) shifts to unlock this.")
-                .font(PaydayFont.caption)
-                .foregroundStyle(PaydayColor.textSecondary)
-                .multilineTextAlignment(.center)
+            if shiftCount == 0 {
+                Text("Log \(StatsEngine.minimumShiftsForInsights) shifts to unlock this.")
+                    .font(PaydayFont.caption)
+                    .foregroundStyle(PaydayColor.textSecondary)
+                    .multilineTextAlignment(.center)
+            } else if let insightsUnlock = unlocks.first(where: { $0.kind == .insights }) {
+                Text("\(insightsUnlock.have) of \(insightsUnlock.need) shifts logged.")
+                    .font(PaydayFont.caption)
+                    .foregroundStyle(PaydayColor.textSecondary)
+                Capsule()
+                    .fill(PaydayColor.fieldBackground)
+                    .frame(width: 160, height: 4)
+                    .overlay(alignment: .leading) {
+                        Capsule()
+                            .fill(PaydayColor.primary)
+                            .frame(width: 160 * CGFloat(insightsUnlock.have) / CGFloat(insightsUnlock.need), height: 4)
+                    }
+                Text(insightsUnlock.line)
+                    .font(PaydayFont.caption)
+                    .foregroundStyle(PaydayColor.textSecondary)
+                    .multilineTextAlignment(.center)
+            }
         }
         .padding(.top, 40)
     }
@@ -314,12 +365,18 @@ private struct InsightsPageFacts {
     /// matches Insights' own "recent patterns" framing rather than dumping
     /// the user's entire history into one bar chart.
     let recentNights: [(date: Date, cents: Int)]
+    /// What unlocks next, and how close — see UnlockProgress.
+    let unlocks: [Unlock]
+    let shiftCount: Int
 
     init(allEntries: [TipEntry], ledger: [String: Date]) {
-        let statsEngine = StatsEngine(records: allEntries.map(TipRecord.init))
+        let records = allEntries.map(TipRecord.init)
+        let statsEngine = StatsEngine(records: records)
         facts = statsEngine.insightsFacts()
         moves = statsEngine.moves()
         followUps = statsEngine.followUps(ledger: ledger)
         recentNights = Array(statsEngine.nightlyTotals().suffix(30))
+        unlocks = UnlockProgress.nextUnlocks(records: records)
+        shiftCount = UnlockProgress.shiftCount(records: records)
     }
 }
