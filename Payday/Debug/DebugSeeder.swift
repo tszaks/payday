@@ -14,6 +14,39 @@ enum DebugSeeder {
         if ProcessInfo.processInfo.arguments.contains("-SeedFollowUpDemo") {
             seedFollowUpDemoData(insightsStore: insightsStore, moveLedgerStore: moveLedgerStore)
         }
+        if ProcessInfo.processInfo.arguments.contains("-SeedColdStart") {
+            seedColdStartData(scheduleStore: scheduleStore, insightsStore: insightsStore)
+        }
+    }
+
+    /// QA-only fixture for the cold-start surfaces: exactly 3 shifts, below
+    /// the 5-shift Insights gate, so the empty state's progress bar and
+    /// unlock line (see UnlockProgress) can be rendered honestly —
+    /// -SeedSampleData is already past every gate and can't show them.
+    @MainActor
+    static func seedColdStartData(scheduleStore: PayScheduleStore, insightsStore: InsightsStore) {
+        let context = SharedModelContainer.shared.mainContext
+        try? context.delete(model: TipEntry.self)
+        try? context.delete(model: PaycheckRecord.self)
+        insightsStore.snapshot = nil
+
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: .now)
+        scheduleStore.schedule = PaySchedule(
+            frequency: .biweekly,
+            anchorPeriodEnd: calendar.date(byAdding: .day, value: -9, to: today) ?? today,
+            payDelayDays: 5,
+            firstWeekday: 2
+        )
+
+        for (daysAgo, cents) in [(1, 14200), (3, 9800), (6, 11600)] {
+            guard let day = calendar.date(byAdding: .day, value: -daysAgo, to: today) else { continue }
+            let at = calendar.date(bySettingHour: 21, minute: 30, second: 0, of: day) ?? day
+            context.insert(TipEntry(date: day, amountCents: cents, kind: .credit, note: nil, recordedAt: at, shiftID: UUID()))
+        }
+
+        try? context.save()
+        PaydayWidgetRefresh.request()
     }
 
     /// QA-only fixture for the Phase B "SINCE THEN" follow-up card: enough
