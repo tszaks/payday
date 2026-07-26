@@ -13,8 +13,10 @@ import SwiftData
 struct BackfillSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
+    @Environment(PayScheduleStore.self) private var scheduleStore
     @Environment(UserPreferencesStore.self) private var preferencesStore
     @Query(sort: \TipEntry.date, order: .reverse) private var allEntries: [TipEntry]
+    @Query private var paycheckRecords: [PaycheckRecord]
 
     @State private var selectedDate: Date
     @State private var cashCents: Int = 0
@@ -109,6 +111,7 @@ struct BackfillSheet: View {
             .onDisappear {
                 guard shiftsAddedCount > 0 else { return }
                 SmartNudgeScheduler.reschedule(preferencesStore: preferencesStore, allEntries: allEntries + sessionEntries)
+                PaydayPushScheduler.reschedule(preferencesStore: preferencesStore, schedule: scheduleStore.schedule, allEntries: allEntries + sessionEntries, paycheckRecords: paycheckRecords)
                 PaydayWidgetRefresh.request()
             }
         }

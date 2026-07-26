@@ -20,6 +20,8 @@ final class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
         Task { @MainActor in
             if identifier == SmartNudgeScheduler.notificationIdentifier {
                 DeepLinkCoordinator.shared.pendingLogTarget = .new(defaultDate: .now)
+            } else if identifier == PaydayPushScheduler.notificationIdentifier {
+                DeepLinkCoordinator.shared.pendingCurrentPeriodDetail = true
             }
         }
         completionHandler()

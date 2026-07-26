@@ -4,8 +4,10 @@ import SwiftData
 struct PaycheckEntrySheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
+    @Environment(PayScheduleStore.self) private var scheduleStore
     @Environment(UserPreferencesStore.self) private var preferencesStore
     @Query private var allEntries: [TipEntry]
+    @Query private var paycheckRecords: [PaycheckRecord]
 
     let period: PayPeriod
     let existing: PaycheckRecord?
@@ -101,11 +103,13 @@ struct PaycheckEntrySheet: View {
     }
 
     private func save() {
+        let record: PaycheckRecord
         if let existing {
             existing.paidTipsCents = amountCents
             existing.note = note.isEmpty ? nil : note
+            record = existing
         } else {
-            let record = PaycheckRecord(
+            record = PaycheckRecord(
                 periodStart: period.start,
                 periodEnd: period.end,
                 paidTipsCents: amountCents,
@@ -115,6 +119,11 @@ struct PaycheckEntrySheet: View {
         }
         PaydayHaptics.success()
         PaydayWidgetRefresh.request()
+        // A recorded paycheck means this period's verification is done —
+        // reschedule so a pending payday push for it clears immediately
+        // instead of surviving until the next unrelated reschedule call.
+        let updatedRecords = paycheckRecords.contains(where: { $0.id == record.id }) ? paycheckRecords : paycheckRecords + [record]
+        PaydayPushScheduler.reschedule(preferencesStore: preferencesStore, schedule: scheduleStore.schedule, allEntries: allEntries, paycheckRecords: updatedRecords)
         dismiss()
     }
 
