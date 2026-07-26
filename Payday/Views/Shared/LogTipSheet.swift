@@ -688,9 +688,10 @@ struct LogTipSheet: View {
         let effectiveSalesCents = salesCents > 0 ? salesCents : nil
         let netTotalCents = totalCents - (effectiveTipOutCents ?? 0)
 
-        // One id ties this closeout's cash and credit rows into one shift.
-        // Logging again the same day mints a fresh id — that's how a double
-        // (two closeouts) emerges, with no toggle.
+        // A stand-in id for the reveal's own exclusion check below — the
+        // freshly-inserted rows get their own id from ShiftWriter, but since
+        // neither id exists among allEntries yet, either one excludes
+        // nothing and the comparison comes out identical.
         let shiftID = UUID()
 
         let statsEngine = StatsEngine(records: allEntries.map(TipRecord.init))
@@ -702,20 +703,21 @@ struct LogTipSheet: View {
         // than excluding the whole day.
         let reveal = statsEngine.reveal(forNightAt: normalizedDate, cents: netTotalCents, period: period, hoursWorked: hoursWorked, shiftID: shiftID)
 
-        var newEntries: [TipEntry] = []
-        if cashCents > 0 {
-            let entry = TipEntry(date: normalizedDate, amountCents: cashCents, kind: .cash, note: trimmedNote, recordedAt: recordedAt, shiftID: shiftID)
-            modelContext.insert(entry)
-            newEntries.append(entry)
-        }
-        if creditCents > 0 {
-            let entry = TipEntry(date: normalizedDate, amountCents: creditCents, kind: .credit, note: trimmedNote, recordedAt: recordedAt, shiftID: shiftID)
-            modelContext.insert(entry)
-            newEntries.append(entry)
-        }
-        // Shift-level details land on one canonical entry (credit
-        // preferred), never split across both — see ShiftDetails.
-        ShiftDetails.write(hoursWorked: hoursWorked, tipOutCents: effectiveTipOutCents, salesCents: effectiveSalesCents, shiftPeriod: shiftPeriod, clockIn: clockIn, clockOut: clockOut, serverCount: serverCount, into: newEntries)
+        let newEntries = ShiftWriter.insertShift(
+            into: modelContext,
+            date: date,
+            cashCents: cashCents,
+            creditCents: creditCents,
+            note: trimmedNote,
+            recordedAt: recordedAt,
+            hoursWorked: hoursWorked,
+            tipOutCents: effectiveTipOutCents,
+            salesCents: effectiveSalesCents,
+            shiftPeriod: shiftPeriod,
+            clockIn: clockIn,
+            clockOut: clockOut,
+            serverCount: serverCount
+        )
 
         revealResult = reveal
         revealGrossAndTipOut = effectiveTipOutCents.map { (grossCents: totalCents, tipOutCents: $0) }

@@ -20,6 +20,7 @@ struct SettingsView: View {
     @State private var firstWeekday: Int
     @State private var wageDigitsText: String = ""
     @FocusState private var isWageFieldFocused: Bool
+    @State private var isShowingBackfillSheet = false
 
     private let weekdaySymbols = Calendar.current.weekdaySymbols // [Sunday…Saturday]
     private static let maxWageDigits = 4 // caps at $99.99/hr
@@ -127,6 +128,13 @@ struct SettingsView: View {
                     preferencesStore.baseHourlyWageCents = filtered.isEmpty ? nil : Int(filtered)
                 }
 
+                Section("Data") {
+                    captionedRow("Backfill history from before Payday. More history means better insights.") {
+                        Button("Add Past Shifts") { isShowingBackfillSheet = true }
+                    }
+                }
+                .listRowBackground(PaydayColor.fieldBackground)
+
                 Section("Calendar") {
                     captionedRow("Sets which day the calendar grid begins on.") {
                         Picker("First day", selection: $firstWeekday) {
@@ -197,6 +205,9 @@ struct SettingsView: View {
                 isFaceIDLockEnabled = preferencesStore.isFaceIDLockEnabled
                 isSmartNudgeEnabled = preferencesStore.isSmartNudgeEnabled
                 wageDigitsText = preferencesStore.baseHourlyWageCents.map(String.init) ?? ""
+            }
+            .sheet(isPresented: $isShowingBackfillSheet) {
+                BackfillSheet()
             }
         }
         .presentationBackground(PaydayColor.background)
