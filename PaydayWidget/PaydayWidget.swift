@@ -164,5 +164,8 @@ struct PaydayWidgetBundle: WidgetBundle {
     var body: some Widget {
         PaydayWidget()
         PaydayLogControl()
+        PaydayStartShiftControl()
+        PaydayEndShiftControl()
+        ShiftLiveActivity()
     }
 }

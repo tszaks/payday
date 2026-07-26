@@ -54,7 +54,7 @@ struct LogTipSheet: View {
     init(target: TipEntrySheetTarget) {
         self.target = target
         switch target {
-        case .new(let defaultDate):
+        case .new(let defaultDate, let seedClockIn, let seedClockOut):
             _date = State(initialValue: defaultDate)
             _note = State(initialValue: "")
             // The clock is only a trustworthy proxy for "which shift is
@@ -64,6 +64,14 @@ struct LogTipSheet: View {
             if Calendar.current.isDateInToday(defaultDate) {
                 let hour = Calendar.current.component(.hour, from: .now)
                 _shiftPeriod = State(initialValue: hour < 16 ? .lunch : .dinner)
+            }
+            // A just-ended live shift session already knows its exact
+            // punches — seed Started/Ended from them directly, same as if
+            // the pickers had been set by hand.
+            _clockIn = State(initialValue: seedClockIn)
+            _clockOut = State(initialValue: seedClockOut)
+            if let seedClockIn, let seedClockOut {
+                _hoursWorked = State(initialValue: ShiftTimes.hours(clockIn: seedClockIn, clockOut: seedClockOut))
             }
         case .edit(let entry):
             // A synchronous fallback seeded from the anchor entry alone —

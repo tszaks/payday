@@ -220,12 +220,17 @@ struct DashboardView: View {
     @Environment(UserPreferencesStore.self) private var preferencesStore
     @Environment(\.modelContext) private var modelContext
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
     @Query(sort: \TipEntry.date, order: .reverse) private var allEntries: [TipEntry]
 
     @State private var sheetTarget: TipEntrySheetTarget?
     @State private var showSettings = false
     @State private var undoState = UndoDeleteToastState()
     @State private var progressTrackDrawn = false
+    /// Observed, not mirrored into local state: a quick action or Control
+    /// Center intent can start a session while this view is already on
+    /// screen and foregrounded, which no scenePhase change would announce.
+    private var shiftSession = ShiftSessionState.shared
     /// Whether the cash/credit breakdown drawer tucked under the hero is open.
     @State private var breakdownExpanded = false
     /// The `end` (as a reference-date interval) of the period whose completion
@@ -271,16 +276,7 @@ struct DashboardView: View {
                         .padding(.horizontal, PaydaySpacing.p16)
                         .padding(.top, 8)
 
-                    if let tonightLine = facts.tonightLine {
-                        Text(tonightLine)
-                            .font(PaydayFont.subheadline)
-                            .foregroundStyle(PaydayColor.textSecondary)
-                            .monospacedDigit()
-                            .frame(maxWidth: .infinity, alignment: .center)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal, PaydaySpacing.p24)
-                            .padding(.vertical, PaydaySpacing.p4)
-                    }
+                    tonightOrShiftRow(facts)
 
                     if facts.periodEntries.isEmpty {
                         emptyState
@@ -338,6 +334,66 @@ struct DashboardView: View {
             }
         }
         .undoDeleteToast(undoState, context: modelContext)
+        .onAppear { shiftSession.sync() }
+        .onChange(of: scenePhase) { _, newPhase in
+            guard newPhase == .active else { return }
+            shiftSession.sync()
+        }
+    }
+
+    // MARK: Tonight line / active shift row
+
+    /// One line, always: an active session takes the row over entirely (the
+    /// live fact wins over the historical "you usually work Fridays" one);
+    /// otherwise the row is exactly TonightLine's own text, now with a quiet
+    /// trailing Start Shift button. Same font/hierarchy as the tonight line
+    /// always used — no card, no box.
+    @ViewBuilder
+    private func tonightOrShiftRow(_ facts: DashboardFacts) -> some View {
+        if let activeShiftStart = shiftSession.activeStart {
+            HStack(spacing: PaydaySpacing.p8) {
+                (Text("On shift · ") + Text(timerInterval: activeShiftStart...activeShiftStart.addingTimeInterval(12 * 3600), countsDown: false))
+                    .font(PaydayFont.subheadline)
+                    .foregroundStyle(PaydayColor.textSecondary)
+                    .monospacedDigit()
+                    .lineLimit(1)
+                Spacer(minLength: PaydaySpacing.p8)
+                Button("End Shift") {
+                    Task {
+                        guard let pending = await ShiftSessionManager.end() else { return }
+                        // This screen presents the log sheet itself, so it
+                        // also consumes the stashed pair — otherwise
+                        // MainTabView's popPendingEnd would present a
+                        // SECOND sheet for the same shift on next
+                        // foreground.
+                        ShiftSessionStore.popPendingEnd()
+                        sheetTarget = .new(defaultDate: pending.start, clockIn: pending.start, clockOut: pending.end)
+                    }
+                }
+                .font(PaydayFont.subheadline)
+                .foregroundStyle(PaydayColor.primary)
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, PaydaySpacing.p24)
+            .padding(.vertical, PaydaySpacing.p4)
+        } else if let tonightLine = facts.tonightLine {
+            HStack(spacing: PaydaySpacing.p8) {
+                Text(tonightLine)
+                    .font(PaydayFont.subheadline)
+                    .foregroundStyle(PaydayColor.textSecondary)
+                    .monospacedDigit()
+                    .lineLimit(1)
+                Spacer(minLength: PaydaySpacing.p8)
+                Button("Start Shift") {
+                    ShiftSessionManager.start()
+                }
+                .font(PaydayFont.subheadline)
+                .foregroundStyle(PaydayColor.primary)
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, PaydaySpacing.p24)
+            .padding(.vertical, PaydaySpacing.p4)
+        }
     }
 
     // MARK: Hero card + breakdown drawer

@@ -57,6 +57,17 @@ targets:
           - CFBundleURLName: com.szakacsmedia.payday
             CFBundleURLSchemes:
               - payday
+        # Required for the shift session's lock screen / Dynamic Island
+        # Live Activity (see ShiftLiveActivity.swift).
+        NSSupportsLiveActivities: true
+        # Home Screen long-press quick actions — handled in AppDelegate.swift.
+        UIApplicationShortcutItems:
+          - UIApplicationShortcutItemType: com.szakacsmedia.payday.quickaction.log
+            UIApplicationShortcutItemTitle: Log Shift
+            UIApplicationShortcutItemIconSymbolName: plus.circle
+          - UIApplicationShortcutItemType: com.szakacsmedia.payday.quickaction.startshift
+            UIApplicationShortcutItemTitle: Start Shift
+            UIApplicationShortcutItemIconSymbolName: timer
     dependencies:
       - target: PaydayWidget
         embed: true
@@ -83,6 +94,9 @@ targets:
       - path: Payday/Design/DesignSystem.swift
       - path: Payday/Views/Shared/TipEntrySheetTarget.swift
       - path: Payday/Intents/OpenLogSheetIntent.swift
+      - path: Payday/Utilities/ShiftSessionStore.swift
+      - path: Payday/Utilities/ShiftSessionManager.swift
+      - path: Payday/Intents/ShiftIntents.swift
     settings:
       base:
         PRODUCT_NAME: PaydayWidget

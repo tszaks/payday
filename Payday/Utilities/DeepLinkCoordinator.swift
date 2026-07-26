@@ -9,5 +9,12 @@ import Foundation
 final class DeepLinkCoordinator {
     static let shared = DeepLinkCoordinator()
     var pendingLogTarget: TipEntrySheetTarget?
+    /// Set by payday://shift (the Live Activity/lock screen tap) — a plain
+    /// Bool rather than an AppTab, so this file (shared into the widget
+    /// target for OpenLogSheetIntent) never depends on a type that only
+    /// exists in the app target. MainTabView observes this and switches
+    /// tabs; a shift-in-progress tap always lands on Dashboard, never a
+    /// sheet.
+    var pendingDashboardSelection = false
     private init() {}
 }

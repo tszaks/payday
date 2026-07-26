@@ -4,7 +4,10 @@ import Foundation
 /// existing entry" from any screen, so no screen mixes sheet(isPresented:)
 /// and sheet(item:) for the same concern.
 enum TipEntrySheetTarget: Identifiable {
-    case new(defaultDate: Date)
+    /// clockIn/clockOut seed the Started/Ended pickers directly — used when
+    /// a live shift session just ended and its exact punches are already
+    /// known, rather than left for the picker's usual lunch/dinner defaults.
+    case new(defaultDate: Date, clockIn: Date? = nil, clockOut: Date? = nil)
     case edit(TipEntry)
 
     var id: String {
