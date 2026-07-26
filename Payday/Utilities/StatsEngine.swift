@@ -556,6 +556,85 @@ struct StatsEngine {
 
     private func startOfDay(_ date: Date) -> Date { calendar.startOfDay(for: date) }
 
+    // MARK: Plan forward
+
+    /// Looks one week ahead, deterministically: what the next 7 days
+    /// probably pay at this person's own rhythm, plus — only when the data
+    /// honestly supports it — the one pickup shift worth chasing. No
+    /// model, no narration, same discipline as moves() and
+    /// projectedPeriodTotal. Self-contained types so the widget target
+    /// that compiles this file stays happy.
+    func planForward(referenceDate: Date = .now) -> PlanForward? {
+        let rhythm = workRhythm(referenceDate: referenceDate)
+        // No rhythm yet = nothing honest to project — same suppression
+        // rule projectedPeriodTotal uses.
+        guard !rhythm.usualWeekdays.isEmpty else { return nil }
+
+        let allShifts = nights()
+        guard !allShifts.isEmpty else { return nil }
+        let overallAverageCents = Int((Double(allShifts.reduce(0) { $0 + $1.cents }) / Double(allShifts.count)).rounded())
+
+        let today = calendar.startOfDay(for: referenceDate)
+        let upcomingWeekdays: [Int] = (1...7).map { offset in
+            let day = calendar.date(byAdding: .day, value: offset, to: today) ?? today
+            return calendar.component(.weekday, from: day)
+        }
+
+        func weekdayShiftCents(_ weekday: Int) -> [Int] {
+            allShifts.filter { calendar.component(.weekday, from: $0.date) == weekday }.map(\.cents)
+        }
+
+        let planNights: [PlanForward.Night] = upcomingWeekdays
+            .filter { rhythm.usualWeekdays.contains($0) }
+            .map { weekday in
+                let cents = weekdayShiftCents(weekday)
+                // Below the same 3-night bar every other weekday-specific
+                // claim in this file requires (minimumNightsForWeekdayBest)
+                // — barely clearing workRhythm's own 2-night "usual" floor
+                // isn't enough to trust a weekday's own price yet, so it
+                // borrows the overall average instead. Mark nothing; the
+                // count alongside it speaks for itself.
+                let averageCents = cents.count >= Self.minimumNightsForWeekdayBest
+                    ? Int((Double(cents.reduce(0, +)) / Double(cents.count)).rounded())
+                    : overallAverageCents
+                return PlanForward.Night(weekday: weekday, averageNetCents: averageCents, nightCount: cents.count)
+            }
+
+        let projectedTotalCents = planNights.reduce(0) { $0 + $1.averageNetCents }
+        let pickup = planPickup(upcomingWeekdays: upcomingWeekdays, usualWeekdays: rhythm.usualWeekdays, planNights: planNights, weekdayShiftCents: weekdayShiftCents)
+
+        return PlanForward(nights: planNights, projectedTotalCents: projectedTotalCents, pickup: pickup)
+    }
+
+    /// The single non-usual weekday in the coming week worth chasing —
+    /// beats the lowest-priced usual night by both a flat floor and the
+    /// same variance guard weekdaySwapMove uses, so a few lucky nights on
+    /// an off-day can't read as a real signal. Silence (nil) beats weak
+    /// advice.
+    private func planPickup(upcomingWeekdays: [Int], usualWeekdays: Set<Int>, planNights: [PlanForward.Night], weekdayShiftCents: (Int) -> [Int]) -> PlanForward.Pickup? {
+        guard let lowestUsual = planNights.min(by: { $0.averageNetCents < $1.averageNetCents }) else { return nil }
+        let usualCents = weekdayShiftCents(lowestUsual.weekday)
+
+        let candidates = upcomingWeekdays
+            .filter { !usualWeekdays.contains($0) }
+            .compactMap { weekday -> (weekday: Int, average: Double, cents: [Int])? in
+                let cents = weekdayShiftCents(weekday)
+                guard cents.count >= Self.minimumNightsForWeekdayBest else { return nil }
+                return (weekday, Double(cents.reduce(0, +)) / Double(cents.count), cents)
+            }
+
+        let qualifying = candidates.filter { candidate in
+            let deltaCents = Int((candidate.average - Double(lowestUsual.averageNetCents)).rounded())
+            guard deltaCents > 0 else { return false }
+            let pooledSD = pooledStandardDeviationCents(candidate.cents, usualCents)
+            let requiredDelta = max(MoveThresholds.minimumWeekdaySwapDeltaCents, Int((MoveThresholds.varianceGuardFactor * pooledSD).rounded()))
+            return deltaCents >= requiredDelta
+        }
+
+        guard let best = qualifying.max(by: { $0.average < $1.average }) else { return nil }
+        return PlanForward.Pickup(weekday: best.weekday, averageNetCents: Int(best.average.rounded()), nightCount: best.cents.count)
+    }
+
     // MARK: Insights facts
 
     static let minimumShiftsForInsights = 5
@@ -1253,6 +1332,35 @@ struct StatsEngine {
 
         return FollowUp(id: moveID, title: title, body: body, dollarEffectCents: dollarEffectCents)
     }
+}
+
+/// StatsEngine.planForward(referenceDate:)'s result — a deterministic look
+/// one week ahead. Self-contained (no dependency on any other Insights
+/// type) so the widget target, which compiles this file alone, stays
+/// happy.
+struct PlanForward: Equatable {
+    /// One usual night in the coming week, priced at that weekday's own
+    /// historical per-shift net average — see planForward for the
+    /// thin-sample fallback rule.
+    struct Night: Equatable {
+        let weekday: Int
+        let averageNetCents: Int
+        let nightCount: Int
+    }
+
+    /// The one non-usual weekday worth picking up next week, only present
+    /// when the data honestly clears both the flat floor and the variance
+    /// guard — see planForward.
+    struct Pickup: Equatable {
+        let weekday: Int
+        let averageNetCents: Int
+        let nightCount: Int
+    }
+
+    /// The next 7 calendar days' usual nights, in date order.
+    let nights: [Night]
+    let projectedTotalCents: Int
+    let pickup: Pickup?
 }
 
 /// The smart nudge's entire basis — see StatsEngine.workRhythm(referenceDate:).
