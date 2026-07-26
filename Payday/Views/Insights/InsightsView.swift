@@ -62,7 +62,7 @@ struct InsightsView: View {
         NavigationStack {
             Group {
                 if let facts = pageFacts.facts {
-                    resultList(facts, moves: pageFacts.moves, followUps: pageFacts.followUps, recentNights: pageFacts.recentNights, unlocks: pageFacts.unlocks)
+                    resultList(facts, moves: pageFacts.moves, followUps: pageFacts.followUps, recentNights: pageFacts.recentNights, unlocks: pageFacts.unlocks, plan: pageFacts.plan)
                 } else {
                     ScrollView {
                         emptyState(unlocks: pageFacts.unlocks, shiftCount: pageFacts.shiftCount)
@@ -93,7 +93,7 @@ struct InsightsView: View {
         }
     }
 
-    private func resultList(_ facts: InsightsFacts, moves: [Move], followUps: [FollowUp], recentNights: [(date: Date, cents: Int)], unlocks: [Unlock]) -> some View {
+    private func resultList(_ facts: InsightsFacts, moves: [Move], followUps: [FollowUp], recentNights: [(date: Date, cents: Int)], unlocks: [Unlock], plan: PlanForward?) -> some View {
         ScrollViewReader { proxy in
         ScrollView {
             VStack(spacing: PaydaySpacing.p16) {
@@ -202,6 +202,27 @@ struct InsightsView: View {
                 // readout), so no separate header here.
                 NightlyEarningsChart(nights: recentNights)
                     .paydayCard()
+
+                // A forward plan outranks anticipation (NEXT UP) but stays
+                // below the chart — this screen's one object. Flat, like
+                // every other section here: deterministic math, no model.
+                if let plan {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("PLAN")
+                            .font(PaydayFont.caption2)
+                            .tracking(0.8)
+                            .foregroundStyle(PaydayColor.primary)
+                        Text(PlanForwardCopy.headline(for: plan))
+                            .font(PaydayFont.headline)
+                            .foregroundStyle(PaydayColor.textPrimary)
+                        Text(PlanForwardCopy.body(for: plan))
+                            .font(PaydayFont.bodyRegular)
+                            .foregroundStyle(PaydayColor.textPrimary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    Divider()
+                }
 
                 // Anticipation, not a finding — flat like the sections
                 // above, but deliberately never a card and never followed
@@ -383,6 +404,8 @@ private struct InsightsPageFacts {
     /// What unlocks next, and how close — see UnlockProgress.
     let unlocks: [Unlock]
     let shiftCount: Int
+    /// A deterministic look one week ahead — see StatsEngine.planForward.
+    let plan: PlanForward?
 
     init(allEntries: [TipEntry], ledger: [String: Date]) {
         let records = allEntries.map(TipRecord.init)
@@ -393,5 +416,6 @@ private struct InsightsPageFacts {
         recentNights = Array(statsEngine.nightlyTotals().suffix(30))
         unlocks = UnlockProgress.nextUnlocks(records: records)
         shiftCount = UnlockProgress.shiftCount(records: records)
+        plan = statsEngine.planForward()
     }
 }
