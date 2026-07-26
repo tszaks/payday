@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import UIKit
 
 /// Owns its own dismissal and save logic.
 ///
@@ -847,12 +848,13 @@ private struct CompactCurrencyField: View {
     var body: some View {
         ZStack(alignment: .trailing) {
             if cents == 0, let placeholderCents {
-                // Tertiary, not secondary — a hint reads visibly softer than
-                // an honest zero, so it's never mistaken for a real number.
+                // Secondary, not tertiary: textTertiary falls short of
+                // 4.5:1 contrast against fieldBackground in both modes, and
+                // a placeholder hint still has to be legible to read at all.
                 Text(Money.string(fromCents: placeholderCents))
                     .font(PaydayFont.body)
                     .monospacedDigit()
-                    .foregroundStyle(PaydayColor.textTertiary)
+                    .foregroundStyle(PaydayColor.textSecondary)
                     .accessibilityHidden(true)
             } else {
                 Text(Money.string(fromCents: cents))
@@ -913,10 +915,12 @@ private struct CompactCountField: View {
     var body: some View {
         ZStack(alignment: .trailing) {
             if count == 0, let placeholderCount {
+                // textSecondary, not textTertiary — see CompactCurrencyField's
+                // same contrast note above.
                 Text("\(placeholderCount)")
                     .font(PaydayFont.body)
                     .monospacedDigit()
-                    .foregroundStyle(PaydayColor.textTertiary)
+                    .foregroundStyle(PaydayColor.textSecondary)
                     .accessibilityHidden(true)
             } else if count > 0 {
                 Text("\(count)")
@@ -1000,6 +1004,10 @@ private struct RevealCardView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .contentShape(Rectangle())
         .onTapGesture { onDismiss() }
+        .onAppear {
+            let comparison = RevealCopy.comparison(for: result.comparison, period: period)
+            UIAccessibility.post(notification: .announcement, argument: "\(RevealCopy.headline(cents: result.cents)) \(comparison)")
+        }
         .task {
             PaydayHaptics.success()
             if result.isRecord {

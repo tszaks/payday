@@ -84,6 +84,7 @@ struct DayDetailSheet: View {
                     } label: {
                         Image(systemName: "plus")
                     }
+                    .accessibilityLabel("Log shift")
                 }
             }
             .sheet(item: $sheetTarget) { target in

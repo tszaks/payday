@@ -202,6 +202,7 @@ struct CalendarView: View {
                 Image(systemName: "chevron.left")
                     .font(PaydayFont.subheadline)
             }
+            .accessibilityLabel("Previous month")
             Spacer()
             Text(monthTitle)
                 .font(PaydayFont.headline)
@@ -213,6 +214,7 @@ struct CalendarView: View {
                 Image(systemName: "chevron.right")
                     .font(PaydayFont.subheadline)
             }
+            .accessibilityLabel("Next month")
         }
         .tint(PaydayColor.primary)
     }
@@ -339,7 +341,7 @@ private struct DayCell: View {
 
     private var accessibilityLabel: String {
         let dateText = day.formatted(.dateTime.month(.wide).day())
-        guard hasTips, let totalCents else { return dateText }
+        guard hasTips, let totalCents else { return "\(dateText), no shifts" }
         return "\(dateText), \(Money.string(fromCents: totalCents)) logged"
     }
 

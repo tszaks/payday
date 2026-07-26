@@ -75,11 +75,17 @@ struct NightlyEarningsChart: View {
                     // every label sits a half-step left of its bar.
                     AxisValueLabel(format: .dateTime.weekday(.narrow), centered: true)
                         .font(PaydayFont.caption3)
-                        .foregroundStyle(PaydayColor.textTertiary)
+                        .foregroundStyle(PaydayColor.textSecondary)
                 }
             }
             .chartYAxis(.hidden)
             .frame(height: 120)
+            // One summary is enough for VoiceOver here (per-bar audio graphs
+            // aren't worth the complexity for a chart this small); combined
+            // with .ignore, this replaces Swift Charts' automatic per-mark
+            // accessibility elements with a single readout.
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(chartAccessibilityLabel)
         }
         .animation(PaydayAnimation.premiumSpring, value: selectedDate)
         .onChange(of: selectedDate) { oldValue, newValue in
@@ -99,6 +105,11 @@ struct NightlyEarningsChart: View {
         .font(PaydayFont.subheadline)
         .foregroundStyle(PaydayColor.textSecondary)
         .monospacedDigit()
+    }
+
+    private var chartAccessibilityLabel: String {
+        guard maxCents > 0 else { return "Daily earnings chart. No earnings logged." }
+        return "Daily earnings chart. Best day \(Money.string(fromCents: maxCents))."
     }
 
     private func barOpacity(for night: (date: Date, cents: Int)) -> Double {

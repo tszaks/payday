@@ -78,7 +78,7 @@ struct BackfillSheet: View {
                         if shiftsAddedCount > 0 {
                             Text(shiftsAddedCount == 1 ? "1 shift added" : "\(shiftsAddedCount) shifts added")
                                 .font(PaydayFont.caption2)
-                                .foregroundStyle(PaydayColor.textTertiary)
+                                .foregroundStyle(PaydayColor.textSecondary)
                         }
                     }
                     .padding(.horizontal)
@@ -135,7 +135,7 @@ struct BackfillSheet: View {
                 if selectedDayAlreadyHasShift {
                     Text("This day already has a shift. Saving adds a second.")
                         .font(PaydayFont.caption2)
-                        .foregroundStyle(PaydayColor.textTertiary)
+                        .foregroundStyle(PaydayColor.textSecondary)
                         .padding(.horizontal)
                         .padding(.bottom, 12)
                 }
