@@ -296,6 +296,7 @@ struct DashboardView: View {
                     } label: {
                         Image(systemName: "gearshape")
                     }
+                    .accessibilityLabel("Settings")
                 }
             }
             .sheet(item: $sheetTarget) { target in
@@ -357,6 +358,7 @@ struct DashboardView: View {
                     .foregroundStyle(PaydayColor.textSecondary)
                     .monospacedDigit()
                     .lineLimit(1)
+                    .minimumScaleFactor(0.7)
                 Spacer(minLength: PaydaySpacing.p8)
                 Button("End Shift") {
                     Task {
@@ -383,6 +385,7 @@ struct DashboardView: View {
                     .foregroundStyle(PaydayColor.textSecondary)
                     .monospacedDigit()
                     .lineLimit(1)
+                    .minimumScaleFactor(0.7)
                 Spacer(minLength: PaydaySpacing.p8)
                 Button("Start Shift") {
                     ShiftSessionManager.start()
@@ -411,12 +414,7 @@ struct DashboardView: View {
                 .contentShape(Rectangle())
                 .onTapGesture {
                     guard hasBreakdown else { return }
-                    PaydayHaptics.lightTap()
-                    // drawerSpring: a touch of overshoot so the drawer lands
-                    // with a small bounce — poppy, not dramatic (Tyler's call).
-                    withAnimation(PaydayAnimation.drawerSpring) {
-                        breakdownExpanded.toggle()
-                    }
+                    toggleBreakdown()
                 }
                 .zIndex(1)
 
@@ -424,6 +422,22 @@ struct DashboardView: View {
                 breakdownDrawer(facts)
                     .padding(.top, -PaydayRadius.xl + 2)
                     .zIndex(0)
+            }
+        }
+    }
+
+    /// drawerSpring: a touch of overshoot so the drawer lands with a small
+    /// bounce — poppy, not dramatic (Tyler's call). Shared by the hero's tap
+    /// gesture and its VoiceOver accessibility action (heroSummary below) so
+    /// both paths toggle identically. Reduce Motion drops the spring/slide
+    /// entirely — the drawer just snaps to its new state.
+    private func toggleBreakdown() {
+        PaydayHaptics.lightTap()
+        if reduceMotion {
+            breakdownExpanded.toggle()
+        } else {
+            withAnimation(PaydayAnimation.drawerSpring) {
+                breakdownExpanded.toggle()
             }
         }
     }
@@ -515,6 +529,27 @@ struct DashboardView: View {
 
     private func heroCard(_ facts: DashboardFacts) -> some View {
         VStack(spacing: PaydaySpacing.p20) {
+            heroSummary(facts)
+
+            if facts.isPaydayMoment {
+                Divider()
+                paydayMomentSection(facts)
+            }
+        }
+        .paydayCard(padding: PaydaySpacing.p24)
+    }
+
+    /// The always-tappable part of the hero: label, amount, pace line, and
+    /// the period progress bar. Combined into one VoiceOver element carrying
+    /// a button trait and the toggle action — the tap gesture that expands
+    /// the breakdown drawer lives on the outer heroCard container, which
+    /// (being several separately-readable Texts) has no single element for
+    /// VoiceOver to activate otherwise. The payday moment section stays
+    /// outside this combined region so its own Dismiss button and TipKit
+    /// popover keep their individual accessibility.
+    private func heroSummary(_ facts: DashboardFacts) -> some View {
+        let hasBreakdown = facts.heroCashCents > 0 || facts.heroCreditCents > 0
+        return VStack(spacing: PaydaySpacing.p20) {
             VStack(spacing: 6) {
                 Text(facts.heroLabel)
                     .font(PaydayFont.subheadline)
@@ -547,13 +582,14 @@ struct DashboardView: View {
             }
 
             progressTrack(facts)
-
-            if facts.isPaydayMoment {
-                Divider()
-                paydayMomentSection(facts)
-            }
         }
-        .paydayCard(padding: PaydaySpacing.p24)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(hasBreakdown ? .isButton : [])
+        .accessibilityHint(hasBreakdown ? (breakdownExpanded ? "Hide breakdown" : "Show breakdown") : "")
+        .accessibilityAction {
+            guard hasBreakdown else { return }
+            toggleBreakdown()
+        }
     }
 
     private func progressAccessibilityValue(_ facts: DashboardFacts) -> String {
@@ -648,8 +684,12 @@ struct DashboardView: View {
             // for this period once dismissed.
             if let end = facts.paydayPeriodEnd {
                 Button {
-                    withAnimation(PaydayAnimation.premiumSpring) {
+                    if reduceMotion {
                         dismissedPaydayEndRaw = end.timeIntervalSinceReferenceDate
+                    } else {
+                        withAnimation(PaydayAnimation.premiumSpring) {
+                            dismissedPaydayEndRaw = end.timeIntervalSinceReferenceDate
+                        }
                     }
                 } label: {
                     Image(systemName: "xmark")
@@ -675,7 +715,7 @@ struct DashboardView: View {
                 Spacer()
                 Text(facts.shiftCount == 1 ? "1 this period" : "\(facts.shiftCount) this period")
                     .font(PaydayFont.caption)
-                    .foregroundStyle(PaydayColor.textTertiary)
+                    .foregroundStyle(PaydayColor.textSecondary)
             }
             .padding(.top, PaydaySpacing.p16)
             .padding(.bottom, PaydaySpacing.p8)

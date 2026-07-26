@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import UIKit
 
 /// Plain field snapshot of a TipEntry, captured right before deletion so
 /// Undo can rebuild it — the SwiftData model instance itself is gone from
@@ -87,6 +88,7 @@ final class UndoDeleteToastState {
 private struct UndoDeleteToastModifier: ViewModifier {
     @Bindable var state: UndoDeleteToastState
     let context: ModelContext
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func body(content: Content) -> some View {
         content.overlay(alignment: .bottom) {
@@ -94,7 +96,10 @@ private struct UndoDeleteToastModifier: ViewModifier {
                 toast
                     .padding(.horizontal, PaydaySpacing.md)
                     .padding(.bottom, PaydaySpacing.md)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
+                    .onAppear {
+                        UIAccessibility.post(notification: .announcement, argument: "Shift deleted")
+                    }
             }
         }
         .animation(PaydayAnimation.premiumSpring, value: state.snapshot != nil)

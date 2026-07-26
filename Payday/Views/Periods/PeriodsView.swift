@@ -205,7 +205,7 @@ private struct PeriodRow: View {
                     .foregroundStyle(PaydayColor.textSecondary)
                 Text(PaydayCopy.payDateText(payDate: payDate))
                     .font(PaydayFont.caption2)
-                    .foregroundStyle(PaydayColor.textTertiary)
+                    .foregroundStyle(PaydayColor.textSecondary)
             }
             Spacer(minLength: 0)
             // Every row here is a NavigationLink — the disclosure chevron
@@ -228,7 +228,7 @@ private struct PeriodRow: View {
                             .foregroundStyle(delta < 0 ? PaydayColor.error : PaydayColor.primary)
                         Text("checked")
                             .font(PaydayFont.caption2)
-                            .foregroundStyle(PaydayColor.textTertiary)
+                            .foregroundStyle(PaydayColor.textSecondary)
                     }
                 }
                 Image(systemName: "chevron.right")

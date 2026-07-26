@@ -290,7 +290,7 @@ struct InsightsView: View {
             } else if let generatedAt = insightsStore.snapshot?.generatedAt {
                 Text("Last updated \(generatedAt.formatted(.dateTime.month(.abbreviated).day().hour().minute()))")
                     .font(PaydayFont.caption2)
-                    .foregroundStyle(PaydayColor.textTertiary)
+                    .foregroundStyle(PaydayColor.textSecondary)
             }
         }
         .multilineTextAlignment(.center)
@@ -327,6 +327,7 @@ struct InsightsView: View {
                 .lineLimit(2)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
     }
 
     private func emptyState(unlocks: [Unlock], shiftCount: Int) -> some View {
@@ -354,6 +355,7 @@ struct InsightsView: View {
                             .fill(PaydayColor.primary)
                             .frame(width: 160 * CGFloat(insightsUnlock.have) / CGFloat(insightsUnlock.need), height: 4)
                     }
+                    .accessibilityHidden(true)
                 Text(insightsUnlock.line)
                     .font(PaydayFont.caption)
                     .foregroundStyle(PaydayColor.textSecondary)
