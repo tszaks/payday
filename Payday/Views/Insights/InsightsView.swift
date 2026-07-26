@@ -20,6 +20,7 @@ struct InsightsView: View {
 
     @State private var isLoading = false
     @State private var errorMessage: String?
+    @State private var isShowingBackfillSheet = false
 
     /// Upper bound on refresh cadence — "maybe weekly, twice a week at
     /// most." A visit to this tab checks whether this much time has passed
@@ -78,6 +79,16 @@ struct InsightsView: View {
             }
             .task(id: pageFacts.moves.map(\.id)) {
                 moveLedgerStore.recordShown(pageFacts.moves)
+            }
+            .sheet(isPresented: $isShowingBackfillSheet) {
+                BackfillSheet()
+            }
+            // QA-only, same launch-arg pattern as -InitialTab: simctl can't
+            // tap, so screenshot QA needs the sheet to present itself.
+            .onAppear {
+                if ProcessInfo.processInfo.arguments.contains("-OpenBackfillSheet") {
+                    isShowingBackfillSheet = true
+                }
             }
         }
     }
@@ -327,6 +338,10 @@ struct InsightsView: View {
                     .foregroundStyle(PaydayColor.textSecondary)
                     .multilineTextAlignment(.center)
             }
+            Button("Add Past Shifts") { isShowingBackfillSheet = true }
+                .font(PaydayFont.subheadline)
+                .foregroundStyle(PaydayColor.primary)
+                .buttonStyle(.plain)
         }
         .padding(.top, 40)
     }
