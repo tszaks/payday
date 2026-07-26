@@ -116,7 +116,7 @@ private struct DashboardFacts {
             bestNightThisPeriod = statsEngine.bestNight(in: pay)
             // Credit tips are what land on a stub; cash never does. Gross, like
             // PaycheckComparisonView — a stub reports gross, not net income.
-            predictedPaycheckCents = payBreakdown.creditCents > 0 ? payBreakdown.creditCents : payBreakdown.grossTotalCents
+            predictedPaycheckCents = PredictedPaycheck.cents(from: payBreakdown)
             predictedPayDate = calculator.payDate(for: pay)
             let payShiftGroups = ShiftDays.groupedByShift(payEntries, shiftID: \.shiftID, date: \.date, period: \.shiftPeriod).map(\.items)
             paydayLoggedHours = WageEstimate.loggedHours(shiftGroups: payShiftGroups)
@@ -167,7 +167,7 @@ private struct DashboardFacts {
         } else {
             bestNightThisPeriod = statsEngine.bestNight(in: period)
             isBestPeriodEver = false
-            predictedPaycheckCents = breakdown.creditCents > 0 ? breakdown.creditCents : breakdown.grossTotalCents
+            predictedPaycheckCents = PredictedPaycheck.cents(from: breakdown)
             predictedPayDate = calculator.payDate(for: period)
             paydayLoggedHours = 0
             heroPeriod = period

@@ -16,6 +16,7 @@ struct LogTipSheet: View {
     @Environment(PayScheduleStore.self) private var scheduleStore
     @Environment(UserPreferencesStore.self) private var preferencesStore
     @Query(sort: \TipEntry.date, order: .reverse) private var allEntries: [TipEntry]
+    @Query private var paycheckRecords: [PaycheckRecord]
 
     let target: TipEntrySheetTarget
 
@@ -734,6 +735,7 @@ struct LogTipSheet: View {
         // refreshed within this same call, so the just-inserted entries
         // are appended explicitly rather than relied on to already be in it.
         SmartNudgeScheduler.reschedule(preferencesStore: preferencesStore, allEntries: allEntries + newEntries)
+        PaydayPushScheduler.reschedule(preferencesStore: preferencesStore, schedule: scheduleStore.schedule, allEntries: allEntries + newEntries, paycheckRecords: paycheckRecords)
         if isFirstShiftEver {
             Task { await SmartNudgeScheduler.requestAuthorizationIfNeeded() }
         }

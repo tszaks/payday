@@ -7,6 +7,7 @@ struct RootView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var lockController = AppLockController()
     @Query private var allEntries: [TipEntry]
+    @Query private var paycheckRecords: [PaycheckRecord]
 
     var body: some View {
         Group {
@@ -25,6 +26,7 @@ struct RootView: View {
                 lockController.armIfEnabled(preferencesStore)
             case .active:
                 SmartNudgeScheduler.reschedule(preferencesStore: preferencesStore, allEntries: allEntries)
+                PaydayPushScheduler.reschedule(preferencesStore: preferencesStore, schedule: scheduleStore.schedule, allEntries: allEntries, paycheckRecords: paycheckRecords)
             default:
                 break
             }

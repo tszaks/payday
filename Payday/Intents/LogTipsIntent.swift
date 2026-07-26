@@ -128,7 +128,10 @@ struct LogTipsIntent: AppIntent {
         try context.save()
 
         let allEntries = try context.fetch(FetchDescriptor<TipEntry>())
-        SmartNudgeScheduler.reschedule(preferencesStore: UserPreferencesStore(), allEntries: allEntries)
+        let paycheckRecords = try context.fetch(FetchDescriptor<PaycheckRecord>())
+        let preferencesStore = UserPreferencesStore()
+        SmartNudgeScheduler.reschedule(preferencesStore: preferencesStore, allEntries: allEntries)
+        PaydayPushScheduler.reschedule(preferencesStore: preferencesStore, schedule: PayScheduleStore().schedule, allEntries: allEntries, paycheckRecords: paycheckRecords)
         PaydayWidgetRefresh.request()
 
         let kindText = kind.tipKind.displayName.lowercased()

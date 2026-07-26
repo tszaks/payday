@@ -1,4 +1,5 @@
 import SwiftUI
+import SwiftData
 
 /// Periods are DERIVED at read time from these settings, never persisted
 /// per-entry — so changing frequency or anchor here just regroups existing
@@ -9,11 +10,14 @@ struct SettingsView: View {
     @Environment(UserPreferencesStore.self) private var preferencesStore
     @Environment(MoveLedgerStore.self) private var moveLedgerStore
     @Environment(\.dismiss) private var dismiss
+    @Query private var allEntries: [TipEntry]
+    @Query private var paycheckRecords: [PaycheckRecord]
 
     @State private var firstName: String
     @State private var appearance: AppAppearance
     @State private var isFaceIDLockEnabled: Bool = false
     @State private var isSmartNudgeEnabled: Bool = true
+    @State private var isPaydayReminderEnabled: Bool = true
     @State private var frequency: PayFrequency
     @State private var mostRecentPayday: Date
     @State private var periodEndDate: Date
@@ -73,6 +77,9 @@ struct SettingsView: View {
                     }
                     captionedRow("A single \"How was your shift?\" notification on a usual work day, only if nothing's logged yet.") {
                         Toggle("Remind me to log", isOn: $isSmartNudgeEnabled)
+                    }
+                    captionedRow("One notification on payday morning with what your check should say.") {
+                        Toggle("Payday reminder", isOn: $isPaydayReminderEnabled)
                     }
                 }
                 .listRowBackground(PaydayColor.fieldBackground)
@@ -199,11 +206,16 @@ struct SettingsView: View {
                     Task { await SmartNudgeScheduler.requestAuthorizationIfNeeded() }
                 }
             }
+            .onChange(of: isPaydayReminderEnabled) { _, newValue in
+                preferencesStore.isPaydayReminderEnabled = newValue
+                PaydayPushScheduler.reschedule(preferencesStore: preferencesStore, schedule: scheduleStore.schedule, allEntries: allEntries, paycheckRecords: paycheckRecords)
+            }
             .onAppear {
                 firstName = preferencesStore.firstName ?? ""
                 appearance = preferencesStore.appearance
                 isFaceIDLockEnabled = preferencesStore.isFaceIDLockEnabled
                 isSmartNudgeEnabled = preferencesStore.isSmartNudgeEnabled
+                isPaydayReminderEnabled = preferencesStore.isPaydayReminderEnabled
                 wageDigitsText = preferencesStore.baseHourlyWageCents.map(String.init) ?? ""
             }
             .sheet(isPresented: $isShowingBackfillSheet) {

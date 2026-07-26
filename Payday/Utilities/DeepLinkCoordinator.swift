@@ -16,5 +16,11 @@ final class DeepLinkCoordinator {
     /// tabs; a shift-in-progress tap always lands on Dashboard, never a
     /// sheet.
     var pendingDashboardSelection = false
+    /// Set by a tapped payday-moment push notification — routes into the
+    /// CURRENT period's detail, the same landing spot as Dashboard's "See
+    /// all" and the -OpenCurrentPeriodDetail QA hook. MainTabView observes
+    /// this and forwards it into TabRouter, since a notification tap lands
+    /// here (an app-wide singleton) before any view's own state exists.
+    var pendingCurrentPeriodDetail = false
     private init() {}
 }

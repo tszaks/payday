@@ -74,6 +74,16 @@ struct MainTabView: View {
             tabRouter.selected = .dashboard
             deepLink.pendingDashboardSelection = false
         }
+        // The payday-moment push's tap target: the same jump Dashboard's
+        // "See all" makes, landing straight inside the current period's
+        // detail where the stub gets verified.
+        .onChange(of: deepLink.pendingCurrentPeriodDetail) { _, shouldOpen in
+            guard shouldOpen else { return }
+            tabRouter.pendingCurrentPeriodDetail = true
+            HistoryLens.periods.select()
+            tabRouter.selected = .history
+            deepLink.pendingCurrentPeriodDetail = false
+        }
         // A shift ended from Control Center, Siri, the Live Activity's own
         // End button, or the Home Screen quick action all happen outside
         // the app — popPendingEnd picks up the exact punches the next time

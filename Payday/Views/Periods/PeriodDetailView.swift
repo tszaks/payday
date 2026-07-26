@@ -113,7 +113,7 @@ struct PeriodDetailView: View {
     }
 
     private var predictedPaycheckCents: Int {
-        breakdown.creditCents > 0 ? breakdown.creditCents : breakdown.grossTotalCents
+        PredictedPaycheck.cents(from: breakdown)
     }
 
     /// Logged hours for this period's shifts, for the wages estimate below —
