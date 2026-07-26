@@ -25,6 +25,7 @@ struct MainTabView: View {
     #if DEBUG
     @Environment(\.modelContext) private var modelContext
     #endif
+    @Environment(\.scenePhase) private var scenePhase
     @State private var tabRouter = TabRouter()
     @State private var previousTab: AppTab = .dashboard
     @State private var isRestoringTabAfterLog = false
@@ -67,6 +68,21 @@ struct MainTabView: View {
         // sheet only for editing an existing entry.
         .sheet(item: $deepLink.pendingLogTarget) { target in
             LogTipSheet(target: target)
+        }
+        .onChange(of: deepLink.pendingDashboardSelection) { _, shouldSelect in
+            guard shouldSelect else { return }
+            tabRouter.selected = .dashboard
+            deepLink.pendingDashboardSelection = false
+        }
+        // A shift ended from Control Center, Siri, the Live Activity's own
+        // End button, or the Home Screen quick action all happen outside
+        // the app — popPendingEnd picks up the exact punches the next time
+        // this view is on screen, whether that's a cold launch or a return
+        // to the foreground.
+        .onAppear { presentPendingShiftEndIfNeeded() }
+        .onChange(of: scenePhase) { _, newPhase in
+            guard newPhase == .active else { return }
+            presentPendingShiftEndIfNeeded()
         }
         #if DEBUG
         .onAppear {
@@ -114,8 +130,19 @@ struct MainTabView: View {
                     deepLink.pendingLogTarget = .edit(entry)
                 }
             }
+            // Screenshot/QA hook only: starts a session 47 minutes ago and
+            // requests its Live Activity, so the active Dashboard row and
+            // the Dynamic Island can be captured without tapping Start.
+            if args.contains("-StartShiftSession") {
+                ShiftSessionManager.start(at: .now.addingTimeInterval(-47 * 60))
+            }
         }
         #endif
+    }
+
+    private func presentPendingShiftEndIfNeeded() {
+        guard let pending = ShiftSessionStore.popPendingEnd() else { return }
+        deepLink.pendingLogTarget = .new(defaultDate: pending.start, clockIn: pending.start, clockOut: pending.end)
     }
 
     private func handleTabSelection(from oldTab: AppTab, to newTab: AppTab) {

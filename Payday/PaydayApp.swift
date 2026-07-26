@@ -5,6 +5,9 @@ import UserNotifications
 
 @main
 struct PaydayApp: App {
+    // Home Screen long-press quick actions need windowScene(_:performActionFor:),
+    // which only a UIKit scene delegate receives — see AppDelegate.swift.
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var scheduleStore = PayScheduleStore()
     @State private var insightsStore = InsightsStore()
     @State private var preferencesStore = UserPreferencesStore()
@@ -32,8 +35,18 @@ struct PaydayApp: App {
                 // the same destination OpenLogSheetIntent gives the
                 // home-screen widget's "+".
                 .onOpenURL { url in
-                    guard url.scheme == "payday", url.host == "log" else { return }
-                    DeepLinkCoordinator.shared.pendingLogTarget = .new(defaultDate: .now)
+                    guard url.scheme == "payday" else { return }
+                    switch url.host {
+                    case "log":
+                        DeepLinkCoordinator.shared.pendingLogTarget = .new(defaultDate: .now)
+                    case "shift":
+                        // The Live Activity/lock screen tap — always opens
+                        // Dashboard, never a sheet; ending is only ever the
+                        // explicit End button/control, never this tap.
+                        DeepLinkCoordinator.shared.pendingDashboardSelection = true
+                    default:
+                        break
+                    }
                 }
                 .task {
                     #if DEBUG

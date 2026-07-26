@@ -24,5 +24,23 @@ struct PaydayShortcuts: AppShortcutsProvider {
             shortTitle: "Period Total",
             systemImageName: "banknote"
         )
+        AppShortcut(
+            intent: StartShiftIntent(),
+            phrases: [
+                "Start my shift in \(.applicationName)",
+                "Start shift in \(.applicationName)"
+            ],
+            shortTitle: "Start Shift",
+            systemImageName: "timer"
+        )
+        AppShortcut(
+            intent: EndShiftIntent(),
+            phrases: [
+                "End my shift in \(.applicationName)",
+                "End shift in \(.applicationName)"
+            ],
+            shortTitle: "End Shift",
+            systemImageName: "stop.circle"
+        )
     }
 }
