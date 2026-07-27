@@ -363,51 +363,15 @@ struct DashboardView: View {
 
     // MARK: Hero card + breakdown drawer
 
-    /// The hero card with a cash/credit drawer tucked behind it — same peek +
-    /// slide treatment as Vero's coverage drawer. The drawer's collapsed lip
-    /// shows the cash/credit split at rest; tapping the hero slides it open to
-    /// the full reconciliation (cash + credit − tip-out = take-home), which is
-    /// where the tip-out lives now instead of cluttering the card face.
-    @ViewBuilder
+    /// The hero card with a cash/credit drawer tucked behind it, via the
+    /// shared HeroBreakdownDrawer (same peek + slide treatment as Vero's
+    /// coverage drawer, now also used by PeriodDetailView's hero). The
+    /// drawer's collapsed lip shows the cash/credit split at rest; tapping
+    /// the hero slides it open to the full reconciliation (cash + credit −
+    /// tip-out = take-home), which is where the tip-out lives now instead of
+    /// cluttering the card face.
     private func heroWithDrawer(_ facts: DashboardFacts) -> some View {
         let hasBreakdown = facts.heroCashCents > 0 || facts.heroCreditCents > 0
-        VStack(spacing: 0) {
-            heroCard(facts)
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    guard hasBreakdown else { return }
-                    toggleBreakdown()
-                }
-                .zIndex(1)
-
-            if hasBreakdown {
-                breakdownDrawer(facts)
-                    .padding(.top, -PaydayRadius.xl + 2)
-                    .zIndex(0)
-            }
-        }
-    }
-
-    /// drawerSpring: a touch of overshoot so the drawer lands with a small
-    /// bounce — poppy, not dramatic (Tyler's call). Shared by the hero's tap
-    /// gesture and its VoiceOver accessibility action (heroSummary below) so
-    /// both paths toggle identically. Reduce Motion drops the spring/slide
-    /// entirely — the drawer just snaps to its new state.
-    private func toggleBreakdown() {
-        PaydayHaptics.lightTap()
-        if reduceMotion {
-            breakdownExpanded.toggle()
-        } else {
-            withAnimation(PaydayAnimation.drawerSpring) {
-                breakdownExpanded.toggle()
-            }
-        }
-    }
-
-    /// Card tucked behind the hero. Collapsed: a lip showing the cash/credit
-    /// split with a chevron. Expanded: the itemized reconciliation. Square top,
-    /// rounded bottom, recessed fill so it reads as sliding out from under.
-    private func breakdownDrawer(_ facts: DashboardFacts) -> some View {
         // The figure that makes the split reconcile to Total, derived so it
         // always adds up regardless of how tip-out was logged across a
         // shift. Wages sit outside cash/credit entirely, so tip-out is
@@ -415,76 +379,36 @@ struct DashboardView: View {
         let wagesTotalCents = facts.heroWages?.totalCents ?? 0
         let tipsNetCents = facts.heroTotalCents - wagesTotalCents
         let tipOutCents = max(0, facts.heroCashCents + facts.heroCreditCents - tipsNetCents)
-        let drawerShape = UnevenRoundedRectangle(
-            cornerRadii: .init(topLeading: 0, bottomLeading: PaydayRadius.xl,
-                               bottomTrailing: PaydayRadius.xl, topTrailing: 0),
-            style: .continuous
-        )
-        return VStack(spacing: 0) {
-            // Collapsed lip: cash/credit at a glance, and the tap affordance.
-            // Extra top padding clears the slice tucked behind the hero.
-            HStack(spacing: PaydaySpacing.p8) {
-                Text("Cash \(Money.string(fromCents: facts.heroCashCents)) · Credit \(Money.string(fromCents: facts.heroCreditCents))")
-                    .font(PaydayFont.caption)
-                    .foregroundStyle(PaydayColor.textSecondary)
-                    .monospacedDigit()
-                Spacer(minLength: 0)
-                Image(systemName: "chevron.down")
-                    .font(PaydayFont.caption2)
-                    .foregroundStyle(PaydayColor.textTertiary)
-                    // Rotate rather than swap symbols — a symbol swap pops
-                    // mid-animation; a rotation rides the same spring.
-                    .rotationEffect(.degrees(breakdownExpanded ? 180 : 0))
-            }
-            .padding(.horizontal, PaydaySpacing.p20)
-            .padding(.top, PaydayRadius.xl + PaydaySpacing.p12)
-            // Constant in both states — a padding that changes with the toggle
-            // is one more thing shifting mid-animation.
-            .padding(.bottom, PaydaySpacing.p12)
-
-            if breakdownExpanded {
-                VStack(spacing: PaydaySpacing.p8) {
-                    breakdownRow("Cash", cents: facts.heroCashCents)
-                    breakdownRow("Credit", cents: facts.heroCreditCents)
-                    if tipOutCents > 0 {
-                        breakdownRow("Tipped out", cents: -tipOutCents)
-                    }
-                    if let wages = facts.heroWages {
-                        breakdownRow("Wages", cents: wages.regularCents)
-                        if wages.overtimeCents > 0 {
-                            breakdownRow("Overtime", cents: wages.overtimeCents)
-                        }
-                    }
-                    Divider()
-                    breakdownRow("Total", cents: facts.heroTotalCents, emphasized: true)
-                }
-                .padding(.horizontal, PaydaySpacing.p20)
-                .padding(.bottom, PaydaySpacing.p20)
-                // Opacity ONLY — no .move. The rows must not travel: they sit
-                // fixed inside the drawer while the grey shape's bottom edge
-                // slides down past them (the clipShape does the revealing).
-                // With .move the rows became their own sliding layer, which
-                // read as a SECOND drawer emerging from under the lip instead
-                // of the one grey drawer simply opening all the way.
-                .transition(.opacity)
+        var rows: [BreakdownRow] = [
+            BreakdownRow("Cash", cents: facts.heroCashCents),
+            BreakdownRow("Credit", cents: facts.heroCreditCents),
+        ]
+        if tipOutCents > 0 {
+            rows.append(BreakdownRow("Tipped out", cents: -tipOutCents))
+        }
+        if let wages = facts.heroWages {
+            rows.append(BreakdownRow("Wages", cents: wages.regularCents))
+            if wages.overtimeCents > 0 {
+                rows.append(BreakdownRow("Overtime", cents: wages.overtimeCents))
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(drawerShape.fill(PaydayColor.fieldBackground))
-        .clipShape(drawerShape)
+
+        return HeroBreakdownDrawer(
+            lipText: "Cash \(Money.string(fromCents: facts.heroCashCents)) · Credit \(Money.string(fromCents: facts.heroCreditCents))",
+            rows: rows,
+            total: BreakdownRow("Total", cents: facts.heroTotalCents, emphasized: true),
+            hasBreakdown: hasBreakdown,
+            isExpanded: $breakdownExpanded
+        ) {
+            heroCard(facts)
+        }
     }
 
-    private func breakdownRow(_ label: String, cents: Int, emphasized: Bool = false) -> some View {
-        HStack {
-            Text(label)
-                .font(emphasized ? PaydayFont.subheadline : PaydayFont.footnote)
-                .foregroundStyle(emphasized ? PaydayColor.textPrimary : PaydayColor.textSecondary)
-            Spacer(minLength: 0)
-            Text(cents < 0 ? "−\(Money.string(fromCents: -cents))" : Money.string(fromCents: cents))
-                .font(emphasized ? PaydayFont.subheadline : PaydayFont.footnote)
-                .foregroundStyle(emphasized ? PaydayColor.textPrimary : PaydayColor.textSecondary)
-                .monospacedDigit()
-        }
+    /// Shared by the hero's tap gesture (inside HeroBreakdownDrawer) and its
+    /// VoiceOver accessibility action (heroSummary below) so both paths
+    /// toggle identically.
+    private func toggleBreakdown() {
+        HeroBreakdownToggle.fire($breakdownExpanded, reduceMotion: reduceMotion)
     }
 
     // MARK: Hero card
