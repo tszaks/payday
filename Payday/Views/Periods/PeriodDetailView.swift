@@ -323,9 +323,36 @@ struct PaycheckComparisonView: View {
                     .font(PaydayFont.caption)
                     .foregroundStyle(PaydayColor.textSecondary)
             }
+
+            ForEach(stubDetailLines, id: \.label) { line in
+                Text(line.text)
+                    .font(PaydayFont.caption)
+                    .monospacedDigit()
+                    .foregroundStyle(PaydayColor.textSecondary)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .paydayCard()
+    }
+
+    /// Capture-only stub facts (see PaycheckRecord's four optional detail
+    /// fields) — quiet caption lines under the comparison, nothing shown
+    /// for whichever weren't entered, no layout change when none exist.
+    private var stubDetailLines: [(label: String, text: String)] {
+        var lines: [(label: String, text: String)] = []
+        if let hourlyRateCents = paycheck.hourlyRateCents {
+            lines.append((label: "Hourly rate", text: "Hourly rate \(Money.string(fromCents: hourlyRateCents))"))
+        }
+        if let grossPayCents = paycheck.grossPayCents {
+            lines.append((label: "Gross pay", text: "Gross pay \(Money.string(fromCents: grossPayCents))"))
+        }
+        if let netPayCents = paycheck.netPayCents {
+            lines.append((label: "Net pay", text: "Net pay \(Money.string(fromCents: netPayCents))"))
+        }
+        if let owedTipsCents = paycheck.owedTipsCents {
+            lines.append((label: "Tips owed", text: "Tips owed \(Money.string(fromCents: owedTipsCents))"))
+        }
+        return lines
     }
 
     private var comparisonLine: String {
