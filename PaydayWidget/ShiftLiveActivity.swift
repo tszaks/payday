@@ -44,26 +44,30 @@ struct ShiftLiveActivity: Widget {
                         .frame(maxHeight: .infinity, alignment: .center)
                 }
                 DynamicIslandExpandedRegion(.bottom) {
+                    // The system stretches the expanded island to a minimum
+                    // height regardless of content — so the content grows to
+                    // meet it (Tyler: "make the contents larger"), rather
+                    // than padding trying to shrink what can't shrink.
                     HStack(alignment: .center, spacing: PaydaySpacing.p12) {
                         Text(timerInterval: timerRange(startedAt: context.state.startedAt), countsDown: false)
-                            .font(PaydayFont.displayHero)
+                            .font(PaydayFont.displayXXL)
                             .monospacedDigit()
                             .foregroundStyle(PaydayColor.textPrimary)
                             .lineLimit(1)
-                            .minimumScaleFactor(0.5)
-                        Spacer()
+                            .minimumScaleFactor(0.4)
+                        Spacer(minLength: PaydaySpacing.p8)
                         Button(intent: EndShiftIntent()) {
                             Text("End")
                                 .font(PaydayFont.headline)
                                 .padding(.horizontal, PaydaySpacing.p8)
-                                .padding(.vertical, PaydaySpacing.p4)
                         }
                         .buttonStyle(.bordered)
                         .buttonBorderShape(.capsule)
+                        .controlSize(.large)
                         .tint(PaydayColor.primary)
                     }
+                    .frame(maxHeight: .infinity, alignment: .center)
                     .padding(.horizontal, PaydaySpacing.p4)
-                    .padding(.vertical, PaydaySpacing.p8)
                 }
             } compactLeading: {
                 // Apple's compact grammar (Timer: orange glyph + orange
