@@ -36,6 +36,17 @@ struct LogTipSheet: View {
     /// lets the reveal show gross + tip-out one glance under the net
     /// headline, never hiding what net was computed from.
     @State private var revealGrossAndTipOut: (grossCents: Int, tipOutCents: Int)?
+    /// Set once, at appearance, when LiveShiftEndModeResolver decides this
+    /// blank `.new` sheet exists to close out the shift already running —
+    /// every creation path (the + tab, the widget, quick actions, deep
+    /// links) funnels through here rather than each knowing about live
+    /// sessions itself. Saving in this state ends the session; cancelling
+    /// leaves it running untouched.
+    @State private var isEndingLiveShift = false
+    /// Captured alongside isEndingLiveShift, independent of the editable
+    /// `clockIn` field below — the caption always names the shift's real
+    /// start even if Started gets hand-edited before Save.
+    @State private var liveShiftStartedAt: Date?
 
     // Optional shift details — skippable, never nagged. hoursWorked,
     // tipOutCents, salesCents, shiftPeriod, clockIn, and clockOut are all
@@ -194,6 +205,25 @@ struct LogTipSheet: View {
     private var serversPlaceholderCount: Int? {
         guard case .new = target else { return nil }
         return suggestedServerCount(for: date)
+    }
+
+    /// Runs once at appearance, before seedShiftDetailDefaults — a resolved
+    /// live-shift punch pair pre-empts the weekday-suggestion fill-in below
+    /// (which only fires when clockIn/clockOut are still nil) rather than
+    /// competing with it.
+    private func applyLiveShiftEndModeIfNeeded() {
+        guard case .new(_, let providedClockIn, let providedClockOut) = target else { return }
+        guard let mode = LiveShiftEndModeResolver.resolve(
+            isEditing: isEditing,
+            providedClockIn: providedClockIn,
+            providedClockOut: providedClockOut,
+            activeStart: ShiftSessionState.shared.activeStart
+        ) else { return }
+        clockIn = mode.clockIn
+        clockOut = mode.clockOut
+        hoursWorked = ShiftTimes.hours(clockIn: mode.clockIn, clockOut: mode.clockOut)
+        liveShiftStartedAt = mode.clockIn
+        isEndingLiveShift = true
     }
 
     /// Pulled out of the view body's onAppear closure — inlining this much
@@ -378,7 +408,10 @@ struct LogTipSheet: View {
                         proxy.scrollTo(newField, anchor: .center)
                     }
                 }
-                .onAppear { seedShiftDetailDefaults() }
+                .onAppear {
+                    applyLiveShiftEndModeIfNeeded()
+                    seedShiftDetailDefaults()
+                }
                 .onDisappear { pruneZeroedRows() }
             }
         }
@@ -529,6 +562,12 @@ struct LogTipSheet: View {
                     }
                 }
                 .padding(.vertical, 14)
+                if isEndingLiveShift, let liveShiftStartedAt {
+                    Text("Ending the shift you started at \(liveShiftStartedAt.formatted(.dateTime.hour().minute())).")
+                        .font(PaydayFont.caption2)
+                        .foregroundStyle(PaydayColor.textTertiary)
+                        .padding(.top, 4)
+                }
                 if let hoursWorked {
                     // Base rate only — overtime is a weekly calculation that
                     // can't be attributed to a single shift, so this caption
@@ -741,6 +780,13 @@ struct LogTipSheet: View {
             Task { await SmartNudgeScheduler.requestAuthorizationIfNeeded() }
         }
         PaydayWidgetRefresh.request()
+
+        // This sheet just consumed the live session's exact punches — end it
+        // without stashing pendingEnd, or MainTabView's next-foreground pop
+        // would present a second, duplicate sheet for the same shift.
+        if isEndingLiveShift {
+            Task { await ShiftSessionManager.end(stashPendingEnd: false) }
+        }
     }
 
     /// Edit flow: every field change writes straight through to the shift.

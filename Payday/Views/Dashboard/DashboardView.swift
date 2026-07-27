@@ -276,7 +276,7 @@ struct DashboardView: View {
                         .padding(.horizontal, PaydaySpacing.p16)
                         .padding(.top, 8)
 
-                    tonightOrShiftRow(facts)
+                    tonightLineRow(facts)
 
                     if facts.periodEntries.isEmpty {
                         emptyState
@@ -342,60 +342,22 @@ struct DashboardView: View {
         }
     }
 
-    // MARK: Tonight line / active shift row
+    // MARK: Tonight line
 
-    /// One line, always: an active session takes the row over entirely (the
-    /// live fact wins over the historical "you usually work Fridays" one);
-    /// otherwise the row is exactly TonightLine's own text, now with a quiet
-    /// trailing Start Shift button. Same font/hierarchy as the tonight line
-    /// always used — no card, no box.
+    /// The historical "you usually work Fridays" line — hero card's own
+    /// footer band (shiftBand) owns the live-shift slot now, so this only
+    /// ever renders while no session is active.
     @ViewBuilder
-    private func tonightOrShiftRow(_ facts: DashboardFacts) -> some View {
-        if let activeShiftStart = shiftSession.activeStart {
-            HStack(spacing: PaydaySpacing.p8) {
-                (Text("On shift · ") + Text(timerInterval: activeShiftStart...activeShiftStart.addingTimeInterval(12 * 3600), countsDown: false))
-                    .font(PaydayFont.subheadline)
-                    .foregroundStyle(PaydayColor.textSecondary)
-                    .monospacedDigit()
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
-                Spacer(minLength: PaydaySpacing.p8)
-                Button("End Shift") {
-                    Task {
-                        guard let pending = await ShiftSessionManager.end() else { return }
-                        // This screen presents the log sheet itself, so it
-                        // also consumes the stashed pair — otherwise
-                        // MainTabView's popPendingEnd would present a
-                        // SECOND sheet for the same shift on next
-                        // foreground.
-                        ShiftSessionStore.popPendingEnd()
-                        sheetTarget = .new(defaultDate: pending.start, clockIn: pending.start, clockOut: pending.end)
-                    }
-                }
+    private func tonightLineRow(_ facts: DashboardFacts) -> some View {
+        if shiftSession.activeStart == nil, let tonightLine = facts.tonightLine {
+            Text(tonightLine)
                 .font(PaydayFont.subheadline)
-                .foregroundStyle(PaydayColor.primary)
-                .buttonStyle(.plain)
-            }
-            .padding(.horizontal, PaydaySpacing.p24)
-            .padding(.vertical, PaydaySpacing.p4)
-        } else if let tonightLine = facts.tonightLine {
-            HStack(spacing: PaydaySpacing.p8) {
-                Text(tonightLine)
-                    .font(PaydayFont.subheadline)
-                    .foregroundStyle(PaydayColor.textSecondary)
-                    .monospacedDigit()
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
-                Spacer(minLength: PaydaySpacing.p8)
-                Button("Start Shift") {
-                    ShiftSessionManager.start()
-                }
-                .font(PaydayFont.subheadline)
-                .foregroundStyle(PaydayColor.primary)
-                .buttonStyle(.plain)
-            }
-            .padding(.horizontal, PaydaySpacing.p24)
-            .padding(.vertical, PaydaySpacing.p4)
+                .foregroundStyle(PaydayColor.textSecondary)
+                .monospacedDigit()
+                .frame(maxWidth: .infinity, alignment: .center)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, PaydaySpacing.p24)
+                .padding(.vertical, PaydaySpacing.p4)
         }
     }
 
@@ -535,8 +497,67 @@ struct DashboardView: View {
                 Divider()
                 paydayMomentSection(facts)
             }
+
+            Divider()
+            shiftBand
         }
         .paydayCard(padding: PaydaySpacing.p24)
+    }
+
+    /// The hero card's own footer band — this is where a shift lives or
+    /// dies now, not a separate row below the card (Tyler's call: Start
+    /// Shift felt tacked on before). Idle offers Start Shift; live shows the
+    /// running timer and hands off to End Shift, which does nothing but
+    /// open the same log sheet every other creation path uses — the
+    /// session itself only ends once that sheet is SAVED (see
+    /// LiveShiftEndModeResolver), so cancelling leaves the shift running
+    /// exactly as it was before the tap.
+    @ViewBuilder
+    private var shiftBand: some View {
+        Group {
+            if let activeStart = shiftSession.activeStart {
+                HStack(spacing: PaydaySpacing.p8) {
+                    HStack(spacing: PaydaySpacing.p8) {
+                        Circle()
+                            .fill(PaydayColor.primary)
+                            .frame(width: 8, height: 8)
+                        (Text("On shift").foregroundStyle(PaydayColor.textSecondary)
+                         + Text(" · ").foregroundStyle(PaydayColor.textSecondary)
+                         + Text(timerInterval: activeStart...activeStart.addingTimeInterval(12 * 3600), countsDown: false).foregroundStyle(PaydayColor.textPrimary))
+                            .font(PaydayFont.subheadline)
+                            .monospacedDigit()
+                    }
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(onShiftAccessibilityLabel(activeStart))
+
+                    Spacer(minLength: PaydaySpacing.p8)
+
+                    Button("End Shift") {
+                        sheetTarget = .new(defaultDate: .now)
+                    }
+                    .font(PaydayFont.subheadline)
+                    .foregroundStyle(PaydayColor.primary)
+                    .buttonStyle(.plain)
+                }
+                .transition(.opacity)
+            } else {
+                Button("Start Shift") {
+                    ShiftSessionManager.start()
+                }
+                .font(PaydayFont.subheadline)
+                .foregroundStyle(PaydayColor.primary)
+                .buttonStyle(.plain)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .transition(.opacity)
+            }
+        }
+    }
+
+    /// "On shift, 47 minutes" — a spoken fact, not the literal ticking
+    /// digits Text(timerInterval:) renders visually.
+    private func onShiftAccessibilityLabel(_ start: Date) -> String {
+        let minutes = max(0, Int(Date.now.timeIntervalSince(start) / 60))
+        return "On shift, \(minutes) minute\(minutes == 1 ? "" : "s")"
     }
 
     /// The always-tappable part of the hero: label, amount, pace line, and
