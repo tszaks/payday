@@ -131,6 +131,12 @@ private struct ShiftFacts {
     /// double day share the same date but different shiftIDs.
     let date: Date
     let grossCents: Int
+    /// The cash portion of grossCents — summed across the shift's cash
+    /// record(s), never resolved credit-preferred like the other fields
+    /// above, since a shift can legitimately hold both a cash AND a credit
+    /// record and both amounts are real money, not competing versions of
+    /// the same fact.
+    let cashCents: Int
     let tipOutCents: Int?
     let hoursWorked: Double?
     let salesCents: Int?
@@ -183,6 +189,7 @@ struct StatsEngine {
                     shiftID: shiftID,
                     date: calendar.startOfDay(for: shiftRecords.map(\.date).min() ?? .now),
                     grossCents: shiftRecords.reduce(0) { $0 + $1.amountCents },
+                    cashCents: shiftRecords.filter { $0.kind == .cash }.reduce(0) { $0 + $1.amountCents },
                     tipOutCents: credit?.tipOutCents ?? cash?.tipOutCents,
                     hoursWorked: credit?.hoursWorked ?? cash?.hoursWorked,
                     salesCents: credit?.salesCents ?? cash?.salesCents,
@@ -654,6 +661,20 @@ struct StatsEngine {
     /// weekday. One $50/hr Tuesday is an anecdote, not a pattern — Insights
     /// once told Tyler to "seek Tuesday shifts" off a single night.
     static let minimumNightsForWeekdayBest = 3
+    /// The cash-weekday fact's rest-of-week pool needs this many qualifying
+    /// shifts of its own before it's a fair baseline to compare against —
+    /// same spirit as lapsedWinnerMove's own 6-night floor.
+    static let minimumRestOfWeekShiftsForCashWeekday = 6
+    /// Materiality floor for the cash-heavy-weekday fact, in cents — a
+    /// weekday with barely $50 of actual cash isn't worth naming even if
+    /// the percentage looks dramatic.
+    static let minimumCashWeekdayCashCents = 5000
+    /// Deliberate calibration, not derived from anything, same spirit as
+    /// MoveThresholds.varianceGuardFactor: a weekday's cash share has to run
+    /// at least 15 points hotter than the rest of the week, as a fraction
+    /// (0.15 = 15 percentage points), before it's worth naming rather than
+    /// noise.
+    static let minimumCashWeekdayShareDelta = 0.15
 
     /// Every number Insights is allowed to talk about — computed here, not
     /// by the model. "The stats engine computes facts; the model narrates
@@ -671,10 +692,6 @@ struct StatsEngine {
         // day's earnings here, so sum shifts back up per calendar day.
         let dayNet = Dictionary(grouping: shifts, by: { $0.date }).mapValues { $0.reduce(0) { $0 + $1.netCents } }
         let topDays = dayNet.sorted { $0.value > $1.value }.prefix(3).map { InsightsFacts.DayAmount(date: $0.key, cents: $0.value) }
-        // Composition of what came in, not take-home — stays gross on
-        // purpose, same as the paycheck comparison.
-        let cashCents = recent.filter { $0.kind == .cash }.reduce(0) { $0 + $1.amountCents }
-        let creditCents = recent.filter { $0.kind == .credit }.reduce(0) { $0 + $1.amountCents }
         // Each shift's canonical tip-out, never the raw per-record sum — a
         // shift with a (legacy) value on both entries would otherwise
         // count it twice here too.
@@ -701,16 +718,55 @@ struct StatsEngine {
             shiftCount: shifts.count,
             averagePerShiftCents: totalCents / shifts.count,
             topDays: Array(topDays),
-            cashCents: cashCents,
-            creditCents: creditCents,
             lunchDinner: lunchDinnerFacts(from: shifts),
             doublesSolo: doublesSoloFacts(from: shifts),
             totalTipOutCents: totalTipOutCents,
             rate: rateFacts(from: shifts),
             sales: salesFacts(from: shifts),
             startTime: startTimeFacts(from: shifts),
+            cashWeekday: cashWeekdayFacts(from: shifts),
             notes: Array(notes.prefix(10))
         )
+    }
+
+    /// The one cash fact Insights is allowed to surface: which weekday runs
+    /// meaningfully more cash than the rest of the week — never a general
+    /// cash-vs-credit split, which is just a server's known pay structure
+    /// and never an insight. A shift only counts toward its weekday when it
+    /// actually earned something (grossCents > 0), and every share is
+    /// blended (total cash over total gross), never an average of nightly
+    /// shares, so one $200 cash night can't outweigh three $20 ones.
+    private func cashWeekdayFacts(from shifts: [ShiftFacts]) -> CashWeekdayFacts? {
+        let qualifying = shifts.filter { $0.grossCents > 0 }
+        let byWeekday = Dictionary(grouping: qualifying) { calendar.component(.weekday, from: $0.date) }
+
+        let candidates = byWeekday.compactMap { weekday, weekdayShifts -> CashWeekdayFacts? in
+            guard weekdayShifts.count >= Self.minimumNightsForWeekdayBest else { return nil }
+
+            let restShifts = qualifying.filter { calendar.component(.weekday, from: $0.date) != weekday }
+            guard restShifts.count >= Self.minimumRestOfWeekShiftsForCashWeekday else { return nil }
+
+            let weekdayCash = weekdayShifts.reduce(0) { $0 + $1.cashCents }
+            guard weekdayCash >= Self.minimumCashWeekdayCashCents else { return nil }
+            let weekdayGross = weekdayShifts.reduce(0) { $0 + $1.grossCents }
+            let weekdayShare = Double(weekdayCash) / Double(weekdayGross)
+
+            let restCash = restShifts.reduce(0) { $0 + $1.cashCents }
+            let restGross = restShifts.reduce(0) { $0 + $1.grossCents }
+            guard restGross > 0 else { return nil }
+            let restShare = Double(restCash) / Double(restGross)
+
+            guard weekdayShare - restShare >= Self.minimumCashWeekdayShareDelta else { return nil }
+
+            return CashWeekdayFacts(
+                weekday: weekday,
+                sharePercent: weekdayShare * 100,
+                restSharePercent: restShare * 100,
+                nightCount: weekdayShifts.count
+            )
+        }
+
+        return candidates.max { ($0.sharePercent - $0.restSharePercent) < ($1.sharePercent - $1.restSharePercent) }
     }
 
     /// Explicit shiftPeriod wins when a night actually recorded one;
@@ -1390,8 +1446,6 @@ struct InsightsFacts: Equatable, Codable, Sendable {
     let shiftCount: Int
     let averagePerShiftCents: Int
     let topDays: [DayAmount]
-    let cashCents: Int
-    let creditCents: Int
     let lunchDinner: LunchDinnerFacts?
     let doublesSolo: DoublesSoloFacts?
     // var + inline default (not let) so the synthesized memberwise init
@@ -1403,9 +1457,29 @@ struct InsightsFacts: Equatable, Codable, Sendable {
     var rate: RateFacts? = nil
     var sales: SalesFacts? = nil
     var startTime: StartTimeFacts? = nil
+    // Replaces the old cashCents/creditCents pair (cash-vs-credit is a
+    // known pay structure, never an insight — see CashWeekdayFacts). Kept
+    // as var + default like the fields above; a persisted InsightsSnapshot
+    // from before this field existed simply has this decode to nil
+    // (JSONDecoder ignores its now-gone "cashCents"/"creditCents" keys
+    // rather than failing), which self-heals on the next refresh.
+    var cashWeekday: CashWeekdayFacts? = nil
     /// Newest-first, one per noted shift, capped — context for the narration,
     /// never an arithmetic input.
     var notes: [NoteFact] = []
+}
+
+/// The one cash fact Insights may ever surface: a weekday that runs
+/// meaningfully more cash than the rest of the week — see
+/// StatsEngine.cashWeekdayFacts. Never a general cash-vs-credit split; a
+/// server already knows their own split, and it's never an insight.
+/// sharePercent/restSharePercent are both 0-100, computed as blended totals
+/// (total cash over total gross), never an average of nightly shares.
+struct CashWeekdayFacts: Equatable, Codable, Sendable {
+    let weekday: Int
+    let sharePercent: Double
+    let restSharePercent: Double
+    let nightCount: Int
 }
 
 struct LunchDinnerFacts: Equatable, Codable, Sendable {

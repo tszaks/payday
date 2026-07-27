@@ -45,9 +45,8 @@ enum InsightsNumbersGrid {
             rows.append([doublesTile(doublesSolo), soloTile(doublesSolo)])
         }
 
-        let grossCents = facts.cashCents + facts.creditCents
-        if grossCents > 0 {
-            rows.append([cashShareTile(cashCents: facts.cashCents, grossCents: grossCents)])
+        if let cashWeekday = facts.cashWeekday {
+            rows.append([cashNightsTile(cashWeekday)])
         }
 
         if let startTime = facts.startTime {
@@ -117,14 +116,21 @@ enum InsightsNumbersGrid {
         )
     }
 
-    private static func cashShareTile(cashCents: Int, grossCents: Int) -> InsightsNumberTile {
-        let percent = Int((Double(cashCents) / Double(grossCents) * 100).rounded())
+    /// The one cash fact Insights ever shows — a weekday that runs
+    /// meaningfully more cash than the rest of the week (see
+    /// StatsEngine.CashWeekdayFacts). Never a cash-vs-credit split.
+    private static func cashNightsTile(_ facts: CashWeekdayFacts) -> InsightsNumberTile {
+        let weekdayName = Calendar.current.weekdaySymbols[facts.weekday - 1]
         return InsightsNumberTile(
-            id: "cashShare",
-            label: "CASH SHARE",
-            value: "\(percent)%",
-            context: "rest arrives on your paycheck"
+            id: "cashNights",
+            label: "CASH NIGHTS",
+            value: "\(Int(facts.sharePercent.rounded()))%",
+            context: "of \(weekdayName) tips are cash · \(weekdayPhrase(facts.nightCount, name: weekdayName))"
         )
+    }
+
+    private static func weekdayPhrase(_ count: Int, name: String) -> String {
+        count == 1 ? "1 \(name)" : "\(count) \(name)s"
     }
 
     private static func startTimesTile(_ facts: StartTimeFacts) -> InsightsNumberTile {

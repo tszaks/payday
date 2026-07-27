@@ -1136,7 +1136,7 @@ struct InsightsFactsTests {
         #expect(engine.insightsFacts(referenceDate: date(2026, 7, 10)) == nil)
     }
 
-    @Test("computes totals, average, top days, and the cash/credit split")
+    @Test("computes totals, average, and top days")
     func basicFacts() {
         let records = [
             record(2026, 7, 1, cents: 1000, kind: .cash),
@@ -1155,8 +1155,6 @@ struct InsightsFactsTests {
         #expect(facts.averagePerShiftCents == 3000)
         #expect(facts.topDays.count == 3)
         #expect(facts.topDays[0].cents == 5000)
-        #expect(facts.cashCents == 10000)
-        #expect(facts.creditCents == 5000)
         #expect(facts.lunchDinner == nil)
         #expect(facts.doublesSolo == nil)
     }
@@ -1497,18 +1495,29 @@ struct InsightsFactsTests {
 
 @Suite("Insights facts copy (no-AI fallback)")
 struct InsightsFactsCopyTests {
-    @Test("always includes overall, top days, and cash vs credit, in order")
+    @Test("always includes overall and top days, in order")
     func alwaysIncludedSections() {
-        let facts = InsightsFacts(totalCents: 10000, shiftCount: 5, averagePerShiftCents: 2000, topDays: [], cashCents: 4000, creditCents: 6000, lunchDinner: nil, doublesSolo: nil)
+        let facts = InsightsFacts(totalCents: 10000, shiftCount: 5, averagePerShiftCents: 2000, topDays: [], lunchDinner: nil, doublesSolo: nil)
         let titles = InsightsFactsCopy.sections(for: facts).map(\.title)
-        #expect(titles == ["Overall Snapshot", "Top Earning Days", "Cash vs Credit"])
+        #expect(titles == ["Overall Snapshot", "Top Earning Days"])
+    }
+
+    @Test("cash nights section appears only when the cash-weekday fact qualifies, with the one allowed sentence")
+    func cashWeekdaySectionAppearsWhenPresent() {
+        var facts = InsightsFacts(totalCents: 10000, shiftCount: 5, averagePerShiftCents: 2000, topDays: [], lunchDinner: nil, doublesSolo: nil)
+        #expect(!InsightsFactsCopy.sections(for: facts).contains { $0.title == "Cash Nights" })
+
+        facts.cashWeekday = CashWeekdayFacts(weekday: 6, sharePercent: 58, restSharePercent: 31, nightCount: 8)
+        let sections = InsightsFactsCopy.sections(for: facts)
+        let cashSection = sections.first { $0.title == "Cash Nights" }
+        #expect(cashSection?.body == "Fridays run more cash - 58% of tips against 31% the rest of the week (across 8 Fridays).")
     }
 
     @Test("lunch vs dinner and doubles vs solo sections only appear when their facts exist")
     func conditionalSections() {
         let facts = InsightsFacts(
             totalCents: 10000, shiftCount: 5, averagePerShiftCents: 2000,
-            topDays: [], cashCents: 4000, creditCents: 6000,
+            topDays: [],
             lunchDinner: LunchDinnerFacts(lunchCents: 1000, lunchShiftCount: 1, dinnerCents: 2000, dinnerShiftCount: 1),
             doublesSolo: DoublesSoloFacts(doubleAverageCents: 5000, doubleCount: 1, soloAverageCents: 3000, soloCount: 2)
         )
@@ -1519,7 +1528,7 @@ struct InsightsFactsCopyTests {
 
     @Test("copy never uses technical jargon like entries")
     func noJargonInCopy() {
-        let facts = InsightsFacts(totalCents: 10000, shiftCount: 5, averagePerShiftCents: 2000, topDays: [], cashCents: 4000, creditCents: 6000, lunchDinner: nil, doublesSolo: nil)
+        let facts = InsightsFacts(totalCents: 10000, shiftCount: 5, averagePerShiftCents: 2000, topDays: [], lunchDinner: nil, doublesSolo: nil)
         for section in InsightsFactsCopy.sections(for: facts) {
             #expect(!section.body.lowercased().contains("entries"))
         }
@@ -1527,7 +1536,7 @@ struct InsightsFactsCopyTests {
 
     @Test("start times section appears only when start-time facts exist")
     func startTimesSectionAppearsWhenPresent() {
-        var facts = InsightsFacts(totalCents: 10000, shiftCount: 5, averagePerShiftCents: 2000, topDays: [], cashCents: 4000, creditCents: 6000, lunchDinner: nil, doublesSolo: nil)
+        var facts = InsightsFacts(totalCents: 10000, shiftCount: 5, averagePerShiftCents: 2000, topDays: [], lunchDinner: nil, doublesSolo: nil)
         facts.startTime = StartTimeFacts(bestStartHour: 17, bestDollarsPerHour: 34, bestShiftCount: 6, worstStartHour: 16, worstDollarsPerHour: 27, worstShiftCount: 4)
         let sections = InsightsFactsCopy.sections(for: facts)
         #expect(sections.contains { $0.title == "Start Times" })
