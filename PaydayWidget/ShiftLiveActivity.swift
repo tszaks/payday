@@ -38,9 +38,11 @@ struct ShiftLiveActivity: Widget {
                         .foregroundStyle(PaydayColor.textPrimary)
                 }
             } compactLeading: {
-                Text("ON")
-                    .font(PaydayFont.caption2)
-                    .foregroundStyle(PaydayColor.primary)
+                // The same green dot as the lock screen and the app's hero
+                // band — one mark meaning "shift running" everywhere.
+                Circle()
+                    .fill(PaydayColor.primary)
+                    .frame(width: 8, height: 8)
             } compactTrailing: {
                 Text(timerInterval: timerRange(startedAt: context.state.startedAt), countsDown: false)
                     .font(PaydayFont.caption)
@@ -65,28 +67,49 @@ struct ShiftLiveActivity: Widget {
         "since \(startedAt.formatted(.dateTime.hour().minute()))"
     }
 
+    /// Composed like Apple's own Timer activity: identity whispered in a
+    /// header row (the same 8pt green dot + tracked kicker as the app's
+    /// hero band — one live language across every surface), the elapsed
+    /// time as the undisputed hero underneath, and one quiet tinted action.
+    /// The since-caption balances the header's trailing edge so the canvas
+    /// has no dead middle.
     private func lockScreenView(startedAt: Date) -> some View {
-        HStack(alignment: .center) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("ON SHIFT")
+        VStack(alignment: .leading, spacing: PaydaySpacing.p8) {
+            HStack(alignment: .firstTextBaseline) {
+                HStack(spacing: PaydaySpacing.p8) {
+                    Circle()
+                        .fill(PaydayColor.primary)
+                        .frame(width: 8, height: 8)
+                    Text("ON SHIFT")
+                        .font(PaydayFont.caption2)
+                        .tracking(1.2)
+                        .foregroundStyle(PaydayColor.primary)
+                }
+                Spacer()
+                Text(sinceCaption(startedAt: startedAt))
                     .font(PaydayFont.caption2)
-                    .tracking(1)
-                    .foregroundStyle(PaydayColor.primary)
+                    .foregroundStyle(PaydayColor.textTertiary)
+            }
+
+            HStack(alignment: .center, spacing: PaydaySpacing.p12) {
                 Text(timerInterval: timerRange(startedAt: startedAt), countsDown: false)
-                    .font(PaydayFont.displayCompact)
+                    .font(PaydayFont.displayLarge)
                     .monospacedDigit()
                     .foregroundStyle(PaydayColor.textPrimary)
-                Text(sinceCaption(startedAt: startedAt))
-                    .font(PaydayFont.caption)
-                    .foregroundStyle(PaydayColor.textSecondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+                Spacer()
+                Button(intent: EndShiftIntent()) {
+                    Text("End")
+                        .font(PaydayFont.subheadline)
+                        .fontWeight(.semibold)
+                        .padding(.horizontal, PaydaySpacing.p4)
+                }
+                .buttonStyle(.bordered)
+                .buttonBorderShape(.capsule)
+                .tint(PaydayColor.primary)
             }
-            Spacer()
-            Button(intent: EndShiftIntent()) {
-                Text("End")
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(PaydayColor.primary)
         }
-        .padding()
+        .padding(PaydaySpacing.p20)
     }
 }
