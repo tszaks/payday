@@ -406,7 +406,11 @@ struct LogTipSheet: View {
                         }
                     }
                 }
-                .confirmationDialog("End shift?", isPresented: $isShowingEndShiftCancelDialog, titleVisibility: .visible) {
+                // An alert, deliberately not a confirmationDialog: anchored
+                // to a toolbar button, a confirmation dialog presents as a
+                // popover that hides the cancel option behind tap-outside.
+                // The centered box shows all three intents explicitly.
+                .alert("End shift?", isPresented: $isShowingEndShiftCancelDialog) {
                     Button("End Shift Without Saving", role: .destructive) {
                         Task {
                             await ShiftSessionManager.end(stashPendingEnd: false)
