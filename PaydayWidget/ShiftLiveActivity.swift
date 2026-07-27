@@ -14,15 +14,26 @@ struct ShiftLiveActivity: Widget {
                 .widgetURL(URL(string: "payday://shift"))
         } dynamicIsland: { context in
             DynamicIsland {
+                // Expanded: identity tucked top-leading (small, never under
+                // the sensor cutout), the action top-trailing, and the big
+                // ticking clock owning the bottom row with the since-caption
+                // on its baseline — the lock screen's grammar, reshaped for
+                // the island. Nothing else; the empty center is breathing
+                // room, not a slot to fill.
                 DynamicIslandExpandedRegion(.leading) {
-                    VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: PaydaySpacing.p8) {
+                        Image("IslandMark")
+                            .renderingMode(.template)
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .frame(height: 18)
+                            .foregroundStyle(PaydayColor.primary)
                         Text("ON SHIFT")
                             .font(PaydayFont.caption2)
                             .tracking(1)
                             .foregroundStyle(PaydayColor.primary)
-                        Text(sinceCaption(startedAt: context.state.startedAt))
-                            .font(PaydayFont.caption2)
-                            .foregroundStyle(PaydayColor.textSecondary)
+                            .lineLimit(1)
+                            .fixedSize()
                     }
                 }
                 DynamicIslandExpandedRegion(.trailing) {
@@ -36,10 +47,19 @@ struct ShiftLiveActivity: Widget {
                     .tint(PaydayColor.primary)
                 }
                 DynamicIslandExpandedRegion(.bottom) {
-                    Text(timerInterval: timerRange(startedAt: context.state.startedAt), countsDown: false)
-                        .font(PaydayFont.displayCompact)
-                        .monospacedDigit()
-                        .foregroundStyle(PaydayColor.textPrimary)
+                    HStack(alignment: .firstTextBaseline, spacing: PaydaySpacing.p12) {
+                        Text(timerInterval: timerRange(startedAt: context.state.startedAt), countsDown: false)
+                            .font(PaydayFont.displayLarge)
+                            .monospacedDigit()
+                            .foregroundStyle(PaydayColor.textPrimary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.6)
+                        Spacer()
+                        Text(sinceCaption(startedAt: context.state.startedAt))
+                            .font(PaydayFont.caption2)
+                            .foregroundStyle(PaydayColor.textSecondary)
+                    }
+                    .padding(.top, PaydaySpacing.p4)
                 }
             } compactLeading: {
                 // Apple's compact grammar (Timer: orange glyph + orange
@@ -99,17 +119,15 @@ struct ShiftLiveActivity: Widget {
         ShiftLockScreenView(startedAt: startedAt, range: timerRange(startedAt: startedAt))
     }
 }
-
-/// The lock screen face. Lit: header (dot + kicker, since-caption trailing)
-/// over the big ticking timer. Dimmed/Always-On (isLuminanceReduced): the
-/// system stops per-second updates — and relative styles render "<1 min"
-/// for a young shift, which reads broken at hero size — so the dimmed
-/// state states the stable fact instead: "Since 2:13 PM" as the hero,
-/// nothing that needs to tick.
+/// The lock screen face: header (dot + kicker, since-caption trailing) over
+/// the big ticking timer. The timer is ALWAYS the ticking clock — no
+/// relative-style or since-time stand-ins (Tyler, 2026-07-27: "nothing
+/// except the ticking clock"). On dimmed/Always-On screens the system
+/// renders its own minute-granularity form of this timer; that's Apple's
+/// floor and we take it rather than substituting different content.
 private struct ShiftLockScreenView: View {
     let startedAt: Date
     let range: ClosedRange<Date>
-    @Environment(\.isLuminanceReduced) private var isLuminanceReduced
 
     var body: some View {
         VStack(alignment: .leading, spacing: PaydaySpacing.p8) {
@@ -124,26 +142,18 @@ private struct ShiftLockScreenView: View {
                         .foregroundStyle(PaydayColor.primary)
                 }
                 Spacer()
-                if !isLuminanceReduced {
-                    Text("since \(startedAt.formatted(.dateTime.hour().minute()))")
-                        .font(PaydayFont.caption2)
-                        .foregroundStyle(PaydayColor.textTertiary)
-                }
+                Text("since \(startedAt.formatted(.dateTime.hour().minute()))")
+                    .font(PaydayFont.caption2)
+                    .foregroundStyle(PaydayColor.textTertiary)
             }
 
             HStack(alignment: .center, spacing: PaydaySpacing.p12) {
-                Group {
-                    if isLuminanceReduced {
-                        Text("Since \(startedAt.formatted(.dateTime.hour().minute()))")
-                    } else {
-                        Text(timerInterval: range, countsDown: false)
-                    }
-                }
-                .font(PaydayFont.displayLarge)
-                .monospacedDigit()
-                .foregroundStyle(PaydayColor.textPrimary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.6)
+                Text(timerInterval: range, countsDown: false)
+                    .font(PaydayFont.displayLarge)
+                    .monospacedDigit()
+                    .foregroundStyle(PaydayColor.textPrimary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
                 Spacer()
                 Button(intent: EndShiftIntent()) {
                     Text("End")
