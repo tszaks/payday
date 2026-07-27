@@ -50,16 +50,10 @@ struct LogTipSheet: View {
     /// `clockIn` field below — the caption always names the shift's real
     /// start even if Started gets hand-edited before Save.
     @State private var liveShiftStartedAt: Date?
-    /// Creation-mode only: which card of the deck is centered. nil never
-    /// happens in practice — it's Optional only because that's what
-    /// `.scrollPosition(id:)` requires — so `?? .tips` is the only place
-    /// that needs to unwrap it. Editing never touches this; the classic
-    /// form has no deck.
-    @State private var currentCardStep: CardFlowStep? = .tips
-    /// The TIPS card's date pill starts collapsed — creation defaults to
-    /// today and never asks, so the DatePicker underneath is a rare,
-    /// deliberate reveal for backdating, not a default-open control.
-    @State private var isBackdatePickerExpanded = false
+    /// New-entry only: the details group opens collapsed behind a one-line
+    /// belief sentence (ShiftBeliefLine) instead of every row at full volume.
+    /// Editing never touches this — that flow keeps the card always open.
+    @State private var isDetailsExpanded = false
 
     // Optional shift details — skippable, never nagged. hoursWorked,
     // tipOutCents, salesCents, shiftPeriod, clockIn, and clockOut are all
@@ -83,8 +77,14 @@ struct LogTipSheet: View {
         case .new(let defaultDate, let seedClockIn, let seedClockOut):
             _date = State(initialValue: defaultDate)
             _note = State(initialValue: "")
-            // Every shift is different — lunch/dinner is never guessed from
-            // the clock. It stays unset until the SHIFT card is tapped.
+            // The clock is only a trustworthy proxy for "which shift is
+            // this" when the shift being logged is actually today — a
+            // backfilled past day has no clock to read, so it starts
+            // unset rather than guessed at.
+            if Calendar.current.isDateInToday(defaultDate) {
+                let hour = Calendar.current.component(.hour, from: .now)
+                _shiftPeriod = State(initialValue: hour < 16 ? .lunch : .dinner)
+            }
             // A just-ended live shift session already knows its exact
             // punches — seed Started/Ended from them directly, same as if
             // the pickers had been set by hand.
@@ -145,9 +145,79 @@ struct LogTipSheet: View {
         return !hasCash && creditCount >= 3
     }
 
-    /// Runs once at appearance, before seedShiftDetailDefaults — resolves
-    /// the live session's exact punches into clockIn/clockOut/hoursWorked
-    /// when this blank `.new` sheet exists to close out a running shift.
+    /// The most recent same-weekday shift with both clock times logged —
+    /// lets a regular Friday bartender see their usual Started/Ended already
+    /// sitting there instead of having to remember and re-enter it every
+    /// time. Re-anchored onto the shift being logged in seedShiftDetailDefaults,
+    /// so only the hour/minute of the suggestion is actually used.
+    private func suggestedClockTimes(for date: Date) -> (`in`: Date, out: Date)? {
+        let calendar = Calendar.current
+        let weekday = calendar.component(.weekday, from: date)
+        let match = allEntries
+            .filter { $0.clockIn != nil && $0.clockOut != nil && calendar.component(.weekday, from: $0.date) == weekday }
+            .sorted { $0.date > $1.date }
+            .first
+        guard let matchIn = match?.clockIn, let matchOut = match?.clockOut else { return nil }
+        return (in: matchIn, out: matchOut)
+    }
+
+    /// Same per-weekday memory as clock times, for tip-out.
+    private func suggestedTipOutCents(for date: Date) -> Int? {
+        let calendar = Calendar.current
+        let weekday = calendar.component(.weekday, from: date)
+        return allEntries
+            .filter { $0.tipOutCents != nil && calendar.component(.weekday, from: $0.date) == weekday }
+            .sorted { $0.date > $1.date }
+            .first?.tipOutCents
+    }
+
+    /// Same per-weekday memory as clock times and tip-out, for sales.
+    private func suggestedSalesCents(for date: Date) -> Int? {
+        let calendar = Calendar.current
+        let weekday = calendar.component(.weekday, from: date)
+        return allEntries
+            .filter { $0.salesCents != nil && calendar.component(.weekday, from: $0.date) == weekday }
+            .sorted { $0.date > $1.date }
+            .first?.salesCents
+    }
+
+    /// Same-weekday tip-out, shown only as a CompactCurrencyField
+    /// placeholder (see the type's own doc) — never pre-filled as a real
+    /// value. New-log only: an existing shift already has its own honest
+    /// number, not a guess to overlay. Recomputes as `date` changes, so
+    /// backdating to a different weekday updates the hint too.
+    private var tipOutPlaceholderCents: Int? {
+        guard case .new = target else { return nil }
+        return suggestedTipOutCents(for: date)
+    }
+
+    /// Same reasoning as tipOutPlaceholderCents, for sales.
+    private var salesPlaceholderCents: Int? {
+        guard case .new = target else { return nil }
+        return suggestedSalesCents(for: date)
+    }
+
+    /// Same per-weekday memory as tip-out and sales, for server count.
+    private func suggestedServerCount(for date: Date) -> Int? {
+        let calendar = Calendar.current
+        let weekday = calendar.component(.weekday, from: date)
+        return allEntries
+            .filter { $0.serverCount != nil && calendar.component(.weekday, from: $0.date) == weekday }
+            .sorted { $0.date > $1.date }
+            .first?.serverCount
+    }
+
+    /// Same reasoning as tipOutPlaceholderCents/salesPlaceholderCents, for
+    /// server count.
+    private var serversPlaceholderCount: Int? {
+        guard case .new = target else { return nil }
+        return suggestedServerCount(for: date)
+    }
+
+    /// Runs once at appearance, before seedShiftDetailDefaults — a resolved
+    /// live-shift punch pair pre-empts the weekday-suggestion fill-in below
+    /// (which only fires when clockIn/clockOut are still nil) rather than
+    /// competing with it.
     private func applyLiveShiftEndModeIfNeeded() {
         guard case .new(_, let providedClockIn, let providedClockOut) = target else { return }
         guard let mode = LiveShiftEndModeResolver.resolve(
@@ -165,30 +235,48 @@ struct LogTipSheet: View {
 
     /// Pulled out of the view body's onAppear closure — inlining this much
     /// logic directly in a chained-modifier closure was slow enough to trip
-    /// the type checker's time budget. Edit only: a new shift starts from a
-    /// genuinely blank slate now (no weekday-typical seeding — every shift
-    /// is different).
+    /// the type checker's time budget.
     private func seedShiftDetailDefaults() {
-        guard case .edit(let entry) = target else { return }
-        // A fact about the whole shift, not this one entry — resolve
-        // across every entry in the shift, same convention liveSaveEdit
-        // writes back through. Guarded on the shift list actually
-        // containing `entry` itself: allEntries is @Query-backed and can
-        // momentarily be empty right as the sheet mounts, which would
-        // otherwise resolve against an empty array and wipe out the
-        // correct value init already seeded from `entry` directly.
-        let shift = sameShiftEntries(around: entry)
-        guard shift.contains(where: { $0.id == entry.id }) else { return }
-        cashCents = shift.filter { $0.kind == .cash }.reduce(0) { $0 + $1.amountCents }
-        creditCents = shift.filter { $0.kind == .credit }.reduce(0) { $0 + $1.amountCents }
-        let resolved = ShiftDetails.resolve(from: shift)
-        hoursWorked = resolved.hoursWorked
-        tipOutCents = resolved.tipOutCents ?? 0
-        salesCents = resolved.salesCents ?? 0
-        shiftPeriod = resolved.shiftPeriod
-        clockIn = resolved.clockIn
-        clockOut = resolved.clockOut
-        serverCount = resolved.serverCount
+        switch target {
+        case .new:
+            if clockIn == nil, clockOut == nil, let suggestion = suggestedClockTimes(for: date) {
+                let calendar = Calendar.current
+                let inComponents = calendar.dateComponents([.hour, .minute], from: suggestion.`in`)
+                let outComponents = calendar.dateComponents([.hour, .minute], from: suggestion.out)
+                clockIn = calendar.date(bySettingHour: inComponents.hour ?? 0, minute: inComponents.minute ?? 0, second: 0, of: date)
+                clockOut = calendar.date(bySettingHour: outComponents.hour ?? 0, minute: outComponents.minute ?? 0, second: 0, of: date)
+                hoursWorked = ShiftTimes.hours(clockIn: clockIn, clockOut: clockOut)
+            }
+            // Times pre-fill as real values because they're stable per
+            // weekday — a genuine fact worth attaching automatically.
+            // Tip-out and sales are NOT: they used to pre-fill tipOutCents/
+            // salesCents directly here, which meant a rushed Save could
+            // silently attach last Friday's tip-out to tonight. They only
+            // ever surface as a CompactCurrencyField placeholder
+            // (tipOutPlaceholderCents/salesPlaceholderCents, read by
+            // shiftDetailsCard below) — a hint to tap into, never a
+            // committed value.
+        case .edit(let entry):
+            // A fact about the whole shift, not this one entry — resolve
+            // across every entry in the shift, same convention liveSaveEdit
+            // writes back through. Guarded on the shift list actually
+            // containing `entry` itself: allEntries is @Query-backed and can
+            // momentarily be empty right as the sheet mounts, which would
+            // otherwise resolve against an empty array and wipe out the
+            // correct value init already seeded from `entry` directly.
+            let shift = sameShiftEntries(around: entry)
+            guard shift.contains(where: { $0.id == entry.id }) else { return }
+            cashCents = shift.filter { $0.kind == .cash }.reduce(0) { $0 + $1.amountCents }
+            creditCents = shift.filter { $0.kind == .credit }.reduce(0) { $0 + $1.amountCents }
+            let resolved = ShiftDetails.resolve(from: shift)
+            hoursWorked = resolved.hoursWorked
+            tipOutCents = resolved.tipOutCents ?? 0
+            salesCents = resolved.salesCents ?? 0
+            shiftPeriod = resolved.shiftPeriod
+            clockIn = resolved.clockIn
+            clockOut = resolved.clockOut
+            serverCount = resolved.serverCount
+        }
     }
 
     /// Every entry belonging to the same shift (closeout) as `entry` — the
@@ -203,15 +291,13 @@ struct LogTipSheet: View {
         return allEntries.filter { $0.shiftID == nil && Calendar.current.isDate($0.date, inSameDayAs: entry.date) }
     }
 
-    /// Edit mode keeps the classic full form, top to bottom by a deliberate
-    /// hierarchy: MONEY first (shiftAmountContent — the reason the sheet
-    /// exists at all), then the shift's own defining facts and economics
+    /// Top to bottom, this sheet is ordered by a deliberate hierarchy:
+    /// MONEY first (shiftAmountContent — the reason the sheet exists at
+    /// all), then the shift's own defining facts and economics
     /// (shiftDetailsCard — when, which shift, what times, what tip-out and
     /// sales), then bookkeeping (noteCard — the least important input on
-    /// the whole sheet), and destructive last (Delete Shift). Every row
-    /// below money is optional; nothing here is ever nagged for. Creation
-    /// mode replaces all of that with creationCardDeck — one question per
-    /// card instead of every field at once.
+    /// the whole sheet), and destructive last (Delete Shift, edit only).
+    /// Every row below money is optional; nothing here is ever nagged for.
     var body: some View {
         NavigationStack {
             // The system's own keyboard avoidance keeps the LAST-focused
@@ -226,40 +312,41 @@ struct LogTipSheet: View {
                 Group {
                     if let revealResult {
                         RevealCardView(result: revealResult, period: shiftPeriod, grossAndTipOut: revealGrossAndTipOut, onDismiss: { dismiss() })
-                    } else if isEditing {
-                        // Scrollable rather than a fixed VStack: the keypad
-                        // coming up used to compress every row toward zero
-                        // height badly enough that the amount could render
-                        // overlapping the nav title. A ScrollView absorbs
-                        // that extra height by scrolling instead of
-                        // squeezing, keeps the header stable in every state,
-                        // and (with the system's own keyboard avoidance)
-                        // keeps a focused field visible above the keyboard
-                        // automatically.
+                    } else {
+                        // Scrollable rather than a fixed VStack: expanding the
+                        // details group used to compress every row toward zero
+                        // height once the keyboard was up, badly enough that
+                        // the amount could render overlapping the nav title.
+                        // A ScrollView absorbs that extra height by scrolling
+                        // instead of squeezing, keeps the header stable in
+                        // every state, and (with the system's own keyboard
+                        // avoidance) keeps a focused field visible above the
+                        // keyboard automatically.
                         ScrollView {
                             VStack(spacing: 24) {
                                 shiftAmountContent
-                                shiftDetailsCard
+
+                                shiftDetailsGroup
                                 noteCard
 
-                                Button(role: .destructive) { showDeleteConfirmation = true } label: {
-                                    Text("Delete Shift")
-                                        .frame(maxWidth: .infinity)
-                                }
-                                .buttonStyle(.glassProminent)
-                                .tint(PaydayColor.error)
-                                .padding(.horizontal)
-                                .padding(.top, 4)
-                                .confirmationDialog("Delete this shift?", isPresented: $showDeleteConfirmation, titleVisibility: .visible) {
-                                    Button("Delete Shift", role: .destructive) { delete() }
+                                if isEditing {
+                                    Button(role: .destructive) { showDeleteConfirmation = true } label: {
+                                        Text("Delete Shift")
+                                            .frame(maxWidth: .infinity)
+                                    }
+                                    .buttonStyle(.glassProminent)
+                                    .tint(PaydayColor.error)
+                                    .padding(.horizontal)
+                                    .padding(.top, 4)
+                                    .confirmationDialog("Delete this shift?", isPresented: $showDeleteConfirmation, titleVisibility: .visible) {
+                                        Button("Delete Shift", role: .destructive) { delete() }
+                                    }
                                 }
                             }
                             .padding(.top, 20)
                             .padding(.bottom, 32)
                         }
                         .scrollDismissesKeyboard(.interactively)
-                    } else {
-                        creationCardDeck
                     }
                 }
                 .background(PaydayColor.background)
@@ -301,19 +388,20 @@ struct LogTipSheet: View {
                         if let focusedCurrencyField {
                             ToolbarItemGroup(placement: .keyboard) {
                                 Spacer()
-                                if isEditing {
-                                    if let next = nextFocusField(after: focusedCurrencyField) {
-                                        Button("Next") {
-                                            PaydayHaptics.selection()
-                                            self.focusedCurrencyField = next
-                                        }
+                                if let next = nextFocusField(after: focusedCurrencyField) {
+                                    Button("Next") {
+                                        PaydayHaptics.selection()
+                                        self.focusedCurrencyField = next
                                     }
-                                    Button("Done") { dismiss() }
-                                } else {
-                                    Button("Next") { advanceFromCreationKeyboard(focusedCurrencyField) }
-                                    Button("Save") { saveNew() }
-                                        .disabled(!canSave)
                                 }
+                                Button(isEditing ? "Done" : "Save") {
+                                    if isEditing {
+                                        dismiss()
+                                    } else {
+                                        saveNew()
+                                    }
+                                }
+                                .disabled(!isEditing && !canSave)
                             }
                         }
                     }
@@ -447,11 +535,15 @@ struct LogTipSheet: View {
         }
     }
 
-    /// Edit mode's classic form only: Next cycles Cash -> Credit -> Tip-out
-    /// -> Sales -> Servers -> back to Cash, since every field is on screen
-    /// at once. Creation mode's fields are split one-per-card, so its Next
-    /// advances the card instead — see advanceFromCreationKeyboard below.
+    /// While the details group is expanded (always true when editing), Next
+    /// cycles Cash -> Credit -> Tip-out -> Sales -> Servers -> back to Cash.
+    /// Collapsed, only Cash and Credit are on screen, so the chain shortens
+    /// to Cash -> Credit -> nil (Save sits right beside Next at that point,
+    /// nothing left to advance into).
     private func nextFocusField(after field: CurrencyRowField) -> CurrencyRowField? {
+        guard isEditing || isDetailsExpanded else {
+            return field == .cash ? .credit : nil
+        }
         switch field {
         case .cash: return .credit
         case .credit: return .tipOut
@@ -461,32 +553,64 @@ struct LogTipSheet: View {
         }
     }
 
-    /// Creation mode's keyboard-toolbar Next. Cash -> Credit stays a
-    /// same-card focus hop (both live on the TIPS card). Tip-out -> Sales
-    /// and Sales -> Servers advance the card AND carry focus to the next
-    /// card's own field, so the numberPad never has to be dismissed and
-    /// re-summoned crossing a card boundary — same "hand never leaves the
-    /// bottom" reachability the rest of the sheet already has. Credit and
-    /// Servers are each the last currency field before a card with no
-    /// keypad (SHIFT, NOTE), so those just advance and let focus clear.
-    private func advanceFromCreationKeyboard(_ field: CurrencyRowField) {
-        switch field {
-        case .cash:
-            PaydayHaptics.selection()
-            focusedCurrencyField = .credit
-        case .credit, .servers:
-            focusedCurrencyField = nil
-            advanceCard()
-        case .tipOut:
-            advanceCard()
-            focusedCurrencyField = .sales
-        case .sales:
-            advanceCard()
-            focusedCurrencyField = .servers
+    // MARK: Shift details — the facts that define this closeout
+
+    /// New-entry only: the belief row (collapsed) or the full card
+    /// (expanded). Editing bypasses this entirely — the card is always
+    /// visible, exactly as it always was, no belief row to speak of.
+    @ViewBuilder
+    private var shiftDetailsGroup: some View {
+        if isEditing || isDetailsExpanded {
+            shiftDetailsCard
+        } else {
+            VStack(alignment: .leading, spacing: 4) {
+                beliefRow
+                if isEndingLiveShift, let liveShiftStartedAt {
+                    Text("Ending the shift you started at \(liveShiftStartedAt.formatted(.dateTime.hour().minute())).")
+                        .font(PaydayFont.caption2)
+                        .foregroundStyle(PaydayColor.textTertiary)
+                }
+            }
+            .padding(.horizontal)
         }
     }
 
-    // MARK: Shift details — the facts that define this closeout (edit mode)
+    /// The collapsed details group's single row: one sentence of what's
+    /// already known (ShiftBeliefLine), tap to expand into the full card.
+    private var beliefRow: some View {
+        Button {
+            toggleDetailsExpanded()
+        } label: {
+            HStack {
+                Text(ShiftBeliefLine.compose(date: date, shiftPeriod: shiftPeriod, clockIn: clockIn, clockOut: clockOut, tipOutCents: tipOutCents))
+                    .font(PaydayFont.subheadline)
+                    .foregroundStyle(PaydayColor.textSecondary)
+                    .monospacedDigit()
+                    .multilineTextAlignment(.leading)
+                Spacer()
+                Image(systemName: "chevron.down")
+                    .font(PaydayFont.caption2)
+                    .foregroundStyle(PaydayColor.textTertiary)
+                    // Rotate rather than swap symbols — same convention as
+                    // the Dashboard's breakdown drawer chevron.
+                    .rotationEffect(.degrees(isDetailsExpanded ? 180 : 0))
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityHint(isDetailsExpanded ? "Hide details" : "Show details")
+    }
+
+    private func toggleDetailsExpanded() {
+        if reduceMotion {
+            isDetailsExpanded.toggle()
+        } else {
+            withAnimation(PaydayAnimation.drawerSpring) {
+                isDetailsExpanded.toggle()
+            }
+        }
+    }
 
     /// The shift's own identity and economics — date, period, times,
     /// tip-out, sales, headcount — sit closest to the money and are always
@@ -572,7 +696,10 @@ struct LogTipSheet: View {
                 HStack {
                     Text("Tip-out")
                     Spacer()
-                    CompactCurrencyField(cents: $tipOutCents, field: .tipOut, focusedField: $focusedCurrencyField, autoFocus: debugAutoFocusTipOut)
+                    if tipOutCents == 0, let tipOutPlaceholderCents {
+                        suggestionChip(cents: tipOutPlaceholderCents) { tipOutCents = tipOutPlaceholderCents }
+                    }
+                    CompactCurrencyField(cents: $tipOutCents, field: .tipOut, focusedField: $focusedCurrencyField, autoFocus: debugAutoFocusTipOut, placeholderCents: tipOutPlaceholderCents)
                 }
                 .padding(.vertical, 14)
                 .id(CurrencyRowField.tipOut)
@@ -580,7 +707,10 @@ struct LogTipSheet: View {
                 HStack {
                     Text("Sales")
                     Spacer()
-                    CompactCurrencyField(cents: $salesCents, field: .sales, focusedField: $focusedCurrencyField)
+                    if salesCents == 0, let salesPlaceholderCents {
+                        suggestionChip(cents: salesPlaceholderCents) { salesCents = salesPlaceholderCents }
+                    }
+                    CompactCurrencyField(cents: $salesCents, field: .sales, focusedField: $focusedCurrencyField, placeholderCents: salesPlaceholderCents)
                 }
                 .padding(.vertical, 14)
                 .id(CurrencyRowField.sales)
@@ -595,7 +725,7 @@ struct LogTipSheet: View {
                 HStack {
                     Text("Servers")
                     Spacer()
-                    CompactCountField(count: serverCountBinding, field: .servers, focusedField: $focusedCurrencyField, autoFocus: debugAutoFocusServers)
+                    CompactCountField(count: serverCountBinding, field: .servers, focusedField: $focusedCurrencyField, autoFocus: debugAutoFocusServers, placeholderCount: serversPlaceholderCount)
                 }
                 .padding(.vertical, 14)
                 .id(CurrencyRowField.servers)
@@ -689,302 +819,33 @@ struct LogTipSheet: View {
         #endif
     }
 
+    /// One-tap commit for a weekday-typical tip-out/sales value — shown only
+    /// while the field itself is still 0 (see CompactCurrencyField's own
+    /// placeholder, which stays a passive, non-committing hint). Tapping
+    /// this is the one and only way a suggestion ever becomes a real value:
+    /// no auto-fill, no silent default.
+    private func suggestionChip(cents: Int, commit: @escaping () -> Void) -> some View {
+        Button {
+            PaydayHaptics.selection()
+            commit()
+        } label: {
+            VStack(spacing: 0) {
+                Text(Money.string(fromCents: cents))
+                    .font(PaydayFont.caption)
+                    .foregroundStyle(PaydayColor.textSecondary)
+                Text("usual")
+                    .font(PaydayFont.caption2)
+                    .foregroundStyle(PaydayColor.textTertiary)
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
     private func card<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
         VStack(spacing: 0) { content() }
             .background(PaydayColor.fieldBackground)
             .clipShape(RoundedRectangle(cornerRadius: PaydayRadius.lg))
             .padding(.horizontal)
-    }
-
-    // MARK: Creation-mode card deck
-    //
-    // SANCTIONED EXCEPTION to docs/DESIGN.md's "card-in-sheet is always
-    // wrong" elevation rule: Tyler (the design law's author) ordered a
-    // card-based entry flow for creation specifically, and the override is
-    // scoped to exactly the seven cards below (deckCard's chrome). Every
-    // other sheet in the app still follows the no-card-in-sheet rule.
-
-    /// The lifted, focused surface every deck card sits on — fieldBackground
-    /// rather than a true elevated card, generous padding, one question at a
-    /// time. See the SANCTIONED EXCEPTION note above.
-    private func deckCard<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 20) { content() }
-            .padding(24)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(PaydayColor.fieldBackground, in: RoundedRectangle(cornerRadius: PaydayRadius.xl, style: .continuous))
-    }
-
-    private func kickerLabel(_ text: String) -> some View {
-        Text(text)
-            .font(PaydayFont.caption)
-            .foregroundStyle(PaydayColor.textSecondary)
-            .tracking(0.6)
-    }
-
-    /// A horizontally paged carousel, poker-deck style: the active card
-    /// centered, neighbors peeking at the edges (contentMargins plus each
-    /// card leaving room on both sides). Swiping always works for review —
-    /// it only ever moves which card is centered, never a value underneath.
-    private var creationCardDeck: some View {
-        VStack(spacing: 16) {
-            GeometryReader { geometry in
-                let cardWidth = max(geometry.size.width - 32, 200)
-                ScrollView(.horizontal, showsIndicators: false) {
-                    LazyHStack(spacing: 16) {
-                        ForEach(CardFlowStep.allCases) { step in
-                            cardView(for: step)
-                                .frame(width: cardWidth)
-                                // The lift-and-slide: scale up slightly while
-                                // sliding out/in — one motion driven by the
-                                // scroll offset itself, whether that offset
-                                // moved from a finger drag or advanceCard's
-                                // animated scrollPosition change. Reduce
-                                // Motion drops the scale, leaving opacity as
-                                // the only cue.
-                                .scrollTransition(axis: .horizontal) { content, phase in
-                                    content
-                                        .scaleEffect(reduceMotion || phase.isIdentity ? 1 : 1.03)
-                                        .opacity(phase.isIdentity ? 1 : 0.9)
-                                }
-                                .accessibilityElement(children: .contain)
-                                .accessibilityLabel("\(step.accessibilityTitle), card \(step.rawValue + 1) of \(CardFlowStep.allCases.count)")
-                        }
-                    }
-                    .scrollTargetLayout()
-                }
-                .scrollTargetBehavior(.viewAligned)
-                .scrollPosition(id: $currentCardStep)
-                .contentMargins(.horizontal, 16, for: .scrollContent)
-            }
-            .frame(height: 400)
-
-            // Sighted-only progress cue — not independently tappable (a tap
-            // gesture here would fight the page view's own drag recognizer).
-            HStack(spacing: 8) {
-                ForEach(CardFlowStep.allCases) { step in
-                    Circle()
-                        .fill((currentCardStep ?? .tips) == step ? PaydayColor.primary : PaydayColor.fieldBackground)
-                        .frame(width: 6, height: 6)
-                }
-            }
-            .accessibilityHidden(true)
-        }
-    }
-
-    @ViewBuilder
-    private func cardView(for step: CardFlowStep) -> some View {
-        switch step {
-        case .tips: tipsCard
-        case .shift: shiftCard
-        case .times: timesCard
-        case .tipOut: tipOutCard
-        case .sales: salesCard
-        case .servers: serversCard
-        case .note: noteDeckCard
-        }
-    }
-
-    private var tipsCard: some View {
-        deckCard {
-            kickerLabel(CardFlowStep.tips.kicker)
-            datePill
-            VStack(spacing: 12) {
-                CurrencyAmountRow(label: "Cash", cents: $cashCents, field: .cash, focusedField: $focusedCurrencyField, autoFocus: !prefersCreditFirst && !debugAutoFocusTipOut && !debugAutoFocusServers)
-                CurrencyAmountRow(label: "Credit", cents: $creditCents, field: .credit, focusedField: $focusedCurrencyField, autoFocus: prefersCreditFirst && !debugAutoFocusTipOut && !debugAutoFocusServers)
-            }
-        }
-    }
-
-    /// Collapsed by default — creation defaults to today and never asks;
-    /// this is the one deliberate, rare escape hatch for backdating.
-    private var datePill: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Button {
-                if reduceMotion {
-                    isBackdatePickerExpanded.toggle()
-                } else {
-                    withAnimation(PaydayAnimation.drawerSpring) {
-                        isBackdatePickerExpanded.toggle()
-                    }
-                }
-            } label: {
-                Text(ShiftBeliefLine.dateLabel(for: date))
-                    .font(PaydayFont.caption)
-                    .foregroundStyle(PaydayColor.textSecondary)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(PaydayColor.background, in: Capsule())
-            }
-            .buttonStyle(.plain)
-            .accessibilityHint(isBackdatePickerExpanded ? "Hide date picker" : "Change the date, for backdating a past shift")
-
-            if isBackdatePickerExpanded {
-                DatePicker("Date", selection: $date, in: ...Date.now, displayedComponents: .date)
-                    .datePickerStyle(.compact)
-                    .labelsHidden()
-            }
-        }
-    }
-
-    private var shiftCard: some View {
-        deckCard {
-            kickerLabel(CardFlowStep.shift.kicker)
-            Text("Lunch or dinner?")
-                .font(PaydayFont.headline)
-                .foregroundStyle(PaydayColor.textPrimary)
-            HStack(spacing: 12) {
-                periodButton(.lunch, label: "Lunch")
-                periodButton(.dinner, label: "Dinner")
-            }
-            Button("Next") { advanceCard() }
-                .buttonStyle(.glassProminent)
-        }
-    }
-
-    private func periodButton(_ period: ShiftPeriod, label: String) -> some View {
-        let isSelected = shiftPeriod == period
-        return Button {
-            selectShiftPeriod(period)
-        } label: {
-            Text(label)
-                .font(PaydayFont.headline)
-                .foregroundStyle(PaydayColor.textPrimary)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 24)
-        }
-        .buttonStyle(.plain)
-        .background(PaydayColor.fieldBackground, in: RoundedRectangle(cornerRadius: PaydayRadius.lg, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: PaydayRadius.lg)
-                .strokeBorder(isSelected ? PaydayColor.primary : PaydayColor.textPrimary.opacity(0.08), lineWidth: isSelected ? 2 : 1)
-        )
-        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
-    }
-
-    /// Tapping a period is a real choice, so it gets its own haptic
-    /// immediately. The beat before advancing (PaydayAnimation.quickDuration
-    /// — the same 150ms token list-item staggers use) lets the selection
-    /// ring actually register before the deck moves on; the eventual advance
-    /// skips advanceCard's own haptic so this whole gesture reads as one
-    /// action, not two. Swiping past this card without tapping either button
-    /// never sets shiftPeriod — it stays nil, never guessed.
-    private func selectShiftPeriod(_ period: ShiftPeriod) {
-        PaydayHaptics.selection()
-        shiftPeriod = period
-        Task {
-            try? await Task.sleep(for: .seconds(PaydayAnimation.quickDuration))
-            advanceCard(haptic: false)
-        }
-    }
-
-    private var timesCard: some View {
-        deckCard {
-            kickerLabel(CardFlowStep.times.kicker)
-            VStack(spacing: 0) {
-                HStack {
-                    Text("Started")
-                    Spacer()
-                    if clockIn != nil {
-                        DatePicker("", selection: clockInBinding, displayedComponents: .hourAndMinute)
-                            .labelsHidden()
-                    } else {
-                        Button("Set") { clockIn = defaultClockIn }
-                    }
-                }
-                .padding(.vertical, 14)
-                Divider()
-                HStack {
-                    Text("Ended")
-                    Spacer()
-                    if clockOut != nil {
-                        DatePicker("", selection: clockOutBinding, displayedComponents: .hourAndMinute)
-                            .labelsHidden()
-                    } else {
-                        Button("Set") { clockOut = defaultClockOut }
-                    }
-                }
-                .padding(.vertical, 14)
-            }
-            if isEndingLiveShift, let liveShiftStartedAt {
-                Text("Ending the shift you started at \(liveShiftStartedAt.formatted(.dateTime.hour().minute())).")
-                    .font(PaydayFont.caption2)
-                    .foregroundStyle(PaydayColor.textTertiary)
-            }
-            if let hoursWorked {
-                // Base rate only — overtime is a weekly calculation that
-                // can't be attributed to a single shift, so this caption
-                // never claims OT.
-                if let wageCents = WageEstimate.cents(wageCentsPerHour: preferencesStore.baseHourlyWageCents, hours: hoursWorked) {
-                    Text("That's \(WageEstimate.hoursLabel(hoursWorked)). \(Money.string(fromCents: wageCents)) in wages.")
-                        .font(PaydayFont.caption)
-                        .foregroundStyle(PaydayColor.textSecondary)
-                } else {
-                    Text("That's \(WageEstimate.hoursLabel(hoursWorked)).")
-                        .font(PaydayFont.caption)
-                        .foregroundStyle(PaydayColor.textSecondary)
-                }
-            }
-            Button("Next") { advanceCard() }
-                .buttonStyle(.glassProminent)
-        }
-        .tint(PaydayColor.textPrimary)
-    }
-
-    private var tipOutCard: some View {
-        deckCard {
-            kickerLabel(CardFlowStep.tipOut.kicker)
-            CurrencyAmountRow(label: "Tip-out", cents: $tipOutCents, field: .tipOut, focusedField: $focusedCurrencyField)
-        }
-    }
-
-    private var salesCard: some View {
-        deckCard {
-            kickerLabel(CardFlowStep.sales.kicker)
-            CurrencyAmountRow(label: "Sales", cents: $salesCents, field: .sales, focusedField: $focusedCurrencyField)
-        }
-    }
-
-    private var serversCard: some View {
-        deckCard {
-            kickerLabel(CardFlowStep.servers.kicker)
-            HStack {
-                Text("Servers")
-                    .font(PaydayFont.body)
-                    .foregroundStyle(PaydayColor.textPrimary)
-                Spacer()
-                CompactCountField(count: serverCountBinding, field: .servers, focusedField: $focusedCurrencyField)
-            }
-        }
-    }
-
-    private var noteDeckCard: some View {
-        deckCard {
-            kickerLabel(CardFlowStep.note.kicker)
-            TextField("Optional", text: $note, axis: .vertical)
-                .font(PaydayFont.body)
-                .lineLimit(2...6)
-            Text(ShiftBeliefLine.compose(date: date, shiftPeriod: shiftPeriod, clockIn: clockIn, clockOut: clockOut, tipOutCents: tipOutCents))
-                .font(PaydayFont.caption)
-                .foregroundStyle(PaydayColor.textSecondary)
-                .monospacedDigit()
-            Button("Save") { saveNew() }
-                .buttonStyle(.glassProminent)
-                .disabled(!canSave)
-        }
-    }
-
-    /// Advances the deck one card via a scroll-position change — the same
-    /// mechanism whether triggered by an on-card Next button, the keyboard
-    /// toolbar's Next, or the SHIFT card's auto-advance. Deliberately does
-    /// nothing to VoiceOver focus: no explicit accessibility-focus call
-    /// here, so an auto-advance never steals focus out from under whatever
-    /// VoiceOver is mid-announcing.
-    private func advanceCard(haptic: Bool = true) {
-        guard let current = currentCardStep, let next = CardFlowStep(rawValue: current.rawValue + 1) else { return }
-        if haptic { PaydayHaptics.selection() }
-        withAnimation(reduceMotion ? .easeInOut(duration: PaydayAnimation.standardDuration) : PaydayAnimation.drawerSpring) {
-            currentCardStep = next
-        }
     }
 
     // MARK: Actions
@@ -1143,13 +1004,11 @@ struct LogTipSheet: View {
     }
 }
 
-/// A small cents field for the optional shift-details group (edit mode's
-/// classic form) — same digit-shift-from-the-right technique as
-/// CurrencyAmountRow, including its focused-ring treatment (scaled down to
-/// fit inline in a row) and the same externally-driven FocusState (so the
-/// keyboard toolbar's Next button can cycle through Tip-out and Sales too,
-/// not just Cash/Credit). No placeholder of any kind: every shift is
-/// different, so an unset amount just shows $0.00, nothing suggested. See
+/// A small cents field for the optional shift-details group — same
+/// digit-shift-from-the-right technique as CurrencyAmountRow, including its
+/// focused-ring treatment (scaled down to fit inline in a row) and the same
+/// externally-driven FocusState (so the keyboard toolbar's Next button can
+/// cycle through Tip-out and Sales too, not just Cash/Credit). See
 /// CompactCountField just below for the plain-integer sibling this powers
 /// (Servers).
 private struct CompactCurrencyField: View {
@@ -1157,6 +1016,12 @@ private struct CompactCurrencyField: View {
     let field: CurrencyRowField
     var focusedField: FocusState<CurrencyRowField?>.Binding
     var autoFocus: Bool = false
+    /// A same-weekday suggestion, shown only while cents == 0 — a hint to
+    /// tap into, never a value that saves on its own. See LogTipSheet's
+    /// seedShiftDetailDefaults: pre-filling this straight into `cents` used
+    /// to let a rushed Save silently attach last Friday's tip-out to
+    /// tonight.
+    var placeholderCents: Int? = nil
     @State private var digitsText: String = ""
 
     private static let maxDigits = 7
@@ -1164,12 +1029,23 @@ private struct CompactCurrencyField: View {
 
     var body: some View {
         ZStack(alignment: .trailing) {
-            Text(Money.string(fromCents: cents))
-                .font(PaydayFont.body)
-                .monospacedDigit()
-                .foregroundStyle(cents == 0 ? PaydayColor.textSecondary : PaydayColor.textPrimary)
-                .contentTransition(.numericText())
-                .accessibilityHidden(true)
+            if cents == 0, let placeholderCents {
+                // Secondary, not tertiary: textTertiary falls short of
+                // 4.5:1 contrast against fieldBackground in both modes, and
+                // a placeholder hint still has to be legible to read at all.
+                Text(Money.string(fromCents: placeholderCents))
+                    .font(PaydayFont.body)
+                    .monospacedDigit()
+                    .foregroundStyle(PaydayColor.textSecondary)
+                    .accessibilityHidden(true)
+            } else {
+                Text(Money.string(fromCents: cents))
+                    .font(PaydayFont.body)
+                    .monospacedDigit()
+                    .foregroundStyle(cents == 0 ? PaydayColor.textSecondary : PaydayColor.textPrimary)
+                    .contentTransition(.numericText())
+                    .accessibilityHidden(true)
+            }
             TextField("", text: $digitsText)
                 .keyboardType(.numberPad)
                 .focused(focusedField, equals: field)
@@ -1196,10 +1072,9 @@ private struct CompactCurrencyField: View {
             cents = Int(filtered) ?? 0
         }
         // Keeps the hidden text field in sync when cents changes from
-        // outside typing (edit mode's seedShiftDetailDefaults resolving the
-        // shift's real value on appear) — without this, digitsText would
-        // silently keep its stale "" and the next keystroke would stomp the
-        // resolved value back toward zero.
+        // outside typing (the suggestion chip's one-tap commit) — without
+        // this, digitsText would silently keep its stale "" and the next
+        // keystroke would stomp the committed value back toward zero.
         .onChange(of: cents) { _, newValue in
             guard Int(digitsText) ?? 0 != newValue else { return }
             digitsText = newValue == 0 ? "" : String(newValue)
@@ -1208,11 +1083,12 @@ private struct CompactCurrencyField: View {
 }
 
 /// CompactCurrencyField's plain-integer sibling — same digit-shift field,
-/// same focus-ring and externally-driven FocusState, but for a count rather
-/// than money: no currency formatting, no unit suffix (the row's own label
-/// already says "Servers"), capped at 2 digits. A count reads as a fact
-/// worth stating plainly or not at all — unlike an amount, which always
-/// shows $0.00 even unset, an unset count shows nothing rather than a
+/// same focus-ring and externally-driven FocusState, same placeholder
+/// treatment, but for a count rather than money: no currency formatting,
+/// no unit suffix (the row's own label already says "Servers"), capped at
+/// 2 digits. A count reads as a fact worth stating plainly or not at all —
+/// unlike an amount, which always shows $0.00 even unset, a count with
+/// neither a real value nor a placeholder shows nothing rather than a
 /// misleading "0" (a real "worked with zero servers" fact this app has no
 /// way to distinguish from "never asked" if it rendered the same as unset).
 private struct CompactCountField: View {
@@ -1220,6 +1096,7 @@ private struct CompactCountField: View {
     let field: CurrencyRowField
     var focusedField: FocusState<CurrencyRowField?>.Binding
     var autoFocus: Bool = false
+    var placeholderCount: Int? = nil
     @State private var digitsText: String = ""
 
     private static let maxDigits = 2
@@ -1227,7 +1104,15 @@ private struct CompactCountField: View {
 
     var body: some View {
         ZStack(alignment: .trailing) {
-            if count > 0 {
+            if count == 0, let placeholderCount {
+                // textSecondary, not textTertiary — see CompactCurrencyField's
+                // same contrast note above.
+                Text("\(placeholderCount)")
+                    .font(PaydayFont.body)
+                    .monospacedDigit()
+                    .foregroundStyle(PaydayColor.textSecondary)
+                    .accessibilityHidden(true)
+            } else if count > 0 {
                 Text("\(count)")
                     .font(PaydayFont.body)
                     .monospacedDigit()
