@@ -12,7 +12,10 @@ import Foundation
 /// but never needs Insights.
 enum InsightsFactsCopy {
     static func sections(for facts: InsightsFacts) -> [InsightSection] {
-        var sections: [InsightSection] = [overallSnapshot(facts), topEarningDays(facts), cashVsCredit(facts)]
+        var sections: [InsightSection] = [overallSnapshot(facts), topEarningDays(facts)]
+        if let cashWeekday = facts.cashWeekday {
+            sections.append(cashWeekdaySection(cashWeekday))
+        }
         if let lunchDinner = facts.lunchDinner {
             sections.append(lunchVsDinner(lunchDinner))
         }
@@ -47,23 +50,15 @@ enum InsightsFactsCopy {
         return InsightSection(title: "Top Earning Days", body: body)
     }
 
-    /// Never "credit was the larger share" — that's true for nearly every
-    /// server and says nothing. The useful fact is the cash share and what
-    /// the split means: cash went home day-of, credit rides the paycheck.
-    private static func cashVsCredit(_ facts: InsightsFacts) -> InsightSection {
-        let grossCents = facts.cashCents + facts.creditCents
-        let body: String
-        if grossCents <= 0 {
-            body = "No cash or credit tips logged in this window yet."
-        } else if facts.cashCents == 0 {
-            body = "All \(Money.string(fromCents: facts.creditCents)) of your tips came in on cards, so all of it arrives on your paycheck."
-        } else if facts.creditCents == 0 {
-            body = "All \(Money.string(fromCents: facts.cashCents)) of your tips came in cash, taken home the day you earned it."
-        } else {
-            let cashPercent = Int((Double(facts.cashCents) / Double(grossCents) * 100).rounded())
-            body = "About \(cashPercent)% of your tips came in cash: \(Money.string(fromCents: facts.cashCents)) you took home day-of. The other \(Money.string(fromCents: facts.creditCents)) came in on cards and lands on your paycheck."
-        }
-        return InsightSection(title: "Cash vs Credit", body: body)
+    /// The one cash fact Insights ever states — a weekday that runs
+    /// meaningfully more cash than the rest of the week (see
+    /// StatsEngine.CashWeekdayFacts). Cash-vs-credit as a general split is
+    /// never a finding — a server already knows their own split.
+    private static func cashWeekdaySection(_ facts: CashWeekdayFacts) -> InsightSection {
+        let weekdayName = Calendar.current.weekdaySymbols[facts.weekday - 1]
+        let countPhrase = facts.nightCount == 1 ? "1 \(weekdayName)" : "\(facts.nightCount) \(weekdayName)s"
+        let body = "\(weekdayName)s run more cash - \(Int(facts.sharePercent.rounded()))% of tips against \(Int(facts.restSharePercent.rounded()))% the rest of the week (across \(countPhrase))."
+        return InsightSection(title: "Cash Nights", body: body)
     }
 
     /// Per-shift averages, never raw totals — the shift counts differ, and

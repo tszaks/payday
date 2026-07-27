@@ -10,8 +10,10 @@ import Foundation
 /// one flat array (see InsightsNumbersGrid's own doc comment).
 @Suite("Insights numbers grid")
 struct InsightsNumbersGridTests {
-    private func baseFacts(cashCents: Int = 0, creditCents: Int = 0, lunchDinner: LunchDinnerFacts? = nil, doublesSolo: DoublesSoloFacts? = nil) -> InsightsFacts {
-        InsightsFacts(totalCents: 100_000, shiftCount: 5, averagePerShiftCents: 20_000, topDays: [], cashCents: cashCents, creditCents: creditCents, lunchDinner: lunchDinner, doublesSolo: doublesSolo)
+    private func baseFacts(cashWeekday: CashWeekdayFacts? = nil, lunchDinner: LunchDinnerFacts? = nil, doublesSolo: DoublesSoloFacts? = nil) -> InsightsFacts {
+        var facts = InsightsFacts(totalCents: 100_000, shiftCount: 5, averagePerShiftCents: 20_000, topDays: [], lunchDinner: lunchDinner, doublesSolo: doublesSolo)
+        facts.cashWeekday = cashWeekday
+        return facts
     }
 
     @Test("empty facts produce no rows")
@@ -72,19 +74,20 @@ struct InsightsNumbersGridTests {
         #expect(row[1].context == "3 days")
     }
 
-    @Test("cash share renders as a percent of gross, no early-read hedge")
-    func cashShare() {
-        let facts = baseFacts(cashCents: 4000, creditCents: 6000)
+    @Test("cash nights renders the weekday's blended share, weekday name, and count")
+    func cashNights() {
+        let facts = baseFacts(cashWeekday: CashWeekdayFacts(weekday: 6, sharePercent: 58, restSharePercent: 31, nightCount: 8))
 
         let rows = InsightsNumbersGrid.rows(for: facts)
         #expect(rows.count == 1)
-        #expect(rows[0].map(\.id) == ["cashShare"])
-        #expect(rows[0][0].value == "40%")
-        #expect(rows[0][0].context == "rest arrives on your paycheck")
+        #expect(rows[0].map(\.id) == ["cashNights"])
+        #expect(rows[0][0].label == "CASH NIGHTS")
+        #expect(rows[0][0].value == "58%")
+        #expect(rows[0][0].context == "of Friday tips are cash · 8 Fridays")
     }
 
-    @Test("cash share is omitted entirely when there's no cash or credit at all")
-    func cashShareOmittedWhenNoGross() {
+    @Test("cash nights is omitted entirely when no weekday qualifies")
+    func cashNightsOmittedWhenAbsent() {
         let facts = baseFacts()
         #expect(InsightsNumbersGrid.rows(for: facts).isEmpty)
     }
@@ -106,7 +109,7 @@ struct InsightsNumbersGridTests {
     @Test("every populated fact produces its own row, in a stable order")
     func fullGridOrder() {
         var facts = baseFacts(
-            cashCents: 4000, creditCents: 6000,
+            cashWeekday: CashWeekdayFacts(weekday: 6, sharePercent: 58, restSharePercent: 31, nightCount: 8),
             lunchDinner: LunchDinnerFacts(lunchCents: 31_800, lunchShiftCount: 2, dinnerCents: 167_500, dinnerShiftCount: 5),
             doublesSolo: DoublesSoloFacts(doubleAverageCents: 51_800, doubleCount: 2, soloAverageCents: 23_800, soloCount: 3, doublePerShiftCents: 25_900)
         )
@@ -119,7 +122,7 @@ struct InsightsNumbersGridTests {
             ["hourly", "tipPercent"],
             ["lunch", "dinner"],
             ["doubles", "solo"],
-            ["cashShare"],
+            ["cashNights"],
             ["startTimes"],
         ])
     }

@@ -115,7 +115,11 @@ enum InsightsService {
             let days = facts.topDays.map { "\(Money.string(fromCents: $0.cents)) on \($0.date.formatted(.dateTime.month(.wide).day()))" }
             lines.append("TOP EARNING DAYS: " + days.joined(separator: ", ") + ".")
         }
-        lines.append("CASH VS CREDIT: \(Money.string(fromCents: facts.cashCents)) cash, \(Money.string(fromCents: facts.creditCents)) credit (this split is gross, before any tip-out). Credit exceeding cash is normal in a card-heavy restaurant and is NOT a finding - never present 'credit was the larger share' as an insight. If this section is worth writing at all, say what the split means: cash went home the day it was earned; credit arrives on the paycheck.")
+        if let cashWeekday = facts.cashWeekday {
+            let weekdayName = Calendar.current.weekdaySymbols[cashWeekday.weekday - 1]
+            let countPhrase = cashWeekday.nightCount == 1 ? "1 \(weekdayName)" : "\(cashWeekday.nightCount) \(weekdayName)s"
+            lines.append("CASH WEEKDAY: \(weekdayName)s run \(Int(cashWeekday.sharePercent.rounded()))% cash against \(Int(cashWeekday.restSharePercent.rounded()))% the rest of the week, across \(countPhrase).")
+        }
         if facts.totalTipOutCents > 0 {
             lines.append("TIP-OUTS: \(Money.string(fromCents: facts.totalTipOutCents)) total tipped out - already subtracted from OVERALL above.")
         }
@@ -160,6 +164,8 @@ enum InsightsService {
 
         lines.append("VOCABULARY: never use 'night' as a generic stand-in for a shift or a day - a shift can be lunch, dinner, or unspecified, and it may be logged and read back at any hour. Say lunch, dinner, shift, or day, matching what the data actually reflects.")
 
+        lines.append("NEVER comment on cash-versus-credit mix in general (e.g. 'most of your tips came in on cards') - a server already knows their own split and it is never an insight. The ONLY cash fact you may ever mention is the CASH WEEKDAY line above, when present, and only in that specific framing.")
+
         if let topMove {
             lines.append("TOP MOVE (already shown to the reader as its own card, above everything you write - never repeat it as an item): \(topMove.title) - \(topMove.body)")
         }
@@ -168,7 +174,7 @@ enum InsightsService {
             lines.append("SINCE THEN (a follow-up on a past Move, already shown to the reader as its own card, above everything you write, including TOP MOVE - never repeat it as an item): \(latestFollowUp.title) - \(latestFollowUp.body)")
         }
 
-        lines.append("THE READER ALREADY SEES ALL OF THE ABOVE AS NUMBERS ON SCREEN, in a stat grid directly below TOP MOVE/SINCE THEN: hourly rate, tip percent, lunch vs dinner per shift, doubles vs solo per shift, cash share, and start times, each already hedged there when the sample is thin. Your job is NOT to restate any of those figures and NOT to write one item per fact / narrate section-by-section - the grid already does that job better than prose can. Return 1 to 3 items in the sections array, and only when something is actually worth flagging beyond the numbers themselves: (a) an explanation for an anomaly or unusual number - especially one grounded in a SHIFT NOTE above - (b) a caveat about how to read the data (e.g. why a figure is thin or noisy) that the grid's own hedge doesn't already cover, or (c) one synthesis connecting two or more of the facts above into a takeaway the grid doesn't spell out on its own. Each item's title must be 4 words or fewer; each item's body must be 1-2 sentences, never more. If nothing above actually clears that bar, return an empty sections array rather than padding it with a restated number or a generic remark.")
+        lines.append("THE READER ALREADY SEES ALL OF THE ABOVE AS NUMBERS ON SCREEN, in a stat grid directly below TOP MOVE/SINCE THEN: hourly rate, tip percent, lunch vs dinner per shift, doubles vs solo per shift, cash weekday (when one qualifies), and start times, each already hedged there when the sample is thin. Your job is NOT to restate any of those figures and NOT to write one item per fact / narrate section-by-section - the grid already does that job better than prose can. Return 1 to 3 items in the sections array, and only when something is actually worth flagging beyond the numbers themselves: (a) an explanation for an anomaly or unusual number - especially one grounded in a SHIFT NOTE above - (b) a caveat about how to read the data (e.g. why a figure is thin or noisy) that the grid's own hedge doesn't already cover, or (c) one synthesis connecting two or more of the facts above into a takeaway the grid doesn't spell out on its own. Each item's title must be 4 words or fewer; each item's body must be 1-2 sentences, never more. If nothing above actually clears that bar, return an empty sections array rather than padding it with a restated number or a generic remark.")
 
         var promptSections = ["NEW FACTS TO REFLECT:", lines.joined(separator: "\n")]
         if let previousSections, !previousSections.isEmpty {
