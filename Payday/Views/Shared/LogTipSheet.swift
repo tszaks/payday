@@ -77,14 +77,9 @@ struct LogTipSheet: View {
         case .new(let defaultDate, let seedClockIn, let seedClockOut):
             _date = State(initialValue: defaultDate)
             _note = State(initialValue: "")
-            // The clock is only a trustworthy proxy for "which shift is
-            // this" when the shift being logged is actually today — a
-            // backfilled past day has no clock to read, so it starts
-            // unset rather than guessed at.
-            if Calendar.current.isDateInToday(defaultDate) {
-                let hour = Calendar.current.component(.hour, from: .now)
-                _shiftPeriod = State(initialValue: hour < 16 ? .lunch : .dinner)
-            }
+            // Lunch/dinner is never guessed — not even from the clock.
+            // Tyler's no-assumptions law (2026-07-27): every shift is
+            // different; it stays unset until tapped.
             // A just-ended live shift session already knows its exact
             // punches — seed Started/Ended from them directly, same as if
             // the pickers had been set by hand.
@@ -145,75 +140,6 @@ struct LogTipSheet: View {
         return !hasCash && creditCount >= 3
     }
 
-    /// The most recent same-weekday shift with both clock times logged —
-    /// lets a regular Friday bartender see their usual Started/Ended already
-    /// sitting there instead of having to remember and re-enter it every
-    /// time. Re-anchored onto the shift being logged in seedShiftDetailDefaults,
-    /// so only the hour/minute of the suggestion is actually used.
-    private func suggestedClockTimes(for date: Date) -> (`in`: Date, out: Date)? {
-        let calendar = Calendar.current
-        let weekday = calendar.component(.weekday, from: date)
-        let match = allEntries
-            .filter { $0.clockIn != nil && $0.clockOut != nil && calendar.component(.weekday, from: $0.date) == weekday }
-            .sorted { $0.date > $1.date }
-            .first
-        guard let matchIn = match?.clockIn, let matchOut = match?.clockOut else { return nil }
-        return (in: matchIn, out: matchOut)
-    }
-
-    /// Same per-weekday memory as clock times, for tip-out.
-    private func suggestedTipOutCents(for date: Date) -> Int? {
-        let calendar = Calendar.current
-        let weekday = calendar.component(.weekday, from: date)
-        return allEntries
-            .filter { $0.tipOutCents != nil && calendar.component(.weekday, from: $0.date) == weekday }
-            .sorted { $0.date > $1.date }
-            .first?.tipOutCents
-    }
-
-    /// Same per-weekday memory as clock times and tip-out, for sales.
-    private func suggestedSalesCents(for date: Date) -> Int? {
-        let calendar = Calendar.current
-        let weekday = calendar.component(.weekday, from: date)
-        return allEntries
-            .filter { $0.salesCents != nil && calendar.component(.weekday, from: $0.date) == weekday }
-            .sorted { $0.date > $1.date }
-            .first?.salesCents
-    }
-
-    /// Same-weekday tip-out, shown only as a CompactCurrencyField
-    /// placeholder (see the type's own doc) — never pre-filled as a real
-    /// value. New-log only: an existing shift already has its own honest
-    /// number, not a guess to overlay. Recomputes as `date` changes, so
-    /// backdating to a different weekday updates the hint too.
-    private var tipOutPlaceholderCents: Int? {
-        guard case .new = target else { return nil }
-        return suggestedTipOutCents(for: date)
-    }
-
-    /// Same reasoning as tipOutPlaceholderCents, for sales.
-    private var salesPlaceholderCents: Int? {
-        guard case .new = target else { return nil }
-        return suggestedSalesCents(for: date)
-    }
-
-    /// Same per-weekday memory as tip-out and sales, for server count.
-    private func suggestedServerCount(for date: Date) -> Int? {
-        let calendar = Calendar.current
-        let weekday = calendar.component(.weekday, from: date)
-        return allEntries
-            .filter { $0.serverCount != nil && calendar.component(.weekday, from: $0.date) == weekday }
-            .sorted { $0.date > $1.date }
-            .first?.serverCount
-    }
-
-    /// Same reasoning as tipOutPlaceholderCents/salesPlaceholderCents, for
-    /// server count.
-    private var serversPlaceholderCount: Int? {
-        guard case .new = target else { return nil }
-        return suggestedServerCount(for: date)
-    }
-
     /// Runs once at appearance, before seedShiftDetailDefaults — a resolved
     /// live-shift punch pair pre-empts the weekday-suggestion fill-in below
     /// (which only fires when clockIn/clockOut are still nil) rather than
@@ -239,23 +165,11 @@ struct LogTipSheet: View {
     private func seedShiftDetailDefaults() {
         switch target {
         case .new:
-            if clockIn == nil, clockOut == nil, let suggestion = suggestedClockTimes(for: date) {
-                let calendar = Calendar.current
-                let inComponents = calendar.dateComponents([.hour, .minute], from: suggestion.`in`)
-                let outComponents = calendar.dateComponents([.hour, .minute], from: suggestion.out)
-                clockIn = calendar.date(bySettingHour: inComponents.hour ?? 0, minute: inComponents.minute ?? 0, second: 0, of: date)
-                clockOut = calendar.date(bySettingHour: outComponents.hour ?? 0, minute: outComponents.minute ?? 0, second: 0, of: date)
-                hoursWorked = ShiftTimes.hours(clockIn: clockIn, clockOut: clockOut)
-            }
-            // Times pre-fill as real values because they're stable per
-            // weekday — a genuine fact worth attaching automatically.
-            // Tip-out and sales are NOT: they used to pre-fill tipOutCents/
-            // salesCents directly here, which meant a rushed Save could
-            // silently attach last Friday's tip-out to tonight. They only
-            // ever surface as a CompactCurrencyField placeholder
-            // (tipOutPlaceholderCents/salesPlaceholderCents, read by
-            // shiftDetailsCard below) — a hint to tap into, never a
-            // committed value.
+            // Nothing is seeded from history — Tyler's no-assumptions law
+            // (2026-07-27): every shift is different, patterns never
+            // pre-populate a field. Only facts prefill: a live session's
+            // exact punches (init) and today's date.
+            break
         case .edit(let entry):
             // A fact about the whole shift, not this one entry — resolve
             // across every entry in the shift, same convention liveSaveEdit
@@ -696,10 +610,7 @@ struct LogTipSheet: View {
                 HStack {
                     Text("Tip-out")
                     Spacer()
-                    if tipOutCents == 0, let tipOutPlaceholderCents {
-                        suggestionChip(cents: tipOutPlaceholderCents) { tipOutCents = tipOutPlaceholderCents }
-                    }
-                    CompactCurrencyField(cents: $tipOutCents, field: .tipOut, focusedField: $focusedCurrencyField, autoFocus: debugAutoFocusTipOut, placeholderCents: tipOutPlaceholderCents)
+                    CompactCurrencyField(cents: $tipOutCents, field: .tipOut, focusedField: $focusedCurrencyField, autoFocus: debugAutoFocusTipOut)
                 }
                 .padding(.vertical, 14)
                 .id(CurrencyRowField.tipOut)
@@ -707,10 +618,7 @@ struct LogTipSheet: View {
                 HStack {
                     Text("Sales")
                     Spacer()
-                    if salesCents == 0, let salesPlaceholderCents {
-                        suggestionChip(cents: salesPlaceholderCents) { salesCents = salesPlaceholderCents }
-                    }
-                    CompactCurrencyField(cents: $salesCents, field: .sales, focusedField: $focusedCurrencyField, placeholderCents: salesPlaceholderCents)
+                    CompactCurrencyField(cents: $salesCents, field: .sales, focusedField: $focusedCurrencyField)
                 }
                 .padding(.vertical, 14)
                 .id(CurrencyRowField.sales)
@@ -725,7 +633,7 @@ struct LogTipSheet: View {
                 HStack {
                     Text("Servers")
                     Spacer()
-                    CompactCountField(count: serverCountBinding, field: .servers, focusedField: $focusedCurrencyField, autoFocus: debugAutoFocusServers, placeholderCount: serversPlaceholderCount)
+                    CompactCountField(count: serverCountBinding, field: .servers, focusedField: $focusedCurrencyField, autoFocus: debugAutoFocusServers)
                 }
                 .padding(.vertical, 14)
                 .id(CurrencyRowField.servers)
@@ -817,28 +725,6 @@ struct LogTipSheet: View {
         #else
         false
         #endif
-    }
-
-    /// One-tap commit for a weekday-typical tip-out/sales value — shown only
-    /// while the field itself is still 0 (see CompactCurrencyField's own
-    /// placeholder, which stays a passive, non-committing hint). Tapping
-    /// this is the one and only way a suggestion ever becomes a real value:
-    /// no auto-fill, no silent default.
-    private func suggestionChip(cents: Int, commit: @escaping () -> Void) -> some View {
-        Button {
-            PaydayHaptics.selection()
-            commit()
-        } label: {
-            VStack(spacing: 0) {
-                Text(Money.string(fromCents: cents))
-                    .font(PaydayFont.caption)
-                    .foregroundStyle(PaydayColor.textSecondary)
-                Text("usual")
-                    .font(PaydayFont.caption2)
-                    .foregroundStyle(PaydayColor.textTertiary)
-            }
-        }
-        .buttonStyle(.plain)
     }
 
     private func card<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
