@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import SwiftData
 @testable import Payday
 
 private func date(_ year: Int, _ month: Int, _ day: Int) -> Date {
@@ -9,6 +10,13 @@ private func date(_ year: Int, _ month: Int, _ day: Int) -> Date {
 }
 
 private let calculator = PayPeriodCalculator(schedule: PaySchedule(frequency: .biweekly, anchorPeriodEnd: date(2026, 7, 19), firstWeekday: 2))
+
+@MainActor
+private func makeContext() throws -> ModelContext {
+    let config = ModelConfiguration(isStoredInMemoryOnly: true)
+    let container = try ModelContainer(for: TipEntry.self, PaycheckRecord.self, configurations: config)
+    return ModelContext(container)
+}
 
 @Suite("CSV export")
 struct CSVExporterTests {
@@ -127,5 +135,83 @@ struct CSVExporterTests {
         let rows = csv.split(separator: "\n")
         #expect(rows[1].hasPrefix("2026-07-08"))
         #expect(rows[2].hasPrefix("2026-07-09"))
+    }
+}
+
+@Suite("PaycheckRecord stub details")
+@MainActor
+struct PaycheckRecordStubDetailsTests {
+    @Test("all four detail fields persist and read back through SwiftData")
+    func roundtripAllSet() throws {
+        let context = try makeContext()
+        let record = PaycheckRecord(
+            periodStart: date(2026, 7, 1),
+            periodEnd: date(2026, 7, 15),
+            paidTipsCents: 10000,
+            hourlyRateCents: 1250,
+            owedTipsCents: 500,
+            grossPayCents: 150000,
+            netPayCents: 110000
+        )
+        context.insert(record)
+        try context.save()
+
+        let fetched = try context.fetch(FetchDescriptor<PaycheckRecord>()).first
+        #expect(fetched?.hourlyRateCents == 1250)
+        #expect(fetched?.owedTipsCents == 500)
+        #expect(fetched?.grossPayCents == 150000)
+        #expect(fetched?.netPayCents == 110000)
+    }
+
+    @Test("all four detail fields stay nil when never entered")
+    func roundtripAllNil() throws {
+        let context = try makeContext()
+        let record = PaycheckRecord(periodStart: date(2026, 7, 1), periodEnd: date(2026, 7, 15), paidTipsCents: 10000)
+        context.insert(record)
+        try context.save()
+
+        let fetched = try context.fetch(FetchDescriptor<PaycheckRecord>()).first
+        #expect(fetched?.hourlyRateCents == nil)
+        #expect(fetched?.owedTipsCents == nil)
+        #expect(fetched?.grossPayCents == nil)
+        #expect(fetched?.netPayCents == nil)
+    }
+
+    // Mirrors PaycheckEntrySheet.save()'s effective-cents conversion — the
+    // same "value > 0 ? value : nil" rule LogTipSheet applies to tip-out.
+    private func effectiveCents(_ value: Int) -> Int? { value > 0 ? value : nil }
+
+    @Test("zero-valued entry fields save as nil")
+    func zeroEntrySavesAsNil() {
+        let record = PaycheckRecord(
+            periodStart: date(2026, 7, 1),
+            periodEnd: date(2026, 7, 15),
+            paidTipsCents: 10000,
+            hourlyRateCents: effectiveCents(0),
+            owedTipsCents: effectiveCents(0),
+            grossPayCents: effectiveCents(0),
+            netPayCents: effectiveCents(0)
+        )
+        #expect(record.hourlyRateCents == nil)
+        #expect(record.owedTipsCents == nil)
+        #expect(record.grossPayCents == nil)
+        #expect(record.netPayCents == nil)
+    }
+
+    @Test("non-zero entry fields save as exact cents")
+    func nonZeroEntrySavesExactCents() {
+        let record = PaycheckRecord(
+            periodStart: date(2026, 7, 1),
+            periodEnd: date(2026, 7, 15),
+            paidTipsCents: 10000,
+            hourlyRateCents: effectiveCents(1275),
+            owedTipsCents: effectiveCents(2200),
+            grossPayCents: effectiveCents(150000),
+            netPayCents: effectiveCents(110000)
+        )
+        #expect(record.hourlyRateCents == 1275)
+        #expect(record.owedTipsCents == 2200)
+        #expect(record.grossPayCents == 150000)
+        #expect(record.netPayCents == 110000)
     }
 }
