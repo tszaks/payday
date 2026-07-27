@@ -36,8 +36,10 @@ enum ShiftBeliefLine {
     }
 
     /// "Today" / "Yesterday" / "Jul 12" — the year is never shown, same
-    /// reasoning as ShiftDays.humanLabel: it's always this one.
-    private static func dateLabel(for date: Date, calendar: Calendar, now: Date) -> String {
+    /// reasoning as ShiftDays.humanLabel: it's always this one. Internal
+    /// (not private): LogTipSheet's creation-mode date pill reuses this
+    /// exact label rather than duplicating the logic.
+    static func dateLabel(for date: Date, calendar: Calendar = .current, now: Date = .now) -> String {
         if calendar.isDate(date, inSameDayAs: now) { return "Today" }
         if let yesterday = calendar.date(byAdding: .day, value: -1, to: now), calendar.isDate(date, inSameDayAs: yesterday) {
             return "Yesterday"
