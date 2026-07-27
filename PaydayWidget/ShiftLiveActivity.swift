@@ -43,12 +43,14 @@ struct ShiftLiveActivity: Widget {
                 }
             } compactLeading: {
                 // Apple's compact grammar (Timer: orange glyph + orange
-                // countdown): identity glyph leading, metric in the same
-                // accent trailing. The glyph is the green banknote — the
-                // app icon's own mark. Deliberately NOT a dollar sign:
-                // that's Vero's icon, the sister app.
-                Image(systemName: "banknote.fill")
-                    .font(PaydayFont.caption)
+                // countdown): identity leading, metric in the accent
+                // trailing. The identity is the actual app icon mark
+                // (Tyler's call) — never a dollar sign, that's Vero.
+                Image("IslandMark")
+                    .renderingMode(.template)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(height: 20)
                     .foregroundStyle(PaydayColor.primary)
             } compactTrailing: {
                 Text(timerInterval: timerRange(startedAt: context.state.startedAt), countsDown: false)
@@ -64,8 +66,11 @@ struct ShiftLiveActivity: Widget {
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
             } minimal: {
-                Image(systemName: "banknote.fill")
-                    .font(PaydayFont.caption)
+                Image("IslandMark")
+                    .renderingMode(.template)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(height: 18)
                     .foregroundStyle(PaydayColor.primary)
             }
         }
@@ -109,12 +114,11 @@ struct ShiftLiveActivity: Widget {
             }
 
             HStack(alignment: .center, spacing: PaydaySpacing.p12) {
-                Text(timerInterval: timerRange(startedAt: startedAt), countsDown: false)
-                    .font(PaydayFont.displayLarge)
-                    .monospacedDigit()
-                    .foregroundStyle(PaydayColor.textPrimary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.6)
+                // Dimmed/Always-On lock screens stop per-second updates and
+                // the system dashes the seconds out ("2:--"). Detect that
+                // state and show a minute-granularity relative readout
+                // ("2 min") instead of dead dashes.
+                LuminanceAwareTimer(startedAt: startedAt, range: timerRange(startedAt: startedAt))
                 Spacer()
                 Button(intent: EndShiftIntent()) {
                     Text("End")
@@ -128,5 +132,29 @@ struct ShiftLiveActivity: Widget {
             }
         }
         .padding(PaydaySpacing.p20)
+    }
+}
+
+/// Full ticking H:MM:SS when the lock screen is live; "2 min" relative
+/// style when luminance is reduced (AOD) and the system would dash the
+/// seconds anyway.
+private struct LuminanceAwareTimer: View {
+    let startedAt: Date
+    let range: ClosedRange<Date>
+    @Environment(\.isLuminanceReduced) private var isLuminanceReduced
+
+    var body: some View {
+        Group {
+            if isLuminanceReduced {
+                Text(startedAt, style: .relative)
+            } else {
+                Text(timerInterval: range, countsDown: false)
+            }
+        }
+        .font(PaydayFont.displayLarge)
+        .monospacedDigit()
+        .foregroundStyle(PaydayColor.textPrimary)
+        .lineLimit(1)
+        .minimumScaleFactor(0.6)
     }
 }

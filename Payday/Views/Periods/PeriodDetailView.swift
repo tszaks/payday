@@ -12,6 +12,9 @@ struct PeriodDetailView: View {
     @State private var sheetTarget: TipEntrySheetTarget?
     @State private var showPaycheckSheet = false
     @State private var undoState = UndoDeleteToastState()
+    /// Whether the cash/credit breakdown drawer tucked under the hero is open.
+    @State private var breakdownExpanded = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var payDate: Date {
         PayPeriodCalculator(schedule: scheduleStore.schedule ?? .fallback).payDate(for: period)
@@ -19,13 +22,6 @@ struct PeriodDetailView: View {
 
     private var isPayDateUpcoming: Bool {
         Calendar.current.startOfDay(for: payDate) >= Calendar.current.startOfDay(for: Date())
-    }
-
-    /// Tense-honest: the money isn't there yet before payDate arrives, so
-    /// this can't say "Paid" until it actually is. Shared with PeriodsView's
-    /// list rows via PaydayCopy so the rule can't fork between the two.
-    private var payDateText: String {
-        PaydayCopy.payDateText(payDate: payDate)
     }
 
     private var entries: [TipEntry] {
@@ -96,20 +92,46 @@ struct PeriodDetailView: View {
         return Double(heroTotalCents) / 100 / loggedHours
     }
 
-    private var heroCaptionLine: String {
-        guard let trueDollarsPerHour else { return payDateText }
+    /// The face's one quiet caption — the true $/hr rate, when there's
+    /// enough to compute one. Nothing when it's absent: no filler, and the
+    /// payday date now lives only in the paycheck section further down this
+    /// screen (see noPaycheckCaption / PaycheckComparisonView).
+    private var heroRateCaption: String? {
+        guard let trueDollarsPerHour else { return nil }
         let rate = Money.wholeDollarString(fromCents: Int((trueDollarsPerHour * 100).rounded()))
-        return "Averaging \(rate)/hr · \(payDateText)"
+        return "Averaging \(rate)/hr"
     }
 
-    /// Shown under the Cash · Credit line only when wages exist — the
-    /// dollar amount actually folded into heroTotalCents above.
-    private var wagesCaptionLine: String? {
-        guard let wages else { return nil }
-        let total = Money.wholeDollarString(fromCents: wages.totalCents)
-        guard wages.overtimeCents > 0 else { return "Wages \(total)" }
-        let overtime = Money.wholeDollarString(fromCents: wages.overtimeCents)
-        return "Wages \(total) · incl. \(overtime) overtime"
+    /// Whether the hero has a cash/credit split worth tucking a drawer under.
+    private var hasBreakdown: Bool {
+        breakdown.cashCents > 0 || breakdown.creditCents > 0
+    }
+
+    /// The figure that makes the drawer's rows reconcile to Total, same
+    /// derivation as the Dashboard hero's drawer: gross cash + credit minus
+    /// the tips-only net (which nightlyTotals() already nets tip-out out of).
+    private var tipOutCents: Int {
+        max(0, breakdown.cashCents + breakdown.creditCents - tipsNetCents)
+    }
+
+    /// Drawer rows in reconciliation order: Cash, Credit, Tipped out (only
+    /// when logged), Wages (only when a rate is set; Overtime its own row
+    /// only when logged) — total = cash + credit − tipout + wages.
+    private var breakdownRows: [BreakdownRow] {
+        var rows: [BreakdownRow] = [
+            BreakdownRow("Cash", cents: breakdown.cashCents),
+            BreakdownRow("Credit", cents: breakdown.creditCents),
+        ]
+        if tipOutCents > 0 {
+            rows.append(BreakdownRow("Tipped out", cents: -tipOutCents))
+        }
+        if let wages {
+            rows.append(BreakdownRow("Wages", cents: wages.regularCents))
+            if wages.overtimeCents > 0 {
+                rows.append(BreakdownRow("Overtime", cents: wages.overtimeCents))
+            }
+        }
+        return rows
     }
 
     private var predictedPaycheckCents: Int {
@@ -149,7 +171,15 @@ struct PeriodDetailView: View {
     var body: some View {
         List {
             Section {
-                heroCard
+                HeroBreakdownDrawer(
+                    lipText: "Cash \(Money.string(fromCents: breakdown.cashCents)) · Credit \(Money.string(fromCents: breakdown.creditCents))",
+                    rows: breakdownRows,
+                    total: BreakdownRow("Total", cents: heroTotalCents, emphasized: true),
+                    hasBreakdown: hasBreakdown,
+                    isExpanded: $breakdownExpanded
+                ) {
+                    heroCard
+                }
             }
             .listRowInsets(EdgeInsets(top: 8, leading: PaydaySpacing.p16, bottom: 8, trailing: PaydaySpacing.p16))
             .listRowBackground(Color.clear)
@@ -215,32 +245,32 @@ struct PeriodDetailView: View {
         .undoDeleteToast(undoState, context: modelContext)
     }
 
+    /// The face goes minimal: the total, plus at most one quiet caption (the
+    /// true $/hr rate, only when there's one to show). Cash/Credit, Wages,
+    /// and the payday date all moved to the tucked drawer / paycheck section
+    /// below, rather than stacking four caption lines of differently-weighted
+    /// information on the card face.
     private var heroCard: some View {
         VStack(spacing: 10) {
             Text(Money.string(fromCents: heroTotalCents))
                 .font(PaydayFont.displayXL)
                 .monospacedDigit()
                 .foregroundStyle(PaydayColor.textPrimary)
-            HStack(spacing: 6) {
-                Text("Cash \(Money.string(fromCents: breakdown.cashCents))")
-                Text("·").foregroundStyle(PaydayColor.textSecondary)
-                Text("Credit \(Money.string(fromCents: breakdown.creditCents))")
-            }
-            .font(PaydayFont.footnote)
-            .monospacedDigit()
-            .foregroundStyle(PaydayColor.textSecondary)
-            if let wagesCaptionLine {
-                Text(wagesCaptionLine)
-                    .font(PaydayFont.footnote)
+            if let heroRateCaption {
+                Text(heroRateCaption)
+                    .font(PaydayFont.caption)
                     .monospacedDigit()
                     .foregroundStyle(PaydayColor.textSecondary)
             }
-            Text(heroCaptionLine)
-                .font(PaydayFont.caption)
-                .monospacedDigit()
-                .foregroundStyle(PaydayColor.textSecondary)
         }
         .frame(maxWidth: .infinity)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(hasBreakdown ? .isButton : [])
+        .accessibilityHint(hasBreakdown ? (breakdownExpanded ? "Hide breakdown" : "Show breakdown") : "")
+        .accessibilityAction {
+            guard hasBreakdown else { return }
+            HeroBreakdownToggle.fire($breakdownExpanded, reduceMotion: reduceMotion)
+        }
         .paydayCard(padding: PaydaySpacing.p24)
     }
 
