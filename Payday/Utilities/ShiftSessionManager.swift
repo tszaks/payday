@@ -46,13 +46,16 @@ enum ShiftSessionManager {
     }
 
     /// nil if no session was running — nothing ended, nothing stashed.
+    /// `stashPendingEnd: false` is for a caller (LogTipSheet, ending the live
+    /// shift it's mid-save on) that already has the exact punches in hand —
+    /// see ShiftSessionStore.endActive's own doc comment.
     @discardableResult
-    static func end(at date: Date = .now) async -> (start: Date, end: Date)? {
+    static func end(at date: Date = .now, stashPendingEnd: Bool = true) async -> (start: Date, end: Date)? {
         guard ShiftSessionStore.activeStart != nil else { return nil }
         for activity in Activity<ShiftSessionAttributes>.activities {
             await activity.end(nil, dismissalPolicy: .immediate)
         }
         defer { ShiftSessionState.shared.sync() }
-        return ShiftSessionStore.endActive(at: date)
+        return ShiftSessionStore.endActive(at: date, stash: stashPendingEnd)
     }
 }

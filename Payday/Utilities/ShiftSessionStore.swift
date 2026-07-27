@@ -35,15 +35,19 @@ enum ShiftSessionStore {
         AppGroup.defaults.set(date, forKey: activeStartKey)
     }
 
-    /// Clears the active session and stashes the exact start/end pair as
-    /// pendingEnd for the app to turn into a prefilled log sheet next
-    /// foreground. Returns nil (and touches nothing) if no session was
-    /// running.
+    /// Clears the active session and, by default, stashes the exact
+    /// start/end pair as pendingEnd for the app to turn into a prefilled log
+    /// sheet next foreground. Returns nil (and touches nothing) if no
+    /// session was running. `stash: false` is for a caller that already has
+    /// its own hold on the exact punches (LogTipSheet ending the live shift
+    /// it's mid-save on) — stashing there too would present a second,
+    /// duplicate sheet next foreground for a shift already logged.
     @discardableResult
-    static func endActive(at date: Date = .now) -> (start: Date, end: Date)? {
+    static func endActive(at date: Date = .now, stash: Bool = true) -> (start: Date, end: Date)? {
         guard let start = activeStart else { return nil }
         AppGroup.defaults.removeObject(forKey: activeStartKey)
         let pair = (start: start, end: date)
+        guard stash else { return pair }
         let encoded = try? JSONEncoder().encode(PendingEnd(start: pair.start, end: pair.end))
         AppGroup.defaults.set(encoded, forKey: pendingEndKey)
         return pair

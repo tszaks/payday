@@ -58,6 +58,18 @@ final class ShiftSessionStoreTests {
         #expect(ShiftSessionStore.popPendingEnd() == nil)
     }
 
+    @Test("endActive(stash: false) clears active but leaves pendingEnd empty")
+    func endActiveWithStashFalseLeavesPendingEndEmpty() {
+        let start = Date(timeIntervalSince1970: 1_753_500_000)
+        let end = start.addingTimeInterval(3600)
+        ShiftSessionStore.start(at: start)
+        let pair = ShiftSessionStore.endActive(at: end, stash: false)
+        #expect(pair?.start == start)
+        #expect(pair?.end == end)
+        #expect(ShiftSessionStore.activeStart == nil)
+        #expect(ShiftSessionStore.pendingEnd == nil)
+    }
+
     @Test("endActive with nothing active returns nil and stashes nothing")
     func endActiveWithNothingActiveReturnsNilAndStashesNothing() {
         #expect(ShiftSessionStore.endActive() == nil)
