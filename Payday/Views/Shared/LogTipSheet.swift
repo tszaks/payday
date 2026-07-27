@@ -16,6 +16,7 @@ struct LogTipSheet: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(PayScheduleStore.self) private var scheduleStore
     @Environment(UserPreferencesStore.self) private var preferencesStore
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Query(sort: \TipEntry.date, order: .reverse) private var allEntries: [TipEntry]
     @Query private var paycheckRecords: [PaycheckRecord]
 
@@ -43,10 +44,16 @@ struct LogTipSheet: View {
     /// sessions itself. Saving in this state ends the session; cancelling
     /// leaves it running untouched.
     @State private var isEndingLiveShift = false
+    /// Cancel-while-ending disambiguation — see the Cancel button.
+    @State private var isShowingEndShiftCancelDialog = false
     /// Captured alongside isEndingLiveShift, independent of the editable
     /// `clockIn` field below — the caption always names the shift's real
     /// start even if Started gets hand-edited before Save.
     @State private var liveShiftStartedAt: Date?
+    /// New-entry only: the details group opens collapsed behind a one-line
+    /// belief sentence (ShiftBeliefLine) instead of every row at full volume.
+    /// Editing never touches this — that flow keeps the card always open.
+    @State private var isDetailsExpanded = false
 
     // Optional shift details — skippable, never nagged. hoursWorked,
     // tipOutCents, salesCents, shiftPeriod, clockIn, and clockOut are all
@@ -319,7 +326,7 @@ struct LogTipSheet: View {
                             VStack(spacing: 24) {
                                 shiftAmountContent
 
-                                shiftDetailsCard
+                                shiftDetailsGroup
                                 noteCard
 
                                 if isEditing {
@@ -354,7 +361,18 @@ struct LogTipSheet: View {
                             }
                         } else {
                             ToolbarItem(placement: .cancellationAction) {
-                                Button("Cancel") { dismiss() }
+                                // Cancel while closing out a LIVE shift is
+                                // ambiguous — three intents hide behind one
+                                // button (Mail's discard-draft problem), so it
+                                // asks. A normal log sheet's Cancel stays
+                                // instant: no timer at stake, no dialog.
+                                Button("Cancel") {
+                                    if isEndingLiveShift {
+                                        isShowingEndShiftCancelDialog = true
+                                    } else {
+                                        dismiss()
+                                    }
+                                }
                             }
                             ToolbarItem(placement: .confirmationAction) {
                                 Button("Save") { saveNew() }
@@ -370,8 +388,11 @@ struct LogTipSheet: View {
                         if let focusedCurrencyField {
                             ToolbarItemGroup(placement: .keyboard) {
                                 Spacer()
-                                Button("Next") {
-                                    self.focusedCurrencyField = nextFocusField(after: focusedCurrencyField)
+                                if let next = nextFocusField(after: focusedCurrencyField) {
+                                    Button("Next") {
+                                        PaydayHaptics.selection()
+                                        self.focusedCurrencyField = next
+                                    }
                                 }
                                 Button(isEditing ? "Done" : "Save") {
                                     if isEditing {
@@ -384,6 +405,18 @@ struct LogTipSheet: View {
                             }
                         }
                     }
+                }
+                .confirmationDialog("End shift?", isPresented: $isShowingEndShiftCancelDialog, titleVisibility: .visible) {
+                    Button("End Shift Without Saving", role: .destructive) {
+                        Task {
+                            await ShiftSessionManager.end(stashPendingEnd: false)
+                            dismiss()
+                        }
+                    }
+                    Button("Continue Shift") { dismiss() }
+                    Button("Keep Logging", role: .cancel) {}
+                } message: {
+                    Text("You're still on the clock.")
                 }
                 .onChange(of: cashCents) { _, _ in liveSaveEdit() }
                 .onChange(of: creditCents) { _, _ in liveSaveEdit() }
@@ -450,9 +483,18 @@ struct LogTipSheet: View {
                     .monospacedDigit()
                     .foregroundStyle(shiftTotalCents == 0 ? PaydayColor.textSecondary : PaydayColor.textPrimary)
                     .contentTransition(.numericText())
-                    .animation(PaydayAnimation.premiumSpring, value: shiftTotalCents)
+                    .animation(reduceMotion ? nil : PaydayAnimation.premiumSpring, value: shiftTotalCents)
                     .lineLimit(1)
                     .minimumScaleFactor(0.5)
+                // Take-home is pure mechanics — cash + credit, net of
+                // tip-out, before wages — and needs no hours logged to say
+                // something true, unlike the $/hr clause right below it.
+                if tipOutCents > 0 {
+                    Text("\(Money.string(fromCents: cashCents + creditCents - tipOutCents)) take-home after tip-out")
+                        .font(PaydayFont.caption)
+                        .monospacedDigit()
+                        .foregroundStyle(PaydayColor.textSecondary)
+                }
                 // Live $/hr, computed as the fields change, off the same
                 // all-in numerator as the total above (net of tip-out, plus
                 // wages) — a tip-out is recorded because it's an important
@@ -489,10 +531,15 @@ struct LogTipSheet: View {
         }
     }
 
-    /// Next always cycles Cash -> Credit -> Tip-out -> Sales -> Servers ->
-    /// back to Cash. The shift-details card is always visible now (no
-    /// disclosure to open first), so every field is reachable every time.
-    private func nextFocusField(after field: CurrencyRowField) -> CurrencyRowField {
+    /// While the details group is expanded (always true when editing), Next
+    /// cycles Cash -> Credit -> Tip-out -> Sales -> Servers -> back to Cash.
+    /// Collapsed, only Cash and Credit are on screen, so the chain shortens
+    /// to Cash -> Credit -> nil (Save sits right beside Next at that point,
+    /// nothing left to advance into).
+    private func nextFocusField(after field: CurrencyRowField) -> CurrencyRowField? {
+        guard isEditing || isDetailsExpanded else {
+            return field == .cash ? .credit : nil
+        }
         switch field {
         case .cash: return .credit
         case .credit: return .tipOut
@@ -503,6 +550,63 @@ struct LogTipSheet: View {
     }
 
     // MARK: Shift details — the facts that define this closeout
+
+    /// New-entry only: the belief row (collapsed) or the full card
+    /// (expanded). Editing bypasses this entirely — the card is always
+    /// visible, exactly as it always was, no belief row to speak of.
+    @ViewBuilder
+    private var shiftDetailsGroup: some View {
+        if isEditing || isDetailsExpanded {
+            shiftDetailsCard
+        } else {
+            VStack(alignment: .leading, spacing: 4) {
+                beliefRow
+                if isEndingLiveShift, let liveShiftStartedAt {
+                    Text("Ending the shift you started at \(liveShiftStartedAt.formatted(.dateTime.hour().minute())).")
+                        .font(PaydayFont.caption2)
+                        .foregroundStyle(PaydayColor.textTertiary)
+                }
+            }
+            .padding(.horizontal)
+        }
+    }
+
+    /// The collapsed details group's single row: one sentence of what's
+    /// already known (ShiftBeliefLine), tap to expand into the full card.
+    private var beliefRow: some View {
+        Button {
+            toggleDetailsExpanded()
+        } label: {
+            HStack {
+                Text(ShiftBeliefLine.compose(date: date, shiftPeriod: shiftPeriod, clockIn: clockIn, clockOut: clockOut, tipOutCents: tipOutCents))
+                    .font(PaydayFont.subheadline)
+                    .foregroundStyle(PaydayColor.textSecondary)
+                    .monospacedDigit()
+                    .multilineTextAlignment(.leading)
+                Spacer()
+                Image(systemName: "chevron.down")
+                    .font(PaydayFont.caption2)
+                    .foregroundStyle(PaydayColor.textTertiary)
+                    // Rotate rather than swap symbols — same convention as
+                    // the Dashboard's breakdown drawer chevron.
+                    .rotationEffect(.degrees(isDetailsExpanded ? 180 : 0))
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityHint(isDetailsExpanded ? "Hide details" : "Show details")
+    }
+
+    private func toggleDetailsExpanded() {
+        if reduceMotion {
+            isDetailsExpanded.toggle()
+        } else {
+            withAnimation(PaydayAnimation.drawerSpring) {
+                isDetailsExpanded.toggle()
+            }
+        }
+    }
 
     /// The shift's own identity and economics — date, period, times,
     /// tip-out, sales, headcount — sit closest to the money and are always
@@ -588,6 +692,9 @@ struct LogTipSheet: View {
                 HStack {
                     Text("Tip-out")
                     Spacer()
+                    if tipOutCents == 0, let tipOutPlaceholderCents {
+                        suggestionChip(cents: tipOutPlaceholderCents) { tipOutCents = tipOutPlaceholderCents }
+                    }
                     CompactCurrencyField(cents: $tipOutCents, field: .tipOut, focusedField: $focusedCurrencyField, autoFocus: debugAutoFocusTipOut, placeholderCents: tipOutPlaceholderCents)
                 }
                 .padding(.vertical, 14)
@@ -596,6 +703,9 @@ struct LogTipSheet: View {
                 HStack {
                     Text("Sales")
                     Spacer()
+                    if salesCents == 0, let salesPlaceholderCents {
+                        suggestionChip(cents: salesPlaceholderCents) { salesCents = salesPlaceholderCents }
+                    }
                     CompactCurrencyField(cents: $salesCents, field: .sales, focusedField: $focusedCurrencyField, placeholderCents: salesPlaceholderCents)
                 }
                 .padding(.vertical, 14)
@@ -703,6 +813,28 @@ struct LogTipSheet: View {
         #else
         false
         #endif
+    }
+
+    /// One-tap commit for a weekday-typical tip-out/sales value — shown only
+    /// while the field itself is still 0 (see CompactCurrencyField's own
+    /// placeholder, which stays a passive, non-committing hint). Tapping
+    /// this is the one and only way a suggestion ever becomes a real value:
+    /// no auto-fill, no silent default.
+    private func suggestionChip(cents: Int, commit: @escaping () -> Void) -> some View {
+        Button {
+            PaydayHaptics.selection()
+            commit()
+        } label: {
+            VStack(spacing: 0) {
+                Text(Money.string(fromCents: cents))
+                    .font(PaydayFont.caption)
+                    .foregroundStyle(PaydayColor.textSecondary)
+                Text("usual")
+                    .font(PaydayFont.caption2)
+                    .foregroundStyle(PaydayColor.textTertiary)
+            }
+        }
+        .buttonStyle(.plain)
     }
 
     private func card<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
@@ -934,6 +1066,14 @@ private struct CompactCurrencyField: View {
             let filtered = String(newValue.filter(\.isNumber).prefix(Self.maxDigits))
             if filtered != newValue { digitsText = filtered }
             cents = Int(filtered) ?? 0
+        }
+        // Keeps the hidden text field in sync when cents changes from
+        // outside typing (the suggestion chip's one-tap commit) — without
+        // this, digitsText would silently keep its stale "" and the next
+        // keystroke would stomp the committed value back toward zero.
+        .onChange(of: cents) { _, newValue in
+            guard Int(digitsText) ?? 0 != newValue else { return }
+            digitsText = newValue == 0 ? "" : String(newValue)
         }
     }
 }
