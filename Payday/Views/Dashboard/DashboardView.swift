@@ -518,14 +518,11 @@ struct DashboardView: View {
             if let activeStart = shiftSession.activeStart {
                 HStack(spacing: PaydaySpacing.p8) {
                     HStack(spacing: PaydaySpacing.p8) {
-                        Circle()
-                            .fill(PaydayColor.primary)
-                            .frame(width: 8, height: 8)
+                        LiveShiftDot()
                         (Text("On shift").foregroundStyle(PaydayColor.textSecondary)
-                         + Text(" · ").foregroundStyle(PaydayColor.textSecondary)
-                         + Text(timerInterval: activeStart...activeStart.addingTimeInterval(12 * 3600), countsDown: false).foregroundStyle(PaydayColor.textPrimary))
+                         + Text(" · ").foregroundStyle(PaydayColor.textSecondary))
                             .font(PaydayFont.subheadline)
-                            .monospacedDigit()
+                        LiveShiftClock(startedAt: activeStart)
                     }
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel(onShiftAccessibilityLabel(activeStart))
@@ -537,24 +534,33 @@ struct DashboardView: View {
                     }
                     .font(PaydayFont.subheadline)
                     .foregroundStyle(PaydayColor.primary)
-                    .buttonStyle(.plain)
+                    .buttonStyle(PressableButtonStyle())
                 }
-                .transition(.opacity)
+                // The live row arrives with real presence — leading-edge
+                // slide + slight scale, the app's own spring — and leaves
+                // fast (exits are always quicker than entrances). Never
+                // from nothing: opacity + 0.97, not scale-from-zero.
+                .transition(reduceMotion ? .opacity : .asymmetric(
+                    insertion: .opacity.combined(with: .offset(x: -8)).combined(with: .scale(scale: 0.97, anchor: .leading)),
+                    removal: .opacity
+                ))
             } else {
                 Button("Start Shift") {
+                    PaydayHaptics.lightTap()
                     ShiftSessionManager.start()
                 }
                 .font(PaydayFont.subheadline)
                 .foregroundStyle(PaydayColor.primary)
-                .buttonStyle(.plain)
+                .buttonStyle(PressableButtonStyle())
                 .frame(maxWidth: .infinity, alignment: .center)
                 .transition(.opacity)
             }
         }
+        .animation(reduceMotion ? .easeOut(duration: 0.15) : PaydayAnimation.drawerSpring, value: shiftSession.activeStart != nil)
     }
 
     /// "On shift, 47 minutes" — a spoken fact, not the literal ticking
-    /// digits Text(timerInterval:) renders visually.
+    /// digits the clock renders visually.
     private func onShiftAccessibilityLabel(_ start: Date) -> String {
         let minutes = max(0, Int(Date.now.timeIntervalSince(start) / 60))
         return "On shift, \(minutes) minute\(minutes == 1 ? "" : "s")"
@@ -813,5 +819,51 @@ private struct PaydayVerificationTip: Tip {
 
     var image: Image? {
         Image(systemName: "checkmark.seal")
+    }
+}
+
+
+/// The live band's recording light: a quiet breathing pulse (opacity only,
+/// never size) says "this is recording right now" the way a REC dot does —
+/// the one piece of ongoing motion the band earns while a shift runs.
+/// Static under Reduce Motion.
+private struct LiveShiftDot: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var dimmed = false
+
+    var body: some View {
+        Circle()
+            .fill(PaydayColor.primary)
+            .frame(width: 8, height: 8)
+            .opacity(dimmed ? 0.55 : 1)
+            .onAppear {
+                guard !reduceMotion else { return }
+                withAnimation(.easeInOut(duration: 1.6).repeatForever(autoreverses: true)) {
+                    dimmed = true
+                }
+            }
+    }
+}
+
+/// The elapsed clock, digit-rolling: Text(timerInterval:) self-updates
+/// outside SwiftUI's animation system, so its digits SWAP every second.
+/// Driving the same string from a per-second TimelineView lets
+/// contentTransition(.numericText) roll each changing digit instead —
+/// the system's own timer language (Dynamic Island, Clock). Plain swaps
+/// under Reduce Motion.
+private struct LiveShiftClock: View {
+    let startedAt: Date
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        TimelineView(.periodic(from: startedAt, by: 1)) { context in
+            let label = ElapsedClock.string(from: startedAt, to: context.date)
+            Text(label)
+                .font(PaydayFont.subheadline)
+                .foregroundStyle(PaydayColor.textPrimary)
+                .monospacedDigit()
+                .contentTransition(reduceMotion ? .identity : .numericText(countsDown: false))
+                .animation(.snappy(duration: 0.25), value: label)
+        }
     }
 }
