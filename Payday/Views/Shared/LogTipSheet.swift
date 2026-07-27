@@ -331,8 +331,11 @@ struct LogTipSheet: View {
                             dismiss()
                         }
                     }
-                    Button("Continue Shift") { dismiss() }
-                    Button("Keep Logging", role: .cancel) {}
+                    // Each label names where it leaves you — "Continue Shift" next
+                    // to "Keep Logging" read as the same thing (Tyler,
+                    // 2026-07-27): one must say EXIT, the other BACK.
+                    Button("Exit and Continue Shift") { dismiss() }
+                    Button("Back to Logging", role: .cancel) {}
                 } message: {
                     Text("You're still on the clock.")
                 }
