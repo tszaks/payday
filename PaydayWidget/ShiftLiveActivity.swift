@@ -14,52 +14,54 @@ struct ShiftLiveActivity: Widget {
                 .widgetURL(URL(string: "payday://shift"))
         } dynamicIsland: { context in
             DynamicIsland {
-                // Expanded: identity tucked top-leading (small, never under
-                // the sensor cutout), the action top-trailing, and the big
-                // ticking clock owning the bottom row with the since-caption
-                // on its baseline — the lock screen's grammar, reshaped for
-                // the island. Nothing else; the empty center is breathing
-                // room, not a slot to fill.
-                DynamicIslandExpandedRegion(.leading) {
-                    HStack(spacing: PaydaySpacing.p8) {
-                        Image("IslandMark")
-                            .renderingMode(.template)
-                            .resizable()
-                            .aspectRatio(contentMode: .fit)
-                            .frame(height: 18)
-                            .foregroundStyle(PaydayColor.primary)
-                        Text("ON SHIFT")
-                            .font(PaydayFont.caption2)
-                            .tracking(1)
-                            .foregroundStyle(PaydayColor.primary)
-                            .lineLimit(1)
-                            .fixedSize()
-                    }
-                }
-                DynamicIslandExpandedRegion(.trailing) {
-                    Button(intent: EndShiftIntent()) {
-                        Text("End")
-                            .font(PaydayFont.subheadline)
-                            .fontWeight(.semibold)
-                    }
-                    .buttonStyle(.bordered)
-                    .buttonBorderShape(.capsule)
-                    .tint(PaydayColor.primary)
-                }
+                // One composed canvas instead of content scattered across
+                // the island's top flanks and bottom edge (which leaves a
+                // dead black band in the middle): the bottom region owns
+                // everything, so the expanded island collapses to a tight
+                // two-row card — the lock screen's exact grammar.
                 DynamicIslandExpandedRegion(.bottom) {
-                    HStack(alignment: .firstTextBaseline, spacing: PaydaySpacing.p12) {
-                        Text(timerInterval: timerRange(startedAt: context.state.startedAt), countsDown: false)
-                            .font(PaydayFont.displayLarge)
-                            .monospacedDigit()
-                            .foregroundStyle(PaydayColor.textPrimary)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.6)
-                        Spacer()
-                        Text(sinceCaption(startedAt: context.state.startedAt))
-                            .font(PaydayFont.caption2)
-                            .foregroundStyle(PaydayColor.textSecondary)
+                    VStack(alignment: .leading, spacing: PaydaySpacing.p8) {
+                        HStack(alignment: .firstTextBaseline) {
+                            HStack(spacing: PaydaySpacing.p8) {
+                                Image("IslandMark")
+                                    .renderingMode(.template)
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fit)
+                                    .frame(height: 16)
+                                    .foregroundStyle(PaydayColor.primary)
+                                Text("ON SHIFT")
+                                    .font(PaydayFont.caption2)
+                                    .tracking(1.2)
+                                    .foregroundStyle(PaydayColor.primary)
+                                    .fixedSize()
+                            }
+                            Spacer()
+                            Text(sinceCaption(startedAt: context.state.startedAt))
+                                .font(PaydayFont.caption2)
+                                .foregroundStyle(PaydayColor.textTertiary)
+                        }
+
+                        HStack(alignment: .center, spacing: PaydaySpacing.p12) {
+                            Text(timerInterval: timerRange(startedAt: context.state.startedAt), countsDown: false)
+                                .font(PaydayFont.displayLarge)
+                                .monospacedDigit()
+                                .foregroundStyle(PaydayColor.textPrimary)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.6)
+                            Spacer()
+                            Button(intent: EndShiftIntent()) {
+                                Text("End")
+                                    .font(PaydayFont.subheadline)
+                                    .fontWeight(.semibold)
+                                    .padding(.horizontal, PaydaySpacing.p4)
+                            }
+                            .buttonStyle(.bordered)
+                            .buttonBorderShape(.capsule)
+                            .tint(PaydayColor.primary)
+                        }
                     }
-                    .padding(.top, PaydaySpacing.p4)
+                    .padding(.horizontal, PaydaySpacing.p4)
+                    .padding(.top, PaydaySpacing.p8)
                 }
             } compactLeading: {
                 // Apple's compact grammar (Timer: orange glyph + orange
