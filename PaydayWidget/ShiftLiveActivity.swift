@@ -28,7 +28,11 @@ struct ShiftLiveActivity: Widget {
                 DynamicIslandExpandedRegion(.trailing) {
                     Button(intent: EndShiftIntent()) {
                         Text("End")
+                            .font(PaydayFont.subheadline)
+                            .fontWeight(.semibold)
                     }
+                    .buttonStyle(.bordered)
+                    .buttonBorderShape(.capsule)
                     .tint(PaydayColor.primary)
                 }
                 DynamicIslandExpandedRegion(.bottom) {
@@ -38,21 +42,28 @@ struct ShiftLiveActivity: Widget {
                         .foregroundStyle(PaydayColor.textPrimary)
                 }
             } compactLeading: {
-                // The same green dot as the lock screen and the app's hero
-                // band — one mark meaning "shift running" everywhere.
-                Circle()
-                    .fill(PaydayColor.primary)
-                    .frame(width: 8, height: 8)
+                // Apple's compact grammar (Timer: orange glyph + orange
+                // countdown): identity glyph leading, metric in the same
+                // accent trailing. Payday's glyph is its green dollar —
+                // text-forward, unmistakable, and never confusable with
+                // the system's green privacy dot the old 8pt circle
+                // impersonated.
+                Text("$")
+                    .font(PaydayFont.displaySmall)
+                    .foregroundStyle(PaydayColor.primary)
             } compactTrailing: {
                 Text(timerInterval: timerRange(startedAt: context.state.startedAt), countsDown: false)
                     .font(PaydayFont.caption)
+                    .fontWeight(.semibold)
                     .monospacedDigit()
-                    .frame(width: 50)
-                    .foregroundStyle(PaydayColor.textPrimary)
+                    .foregroundStyle(PaydayColor.primary)
+                    .frame(maxWidth: 60, alignment: .trailing)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
             } minimal: {
-                Circle()
-                    .fill(PaydayColor.primary)
-                    .frame(width: 8, height: 8)
+                Text("$")
+                    .font(PaydayFont.displaySmall)
+                    .foregroundStyle(PaydayColor.primary)
             }
         }
     }
