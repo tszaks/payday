@@ -44,12 +44,11 @@ struct ShiftLiveActivity: Widget {
             } compactLeading: {
                 // Apple's compact grammar (Timer: orange glyph + orange
                 // countdown): identity glyph leading, metric in the same
-                // accent trailing. Payday's glyph is its green dollar —
-                // text-forward, unmistakable, and never confusable with
-                // the system's green privacy dot the old 8pt circle
-                // impersonated.
-                Text("$")
-                    .font(PaydayFont.displaySmall)
+                // accent trailing. The glyph is the green banknote — the
+                // app icon's own mark. Deliberately NOT a dollar sign:
+                // that's Vero's icon, the sister app.
+                Image(systemName: "banknote.fill")
+                    .font(PaydayFont.caption)
                     .foregroundStyle(PaydayColor.primary)
             } compactTrailing: {
                 Text(timerInterval: timerRange(startedAt: context.state.startedAt), countsDown: false)
@@ -57,12 +56,16 @@ struct ShiftLiveActivity: Widget {
                     .fontWeight(.semibold)
                     .monospacedDigit()
                     .foregroundStyle(PaydayColor.primary)
-                    .frame(maxWidth: 60, alignment: .trailing)
+                    // Text(timerInterval:) reserves width for the WIDEST
+                    // string the range allows; a sub-10h ceiling drops a
+                    // reserved digit so a young shift's "0:07" doesn't sit
+                    // in an "11:59:59"-wide box.
+                    .frame(maxWidth: 52, alignment: .trailing)
                     .lineLimit(1)
-                    .minimumScaleFactor(0.8)
+                    .minimumScaleFactor(0.7)
             } minimal: {
-                Text("$")
-                    .font(PaydayFont.displaySmall)
+                Image(systemName: "banknote.fill")
+                    .font(PaydayFont.caption)
                     .foregroundStyle(PaydayColor.primary)
             }
         }
@@ -71,7 +74,10 @@ struct ShiftLiveActivity: Widget {
     /// Twelve hours out is far past any real shift — just a ceiling so
     /// Text(timerInterval:) has a bounded range to render against.
     private func timerRange(startedAt: Date) -> ClosedRange<Date> {
-        startedAt...startedAt.addingTimeInterval(12 * 3600)
+        // 9:59:59 is the ceiling on purpose: past 9h59m the range would
+        // grow the timer to eight characters and the Dynamic Island
+        // reserves that width all shift long (see compactTrailing).
+        startedAt...startedAt.addingTimeInterval(10 * 3600 - 1)
     }
 
     private func sinceCaption(startedAt: Date) -> String {
