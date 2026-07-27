@@ -60,6 +60,18 @@ targets:
         # Required for the shift session's lock screen / Dynamic Island
         # Live Activity (see ShiftLiveActivity.swift).
         NSSupportsLiveActivities: true
+        # Siri hears "Payday" as two words ("pay day") as often as one, and
+        # an App Shortcut phrase only matches when the app name inside it
+        # is recognized — so a misheard name means "I don't know that app"
+        # rather than a wrong action. These register the variants and the
+        # spoken pronunciation.
+        INAlternativeAppNames:
+          - INAlternativeAppName: Pay Day
+            INAlternativeAppNamePronunciationHint: pay day
+          - INAlternativeAppName: Payday App
+            INAlternativeAppNamePronunciationHint: payday app
+          - INAlternativeAppName: Pay Day App
+            INAlternativeAppNamePronunciationHint: pay day app
         # Home Screen long-press quick actions — handled in AppDelegate.swift.
         UIApplicationShortcutItems:
           - UIApplicationShortcutItemType: com.szakacsmedia.payday.quickaction.log
