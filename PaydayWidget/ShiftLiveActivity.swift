@@ -96,6 +96,22 @@ struct ShiftLiveActivity: Widget {
     /// The since-caption balances the header's trailing edge so the canvas
     /// has no dead middle.
     private func lockScreenView(startedAt: Date) -> some View {
+        ShiftLockScreenView(startedAt: startedAt, range: timerRange(startedAt: startedAt))
+    }
+}
+
+/// The lock screen face. Lit: header (dot + kicker, since-caption trailing)
+/// over the big ticking timer. Dimmed/Always-On (isLuminanceReduced): the
+/// system stops per-second updates — and relative styles render "<1 min"
+/// for a young shift, which reads broken at hero size — so the dimmed
+/// state states the stable fact instead: "Since 2:13 PM" as the hero,
+/// nothing that needs to tick.
+private struct ShiftLockScreenView: View {
+    let startedAt: Date
+    let range: ClosedRange<Date>
+    @Environment(\.isLuminanceReduced) private var isLuminanceReduced
+
+    var body: some View {
         VStack(alignment: .leading, spacing: PaydaySpacing.p8) {
             HStack(alignment: .firstTextBaseline) {
                 HStack(spacing: PaydaySpacing.p8) {
@@ -108,17 +124,26 @@ struct ShiftLiveActivity: Widget {
                         .foregroundStyle(PaydayColor.primary)
                 }
                 Spacer()
-                Text(sinceCaption(startedAt: startedAt))
-                    .font(PaydayFont.caption2)
-                    .foregroundStyle(PaydayColor.textTertiary)
+                if !isLuminanceReduced {
+                    Text("since \(startedAt.formatted(.dateTime.hour().minute()))")
+                        .font(PaydayFont.caption2)
+                        .foregroundStyle(PaydayColor.textTertiary)
+                }
             }
 
             HStack(alignment: .center, spacing: PaydaySpacing.p12) {
-                // Dimmed/Always-On lock screens stop per-second updates and
-                // the system dashes the seconds out ("2:--"). Detect that
-                // state and show a minute-granularity relative readout
-                // ("2 min") instead of dead dashes.
-                LuminanceAwareTimer(startedAt: startedAt, range: timerRange(startedAt: startedAt))
+                Group {
+                    if isLuminanceReduced {
+                        Text("Since \(startedAt.formatted(.dateTime.hour().minute()))")
+                    } else {
+                        Text(timerInterval: range, countsDown: false)
+                    }
+                }
+                .font(PaydayFont.displayLarge)
+                .monospacedDigit()
+                .foregroundStyle(PaydayColor.textPrimary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
                 Spacer()
                 Button(intent: EndShiftIntent()) {
                     Text("End")
@@ -132,29 +157,5 @@ struct ShiftLiveActivity: Widget {
             }
         }
         .padding(PaydaySpacing.p20)
-    }
-}
-
-/// Full ticking H:MM:SS when the lock screen is live; "2 min" relative
-/// style when luminance is reduced (AOD) and the system would dash the
-/// seconds anyway.
-private struct LuminanceAwareTimer: View {
-    let startedAt: Date
-    let range: ClosedRange<Date>
-    @Environment(\.isLuminanceReduced) private var isLuminanceReduced
-
-    var body: some View {
-        Group {
-            if isLuminanceReduced {
-                Text(startedAt, style: .relative)
-            } else {
-                Text(timerInterval: range, countsDown: false)
-            }
-        }
-        .font(PaydayFont.displayLarge)
-        .monospacedDigit()
-        .foregroundStyle(PaydayColor.textPrimary)
-        .lineLimit(1)
-        .minimumScaleFactor(0.6)
     }
 }
