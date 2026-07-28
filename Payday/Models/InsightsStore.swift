@@ -42,7 +42,23 @@ final class InsightsStore {
 
     private static func load(from defaults: UserDefaults) -> InsightsSnapshot? {
         guard let data = defaults.data(forKey: key) else { return nil }
-        return try? JSONDecoder().decode(InsightsSnapshot.self, from: data)
+        guard let decoded = try? JSONDecoder().decode(InsightsSnapshot.self, from: data) else { return nil }
+        return scrubbed(decoded)
+    }
+
+    /// Cash-vs-credit was banned as a topic (2026-07-27, app facts + proxy
+    /// prompt) — but a narration generated BEFORE the ban persists here and
+    /// keeps displaying until the next due refresh, days away. Scrub the
+    /// fossil at load so the ban takes effect immediately, and keep the
+    /// filter permanently as a belt-and-braces guard against the model
+    /// ever regressing.
+    private static func scrubbed(_ snapshot: InsightsSnapshot) -> InsightsSnapshot {
+        let cleaned = snapshot.sections.filter { section in
+            let title = section.title.lowercased()
+            return !(title.contains("cash") && title.contains("credit"))
+        }
+        guard cleaned.count != snapshot.sections.count else { return snapshot }
+        return InsightsSnapshot(sections: cleaned, generatedAt: snapshot.generatedAt, facts: snapshot.facts)
     }
 
     private func persistSnapshot() {
