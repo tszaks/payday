@@ -38,11 +38,12 @@ final class WorkCalendarStore {
     /// was deleted since being picked), so callers can fall back to the
     /// rhythm heuristic silently instead of treating "gone" the same as
     /// "nothing scheduled."
-    func scheduledShifts(calendarIdentifier: String, from start: Date, to end: Date) -> [WorkScheduleNudge.ScheduledShift]? {
+    func scheduledShifts(calendarIdentifier: String, keyword: String? = nil, from start: Date, to end: Date) -> [WorkScheduleNudge.ScheduledShift]? {
         guard let calendar = eventStore.calendar(withIdentifier: calendarIdentifier) else { return nil }
         let predicate = eventStore.predicateForEvents(withStart: start, end: end, calendars: [calendar])
         return eventStore.events(matching: predicate)
             .filter { !$0.isAllDay }
+            .filter { WorkScheduleNudge.matches(title: $0.title, keyword: keyword) }
             .map { WorkScheduleNudge.ScheduledShift(start: $0.startDate, end: $0.endDate) }
     }
 }

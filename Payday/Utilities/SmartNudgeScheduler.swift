@@ -54,7 +54,7 @@ enum SmartNudgeScheduler {
         let calendarStore = WorkCalendarStore()
         guard calendarStore.authorizationStatus == .fullAccess else { return nil }
         guard let horizon = Calendar.current.date(byAdding: .day, value: 7, to: now) else { return nil }
-        guard let shifts = calendarStore.scheduledShifts(calendarIdentifier: calendarIdentifier, from: now, to: horizon) else { return nil }
+        guard let shifts = calendarStore.scheduledShifts(calendarIdentifier: calendarIdentifier, keyword: preferencesStore.workCalendarKeyword, from: now, to: horizon) else { return nil }
         return WorkScheduleNudge.fireDate(shifts: shifts, now: now, alreadyLoggedToday: alreadyLoggedToday)
     }
 

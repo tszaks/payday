@@ -83,3 +83,26 @@ struct WorkScheduleNudgeTests {
         #expect(fireDate == nil)
     }
 }
+
+@Suite("Work calendar keyword filter")
+struct WorkCalendarKeywordTests {
+    @Test("nil or blank keyword counts every event")
+    func blankCountsAll() {
+        #expect(WorkScheduleNudge.matches(title: "Dentist", keyword: nil))
+        #expect(WorkScheduleNudge.matches(title: "Dentist", keyword: ""))
+        #expect(WorkScheduleNudge.matches(title: "Dentist", keyword: "   "))
+    }
+
+    @Test("keyword matches case-insensitively within the title")
+    func caseInsensitiveContains() {
+        #expect(WorkScheduleNudge.matches(title: "Shift at Harry's", keyword: "harry's"))
+        #expect(WorkScheduleNudge.matches(title: "HARRY'S dinner", keyword: "Harry's"))
+        #expect(!WorkScheduleNudge.matches(title: "Dentist", keyword: "Harry's"))
+    }
+
+    @Test("missing title only matches a blank keyword")
+    func missingTitle() {
+        #expect(WorkScheduleNudge.matches(title: nil, keyword: nil))
+        #expect(!WorkScheduleNudge.matches(title: nil, keyword: "Harry's"))
+    }
+}
