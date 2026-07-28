@@ -217,7 +217,6 @@ private struct DashboardFacts {
             tonightRevealText = "\(RevealCopy.headline(cents: revealCents, includesWages: shiftWageCents != nil)) \(RevealCopy.comparison(for: result.comparison, period: details.shiftPeriod))"
         }
         tonightLine = TonightLine.compose(
-            rhythm: statsEngine.workRhythm(),
             tonightRevealText: tonightRevealText,
             isPaydayMoment: isPaydayMoment
         )

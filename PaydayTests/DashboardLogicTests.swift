@@ -150,41 +150,21 @@ struct PaydayMomentTests {
 
 @Suite("Tonight line")
 struct TonightLineTests {
-    // date(2026, 7, 14) is a Tuesday → Gregorian weekday 3.
-    let tuesdayNight = date(2026, 7, 14, hour: 19)
-
     @Test("payday moment silences the line entirely")
     func paydaySilence() {
-        let rhythm = WorkRhythm(usualWeekdays: [3], typicalLogHour: 22)
-        let line = TonightLine.compose(rhythm: rhythm, tonightRevealText: "$100.00 today.", isPaydayMoment: true, now: tuesdayNight)
+        let line = TonightLine.compose(tonightRevealText: "$100.00 today.", isPaydayMoment: true)
         #expect(line == nil)
     }
 
     @Test("logged today echoes the reveal verdict verbatim")
     func revealEcho() {
-        let rhythm = WorkRhythm(usualWeekdays: [3], typicalLogHour: 22)
-        let line = TonightLine.compose(rhythm: rhythm, tonightRevealText: "$118.00 today. $34.00 above your Tuesday average.", isPaydayMoment: false, now: tuesdayNight)
+        let line = TonightLine.compose(tonightRevealText: "$118.00 today. $34.00 above your Tuesday average.", isPaydayMoment: false)
         #expect(line == "$118.00 today. $34.00 above your Tuesday average.")
     }
 
-    @Test("usual work day with a typical hour prompts with the time, no time-of-day word")
-    func workNightPrompt() {
-        let rhythm = WorkRhythm(usualWeekdays: [3], typicalLogHour: 22)
-        let line = TonightLine.compose(rhythm: rhythm, tonightRevealText: nil, isPaydayMoment: false, now: tuesdayNight)
-        #expect(line == "You usually work Tuesdays around 10\u{202F}PM.")
-    }
-
-    @Test("usual work day without a typical hour still prompts")
-    func workNightPromptNoHour() {
-        let rhythm = WorkRhythm(usualWeekdays: [3], typicalLogHour: nil)
-        let line = TonightLine.compose(rhythm: rhythm, tonightRevealText: nil, isPaydayMoment: false, now: tuesdayNight)
-        #expect(line == "You usually work Tuesdays.")
-    }
-
-    @Test("not a usual night, nothing logged: no line")
-    func offNightSilence() {
-        let rhythm = WorkRhythm(usualWeekdays: [6], typicalLogHour: 22)
-        let line = TonightLine.compose(rhythm: rhythm, tonightRevealText: nil, isPaydayMoment: false, now: tuesdayNight)
+    @Test("nothing logged: no line — the app never recites your schedule")
+    func nothingLoggedSilence() {
+        let line = TonightLine.compose(tonightRevealText: nil, isPaydayMoment: false)
         #expect(line == nil)
     }
 }
