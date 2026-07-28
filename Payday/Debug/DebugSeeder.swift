@@ -7,7 +7,7 @@ import SwiftData
 /// or on demand from the Settings > Developer section.
 enum DebugSeeder {
     @MainActor
-    static func seedIfRequested(scheduleStore: PayScheduleStore, insightsStore: InsightsStore, moveLedgerStore: MoveLedgerStore) {
+    static func seedIfRequested(scheduleStore: PayScheduleStore, insightsStore: InsightsStore, moveLedgerStore: MoveLedgerStore, preferencesStore: UserPreferencesStore) {
         if ProcessInfo.processInfo.arguments.contains("-SeedSampleData") {
             seedSampleData(scheduleStore: scheduleStore, insightsStore: insightsStore)
         }
@@ -17,6 +17,162 @@ enum DebugSeeder {
         if ProcessInfo.processInfo.arguments.contains("-SeedColdStart") {
             seedColdStartData(scheduleStore: scheduleStore, insightsStore: insightsStore)
         }
+        if ProcessInfo.processInfo.arguments.contains("-SeedShowcase") {
+            seedShowcaseData(scheduleStore: scheduleStore, insightsStore: insightsStore, preferencesStore: preferencesStore)
+        }
+    }
+
+    /// Six months of plausible history for App Store screenshots: a
+    /// Wed-through-Sun server at a dinner house, with lunch doubles on
+    /// weekends, a summer that builds, and enough hours/sales/tip-outs
+    /// logged that every gated insight (weekday reads, $/hr, tip percent,
+    /// Moves, plan-forward) actually clears its honesty threshold.
+    /// Deterministic: a seeded generator, so every screenshot run renders
+    /// identical numbers.
+    @MainActor
+    static func seedShowcaseData(scheduleStore: PayScheduleStore, insightsStore: InsightsStore, preferencesStore: UserPreferencesStore) {
+        let context = SharedModelContainer.shared.mainContext
+        try? context.delete(model: TipEntry.self)
+        try? context.delete(model: PaycheckRecord.self)
+        insightsStore.snapshot = nil
+
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: .now)
+        preferencesStore.baseHourlyWageCents = 283
+        preferencesStore.firstName = "Alex"
+        // A leftover live session from QA would put "On shift" in every
+        // screenshot — this fixture owns a clean slate.
+        ShiftSessionStore.endActive(stash: false)
+
+        let schedule = PaySchedule(
+            frequency: .biweekly,
+            anchorPeriodEnd: calendar.date(byAdding: .day, value: -9, to: today) ?? today,
+            payDelayDays: 5,
+            firstWeekday: 2
+        )
+        scheduleStore.schedule = schedule
+        let calculator = PayPeriodCalculator(schedule: schedule)
+
+        // Deterministic pseudo-random: same screenshots every run.
+        var seed: UInt64 = 0x5EED_0DAD
+        func next(_ upperBound: Int) -> Int {
+            seed = seed &* 6364136223846793005 &+ 1442695040888963407
+            return Int((seed >> 33) % UInt64(max(1, upperBound)))
+        }
+        func jitter(_ base: Int, _ spread: Int) -> Int { base + next(spread * 2) - spread }
+
+        /// Weekday earning personality: Friday and Saturday dinners carry
+        /// the week, Wednesday is the quiet night, Sunday brunch runs
+        /// cash-heavy — a real-looking shape, not noise.
+        func dinnerBase(weekday: Int) -> Int {
+            switch weekday {
+            case 4: return 15500   // Wednesday
+            case 5: return 19000   // Thursday
+            case 6: return 27500   // Friday
+            case 7: return 30500   // Saturday
+            case 1: return 21000   // Sunday
+            default: return 18000
+            }
+        }
+        func cashShare(weekday: Int) -> Double { weekday == 1 ? 0.42 : 0.16 }
+
+        var day = calendar.date(byAdding: .month, value: -6, to: today) ?? today
+        while day <= today {
+            let weekday = calendar.component(.weekday, from: day)
+            let worksToday = [4, 5, 6, 7, 1].contains(weekday)
+            guard worksToday, next(100) > 12 else {   // ~12% of shifts off
+                day = calendar.date(byAdding: .day, value: 1, to: day) ?? day.addingTimeInterval(86400)
+                continue
+            }
+
+            // Summer builds: a gentle upward ramp across the six months,
+            // with the current period running a little hot so the pace line
+            // reads "ahead of last period" in store screenshots.
+            let monthsIn = Double(calendar.dateComponents([.month], from: day, to: today).month ?? 0)
+            let daysAgo = calendar.dateComponents([.day], from: day, to: today).day ?? 0
+            let recentBoost = daysAgo <= 14 ? 1.18 : 1.0
+            let ramp = (1.0 + (6.0 - monthsIn) * 0.02) * recentBoost
+
+            // Weekend lunch double.
+            if [6, 7, 1].contains(weekday), next(100) < 45 {
+                let lunchGross = Int(Double(jitter(9500, 2200)) * ramp)
+                insertShift(context: context, day: day, grossCents: lunchGross,
+                            cashFraction: cashShare(weekday: weekday) + 0.1,
+                            clockIn: (10, 30), clockOut: (15, 15),
+                            tipOutCents: Int(Double(lunchGross) * 0.11),
+                            salesCents: lunchGross * 9, period: .lunch, calendar: calendar, next: next)
+            }
+
+            let dinnerGross = Int(Double(jitter(dinnerBase(weekday: weekday), 5200)) * ramp)
+            insertShift(context: context, day: day, grossCents: dinnerGross,
+                        cashFraction: cashShare(weekday: weekday),
+                        clockIn: (16, 45), clockOut: (23, 15),
+                        tipOutCents: Int(Double(dinnerGross) * 0.12),
+                        salesCents: dinnerGross * 8, period: .dinner, calendar: calendar, next: next)
+
+            day = calendar.date(byAdding: .day, value: 1, to: day) ?? day.addingTimeInterval(86400)
+        }
+        try? context.save()
+
+        // Verified paychecks for every closed period but the most recent —
+        // so the paycheck surfaces have real history to show.
+        let allEntries = (try? context.fetch(FetchDescriptor<TipEntry>())) ?? []
+        var cursor = calculator.period(containing: calendar.date(byAdding: .day, value: -14, to: today) ?? today)
+        for _ in 0..<11 {
+            let periodEntries = allEntries.filter { $0.date >= cursor.start && $0.date <= cursor.end }
+            let creditCents = TipBreakdown.total(of: periodEntries).creditCents
+            if creditCents > 0 {
+                context.insert(PaycheckRecord(
+                    periodStart: cursor.start,
+                    periodEnd: cursor.end,
+                    paidTipsCents: creditCents,
+                    note: "Direct deposit"
+                ))
+            }
+            guard let previousEnd = calendar.date(byAdding: .day, value: -1, to: cursor.start) else { break }
+            cursor = calculator.period(containing: previousEnd)
+        }
+        try? context.save()
+        PaydayWidgetRefresh.request()
+    }
+
+    /// One closeout: cash + credit rows sharing a shiftID, with the
+    /// shift-level facts on the canonical entry (see ShiftDetails).
+    @MainActor
+    private static func insertShift(
+        context: ModelContext,
+        day: Date,
+        grossCents: Int,
+        cashFraction: Double,
+        clockIn: (Int, Int),
+        clockOut: (Int, Int),
+        tipOutCents: Int,
+        salesCents: Int,
+        period: ShiftPeriod,
+        calendar: Calendar,
+        next: (Int) -> Int
+    ) {
+        // Cash walks out in bills — round the cash side to whole dollars.
+        let cashCents = Int((Double(grossCents) * cashFraction / 100.0).rounded()) * 100
+        let creditCents = grossCents - cashCents
+        let inDate = calendar.date(bySettingHour: clockIn.0, minute: clockIn.1, second: 0, of: day) ?? day
+        let outDate = calendar.date(bySettingHour: clockOut.0, minute: clockOut.1, second: 0, of: day) ?? day
+        let recordedAt = calendar.date(byAdding: .minute, value: 20, to: outDate) ?? outDate
+        let hours = ShiftTimes.hours(clockIn: inDate, clockOut: outDate)
+        let shiftID = UUID()
+
+        var entries: [TipEntry] = []
+        if cashCents > 0 {
+            let entry = TipEntry(date: day, amountCents: cashCents, kind: .cash, note: nil, recordedAt: recordedAt, shiftID: shiftID)
+            context.insert(entry)
+            entries.append(entry)
+        }
+        if creditCents > 0 {
+            let entry = TipEntry(date: day, amountCents: creditCents, kind: .credit, note: nil, recordedAt: recordedAt, shiftID: shiftID)
+            context.insert(entry)
+            entries.append(entry)
+        }
+        ShiftDetails.write(hoursWorked: hours, tipOutCents: tipOutCents, salesCents: salesCents, shiftPeriod: period, clockIn: inDate, clockOut: outDate, serverCount: 4 + next(3), into: entries)
     }
 
     /// QA-only fixture for the cold-start surfaces: exactly 3 shifts, below

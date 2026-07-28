@@ -1,6 +1,5 @@
 import SwiftUI
 import SwiftData
-import UIKit
 
 private struct DaySelection: Identifiable {
     let date: Date
@@ -120,18 +119,10 @@ struct CalendarView: View {
         ScrollView {
             VStack(spacing: PaydaySpacing.p16) {
                 monthNavRow
-
-                VStack(spacing: 2) {
-                    Text(Money.string(fromCents: monthTotalCents))
-                        .font(PaydayFont.displayLarge)
-                        .monospacedDigit()
-                        .foregroundStyle(PaydayColor.textPrimary)
-                        .contentTransition(.numericText())
-                        .animation(PaydayAnimation.premiumSpring, value: monthTotalCents)
-                    Text("this month")
-                        .font(PaydayFont.caption)
-                        .foregroundStyle(PaydayColor.textSecondary)
-                }
+                    // The lens selector sits directly above this screen;
+                    // the month needs air to read as its own thing rather
+                    // than a second row of that control (Tyler, 2026-07-28).
+                    .padding(.top, PaydaySpacing.p20)
 
                 weekdayHeader
 
@@ -194,29 +185,17 @@ struct CalendarView: View {
     /// lens now, so paging the month can't live there. A compact quiet row,
     /// not big floating nav buttons: chevrons small enough to read as an
     /// in-page control, not a second navigation bar.
+    /// No chevrons (Tyler, 2026-07-28): the month title alone, with a
+    /// horizontal swipe over the grid moving months — the gesture every
+    /// calendar already teaches. The buttons were a second navigation bar
+    /// stacked under the real one.
     private var monthNavRow: some View {
-        HStack {
-            Button {
-                withAnimation(.easeOut(duration: PaydayAnimation.standardDuration)) { shiftMonth(by: -1) }
-            } label: {
-                Image(systemName: "chevron.left")
-                    .font(PaydayFont.subheadline)
-            }
-            .accessibilityLabel("Previous month")
-            Spacer()
-            Text(monthTitle)
-                .font(PaydayFont.headline)
-                .foregroundStyle(PaydayColor.textPrimary)
-            Spacer()
-            Button {
-                withAnimation(.easeOut(duration: PaydayAnimation.standardDuration)) { shiftMonth(by: 1) }
-            } label: {
-                Image(systemName: "chevron.right")
-                    .font(PaydayFont.subheadline)
-            }
-            .accessibilityLabel("Next month")
-        }
-        .tint(PaydayColor.primary)
+        Text(monthTitle)
+            .font(PaydayFont.headline)
+            .foregroundStyle(PaydayColor.textPrimary)
+            .frame(maxWidth: .infinity)
+            .accessibilityAddTraits(.isHeader)
+            .accessibilityHint("Swipe left or right to change month")
     }
 
     private var weekdayHeader: some View {
@@ -237,9 +216,12 @@ struct CalendarView: View {
         return Array(symbols[start...] + symbols[..<start])
     }
 
-    /// The month's second surface: exact hours worked, its best day (all-in,
-    /// matching the tiles above), and a quiet weekday shape. Collapses to a
-    /// single line when nothing's logged yet so an empty month never shows
+    /// The screen's hero moved here (Tyler, 2026-07-28): the grid is what a
+    /// glance at this screen is for, so the month total no longer sits above
+    /// it demanding first read. This cluster is the second surface: the
+    /// total leads, then exact hours worked, its best day (all-in, matching
+    /// the tiles above), and a quiet weekday shape. Collapses to a single
+    /// line when nothing's logged yet so an empty month never shows
     /// zeroed-out stats.
     @ViewBuilder
     private var monthSummarySection: some View {
@@ -252,6 +234,18 @@ struct CalendarView: View {
         } else {
             VStack(spacing: PaydaySpacing.p12) {
                 Divider()
+
+                VStack(spacing: 2) {
+                    Text(Money.string(fromCents: monthTotalCents))
+                        .font(PaydayFont.displayMedium)
+                        .monospacedDigit()
+                        .foregroundStyle(PaydayColor.textPrimary)
+                        .contentTransition(.numericText())
+                        .animation(PaydayAnimation.premiumSpring, value: monthTotalCents)
+                    Text("this month")
+                        .font(PaydayFont.caption)
+                        .foregroundStyle(PaydayColor.textSecondary)
+                }
 
                 VStack(spacing: 4) {
                     Text("\(daysWorkedCount) day\(daysWorkedCount == 1 ? "" : "s") worked · \(WageEstimate.hoursLabel(monthLoggedHours))")
@@ -290,6 +284,8 @@ private struct DayCell: View {
     let isCurrentMonth: Bool
     let isToday: Bool
 
+    @Environment(\.colorScheme) private var colorScheme
+
     private var dayNumber: Int {
         Calendar.current.component(.day, from: day)
     }
@@ -308,15 +304,20 @@ private struct DayCell: View {
             dayNumberLabel
             if hasTips, let totalCents {
                 Text(Money.wholeDollarString(fromCents: totalCents))
-                    .font(PaydayFont.caption3)
+                    .font(PaydayFont.caption2)
+                    .fontWeight(.medium)
                     .monospacedDigit()
-                    .foregroundStyle(Self.heatTextColor(fraction: heatFraction))
+                    .foregroundStyle(Self.heatTextColor(fraction: heatFraction, colorScheme: colorScheme))
+                    .opacity(0.85)
                     .lineLimit(1)
                     .minimumScaleFactor(0.6)
             }
         }
-        .frame(maxWidth: .infinity, minHeight: 46)
-        .background(hasTips ? Self.heat(fraction: heatFraction) : Color.clear, in: RoundedRectangle(cornerRadius: PaydayRadius.sm))
+        // Every cell — worked or not, in-month or not — gets the same fixed
+        // footprint so the grid reads as one surface with heat in it, never
+        // a field of raised chips (Tyler, 2026-07-28).
+        .frame(maxWidth: .infinity, minHeight: 46, maxHeight: 46)
+        .background(hasTips ? PaydayColor.primary.opacity(Self.fillOpacity(fraction: heatFraction)) : Color.clear, in: RoundedRectangle(cornerRadius: PaydayRadius.sm))
         // Today always rings the full cell in the same rounded-square
         // geometry as the tiles — a tight circle around the numeral read as
         // a stray dot, not a state (Tyler, 2026-07-20).
@@ -336,7 +337,7 @@ private struct DayCell: View {
         Text("\(dayNumber)")
             .font(.system(.callout, design: .rounded))
             .fontWeight(hasTips || isToday ? .bold : .regular)
-            .foregroundStyle(hasTips ? Self.heatTextColor(fraction: heatFraction) : PaydayColor.textSecondary)
+            .foregroundStyle(hasTips ? Self.heatTextColor(fraction: heatFraction, colorScheme: colorScheme) : PaydayColor.textSecondary)
     }
 
     private var accessibilityLabel: String {
@@ -345,41 +346,53 @@ private struct DayCell: View {
         return "\(dateText), \(Money.string(fromCents: totalCents)) logged"
     }
 
-    /// Temperature scale, Tyler's pick over a single-hue green ramp (2026-07-19):
-    /// a hue walk from red (slow) through yellow (mid) to Vero green (best).
-    /// Committed color (2026-07-20): opacity is no longer how heat shows —
-    /// every worked tile is fully opaque, and saturation/brightness deepen
-    /// with heat instead, so light mode never washes out to pastel. A
-    /// deliberate, contained exception to the one-green design law — the
-    /// calendar is the app's one at-a-glance pattern surface, and on a
-    /// tightly clustered month hue separates days that a green ramp leaves
-    /// looking identical. True red only appears when a day lands far below
-    /// the month's best, so it reads as information, not judgment.
-    private static func heatComponents(fraction f: Double) -> (hue: Double, saturation: Double, brightness: Double) {
-        let hue = f < 0.5
-            ? 0.02 + (0.13 - 0.02) * (f / 0.5)
-            : 0.13 + (0.40 - 0.13) * ((f - 0.5) / 0.5)
-        let saturation = 0.62 + 0.18 * f
-        let brightness = 0.70 - 0.30 * f
-        return (hue, saturation, brightness)
+    /// One-hue green ramp (Tyler, 2026-07-28), reversing the temperature-walk
+    /// exception picked on 2026-07-19: a hue walk from red through yellow to
+    /// green was meant to separate a tightly clustered month at a glance, but
+    /// on real renders it came out as muddy browns and olives on black — not
+    /// one cell actually read as the app's green — so the "deliberate,
+    /// contained exception to the one-green law" it was sold as never earned
+    /// its keep. The calendar rejoins that law: every worked day is
+    /// PaydayColor.primary, full stop, and heat is carried by opacity alone,
+    /// floored so the faintest worked day still reads as green rather than
+    /// fading toward grey — the mistake made in the prior opacity attempt
+    /// (2026-07-20) that led to the (now also reversed) fully-opaque commit.
+    /// That prior miss came from tuning against dark-mode renders only; the
+    /// floor here is picked by looking at both modes.
+    private static let fillOpacityFloor = 0.22
+
+    /// A linear ramp off a high floor made every worked day look alike on a
+    /// tightly clustered month. Squaring the fraction spends more of the
+    /// range on the differences that actually exist between ordinary days,
+    /// while the floor keeps the quietest one unmistakably green.
+    private static func fillOpacity(fraction: Double) -> Double {
+        let curved = fraction * fraction
+        return fillOpacityFloor + (1 - fillOpacityFloor) * curved
     }
 
-    private static func heat(fraction f: Double) -> Color {
-        let c = heatComponents(fraction: f)
-        return Color(hue: c.hue, saturation: c.saturation, brightness: c.brightness)
+    private static func backgroundComponents(for colorScheme: ColorScheme) -> (r: Double, g: Double, b: Double) {
+        if colorScheme == .dark {
+            return (0.0196, 0.0196, 0.0196) // #050505
+        }
+        return (0.9804, 0.9804, 0.9804) // #FAFAFA
     }
 
-    /// White reads on most of the ramp, but the hue walk crosses yellow —
-    /// bright enough on its own that white can fail there even after the
-    /// darkening above. Computed from the same HSB the tile actually paints
-    /// (relative luminance, ITU-R BT.601 weights) rather than a fixed
-    /// "white unless near yellow" guess, so the choice is correct at every
-    /// point on the ramp, not just the one this was checked at.
-    private static func heatTextColor(fraction f: Double) -> Color {
-        let c = heatComponents(fraction: f)
-        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
-        UIColor(hue: c.hue, saturation: c.saturation, brightness: c.brightness, alpha: 1).getRed(&r, green: &g, blue: &b, alpha: &a)
+    /// Contrast is computed against the fill as it actually composites —
+    /// PaydayColor.primary at `fillOpacity`, blended over this mode's page
+    /// background (PaydayColor.background) — rather than assumed, since the
+    /// same opacity reads very differently over alabaster than over
+    /// obsidian. Same relative-luminance approximation (ITU-R BT.601
+    /// weights) the calendar has used since the temperature-walk days.
+    private static func heatTextColor(fraction: Double, colorScheme: ColorScheme) -> Color {
+        let alpha = fillOpacity(fraction: fraction)
+        let bg = backgroundComponents(for: colorScheme)
+        let fgR = 0.0
+        let fgG = 0.7216 // 184/255
+        let fgB = 0.2471 // 63/255
+        let r = fgR * alpha + bg.r * (1 - alpha)
+        let g = fgG * alpha + bg.g * (1 - alpha)
+        let b = fgB * alpha + bg.b * (1 - alpha)
         let luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b
-        return luminance > 0.55 ? .black : .white
+        return luminance > 0.55 ? PaydayColor.textPrimary : .white
     }
 }

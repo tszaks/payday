@@ -50,7 +50,7 @@ struct PaydayApp: App {
                 }
                 .task {
                     #if DEBUG
-                    DebugSeeder.seedIfRequested(scheduleStore: scheduleStore, insightsStore: insightsStore, moveLedgerStore: moveLedgerStore)
+                    DebugSeeder.seedIfRequested(scheduleStore: scheduleStore, insightsStore: insightsStore, moveLedgerStore: moveLedgerStore, preferencesStore: preferencesStore)
                     #endif
                     // Backfill shiftID on any legacy rows (cheap nil-predicate
                     // fetch; no-ops once every row is migrated). Runs after the
