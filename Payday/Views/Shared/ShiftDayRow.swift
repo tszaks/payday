@@ -1,11 +1,16 @@
 import SwiftUI
 
 /// One shift (one closeout), however many rows it took to log it — a merged
-/// cash+credit shift reads as a single row with both amounts in the
-/// subtitle, not two separate list rows. Shared between Dashboard and
-/// Period detail so both screens describe a shift the same way. On a double
-/// day the two shifts each get their own row, distinguished by period
-/// ("Today · Lunch" / "Today · Dinner").
+/// cash+credit shift reads as a single row: date/period label on the left,
+/// Total on the right, nothing else. Shared between Dashboard and Period
+/// detail so both screens describe a shift the same way. On a double day the
+/// two shifts each get their own row, distinguished by period ("Today ·
+/// Lunch" / "Today · Dinner"). No money caption underneath the label — cash
+/// and credit are a decomposition, and showing their gross figures next to
+/// this row's net Total would visibly fail to sum (Tyler's money-language
+/// law, 2026-07-27: at most one money line per row, and it's the Total). The
+/// split is one tap away in the shift's own sheet, and the period-level
+/// drawer carries it too.
 struct ShiftDayRow: View {
     let day: Date
     let period: ShiftPeriod?
@@ -34,38 +39,11 @@ struct ShiftDayRow: View {
         breakdown.netTotalCents + wageCents
     }
 
-    private var subtitle: String {
-        var parts: [String] = []
-        if breakdown.cashCents > 0, breakdown.creditCents > 0 {
-            parts.append("Cash \(Money.string(fromCents: breakdown.cashCents)) · Credit \(Money.string(fromCents: breakdown.creditCents))")
-        } else if breakdown.creditCents > 0 {
-            parts.append("Credit \(Money.string(fromCents: breakdown.creditCents))")
-        } else if breakdown.cashCents > 0 {
-            parts.append("Cash \(Money.string(fromCents: breakdown.cashCents))")
-        } else {
-            parts.append(entries.first?.kind.displayName ?? "")
-        }
-        // Tip-out is deliberately not shown per-row: the amount to the right
-        // is already net (what you kept), and a tip-out isn't income worth
-        // repeating on every glance. It stays visible/editable in the shift's
-        // own sheet, and the period hero still reconciles it.
-        // Notes stay off list rows on purpose — they live in the shift's own sheet.
-        return parts.joined(separator: " · ")
-    }
-
     var body: some View {
         HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(ShiftDays.shiftLabel(day: day, period: period, dayHasMultipleShifts: dayHasMultipleShifts))
-                    .font(PaydayFont.body)
-                    .foregroundStyle(PaydayColor.textPrimary)
-                Text(subtitle)
-                    .font(PaydayFont.caption)
-                    .foregroundStyle(PaydayColor.textSecondary)
-                    .monospacedDigit()
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            Text(ShiftDays.shiftLabel(day: day, period: period, dayHasMultipleShifts: dayHasMultipleShifts))
+                .font(PaydayFont.body)
+                .foregroundStyle(PaydayColor.textPrimary)
             Spacer()
             Text(Money.string(fromCents: netCents))
                 .font(PaydayFont.displaySmall)

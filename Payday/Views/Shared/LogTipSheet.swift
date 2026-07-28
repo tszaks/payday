@@ -412,28 +412,20 @@ struct LogTipSheet: View {
                     .animation(reduceMotion ? nil : PaydayAnimation.premiumSpring, value: shiftTotalCents)
                     .lineLimit(1)
                     .minimumScaleFactor(0.5)
-                // Take-home is pure mechanics — cash + credit, net of
-                // tip-out, before wages — and needs no hours logged to say
-                // something true, unlike the $/hr clause right below it.
-                if tipOutCents > 0 {
-                    Text("\(Money.string(fromCents: cashCents + creditCents - tipOutCents)) take-home after tip-out")
-                        .font(PaydayFont.caption)
-                        .monospacedDigit()
-                        .foregroundStyle(PaydayColor.textSecondary)
-                }
+                // The hero total and the fields below it ARE the
+                // decomposition (Tyler's money-language law, 2026-07-27): no
+                // restated amount in another dialect sits under the headline.
                 // Live $/hr, computed as the fields change, off the same
                 // all-in numerator as the total above (net of tip-out, plus
                 // wages) — a tip-out is recorded because it's an important
                 // fact, but it is never income; wages are income, so they
-                // belong in the rate same as they belong in the total.
-                // Only appears once the shift has a length (times set, or
-                // legacy hours).
+                // belong in the rate same as they belong in the total. This
+                // is the sheet's one secondary line. Only appears once the
+                // shift has a length (times set, or legacy hours).
                 if let hoursWorked, hoursWorked > 0 {
                     if shiftTotalCents > 0 {
                         let rateCentsPerHour = Int((Double(shiftTotalCents) / hoursWorked).rounded())
-                        Text(tipOutCents > 0
-                             ? "\(Money.wholeDollarString(fromCents: rateCentsPerHour))/hr after tip-out"
-                             : "\(Money.wholeDollarString(fromCents: rateCentsPerHour))/hr")
+                        Text("\(Money.wholeDollarString(fromCents: rateCentsPerHour))/hr")
                             .font(PaydayFont.caption)
                             .monospacedDigit()
                             .foregroundStyle(PaydayColor.textSecondary)

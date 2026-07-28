@@ -99,7 +99,7 @@ struct NightlyEarningsChart: View {
             if let selectedNight {
                 Text("\(Money.string(fromCents: selectedNight.cents)) on \(selectedNight.date.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day()))")
             } else {
-                Text("Daily earnings")
+                Text("Daily tips")
             }
         }
         .font(PaydayFont.subheadline)
@@ -108,8 +108,8 @@ struct NightlyEarningsChart: View {
     }
 
     private var chartAccessibilityLabel: String {
-        guard maxCents > 0 else { return "Daily earnings chart. No earnings logged." }
-        return "Daily earnings chart. Best day \(Money.string(fromCents: maxCents))."
+        guard maxCents > 0 else { return "Daily tips chart. No tips logged." }
+        return "Daily tips chart. Best day \(Money.string(fromCents: maxCents))."
     }
 
     private func barOpacity(for night: (date: Date, cents: Int)) -> Double {
