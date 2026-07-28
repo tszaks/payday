@@ -1596,8 +1596,15 @@ enum RevealCopy {
     // Names its unit (tips, net per shift) rather than "today" — a lunch
     // shift logged at 2pm, or this line read back hours later, must never
     // look like the all-in "Today" total shown elsewhere on the Dashboard.
-    static func headline(cents: Int) -> String {
-        "\(Money.string(fromCents: cents)) in tips this shift."
+    // When wages exist for the shift, the with-wages figure is named too:
+    // the Shifts row directly below this line shows the wage-inclusive
+    // total, and two unbridged numbers for one shift on one screen read
+    // as a contradiction (Tyler, 2026-07-27).
+    static func headline(cents: Int, withWagesCents: Int? = nil) -> String {
+        guard let withWagesCents, withWagesCents != cents else {
+            return "\(Money.string(fromCents: cents)) in tips this shift."
+        }
+        return "\(Money.string(fromCents: cents)) in tips this shift, \(Money.string(fromCents: withWagesCents)) with wages."
     }
 
     static func comparison(for result: RevealComparison, period: ShiftPeriod? = nil) -> String {

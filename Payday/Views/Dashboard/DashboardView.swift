@@ -203,8 +203,12 @@ private struct DashboardFacts {
             let cents = TipBreakdown.total(of: latest.items).netTotalCents
             let today = calendar.startOfDay(for: now)
             let result = statsEngine.reveal(forNightAt: today, cents: cents, period: period, shiftID: latest.shiftID)
-            let shiftPeriod = ShiftDetails.resolve(from: latest.items).shiftPeriod
-            tonightRevealText = "\(RevealCopy.headline(cents: cents)) \(RevealCopy.comparison(for: result.comparison, period: shiftPeriod))"
+            let details = ShiftDetails.resolve(from: latest.items)
+            // The same wage math the shift's own row uses — the echo and
+            // the row must reconcile on sight.
+            let shiftWages = details.hoursWorked.flatMap { WageEstimate.cents(wageCentsPerHour: wageCentsPerHour, hours: $0) }
+            let withWages = shiftWages.map { cents + $0 }
+            tonightRevealText = "\(RevealCopy.headline(cents: cents, withWagesCents: withWages)) \(RevealCopy.comparison(for: result.comparison, period: details.shiftPeriod))"
         }
         tonightLine = TonightLine.compose(
             rhythm: statsEngine.workRhythm(),

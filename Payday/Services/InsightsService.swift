@@ -164,7 +164,7 @@ enum InsightsService {
 
         lines.append("VOCABULARY: never use 'night' as a generic stand-in for a shift or a day - a shift can be lunch, dinner, or unspecified, and it may be logged and read back at any hour. Say lunch, dinner, shift, or day, matching what the data actually reflects.")
 
-        lines.append("NEVER comment on cash-versus-credit mix in general (e.g. 'most of your tips came in on cards') - a server already knows their own split and it is never an insight. The ONLY cash fact you may ever mention is the CASH WEEKDAY line above, when present, and only in that specific framing.")
+        lines.append("THE OBVIOUSNESS LAW, absolute: never state anything that would be true for every server everywhere - if a sentence doesn't depend on THIS person's numbers, it is not an insight and must not be written. Banned by this law: how tipping works (cash goes home nightly, credit arrives on the paycheck), what any term means, that weekends or dinners are generally busier, that more hours mean more pay. The cash-versus-credit mix in general is banned under this law too - the ONLY cash fact you may ever mention is the CASH WEEKDAY line above, when present, and only in that specific framing. The test for every sentence you write: could it only be said about this person's data? If not, delete it.")
 
         if let topMove {
             lines.append("TOP MOVE (already shown to the reader as its own card, above everything you write - never repeat it as an item): \(topMove.title) - \(topMove.body)")
