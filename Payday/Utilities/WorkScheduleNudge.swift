@@ -6,6 +6,14 @@ import Foundation
 /// never looks at an event's title, only its start/end, so it has nothing
 /// to say about WHAT a shift is, only WHEN one ends.
 enum WorkScheduleNudge {
+    /// The mixed-calendar filter, pure so it's testable: nil/blank keyword
+    /// means every event counts; otherwise a case-insensitive contains on
+    /// the event title. User-stated, applied literally — never inferred.
+    static func matches(title: String?, keyword: String?) -> Bool {
+        guard let keyword = keyword?.trimmingCharacters(in: .whitespacesAndNewlines), !keyword.isEmpty else { return true }
+        return (title ?? "").localizedCaseInsensitiveContains(keyword)
+    }
+
     struct ScheduledShift: Equatable {
         let start: Date
         let end: Date

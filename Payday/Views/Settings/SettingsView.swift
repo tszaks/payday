@@ -104,6 +104,13 @@ struct SettingsView: View {
                                     .foregroundStyle(PaydayColor.textSecondary)
                             }
                         }
+                        // For a MIXED calendar (shifts next to dentist
+                        // appointments): the user states the rule, the app
+                        // applies it literally. Blank = every event counts.
+                        captionedRow("Only count events whose title contains this. Leave empty if every event is a shift.") {
+                            TextField("Filter, e.g. your restaurant's name", text: workCalendarKeywordBinding)
+                                .autocorrectionDisabled()
+                        }
                     } else {
                         captionedRow(workCalendarConnectCaption) {
                             Button("Connect Work Calendar") { connectWorkCalendar() }
@@ -285,6 +292,23 @@ struct SettingsView: View {
     private func selectWorkCalendar(id: String, title: String) {
         preferencesStore.workCalendarIdentifier = id
         connectedWorkCalendarTitle = title
+        SmartNudgeScheduler.reschedule(preferencesStore: preferencesStore, allEntries: allEntries)
+    }
+
+    private var workCalendarKeywordBinding: Binding<String> {
+        Binding(
+            get: { preferencesStore.workCalendarKeyword ?? "" },
+            set: { newValue in
+                preferencesStore.workCalendarKeyword = newValue
+                rescheduleNudgeForWorkCalendarChange()
+            }
+        )
+    }
+
+    /// Keyword edits change which events count, so the pending nudge is
+    /// re-aimed on each change — replacing the single pending request is
+    /// cheap and idempotent.
+    private func rescheduleNudgeForWorkCalendarChange() {
         SmartNudgeScheduler.reschedule(preferencesStore: preferencesStore, allEntries: allEntries)
     }
 

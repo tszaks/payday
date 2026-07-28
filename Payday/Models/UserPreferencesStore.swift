@@ -31,6 +31,7 @@ final class UserPreferencesStore {
     private static let smartNudgeKey = "com.szakacsmedia.payday.smartNudge"
     private static let paydayReminderKey = "com.szakacsmedia.payday.paydayReminder"
     private static let workCalendarIdentifierKey = "com.szakacsmedia.payday.workCalendarIdentifier"
+    private static let workCalendarKeywordKey = "com.szakacsmedia.payday.workCalendarKeyword"
     private static let baseHourlyWageCentsKey = AppGroup.baseHourlyWageCentsKey
     /// Set once migration to the app-group suite has run, so a wage the user
     /// later clears (removeObject on the suite key) is never mistaken for
@@ -87,6 +88,15 @@ final class UserPreferencesStore {
         didSet { persistWorkCalendarIdentifier() }
     }
 
+    /// Optional user-stated filter for a MIXED calendar (Schedulefly's
+    /// Google-sync can drop shifts into a personal calendar next to
+    /// dentist appointments): only events whose title contains this count
+    /// as shifts. Still designation, never inference — the user states the
+    /// rule, the app applies it literally. nil/empty = every event counts.
+    var workCalendarKeyword: String? {
+        didSet { persistWorkCalendarKeyword() }
+    }
+
     init(defaults: UserDefaults = .standard, wageDefaults: UserDefaults = AppGroup.defaults) {
         self.defaults = defaults
         self.wageDefaults = wageDefaults
@@ -97,6 +107,7 @@ final class UserPreferencesStore {
         self.isSmartNudgeEnabled = defaults.object(forKey: Self.smartNudgeKey) == nil ? true : defaults.bool(forKey: Self.smartNudgeKey)
         self.isPaydayReminderEnabled = defaults.object(forKey: Self.paydayReminderKey) == nil ? true : defaults.bool(forKey: Self.paydayReminderKey)
         self.workCalendarIdentifier = defaults.string(forKey: Self.workCalendarIdentifierKey)
+        self.workCalendarKeyword = defaults.string(forKey: Self.workCalendarKeywordKey)
 
         Self.migrateBaseHourlyWageCentsIfNeeded(from: defaults, to: wageDefaults)
         self.baseHourlyWageCents = wageDefaults.object(forKey: Self.baseHourlyWageCentsKey) == nil ? nil : wageDefaults.integer(forKey: Self.baseHourlyWageCentsKey)
@@ -141,6 +152,15 @@ final class UserPreferencesStore {
             defaults.set(workCalendarIdentifier, forKey: Self.workCalendarIdentifierKey)
         } else {
             defaults.removeObject(forKey: Self.workCalendarIdentifierKey)
+        }
+    }
+
+    private func persistWorkCalendarKeyword() {
+        let trimmed = workCalendarKeyword?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let trimmed, !trimmed.isEmpty {
+            defaults.set(trimmed, forKey: Self.workCalendarKeywordKey)
+        } else {
+            defaults.removeObject(forKey: Self.workCalendarKeywordKey)
         }
     }
 
