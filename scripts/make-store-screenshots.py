@@ -24,7 +24,10 @@ INK = (10, 10, 10)
 MUTED = (110, 110, 112)
 BEZEL = (18, 18, 20)
 
-SERIF = "/System/Library/Fonts/Supplemental/Didot.ttc"
+# Bodoni 72 Book, not Didot: Vero's headline has a descending hooked J and
+# a heavier hairline contrast that Didot Regular renders too delicately.
+SERIF = "/System/Library/Fonts/Supplemental/Bodoni 72.ttc"
+SERIF_INDEX = 0
 SANS = "/System/Library/Fonts/Supplemental/Helvetica.ttc"
 SANS_BOLD = "/System/Library/Fonts/Supplemental/Helvetica.ttc"
 
@@ -57,6 +60,15 @@ SHOTS = [
 ]
 
 
+def tracked_text(draw, origin, text, font, fill, tracking):
+    """PIL has no letter-spacing, and the subhead's air is half its
+    character — so the glyphs get placed one at a time."""
+    x, y = origin
+    for char in text:
+        draw.text((x, y), char, font=font, fill=fill)
+        x += draw.textlength(char, font=font) + tracking
+
+
 def rounded_mask(size, radius):
     mask = Image.new("L", size, 0)
     ImageDraw.Draw(mask).rounded_rectangle([0, 0, size[0] - 1, size[1] - 1], radius=radius, fill=255)
@@ -67,14 +79,14 @@ def compose(src: Path, headline: str, subhead: str, dest: Path):
     canvas = Image.new("RGB", (W, H), BG)
     draw = ImageDraw.Draw(canvas)
 
-    head_font = ImageFont.truetype(SERIF, 118)
-    sub_font = ImageFont.truetype(SANS, 46)
+    head_font = ImageFont.truetype(SERIF, 126, index=SERIF_INDEX)
+    sub_font = ImageFont.truetype(SANS, 44)
 
     y = HEAD_TOP
     for line in headline.split("\n"):
         draw.text((MARGIN, y), line, font=head_font, fill=INK)
-        y += 132
-    draw.text((MARGIN, y + 54), subhead, font=sub_font, fill=MUTED)
+        y += 138
+    tracked_text(draw, (MARGIN, y + 52), subhead, sub_font, MUTED, tracking=2.4)
 
     shot = Image.open(src).convert("RGB")
     scale = PHONE_W / shot.width
