@@ -55,22 +55,6 @@ struct PeriodDetailView: View {
         nightsInPeriod.reduce(0) { $0 + $1.cents }
     }
 
-    /// Chart-only: nightsInPeriod with each day's base-rate wages folded in
-    /// (never OT — that's a weekly figure, unattributable to one day), so
-    /// the bars agree with the tiles and shift rows on screen. tipsNetCents/
-    /// heroTotalCents above deliberately keep reading the tips-only
-    /// nightsInPeriod — period wages (incl. OT) are already added in there
-    /// once, at the period level; folding wages in twice here too would
-    /// double-count them.
-    private var chartNightsInPeriod: [(date: Date, cents: Int)] {
-        guard let wageCentsPerHour = preferencesStore.baseHourlyWageCents else { return nightsInPeriod }
-        let shiftsByDay = Dictionary(grouping: shiftDays, by: \.day)
-        let wagesByDay = shiftsByDay.mapValues { WageEstimate.centsSummedPerShift(shiftGroups: $0.map(\.items), wageCentsPerHour: wageCentsPerHour) }
-        return nightsInPeriod.map { night in
-            (date: night.date, cents: night.cents + (wagesByDay[night.date] ?? 0))
-        }
-    }
-
     /// Base wage + overtime for this period's shifts — folds into the hero
     /// total and the true $/hr rate below, but StatsEngine/TipBreakdown/
     /// nightsInPeriod above never see it.
@@ -187,7 +171,7 @@ struct PeriodDetailView: View {
 
             if !nightsInPeriod.isEmpty {
                 Section {
-                    NightlyEarningsChart(nights: chartNightsInPeriod, period: period)
+                    NightlyEarningsChart(nights: nightsInPeriod, period: period)
                         .paydayCard()
                 }
                 .listRowInsets(EdgeInsets(top: 4, leading: PaydaySpacing.p16, bottom: 4, trailing: PaydaySpacing.p16))
