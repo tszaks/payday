@@ -16,41 +16,38 @@ struct LockGateView: View {
         VStack(spacing: 0) {
             Spacer()
 
-            Image("IslandMark")
+            // The system app-lock grammar (Tyler's reference: GitHub's
+            // lock screen): the mark centered, "Unlock Payday" as the only
+            // text, Face ID firing on its own — and one full-width
+            // fallback button anchored at the bottom, nothing mid-screen.
+            Image("BrandMark")
                 .renderingMode(.template)
                 .resizable()
                 .aspectRatio(contentMode: .fit)
-                .frame(height: 44)
+                .frame(height: 72)
                 .foregroundStyle(PaydayColor.primary)
                 .opacity(hasAppeared ? 1 : 0)
                 .scaleEffect(reduceMotion ? 1 : (hasAppeared ? 1 : 0.94))
                 .padding(.bottom, PaydaySpacing.p20)
 
-            Text("Payday is locked")
-                .font(PaydayFont.headline)
+            Text("Unlock Payday")
+                .font(PaydayFont.displayMedium)
                 .foregroundStyle(PaydayColor.textPrimary)
-                .padding(.bottom, PaydaySpacing.p4)
 
-            Text("Your tips stay private.")
-                .font(PaydayFont.caption)
-                .foregroundStyle(PaydayColor.textSecondary)
-                .padding(.bottom, PaydaySpacing.p30)
+            Spacer()
 
             Button {
                 Task { await lockController.unlock() }
             } label: {
-                HStack(spacing: PaydaySpacing.p8) {
-                    Image(systemName: "faceid")
-                    Text("Unlock")
-                        .fontWeight(.semibold)
-                }
-                .padding(.horizontal, PaydaySpacing.p8)
+                Text(lockController.failedAttempts >= 2 ? "Use Passcode" : "Unlock")
+                    .font(PaydayFont.headline)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, PaydaySpacing.p4)
             }
             .buttonStyle(.glassProminent)
             .tint(PaydayColor.primary)
-
-            Spacer()
-            Spacer()
+            .padding(.horizontal, PaydaySpacing.p16)
+            .padding(.bottom, PaydaySpacing.p16)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(PaydayColor.background)

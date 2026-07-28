@@ -365,19 +365,31 @@ struct PaycheckComparisonView: View {
         .paydayCard()
     }
 
-    /// Capture-only stub facts (see PaycheckRecord's four optional detail
+    /// Capture-only stub facts (see PaycheckRecord's optional detail
     /// fields) — quiet caption lines under the comparison, nothing shown
     /// for whichever weren't entered, no layout change when none exist.
+    /// hourlyRateCents/owedTipsCents are retired from the entry sheet
+    /// (2026-07-27) but still shown here when present — legacy records that
+    /// only ever had those two must stay legible.
     private var stubDetailLines: [(label: String, text: String)] {
         var lines: [(label: String, text: String)] = []
-        if let hourlyRateCents = paycheck.hourlyRateCents {
-            lines.append((label: "Hourly rate", text: "Hourly rate \(Money.string(fromCents: hourlyRateCents))"))
+        if let regularWagesCents = paycheck.regularWagesCents {
+            lines.append((label: "Regular wages", text: "Regular wages \(Money.string(fromCents: regularWagesCents))"))
+        }
+        if let overtimeWagesCents = paycheck.overtimeWagesCents {
+            lines.append((label: "Overtime wages", text: "Overtime wages \(Money.string(fromCents: overtimeWagesCents))"))
         }
         if let grossPayCents = paycheck.grossPayCents {
-            lines.append((label: "Gross pay", text: "Gross pay \(Money.string(fromCents: grossPayCents))"))
+            lines.append((label: "Gross", text: "Gross \(Money.string(fromCents: grossPayCents))"))
+        }
+        if let taxesCents = paycheck.taxesCents {
+            lines.append((label: "Taxes", text: "Taxes \(Money.string(fromCents: taxesCents))"))
         }
         if let netPayCents = paycheck.netPayCents {
-            lines.append((label: "Net pay", text: "Net pay \(Money.string(fromCents: netPayCents))"))
+            lines.append((label: "Net", text: "Net \(Money.string(fromCents: netPayCents))"))
+        }
+        if let hourlyRateCents = paycheck.hourlyRateCents {
+            lines.append((label: "Hourly rate", text: "Hourly rate \(Money.string(fromCents: hourlyRateCents))"))
         }
         if let owedTipsCents = paycheck.owedTipsCents {
             lines.append((label: "Tips owed", text: "Tips owed \(Money.string(fromCents: owedTipsCents))"))
