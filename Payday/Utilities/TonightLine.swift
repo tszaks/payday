@@ -3,37 +3,21 @@ import Foundation
 /// The Dashboard's one context-aware sentence, composed from facts the
 /// engines already computed. Pure so the "which line tonight?" decision is
 /// unit-testable; the view just renders whatever this returns.
+///
+/// This is ONLY the reveal echo now — the "You usually work Fridays"
+/// rhythm fallback was removed on Tyler's order (2026-07-28): the app
+/// telling you your own schedule reads as noise, not insight. The slot
+/// stays empty until something true about TONIGHT exists.
 enum TonightLine {
     /// - Returns: the line to show between the hero card and the Shifts
-    ///   list, or nil when there's nothing worth saying (not a usual work
-    ///   night, nothing logged, or the payday moment owns the slot).
+    ///   list, or nil when there's nothing worth saying (nothing logged
+    ///   today, or the payday moment owns the slot).
     static func compose(
-        rhythm: WorkRhythm,
         tonightRevealText: String?,
-        isPaydayMoment: Bool,
-        now: Date = .now,
-        calendar: Calendar = .current
+        isPaydayMoment: Bool
     ) -> String? {
         // The payday moment is the bigger statement; don't compete with it.
         if isPaydayMoment { return nil }
-
-        if let tonightRevealText {
-            return tonightRevealText
-        }
-
-        let weekday = calendar.component(.weekday, from: now)
-        guard rhythm.usualWeekdays.contains(weekday) else { return nil }
-
-        // Time-neutral: this is a usual-work-day nudge that may show at any
-        // hour, and the worker's shift could be lunch or dinner — so no
-        // "tonight."
-        let dayName = calendar.weekdaySymbols[weekday - 1]
-        guard let hour = rhythm.typicalLogHour,
-              let at = calendar.date(bySettingHour: hour, minute: 0, second: 0, of: now)
-        else {
-            return "You usually work \(dayName)s."
-        }
-        let hourText = at.formatted(.dateTime.hour())
-        return "You usually work \(dayName)s around \(hourText)."
+        return tonightRevealText
     }
 }
