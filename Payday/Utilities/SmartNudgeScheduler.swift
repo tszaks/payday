@@ -1,3 +1,4 @@
+import EventKit
 import Foundation
 import UserNotifications
 
@@ -31,15 +32,40 @@ enum SmartNudgeScheduler {
         center.removePendingNotificationRequests(withIdentifiers: [notificationIdentifier])
         guard preferencesStore.isSmartNudgeEnabled else { return }
 
-        let engine = StatsEngine(records: allEntries.map(TipRecord.init))
-        let rhythm = engine.workRhythm()
-        guard !rhythm.usualWeekdays.isEmpty,
-              let typicalLogHour = rhythm.typicalLogHour,
-              let fireDate = nextFireDate(usualWeekdays: rhythm.usualWeekdays, typicalLogHour: typicalLogHour, allEntries: allEntries)
+        let alreadyLoggedToday = allEntries.contains { Calendar.current.isDateInToday($0.date) }
+        guard let fireDate = workScheduleFireDate(preferencesStore: preferencesStore, alreadyLoggedToday: alreadyLoggedToday)
+            ?? rhythmFireDate(allEntries: allEntries)
         else { return }
 
         guard await isCurrentlyAuthorized(center: center) else { return }
         schedule(at: fireDate, center: center)
+    }
+
+    /// The designated-work-calendar fire date, upgrading this same nudge's
+    /// timing to the end of the posted shift instead of the learned
+    /// typical-hour heuristic — still ONE notification identifier, ONE
+    /// piece of content, same permission gating below. Nil whenever the
+    /// feature is off, calendar access isn't authorized, the calendar's
+    /// gone, or it simply has nothing usable in the next 7 days — any of
+    /// those silently hand back to rhythmFireDate below, since a broken
+    /// calendar must never break the nudge.
+    private static func workScheduleFireDate(preferencesStore: UserPreferencesStore, alreadyLoggedToday: Bool, now: Date = .now) -> Date? {
+        guard let calendarIdentifier = preferencesStore.workCalendarIdentifier else { return nil }
+        let calendarStore = WorkCalendarStore()
+        guard calendarStore.authorizationStatus == .fullAccess else { return nil }
+        guard let horizon = Calendar.current.date(byAdding: .day, value: 7, to: now) else { return nil }
+        guard let shifts = calendarStore.scheduledShifts(calendarIdentifier: calendarIdentifier, from: now, to: horizon) else { return nil }
+        return WorkScheduleNudge.fireDate(shifts: shifts, now: now, alreadyLoggedToday: alreadyLoggedToday)
+    }
+
+    /// The learned typical-hour heuristic — exactly today's behavior,
+    /// unchanged, now just factored out so the designated-calendar path
+    /// above can take priority when it has something usable.
+    private static func rhythmFireDate(allEntries: [TipEntry]) -> Date? {
+        let engine = StatsEngine(records: allEntries.map(TipRecord.init))
+        let rhythm = engine.workRhythm()
+        guard !rhythm.usualWeekdays.isEmpty, let typicalLogHour = rhythm.typicalLogHour else { return nil }
+        return nextFireDate(usualWeekdays: rhythm.usualWeekdays, typicalLogHour: typicalLogHour, allEntries: allEntries)
     }
 
     /// The next moment worth nudging: today if it's a usual night, the

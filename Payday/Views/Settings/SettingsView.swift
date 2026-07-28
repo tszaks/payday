@@ -26,8 +26,16 @@ struct SettingsView: View {
     @FocusState private var isWageFieldFocused: Bool
     @State private var isShowingBackfillSheet = false
 
+    @State private var workCalendarStore = WorkCalendarStore()
+    @State private var connectedWorkCalendarTitle: String?
+    @State private var isShowingWorkCalendarPicker = false
+    @State private var availableWorkCalendars: [(id: String, title: String, sourceTitle: String)] = []
+    @State private var workCalendarConnectCaption = SettingsView.defaultWorkCalendarCaption
+
     private let weekdaySymbols = Calendar.current.weekdaySymbols // [Sunday…Saturday]
     private static let maxWageDigits = 4 // caps at $99.99/hr
+    private static let defaultWorkCalendarCaption = "Times the shift reminder to your posted schedule. Payday reads only the calendar you pick; it never leaves your phone."
+    private static let deniedWorkCalendarCaption = "Calendar access is off for Payday in Settings."
 
     init(schedule: PaySchedule) {
         _frequency = State(initialValue: schedule.frequency)
@@ -80,6 +88,26 @@ struct SettingsView: View {
                     }
                     captionedRow("One notification on payday morning with what your check should say.") {
                         Toggle("Payday reminder", isOn: $isPaydayReminderEnabled)
+                    }
+                }
+                .listRowBackground(PaydayColor.fieldBackground)
+
+                Section("Work Schedule") {
+                    if preferencesStore.workCalendarIdentifier != nil {
+                        captionedRow("Shift reminders follow this schedule.") {
+                            HStack {
+                                Text(connectedWorkCalendarTitle ?? "Work calendar")
+                                    .foregroundStyle(PaydayColor.textPrimary)
+                                Spacer()
+                                Button("Disconnect") { disconnectWorkCalendar() }
+                                    .buttonStyle(.plain)
+                                    .foregroundStyle(PaydayColor.textSecondary)
+                            }
+                        }
+                    } else {
+                        captionedRow(workCalendarConnectCaption) {
+                            Button("Connect Work Calendar") { connectWorkCalendar() }
+                        }
                     }
                 }
                 .listRowBackground(PaydayColor.fieldBackground)
@@ -217,12 +245,54 @@ struct SettingsView: View {
                 isSmartNudgeEnabled = preferencesStore.isSmartNudgeEnabled
                 isPaydayReminderEnabled = preferencesStore.isPaydayReminderEnabled
                 wageDigitsText = preferencesStore.baseHourlyWageCents.map(String.init) ?? ""
+                if let identifier = preferencesStore.workCalendarIdentifier {
+                    connectedWorkCalendarTitle = workCalendarStore.availableCalendars().first { $0.id == identifier }?.title
+                }
             }
             .sheet(isPresented: $isShowingBackfillSheet) {
                 BackfillSheet()
             }
+            .sheet(isPresented: $isShowingWorkCalendarPicker) {
+                WorkCalendarPickerSheet(calendars: availableWorkCalendars, onSelect: selectWorkCalendar)
+            }
         }
         .presentationBackground(PaydayColor.background)
+    }
+
+    /// The one deliberate place this app ever asks iOS for calendar
+    /// access — an explicit tap here, never on launch. Already-authorized
+    /// taps skip straight to the picker; a fresh denial swaps the caption
+    /// in place rather than showing an alert.
+    private func connectWorkCalendar() {
+        Task {
+            if workCalendarStore.authorizationStatus == .fullAccess {
+                presentWorkCalendarPicker()
+                return
+            }
+            if await workCalendarStore.requestAccess() {
+                presentWorkCalendarPicker()
+            } else {
+                workCalendarConnectCaption = Self.deniedWorkCalendarCaption
+            }
+        }
+    }
+
+    private func presentWorkCalendarPicker() {
+        availableWorkCalendars = workCalendarStore.availableCalendars()
+        isShowingWorkCalendarPicker = true
+    }
+
+    private func selectWorkCalendar(id: String, title: String) {
+        preferencesStore.workCalendarIdentifier = id
+        connectedWorkCalendarTitle = title
+        SmartNudgeScheduler.reschedule(preferencesStore: preferencesStore, allEntries: allEntries)
+    }
+
+    private func disconnectWorkCalendar() {
+        preferencesStore.workCalendarIdentifier = nil
+        connectedWorkCalendarTitle = nil
+        workCalendarConnectCaption = Self.defaultWorkCalendarCaption
+        SmartNudgeScheduler.reschedule(preferencesStore: preferencesStore, allEntries: allEntries)
     }
 
     private func save() {
