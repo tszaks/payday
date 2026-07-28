@@ -162,12 +162,22 @@ private struct ShiftFacts {
 struct StatsEngine {
     let records: [TipRecord]
     private let calendar: Calendar
+    /// The reveal pipeline's ONLY wage-aware surface (Tyler's ruling,
+    /// 2026-07-27): "for a shift, we don't differentiate [tips vs wages] —
+    /// it's 1 amount." When set, revealComparison's own record/average/
+    /// slowest checks price each shift at net tips + that shift's wages
+    /// instead of net tips alone. Nil (the default) reproduces every
+    /// existing behavior exactly — pace, charts, projections, Insights,
+    /// Moves, $/hr, and tip percent never read this and stay tips-only
+    /// regardless of what's passed here.
+    private let wageCentsPerHour: Int?
 
-    init(records: [TipRecord], calendar: Calendar = .current) {
+    init(records: [TipRecord], calendar: Calendar = .current, wageCentsPerHour: Int? = nil) {
         self.records = records
         var cal = calendar
         cal.timeZone = TimeZone.current
         self.calendar = cal
+        self.wageCentsPerHour = wageCentsPerHour
     }
 
     /// Groups records into one ShiftFacts per closeout, keyed on shiftID —
@@ -431,10 +441,82 @@ struct StatsEngine {
 
     // MARK: Reveal
 
+    /// A shift's reveal-basis cents: net tips, plus that shift's wages when
+    /// BOTH this engine's wageCentsPerHour and the shift's own hoursWorked
+    /// are known. Falls back to plain netCents whenever either is missing —
+    /// which is also every value this returns when wageCentsPerHour is nil,
+    /// so the fork below is byte-identical to the tips-only path by
+    /// default. Used ONLY by revealComparison's own helpers; every other
+    /// caller in this file reads shiftFacts/netCents directly and never
+    /// sees a wage.
+    private func revealCents(of shift: ShiftFacts) -> Int {
+        guard let wageCentsPerHour,
+              let hours = shift.hoursWorked,
+              let wage = WageEstimate.cents(wageCentsPerHour: wageCentsPerHour, hours: hours)
+        else { return shift.netCents }
+        return shift.netCents + wage
+    }
+
+    /// The reveal-basis twin of shiftTotals(excludingDate:excludingShift:) —
+    /// same shape and filtering, priced with revealCents instead of
+    /// netCents. Forked rather than flag-guarded so nothing outside
+    /// revealComparison can accidentally pick up a wage-inclusive total.
+    private func shiftTotalsForReveal(excludingDate: Date? = nil, excludingShift: UUID? = nil) -> [(shiftID: UUID, date: Date, cents: Int)] {
+        shiftFacts(from: records)
+            .filter { shift in
+                if let excludingDate, calendar.isDate(shift.date, inSameDayAs: excludingDate) { return false }
+                if let excludingShift, shift.shiftID == excludingShift { return false }
+                return true
+            }
+            .map { (shiftID: $0.shiftID, date: $0.date, cents: revealCents(of: $0)) }
+    }
+
+    /// Reveal-basis twin of bestNightEver(excluding:excludingShift:).
+    private func bestNightEverForReveal(excluding excludedDate: Date? = nil, excludingShift: UUID? = nil) -> (date: Date, cents: Int)? {
+        shiftTotalsForReveal(excludingDate: excludedDate, excludingShift: excludingShift)
+            .map { (date: $0.date, cents: $0.cents) }
+            .max { $0.cents < $1.cents }
+    }
+
+    /// Reveal-basis twin of bestNight(forWeekday:excluding:excludingShift:).
+    private func bestNightForRevealWeekday(_ weekday: Int, excluding excludedDate: Date? = nil, excludingShift: UUID? = nil) -> (date: Date, cents: Int)? {
+        shiftTotalsForReveal(excludingDate: excludedDate, excludingShift: excludingShift)
+            .filter { calendar.component(.weekday, from: $0.date) == weekday }
+            .map { (date: $0.date, cents: $0.cents) }
+            .max { $0.cents < $1.cents }
+    }
+
+    /// Reveal-basis twin of averageForWeekday(_:excluding:excludingShift:).
+    private func averageForRevealWeekday(_ weekday: Int, excluding excludedDate: Date? = nil, excludingShift: UUID? = nil) -> Double? {
+        let matching = shiftTotalsForReveal(excludingDate: excludedDate, excludingShift: excludingShift)
+            .filter { calendar.component(.weekday, from: $0.date) == weekday }
+        guard !matching.isEmpty else { return nil }
+        return Double(matching.reduce(0) { $0 + $1.cents }) / Double(matching.count)
+    }
+
+    /// Reveal-basis twin of the private nights(excludingDate:excludingShift:).
+    private func nightsForReveal(excludingDate: Date? = nil, excludingShift: UUID? = nil) -> [(date: Date, cents: Int)] {
+        shiftTotalsForReveal(excludingDate: excludingDate, excludingShift: excludingShift)
+            .map { (date: $0.date, cents: $0.cents) }
+    }
+
+    /// Reveal-basis twin of isSlowestRecently(date:cents:lookbackShifts:excludingShift:).
+    private func isSlowestRecentlyForReveal(date: Date, cents: Int, lookbackShifts: Int, excludingShift: UUID? = nil) -> Bool {
+        let priorNights = excludingShift.map { nightsForReveal(excludingShift: $0) } ?? nightsForReveal(excludingDate: date)
+        guard priorNights.count >= 4 else { return false }
+        let recent = priorNights.suffix(lookbackShifts)
+        guard let minCents = recent.map(\.cents).min() else { return false }
+        return cents <= minCents
+    }
+
     /// Picks the one most interesting true thing about tonight, in priority
     /// order: all-time record, first shift of a period, weekday record,
     /// notably slow night, then the everyday weekday-average comparison.
     /// Stacks an independent $/hr clause underneath when hours were logged.
+    /// `cents` must be the SAME basis this engine's history is compared
+    /// on: pass the shift's displayed total — net tips, plus wages when a
+    /// wage is set on this engine (Tyler's ruling, 2026-07-27) — never a
+    /// tips-only figure alongside a wage-aware engine or vice versa.
     func reveal(forNightAt date: Date, cents: Int, period: PayPeriod, hoursWorked: Double? = nil, shiftID: UUID? = nil) -> RevealResult {
         let (comparison, isRecord) = revealComparison(forNightAt: date, cents: cents, period: period, shiftID: shiftID)
         return RevealResult(
@@ -454,31 +536,31 @@ struct StatsEngine {
         // When a shiftID is given, exclude only that shift; otherwise exclude
         // the whole day (the pre-shift-grouping behavior).
         let excludingDate: Date? = shiftID == nil ? date : nil
-        if bestNightEver(excluding: excludingDate, excludingShift: shiftID) == nil {
+        if bestNightEverForReveal(excluding: excludingDate, excludingShift: shiftID) == nil {
             return (.firstNightLogged, false)
         }
-        if let best = bestNightEver(excluding: excludingDate, excludingShift: shiftID), cents > best.cents {
+        if let best = bestNightEverForReveal(excluding: excludingDate, excludingShift: shiftID), cents > best.cents {
             return (.allTimeRecord(previousBestCents: best.cents), true)
         }
         if isFirstShiftOfPeriod(date: date, period: period) {
             return (.firstShiftOfPeriod, false)
         }
         let weekday = calendar.component(.weekday, from: date)
-        if let bestWeekday = bestNight(forWeekday: weekday, excluding: excludingDate, excludingShift: shiftID), cents > bestWeekday.cents {
+        if let bestWeekday = bestNightForRevealWeekday(weekday, excluding: excludingDate, excludingShift: shiftID), cents > bestWeekday.cents {
             return (.weekdayRecord(weekday: weekday, previousBestCents: bestWeekday.cents), true)
         }
-        if isSlowestRecently(date: date, cents: cents, lookbackShifts: 8, excludingShift: shiftID) {
+        if isSlowestRecentlyForReveal(date: date, cents: cents, lookbackShifts: 8, excludingShift: shiftID) {
             return (.slowestRecently, false)
         }
         // No prior history for this weekday to average against — falling
         // back to "compare tonight against tonight" would always read as
         // "$0.00 above your ‹weekday› average," a self-referential
         // non-comparison. Say plainly that this is the first one instead.
-        guard let average = averageForWeekday(weekday, excluding: excludingDate, excludingShift: shiftID) else {
+        guard let average = averageForRevealWeekday(weekday, excluding: excludingDate, excludingShift: shiftID) else {
             return (.firstWeekdayLogged(weekday: weekday), false)
         }
         let deltaCents = cents - Int(average.rounded())
-        let periodShifts = shiftTotals(excludingDate: excludingDate, excludingShift: shiftID)
+        let periodShifts = shiftTotalsForReveal(excludingDate: excludingDate, excludingShift: shiftID)
             .filter { $0.date >= period.start && $0.date <= period.end }
         // Rank this shift among the period's other logged shifts, plus itself.
         let rank = periodShifts.filter { $0.cents > cents }.count + 1
@@ -1596,15 +1678,16 @@ enum RevealCopy {
     // Names its unit (tips, net per shift) rather than "today" — a lunch
     // shift logged at 2pm, or this line read back hours later, must never
     // look like the all-in "Today" total shown elsewhere on the Dashboard.
-    // When wages exist for the shift, the with-wages figure is named too:
-    // the Shifts row directly below this line shows the wage-inclusive
-    // total, and two unbridged numbers for one shift on one screen read
-    // as a contradiction (Tyler, 2026-07-27).
-    static func headline(cents: Int, withWagesCents: Int? = nil) -> String {
-        guard let withWagesCents, withWagesCents != cents else {
-            return "\(Money.string(fromCents: cents)) in tips this shift."
-        }
-        return "\(Money.string(fromCents: cents)) in tips this shift, \(Money.string(fromCents: withWagesCents)) with wages."
+    // Tyler's ruling (2026-07-27): a shift speaks ONE number, the same
+    // wage-inclusive total its Shifts row already shows — so `cents` is
+    // that one figure, and `includesWages` just picks the honest unit for
+    // it. "in tips" only when the amount actually IS tips (no wage set);
+    // otherwise it's income, so the headline drops the word "tips"
+    // entirely rather than call a wage-inclusive number "tips."
+    static func headline(cents: Int, includesWages: Bool) -> String {
+        includesWages
+            ? "\(Money.string(fromCents: cents)) this shift."
+            : "\(Money.string(fromCents: cents)) in tips this shift."
     }
 
     static func comparison(for result: RevealComparison, period: ShiftPeriod? = nil) -> String {

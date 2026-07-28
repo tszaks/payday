@@ -97,6 +97,7 @@ targets:
       - path: Payday/Utilities/Money.swift
       - path: Payday/Utilities/TipBreakdown.swift
       - path: Payday/Utilities/StatsEngine.swift
+      - path: Payday/Utilities/WageEstimate.swift
       - path: Payday/Utilities/ShiftDays.swift
       - path: Payday/Utilities/ShiftDetails.swift
       - path: Payday/Utilities/PeriodIncome.swift
