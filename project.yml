@@ -50,6 +50,7 @@ targets:
         UIBackgroundModes:
           - remote-notification
         NSFaceIDUsageDescription: Payday can lock itself with Face ID when you turn that on in Settings.
+        NSCalendarsFullAccessUsageDescription: Payday reads only the calendar you choose, to time the end-of-shift reminder. Your schedule never leaves your phone.
         # Lock Screen / StandBy accessory widgets can't host an interactive
         # button (see PaydayWidgetAccessoryViews.swift) — widgetURL + this
         # URL scheme is the only way one of those taps can reach the app.
