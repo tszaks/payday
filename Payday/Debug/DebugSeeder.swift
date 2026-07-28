@@ -66,6 +66,8 @@ enum DebugSeeder {
         /// cash-heavy — a real-looking shape, not noise.
         func dinnerBase(weekday: Int) -> Int {
             switch weekday {
+            case 2: return 11500   // Monday, a picked-up slow one
+            case 3: return 13000   // Tuesday
             case 4: return 15500   // Wednesday
             case 5: return 19000   // Thursday
             case 6: return 27500   // Friday
@@ -76,14 +78,33 @@ enum DebugSeeder {
         }
         func cashShare(weekday: Int) -> Double { weekday == 1 ? 0.42 : 0.16 }
 
+        // Nobody works seven days (Tyler, 2026-07-28): six is the ceiling,
+        // tracked per calendar week so a pickup can never complete a full
+        // week no matter how the dice fall.
+        var daysWorkedThisWeek = 0
+        var currentWeekOfYear = calendar.component(.weekOfYear, from: calendar.date(byAdding: .month, value: -6, to: today) ?? today)
+
         var day = calendar.date(byAdding: .month, value: -6, to: today) ?? today
         while day <= today {
             let weekday = calendar.component(.weekday, from: day)
-            let worksToday = [4, 5, 6, 7, 1].contains(weekday)
-            guard worksToday, next(100) > 12 else {   // ~12% of shifts off
+            let weekOfYear = calendar.component(.weekOfYear, from: day)
+            if weekOfYear != currentWeekOfYear {
+                currentWeekOfYear = weekOfYear
+                daysWorkedThisWeek = 0
+            }
+            // The regular Wed-Sun rotation, plus the occasional Monday or
+            // Tuesday picked up when someone drops one — the shape of an
+            // actual server's month, not a fixed schedule.
+            let isRegularNight = [4, 5, 6, 7, 1].contains(weekday)
+            let isPickup = [2, 3].contains(weekday) && next(100) < 14
+            // Nobody gives up a Friday or Saturday — those are the money.
+            // The quieter nights are where a shift gets dropped or covered.
+            let callOffChance = [6, 7].contains(weekday) ? 4 : 14
+            guard isRegularNight || isPickup, next(100) >= callOffChance, daysWorkedThisWeek < 6 else {
                 day = calendar.date(byAdding: .day, value: 1, to: day) ?? day.addingTimeInterval(86400)
                 continue
             }
+            daysWorkedThisWeek += 1
 
             // Summer builds: a gentle upward ramp across the six months,
             // with the current period running a little hot so the pace line
@@ -122,11 +143,36 @@ enum DebugSeeder {
             let periodEntries = allEntries.filter { $0.date >= cursor.start && $0.date <= cursor.end }
             let creditCents = TipBreakdown.total(of: periodEntries).creditCents
             if creditCents > 0 {
+                // A real stub almost never equals your own tally: a late
+                // closeout lands on the next check, a comp gets adjusted,
+                // a charge-back claws a few dollars, one period is simply
+                // right. Mostly small drift, occasionally a real gap worth
+                // noticing — which is the whole point of the comparison.
+                let roll = next(100)
+                let paidCents: Int
+                let note: String?
+                switch roll {
+                case 0..<12:
+                    paidCents = creditCents                              // exact
+                    note = "Direct deposit"
+                case 12..<30:
+                    paidCents = creditCents - jitter(4200, 2600)         // a shift landed late
+                    note = "Direct deposit"
+                case 30..<44:
+                    paidCents = creditCents + jitter(1800, 1200)         // last period's straggler
+                    note = "Direct deposit"
+                case 44..<52:
+                    paidCents = creditCents - jitter(11500, 3500)        // a real gap
+                    note = "Short. Asked payroll."
+                default:
+                    paidCents = creditCents - jitter(900, 700)           // rounding-level drift
+                    note = "Direct deposit"
+                }
                 context.insert(PaycheckRecord(
                     periodStart: cursor.start,
                     periodEnd: cursor.end,
-                    paidTipsCents: creditCents,
-                    note: "Direct deposit"
+                    paidTipsCents: max(0, paidCents),
+                    note: note
                 ))
             }
             guard let previousEnd = calendar.date(byAdding: .day, value: -1, to: cursor.start) else { break }
