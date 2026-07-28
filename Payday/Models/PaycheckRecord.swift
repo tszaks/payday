@@ -17,10 +17,16 @@ final class PaycheckRecord {
     // stay distinguishable facts, never a defaulted non-optional.
 
     /// The rate printed on the stub — may differ from the Settings wage;
-    /// that difference is future signal, never reconciled here.
+    /// that difference is future signal, never reconciled here. Retired
+    /// from the entry sheet's UI (2026-07-27, superseded by the wages/
+    /// gross/net audit fields below) but kept on the model — a deployed
+    /// CloudKit record type can't drop a field, and legacy records still
+    /// carry this.
     var hourlyRateCents: Int?
 
-    /// Tips the employer still owes / held back, not on this check.
+    /// Tips the employer still owes / held back, not on this check. Retired
+    /// from the entry sheet's UI (2026-07-27) for the same CloudKit-schema-
+    /// stability reason as hourlyRateCents.
     var owedTipsCents: Int?
 
     /// Stub gross.
@@ -28,6 +34,17 @@ final class PaycheckRecord {
 
     /// What actually hit the account.
     var netPayCents: Int?
+
+    /// Base pay for the period, as printed on the stub — the audit's
+    /// ground truth is PeriodIncome's computed wages, this is what the
+    /// employer actually paid.
+    var regularWagesCents: Int?
+
+    /// Overtime pay for the period, as printed on the stub.
+    var overtimeWagesCents: Int?
+
+    /// Taxes withheld, as printed on the stub.
+    var taxesCents: Int?
 
     init(
         id: UUID = UUID(),
@@ -38,7 +55,10 @@ final class PaycheckRecord {
         hourlyRateCents: Int? = nil,
         owedTipsCents: Int? = nil,
         grossPayCents: Int? = nil,
-        netPayCents: Int? = nil
+        netPayCents: Int? = nil,
+        regularWagesCents: Int? = nil,
+        overtimeWagesCents: Int? = nil,
+        taxesCents: Int? = nil
     ) {
         self.id = id
         self.periodStart = periodStart
@@ -49,5 +69,8 @@ final class PaycheckRecord {
         self.owedTipsCents = owedTipsCents
         self.grossPayCents = grossPayCents
         self.netPayCents = netPayCents
+        self.regularWagesCents = regularWagesCents
+        self.overtimeWagesCents = overtimeWagesCents
+        self.taxesCents = taxesCents
     }
 }
