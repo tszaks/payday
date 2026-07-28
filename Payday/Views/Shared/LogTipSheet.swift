@@ -33,10 +33,15 @@ struct LogTipSheet: View {
     @State private var note: String
     @State private var showDeleteConfirmation = false
     @State private var revealResult: RevealResult?
-    /// Set alongside revealResult only when a tip-out was logged tonight —
-    /// lets the reveal show gross + tip-out one glance under the net
-    /// headline, never hiding what net was computed from.
-    @State private var revealGrossAndTipOut: (grossCents: Int, tipOutCents: Int)?
+    /// Whether revealResult.cents already has this shift's wages folded in
+    /// — set alongside revealResult, drives which unit the headline names
+    /// (Tyler's ruling, 2026-07-27: a shift speaks ONE number).
+    @State private var revealIncludesWages = false
+    /// Set alongside revealResult only when there's something to reconcile
+    /// the headline back to — a tip-out was logged, a wage got folded in,
+    /// or both — so the reveal never hides what its one number was built
+    /// from.
+    @State private var revealBreakdown: (grossCents: Int, tipOutCents: Int?, wageCents: Int?)?
     /// Set once, at appearance, when LiveShiftEndModeResolver decides this
     /// blank `.new` sheet exists to close out the shift already running —
     /// every creation path (the + tab, the widget, quick actions, deep
@@ -225,7 +230,7 @@ struct LogTipSheet: View {
             ScrollViewReader { proxy in
                 Group {
                     if let revealResult {
-                        RevealCardView(result: revealResult, period: shiftPeriod, grossAndTipOut: revealGrossAndTipOut, onDismiss: { dismiss() })
+                        RevealCardView(result: revealResult, period: shiftPeriod, includesWages: revealIncludesWages, breakdown: revealBreakdown, onDismiss: { dismiss() })
                     } else {
                         // Scrollable rather than a fixed VStack: expanding the
                         // details group used to compress every row toward zero
@@ -761,6 +766,13 @@ struct LogTipSheet: View {
         let effectiveTipOutCents = tipOutCents > 0 ? tipOutCents : nil
         let effectiveSalesCents = salesCents > 0 ? salesCents : nil
         let netTotalCents = totalCents - (effectiveTipOutCents ?? 0)
+        // A shift speaks ONE number (Tyler's ruling, 2026-07-27): the
+        // reveal's total is net tips plus this shift's own wages, the same
+        // figure the Shifts row already shows — never a tips-only number
+        // shown next to a wage-aware history.
+        let wageCentsPerHour = preferencesStore.baseHourlyWageCents
+        let wageCents = hoursWorked.flatMap { WageEstimate.cents(wageCentsPerHour: wageCentsPerHour, hours: $0) }
+        let revealCents = netTotalCents + (wageCents ?? 0)
 
         // A stand-in id for the reveal's own exclusion check below — the
         // freshly-inserted rows get their own id from ShiftWriter, but since
@@ -768,14 +780,14 @@ struct LogTipSheet: View {
         // nothing and the comparison comes out identical.
         let shiftID = UUID()
 
-        let statsEngine = StatsEngine(records: allEntries.map(TipRecord.init))
+        let statsEngine = StatsEngine(records: allEntries.map(TipRecord.init), wageCentsPerHour: wageCentsPerHour)
         let calculator = PayPeriodCalculator(schedule: scheduleStore.schedule ?? .fallback)
         let period = calculator.period(containing: normalizedDate)
-        // Reveal always speaks in net — the same rule StatsEngine applies to
-        // every other analytical total. Passing this shift's id lets the
+        // The engine and the cents passed here share one basis — see
+        // StatsEngine.reveal's doc. Passing this shift's id lets the
         // reveal compare it against the day's other shift (if any) rather
         // than excluding the whole day.
-        let reveal = statsEngine.reveal(forNightAt: normalizedDate, cents: netTotalCents, period: period, hoursWorked: hoursWorked, shiftID: shiftID)
+        let reveal = statsEngine.reveal(forNightAt: normalizedDate, cents: revealCents, period: period, hoursWorked: hoursWorked, shiftID: shiftID)
 
         let newEntries = ShiftWriter.insertShift(
             into: modelContext,
@@ -794,7 +806,10 @@ struct LogTipSheet: View {
         )
 
         revealResult = reveal
-        revealGrossAndTipOut = effectiveTipOutCents.map { (grossCents: totalCents, tipOutCents: $0) }
+        revealIncludesWages = wageCents != nil
+        revealBreakdown = (effectiveTipOutCents != nil || wageCents != nil)
+            ? (grossCents: totalCents, tipOutCents: effectiveTipOutCents, wageCents: wageCents)
+            : nil
         // Tonight is logged — cancel tonight's nudge and queue the next
         // usual night's instead. allEntries' @Query hasn't necessarily
         // refreshed within this same call, so the just-inserted entries
@@ -1046,17 +1061,34 @@ private struct RevealCardView: View {
     /// The shift's lunch/dinner, when captured — lets the comparison below
     /// name it instead of falling back to the generic "shift".
     let period: ShiftPeriod?
-    /// Non-nil only when a tip-out was logged — the headline above is
-    /// already net; this makes the gross it came from one glance away.
-    let grossAndTipOut: (grossCents: Int, tipOutCents: Int)?
+    /// Whether result.cents already has this shift's wages folded in —
+    /// picks the headline's unit (Tyler's ruling, 2026-07-27).
+    let includesWages: Bool
+    /// Non-nil only when there's something to reconcile the headline back
+    /// to — a tip-out was logged, a wage got folded in, or both.
+    let breakdown: (grossCents: Int, tipOutCents: Int?, wageCents: Int?)?
     let onDismiss: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isRevealed = false
 
+    /// Reconciles the headline back to its parts, in the same order the
+    /// total was built: gross, minus any tip-out, plus any wages.
+    private var decompositionText: String? {
+        guard let breakdown else { return nil }
+        var parts = ["\(Money.string(fromCents: breakdown.grossCents)) gross"]
+        if let tipOutCents = breakdown.tipOutCents {
+            parts.append("\(Money.string(fromCents: tipOutCents)) tipped out")
+        }
+        if let wageCents = breakdown.wageCents {
+            parts.append("\(Money.string(fromCents: wageCents)) wages")
+        }
+        return parts.joined(separator: ", ") + "."
+    }
+
     var body: some View {
         VStack(spacing: 12) {
-            Text(RevealCopy.headline(cents: result.cents))
+            Text(RevealCopy.headline(cents: result.cents, includesWages: includesWages))
                 .font(PaydayFont.displayXL)
                 .monospacedDigit()
                 .foregroundStyle(result.isRecord && isRevealed ? PaydayColor.primary : PaydayColor.textPrimary)
@@ -1072,8 +1104,8 @@ private struct RevealCardView: View {
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 40)
             }
-            if let grossAndTipOut {
-                Text("\(Money.string(fromCents: grossAndTipOut.grossCents)) gross, \(Money.string(fromCents: grossAndTipOut.tipOutCents)) tipped out.")
+            if let decompositionText {
+                Text(decompositionText)
                     .font(PaydayFont.caption)
                     .foregroundStyle(PaydayColor.textSecondary)
                     .multilineTextAlignment(.center)
@@ -1085,7 +1117,7 @@ private struct RevealCardView: View {
         .onTapGesture { onDismiss() }
         .onAppear {
             let comparison = RevealCopy.comparison(for: result.comparison, period: period)
-            UIAccessibility.post(notification: .announcement, argument: "\(RevealCopy.headline(cents: result.cents)) \(comparison)")
+            UIAccessibility.post(notification: .announcement, argument: "\(RevealCopy.headline(cents: result.cents, includesWages: includesWages)) \(comparison)")
         }
         .task {
             PaydayHaptics.success()

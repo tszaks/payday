@@ -1026,11 +1026,157 @@ struct RevealTests {
     }
 }
 
+/// Tyler's ruling (2026-07-27): a shift speaks ONE number. These fixtures
+/// are built so tips-basis and income-basis DISAGREE about the same
+/// night — proving revealComparison actually switches basis when a wage
+/// is set, rather than happening to agree by coincidence.
+@Suite("Reveal wage basis")
+struct RevealWageBasisTests {
+    @Test("an all-time record on tips-only history is no longer a record once a wage lifts a prior night above it")
+    func allTimeRecordFlipsWithWage() {
+        let period = PayPeriod(start: date(2026, 7, 1), end: date(2026, 7, 31))
+        // Tips-basis all-time best is 9000 (no hours). Income-basis
+        // all-time best is 12000, once the $5/hr wage lands on the 10-hour
+        // shift below.
+        let records = [
+            record(2026, 7, 1, cents: 9000),
+            record(2026, 7, 2, cents: 7000, hoursWorked: 10)
+        ]
+        // Tips-only: tonight's 9500 beats the 9000 tips-basis best.
+        let tipsOnly = StatsEngine(records: records)
+        let tipsResult = tipsOnly.reveal(forNightAt: date(2026, 7, 3), cents: 9500, period: period)
+        #expect(tipsResult.comparison == .allTimeRecord(previousBestCents: 9000))
+        #expect(tipsResult.isRecord)
+
+        // Income-aware, same records, same tonight: 9500 no longer beats
+        // the 12000 income-basis best (7000 tips + $50 wage on 10 hours).
+        let incomeAware = StatsEngine(records: records, wageCentsPerHour: 500)
+        let incomeResult = incomeAware.reveal(forNightAt: date(2026, 7, 3), cents: 9500, period: period)
+        #expect(incomeResult.comparison != .allTimeRecord(previousBestCents: 9000))
+        #expect(!incomeResult.isRecord)
+    }
+
+    @Test("a weekday record on tips-only history disappears once a wage lifts a prior Monday above it")
+    func weekdayRecordFlipsWithWage() {
+        let period = PayPeriod(start: date(2026, 6, 1), end: date(2026, 7, 31))
+        let monday = Calendar.current.component(.weekday, from: date(2026, 7, 6))
+        let records = [
+            record(2026, 7, 3, cents: 50000),                    // dominant all-time best (a Friday), blocks allTimeRecord in both bases
+            record(2026, 6, 22, cents: 9000),                     // best Monday, tips-basis: 9000
+            record(2026, 6, 29, cents: 7000, hoursWorked: 10)     // tips 7000, income 7000 + $50 wage = 12000
+        ]
+        let tipsOnly = StatsEngine(records: records)
+        let tipsResult = tipsOnly.reveal(forNightAt: date(2026, 7, 6), cents: 9500, period: period)
+        #expect(tipsResult.comparison == .weekdayRecord(weekday: monday, previousBestCents: 9000))
+        #expect(tipsResult.isRecord)
+
+        let incomeAware = StatsEngine(records: records, wageCentsPerHour: 500)
+        let incomeResult = incomeAware.reveal(forNightAt: date(2026, 7, 6), cents: 9500, period: period)
+        #expect(incomeResult.comparison != .weekdayRecord(weekday: monday, previousBestCents: 9000))
+        #expect(!incomeResult.isRecord)
+    }
+
+    @Test("the weekday-average delta flips sign once a wage lifts a prior Monday's income above tonight")
+    func weekdayAverageDeltaFlipsWithWage() {
+        let period = PayPeriod(start: date(2026, 6, 1), end: date(2026, 7, 31))
+        let monday = Calendar.current.component(.weekday, from: date(2026, 7, 6))
+        let records = [
+            record(2026, 7, 3, cents: 50000),                    // dominant all-time best (a Friday)
+            record(2026, 6, 22, cents: 6000),                     // Monday, no hours
+            record(2026, 6, 29, cents: 4000, hoursWorked: 10)     // Monday, tips 4000, income 4000 + $50 wage = 9000
+        ]
+        // Tips-basis Monday average: (6000 + 4000) / 2 = 5000. Tonight's
+        // 5500 sits $500 ABOVE it.
+        let tipsOnly = StatsEngine(records: records)
+        let tipsResult = tipsOnly.reveal(forNightAt: date(2026, 7, 6), cents: 5500, period: period)
+        guard case .weekdayAverage(_, let tipsDelta, _, _, _) = tipsResult.comparison else {
+            Issue.record("expected weekdayAverage case, got \(tipsResult.comparison)")
+            return
+        }
+        #expect(tipsDelta == 500)
+
+        // Income-basis Monday average: (6000 + 9000) / 2 = 7500. The SAME
+        // tonight now sits $2000 BELOW it — the sign flips.
+        let incomeAware = StatsEngine(records: records, wageCentsPerHour: 500)
+        let incomeResult = incomeAware.reveal(forNightAt: date(2026, 7, 6), cents: 5500, period: period)
+        guard case .weekdayAverage(_, let incomeDelta, _, _, _) = incomeResult.comparison else {
+            Issue.record("expected weekdayAverage case, got \(incomeResult.comparison)")
+            return
+        }
+        #expect(incomeDelta == -2000)
+    }
+
+    @Test("slowest-recently uses income basis: a low-tip, high-wage night raises the recent floor enough to flip the verdict")
+    func slowestRecentlyFlipsWithWage() {
+        let period = PayPeriod(start: date(2026, 7, 1), end: date(2026, 7, 31))
+        // Tips-basis floor is 2000 (this shift's own tips); income-basis
+        // lifts that same shift to 7000 with a $50 wage, so the
+        // income-basis floor becomes 6000 instead.
+        let records = [
+            record(2026, 7, 1, cents: 2000, hoursWorked: 10),
+            record(2026, 7, 2, cents: 6000),
+            record(2026, 7, 3, cents: 6000),
+            record(2026, 7, 4, cents: 6000)
+        ]
+        let tipsOnly = StatsEngine(records: records)
+        let tipsResult = tipsOnly.reveal(forNightAt: date(2026, 7, 6), cents: 5000, period: period)
+        #expect(tipsResult.comparison != .slowestRecently)
+
+        let incomeAware = StatsEngine(records: records, wageCentsPerHour: 500)
+        let incomeResult = incomeAware.reveal(forNightAt: date(2026, 7, 6), cents: 5000, period: period)
+        #expect(incomeResult.comparison == .slowestRecently)
+    }
+
+    @Test("nil wage (the default) reproduces tips-only reveal behavior exactly")
+    func nilWageMatchesTipsOnlyReveal() {
+        let period = PayPeriod(start: date(2026, 7, 6), end: date(2026, 7, 19))
+        // Same fixture and expectations as weekdayRecordFires above,
+        // constructed with an explicit wageCentsPerHour: nil.
+        let engine = StatsEngine(records: [
+            record(2026, 6, 26, cents: 20000),
+            record(2026, 6, 22, cents: 3000),
+            record(2026, 7, 8, cents: 4000)
+        ], wageCentsPerHour: nil)
+        let result = engine.reveal(forNightAt: date(2026, 7, 13), cents: 5000, period: period)
+        #expect(result.comparison == .weekdayRecord(weekday: Calendar.current.component(.weekday, from: date(2026, 7, 13)), previousBestCents: 3000))
+        #expect(result.isRecord)
+    }
+
+    @Test("pace and charts never read wageCentsPerHour — the boundary that doesn't move")
+    func paceAndChartsIgnoreWage() {
+        let records = [
+            record(2026, 7, 1, cents: 5000, hoursWorked: 8),
+            record(2026, 7, 2, cents: 7000, hoursWorked: 6),
+            record(2026, 7, 3, cents: 6000)
+        ]
+        let tipsOnly = StatsEngine(records: records)
+        let wageAware = StatsEngine(records: records, wageCentsPerHour: 500)
+
+        #expect(tipsOnly.nightlyTotals().map(\.cents) == wageAware.nightlyTotals().map(\.cents))
+
+        let current = PayPeriod(start: date(2026, 7, 1), end: date(2026, 7, 14))
+        let prior = PayPeriod(start: date(2026, 6, 17), end: date(2026, 6, 30))
+        #expect(
+            tipsOnly.paceDelta(currentPeriod: current, priorPeriod: prior, asOf: date(2026, 7, 3))
+            == wageAware.paceDelta(currentPeriod: current, priorPeriod: prior, asOf: date(2026, 7, 3))
+        )
+        #expect(
+            tipsOnly.projectedPeriodTotal(period: current, asOf: date(2026, 7, 3), rhythm: tipsOnly.workRhythm(referenceDate: date(2026, 7, 3)))
+            == wageAware.projectedPeriodTotal(period: current, asOf: date(2026, 7, 3), rhythm: wageAware.workRhythm(referenceDate: date(2026, 7, 3)))
+        )
+    }
+}
+
 @Suite("Reveal copy")
 struct RevealCopyTests {
     @Test("headline formats the shift total, naming tips rather than the day")
     func headlineFormat() {
-        #expect(RevealCopy.headline(cents: 18600) == "$186.00 in tips this shift.")
+        #expect(RevealCopy.headline(cents: 18600, includesWages: false) == "$186.00 in tips this shift.")
+    }
+
+    @Test("headline drops 'tips' when the total already includes wages — it's income, not tips")
+    func headlineFormatWithWages() {
+        #expect(RevealCopy.headline(cents: 20132, includesWages: true) == "$201.32 this shift.")
     }
 
     @Test("all-time record copy names the previous best, falling back to 'shift' when the period is unknown")

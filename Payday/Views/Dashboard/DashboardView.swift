@@ -77,7 +77,8 @@ private struct DashboardFacts {
         var dayCounts: [Date: Int] = [:]
         for shift in shiftDays { dayCounts[shift.day, default: 0] += 1 }
         multiShiftDays = Set(dayCounts.filter { $0.value >= 2 }.keys)
-        let statsEngine = StatsEngine(records: allEntries.map(TipRecord.init))
+        let tipRecords = allEntries.map(TipRecord.init)
+        let statsEngine = StatsEngine(records: tipRecords)
         // Net of any tip-out, same rule as every other analytical total —
         // breakdown above stays gross, purely for the cash/credit subtitle.
         totalCents = statsEngine.periodToDateTotal(period: period, asOf: now)
@@ -200,15 +201,20 @@ private struct DashboardFacts {
         )
         var tonightRevealText: String?
         if let latest = todayShifts.max(by: { shiftRecordedAt($0.items) < shiftRecordedAt($1.items) }) {
-            let cents = TipBreakdown.total(of: latest.items).netTotalCents
+            let netCents = TipBreakdown.total(of: latest.items).netTotalCents
             let today = calendar.startOfDay(for: now)
-            let result = statsEngine.reveal(forNightAt: today, cents: cents, period: period, shiftID: latest.shiftID)
             let details = ShiftDetails.resolve(from: latest.items)
             // The same wage math the shift's own row uses — the echo and
-            // the row must reconcile on sight.
-            let shiftWages = details.hoursWorked.flatMap { WageEstimate.cents(wageCentsPerHour: wageCentsPerHour, hours: $0) }
-            let withWages = shiftWages.map { cents + $0 }
-            tonightRevealText = "\(RevealCopy.headline(cents: cents, withWagesCents: withWages)) \(RevealCopy.comparison(for: result.comparison, period: details.shiftPeriod))"
+            // the row must reconcile on sight. A shift speaks ONE number
+            // (Tyler's ruling, 2026-07-27): the reveal pipeline moves to
+            // that same wage-inclusive basis via its own StatsEngine,
+            // while `statsEngine` above stays tips-only for pace/charts/
+            // projections, per the boundary that doesn't move.
+            let shiftWageCents = details.hoursWorked.flatMap { WageEstimate.cents(wageCentsPerHour: wageCentsPerHour, hours: $0) }
+            let revealCents = netCents + (shiftWageCents ?? 0)
+            let revealEngine = StatsEngine(records: tipRecords, wageCentsPerHour: wageCentsPerHour)
+            let result = revealEngine.reveal(forNightAt: today, cents: revealCents, period: period, shiftID: latest.shiftID)
+            tonightRevealText = "\(RevealCopy.headline(cents: revealCents, includesWages: shiftWageCents != nil)) \(RevealCopy.comparison(for: result.comparison, period: details.shiftPeriod))"
         }
         tonightLine = TonightLine.compose(
             rhythm: statsEngine.workRhythm(),
