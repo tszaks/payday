@@ -153,8 +153,13 @@ struct PeriodDetailView: View {
     }
 
     var body: some View {
-        List {
-            Section {
+        // A ScrollView, deliberately NOT a List — same fix as the Dashboard
+        // (2026-07-19): a List animates row resize on UIKit's own clock,
+        // which fights the hero drawer's spring and makes everything below
+        // visibly stutter as it opens and closes. Pure SwiftUI layout keeps
+        // the whole column on one animation.
+        ScrollView {
+            VStack(spacing: PaydaySpacing.p16) {
                 HeroBreakdownDrawer(
                     lipText: "Cash \(Money.string(fromCents: breakdown.cashCents)) · Credit \(Money.string(fromCents: breakdown.creditCents))",
                     rows: breakdownRows,
@@ -164,59 +169,23 @@ struct PeriodDetailView: View {
                 ) {
                     heroCard
                 }
-            }
-            .listRowInsets(EdgeInsets(top: 8, leading: PaydaySpacing.p16, bottom: 8, trailing: PaydaySpacing.p16))
-            .listRowBackground(Color.clear)
-            .listRowSeparator(.hidden)
 
-            if !nightsInPeriod.isEmpty {
-                Section {
+                // The chart keeps its own "Daily tips" label (it doubles as
+                // the scrub readout), so no separate flat header goes above
+                // it — this is this screen's only other flat section without
+                // a kicker.
+                if !nightsInPeriod.isEmpty {
                     NightlyEarningsChart(nights: nightsInPeriod, period: period)
-                        .paydayCard()
                 }
-                .listRowInsets(EdgeInsets(top: 4, leading: PaydaySpacing.p16, bottom: 4, trailing: PaydaySpacing.p16))
-                .listRowBackground(Color.clear)
-                .listRowSeparator(.hidden)
-            }
 
-            Section("Paycheck") {
-                if let paycheck {
-                    PaycheckComparisonView(breakdown: breakdown, paycheck: paycheck)
-                        .listRowInsets(EdgeInsets(top: 4, leading: PaydaySpacing.p16, bottom: 4, trailing: PaydaySpacing.p16))
-                        .listRowBackground(Color.clear)
-                    Button("Edit paycheck amount") { showPaycheckSheet = true }
-                        .listRowBackground(PaydayColor.background)
-                } else {
-                    Button {
-                        showPaycheckSheet = true
-                    } label: {
-                        Label("Enter paycheck amount", systemImage: "banknote")
-                    }
-                    .listRowBackground(PaydayColor.background)
-                    Text(noPaycheckCaption)
-                        .font(PaydayFont.caption)
-                        .foregroundStyle(PaydayColor.textSecondary)
-                        .listRowBackground(PaydayColor.background)
-                }
-            }
+                paycheckSection
 
-            if shiftDays.isEmpty {
-                Section {
-                    Text("No shifts in this period.")
-                        .foregroundStyle(PaydayColor.textSecondary)
-                }
-                .listRowBackground(PaydayColor.background)
-            } else {
-                Section("Shifts") {
-                    ForEach(shiftDays, id: \.shiftID) { group in
-                        shiftRow(for: group)
-                    }
-                }
-                .listRowBackground(PaydayColor.background)
+                shiftsSection
             }
+            .padding(.horizontal, PaydaySpacing.p16)
+            .padding(.top, PaydaySpacing.p8)
         }
-        .listStyle(.plain)
-        .scrollContentBackground(.hidden)
+        .contentMargins(.bottom, 88, for: .scrollContent)
         .background(PaydayColor.background)
         .navigationTitle(periodTitle)
         .navigationBarTitleDisplayMode(.inline)
@@ -227,6 +196,70 @@ struct PeriodDetailView: View {
             PaycheckEntrySheet(period: period, existing: paycheck)
         }
         .undoDeleteToast(undoState, context: modelContext)
+        #if DEBUG
+        .onAppear {
+            // Screenshot-only, same flag as the Dashboard hero: opens the
+            // drawer immediately so QA can inspect the expanded layout
+            // without tapping through simctl.
+            if ProcessInfo.processInfo.arguments.contains("-DebugExpandBreakdown") {
+                breakdownExpanded = true
+            }
+        }
+        #endif
+    }
+
+    /// Flat, in the Insights section grammar: a tracked caption2 kicker,
+    /// content beneath, no card. One raised object on this screen is the
+    /// hero; the paycheck comparison sits on the surface like every other
+    /// non-hero section.
+    @ViewBuilder
+    private var paycheckSection: some View {
+        let paycheck = self.paycheck
+        VStack(alignment: .leading, spacing: 6) {
+            Text("PAYCHECK")
+                .font(PaydayFont.caption2)
+                .tracking(0.8)
+                .foregroundStyle(PaydayColor.primary)
+
+            if let paycheck {
+                PaycheckComparisonView(breakdown: breakdown, paycheck: paycheck)
+            } else {
+                Text(noPaycheckCaption)
+                    .font(PaydayFont.caption)
+                    .foregroundStyle(PaydayColor.textSecondary)
+            }
+
+            Button(paycheck == nil ? "Enter paycheck amount" : "Edit paycheck amount") {
+                showPaycheckSheet = true
+            }
+            .font(PaydayFont.subheadline)
+            .foregroundStyle(PaydayColor.primary)
+            .buttonStyle(.plain)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        Divider()
+    }
+
+    @ViewBuilder
+    private var shiftsSection: some View {
+        if shiftDays.isEmpty {
+            Text("No shifts in this period.")
+                .font(PaydayFont.bodyRegular)
+                .foregroundStyle(PaydayColor.textSecondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            VStack(alignment: .leading, spacing: 0) {
+                Text("Shifts")
+                    .font(PaydayFont.subheadline)
+                    .foregroundStyle(PaydayColor.textSecondary)
+                    .padding(.bottom, PaydaySpacing.p8)
+
+                ForEach(Array(shiftDays.enumerated()), id: \.element.shiftID) { index, group in
+                    if index > 0 { Divider() }
+                    shiftRow(for: group)
+                }
+            }
+        }
     }
 
     /// The face goes minimal: the total, plus at most one quiet caption (the
@@ -267,15 +300,13 @@ struct PeriodDetailView: View {
                 sheetTarget = .edit(anchor)
             } label: {
                 ShiftDayRow(day: group.day, period: period, dayHasMultipleShifts: dayHasMultiple, entries: group.items, wageCentsPerHour: preferencesStore.baseHourlyWageCents)
+                    .padding(.vertical, PaydaySpacing.p12)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .swipeActions(edge: .trailing) {
-                Button(role: .destructive) {
-                    undoState.delete(group.items, in: modelContext)
-                } label: {
-                    Label("Delete", systemImage: "trash")
-                }
-            }
+            // Swipe-to-delete was List-only and went with the List
+            // conversion — delete stays one long-press away via the context
+            // menu, with the same undo toast, matching the Dashboard.
             .shiftContextMenu(group.items, sheetTarget: $sheetTarget, undoState: undoState, context: modelContext)
         }
     }
@@ -313,40 +344,31 @@ struct PaycheckComparisonView: View {
     private var isShort: Bool { deltaCents < 0 }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(comparisonLine)
-                .font(PaydayFont.subheadline)
+        VStack(alignment: .leading, spacing: 6) {
+            Text(verdictLine)
+                .font(PaydayFont.headline)
                 .monospacedDigit()
-                .foregroundStyle(PaydayColor.textPrimary)
+                .foregroundStyle(isShort ? PaydayColor.error : PaydayColor.primary)
 
-            HStack(spacing: 6) {
-                Image(systemName: isShort ? "arrow.down.circle.fill" : "checkmark.circle.fill")
-                    .foregroundStyle(isShort ? PaydayColor.error : PaydayColor.primary)
-                Text(deltaString)
-                    .font(PaydayFont.displayCompact)
-                    .monospacedDigit()
-                    .foregroundStyle(isShort ? PaydayColor.error : PaydayColor.primary)
-            }
-
-            Text(caption)
+            Text(comparisonCaption)
                 .font(PaydayFont.caption)
                 .foregroundStyle(PaydayColor.textSecondary)
+                .monospacedDigit()
 
             if let note = paycheck.note, !note.isEmpty {
                 Text(note)
-                    .font(PaydayFont.caption)
-                    .foregroundStyle(PaydayColor.textSecondary)
+                    .font(PaydayFont.caption2)
+                    .foregroundStyle(PaydayColor.textTertiary)
             }
 
             ForEach(stubDetailLines, id: \.label) { line in
                 Text(line.text)
-                    .font(PaydayFont.caption)
+                    .font(PaydayFont.caption2)
                     .monospacedDigit()
-                    .foregroundStyle(PaydayColor.textSecondary)
+                    .foregroundStyle(PaydayColor.textTertiary)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .paydayCard()
     }
 
     /// Capture-only stub facts (see PaycheckRecord's optional detail
@@ -381,25 +403,23 @@ struct PaycheckComparisonView: View {
         return lines
     }
 
-    private var comparisonLine: String {
+    /// The whole verdict in one sentence — exact dollar gap, no exclamation
+    /// marks. The explanatory paragraph that used to sit under this (cash
+    /// tips aren't on the stub) is gone: true of every server everywhere,
+    /// it doesn't need repeating on every period forever (Tyler's
+    /// obviousness law, 2026-07-27).
+    private var verdictLine: String {
+        guard deltaCents != 0 else { return "Matched exactly." }
+        let amount = Money.string(fromCents: abs(deltaCents))
+        return isShort ? "\(amount) short." : "\(amount) over."
+    }
+
+    private var comparisonCaption: String {
         let logged = Money.string(fromCents: comparedCents)
         let paid = Money.string(fromCents: paycheck.paidTipsCents)
         if usesCreditOnly {
-            return "You logged \(logged) in credit tips / Check paid \(paid)"
+            return "Logged \(logged) in credit tips · check paid \(paid)"
         }
-        return "You logged \(logged) / Check paid \(paid)"
-    }
-
-    private var caption: String {
-        if usesCreditOnly {
-            return "Cash tips aren't on your stub, so this compares your credit tips against the tips line."
-        }
-        return "This period has no credit tips logged, so it compares your total against the tips line."
-    }
-
-    private var deltaString: String {
-        if deltaCents == 0 { return "Matched exactly" }
-        let sign = deltaCents > 0 ? "+" : "-"
-        return "\(sign)\(Money.string(fromCents: abs(deltaCents)))"
+        return "Logged \(logged) · check paid \(paid)"
     }
 }
