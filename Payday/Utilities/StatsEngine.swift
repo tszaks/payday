@@ -1036,12 +1036,54 @@ struct StatsEngine {
         /// comparison counts as signal rather than noise. Tune here if
         /// Moves feels too eager or too quiet in practice.
         static let varianceGuardFactor = 0.6
+        /// A Move's comparison can be real (the 3-night floor above lets it
+        /// through) while a year-long dollar projection off it still
+        /// overclaims - 23 Saturdays against 3 Tuesdays is a fair thing to
+        /// notice, not a fair thing to annualize into a five-figure number.
+        /// Both sides of a Move's comparison need this many qualifying
+        /// shifts before it states its annualized figure; thinner than
+        /// this on either side and it hedges instead (see annualizedClause).
+        static let minimumShiftsForAnnualizedImpact = 8
+    }
+
+    /// One side of an annualized Move's comparison - how many qualifying
+    /// shifts back it, and what to call it if it turns out to be the thin
+    /// side of a hedge. See annualizedClause.
+    private struct MoveComparisonSide {
+        let count: Int
+        let singular: String
+        let plural: String
+    }
+
+    /// Every annualizing Move's closing clause routes through here. States
+    /// the confident sentence only when BOTH sides of the comparison clear
+    /// MoveThresholds.minimumShiftsForAnnualizedImpact; otherwise returns a
+    /// plain hedge naming whichever side is thinner, with no dollar figure
+    /// anywhere in it - the comparison itself may still be real (that's
+    /// what each move's own 2-3 night gate already established), but a
+    /// year-long projection off a handful of shifts is not.
+    private func annualizedClause(_ sentence: @autoclosure () -> String, _ sideA: MoveComparisonSide, _ sideB: MoveComparisonSide) -> String {
+        guard sideA.count >= MoveThresholds.minimumShiftsForAnnualizedImpact,
+              sideB.count >= MoveThresholds.minimumShiftsForAnnualizedImpact
+        else {
+            let thin = sideA.count <= sideB.count ? sideA : sideB
+            let noun = thin.count == 1 ? thin.singular : thin.plural
+            return "Only \(thin.count) \(noun) to compare against so far."
+        }
+        return sentence()
     }
 
     /// Up to 3 dollar-quantified, ranked observations - deterministic and
     /// pure like the rest of this file, no model, no network. Silence over
     /// weak advice: an empty array is a valid, honest answer when nothing
     /// clears the materiality bar.
+    ///
+    /// Ranks by annualImpactCents first, THEN de-duplicates by weekday
+    /// subject (see MoveCandidate) so the same weekday can't show up
+    /// twice wearing two different Moves - "Saturday Beats Tuesday" and
+    /// "Saturday Pays Best Per Hour" stacked is the same finding said
+    /// twice, not two findings. The higher-ranked Move for a subject wins;
+    /// the cap of 3 is applied last, after dedup.
     func moves(referenceDate: Date = .now) -> [Move] {
         let candidates = [
             weekdaySwapMove(),
@@ -1051,19 +1093,40 @@ struct StatsEngine {
             tipPercentSignalMove(),
             startTimeLeaderMove()
         ].compactMap { $0 }
-        return Array(
-            candidates
-                .filter { $0.annualImpactCents >= MoveThresholds.minimumAnnualImpactCents }
-                .sorted { $0.annualImpactCents > $1.annualImpactCents }
-                .prefix(3)
-        )
+        let ranked = candidates
+            .filter { $0.move.annualImpactCents >= MoveThresholds.minimumAnnualImpactCents }
+            .sorted { $0.move.annualImpactCents > $1.move.annualImpactCents }
+
+        var seenSubjects = Set<Int>()
+        var deduped: [Move] = []
+        for candidate in ranked {
+            if let subject = candidate.weekdaySubject, !seenSubjects.insert(subject).inserted {
+                continue
+            }
+            deduped.append(candidate.move)
+            if deduped.count == 3 { break }
+        }
+        return deduped
+    }
+
+    /// One candidate out of moves()' own builders, paired with the single
+    /// weekday it's "about," if any - the key moves() de-duplicates on.
+    /// weekdaySwapMove/lapsedWinnerMove/rateLeaderMove are each fundamentally
+    /// a "this weekday is the one to lean into" claim, so they carry the
+    /// weekday they're praising. doublesVerdictMove/startTimeLeaderMove/
+    /// tipPercentSignalMove are claims about a different axis (doubles,
+    /// start hour, tip percent) and carry no subject, even where their own
+    /// copy happens to name a weekday.
+    private struct MoveCandidate {
+        let move: Move
+        let weekdaySubject: Int?
     }
 
     /// Best-paying weekday against worst-paying weekday, both net, both
     /// needing >= 3 nights of their own history to qualify, and gated by
     /// a variance guard so three lucky Fridays against three slow Mondays
     /// can't recommend a schedule change off pure noise.
-    private func weekdaySwapMove() -> Move? {
+    private func weekdaySwapMove() -> MoveCandidate? {
         let allNights = nightlyTotals()
         let weekdayAverages = weekdayNightAverages(allNights)
         guard weekdayAverages.count >= 2,
@@ -1080,12 +1143,18 @@ struct StatsEngine {
         let bestName = Calendar.current.weekdaySymbols[best.weekday - 1]
         let worstName = Calendar.current.weekdaySymbols[worst.weekday - 1]
         let annualImpact = Int(Double(deltaCents) * MoveThresholds.assumedWeeksPerYear)
-        return Move(
+        let closingClause = annualizedClause(
+            "Over a year of regular shifts, that gap is worth about \(Money.wholeDollarString(fromCents: annualImpact)).",
+            MoveComparisonSide(count: best.count, singular: bestName, plural: "\(bestName)s"),
+            MoveComparisonSide(count: worst.count, singular: worstName, plural: "\(worstName)s")
+        )
+        let move = Move(
             id: "weekdaySwap",
             title: "\(bestName) Beats \(worstName)",
-            body: "\(bestName)s average \(Money.string(fromCents: Int(best.avg.rounded()))) across \(best.count) \(bestName)s, against \(Money.string(fromCents: Int(worst.avg.rounded()))) across \(worst.count) \(worstName)s. Over a year of regular shifts, that gap is worth about \(Money.wholeDollarString(fromCents: annualImpact)).",
+            body: "\(bestName)s average \(Money.string(fromCents: Int(best.avg.rounded()))) across \(best.count) \(bestName)s, against \(Money.string(fromCents: Int(worst.avg.rounded()))) across \(worst.count) \(worstName)s. \(closingClause)",
             annualImpactCents: annualImpact
         )
+        return MoveCandidate(move: move, weekdaySubject: best.weekday)
     }
 
     /// Pooled per-night standard deviation across two independent samples —
@@ -1105,7 +1174,7 @@ struct StatsEngine {
     }
 
     /// A weekday that used to pay well but hasn't shown up recently.
-    private func lapsedWinnerMove(referenceDate: Date) -> Move? {
+    private func lapsedWinnerMove(referenceDate: Date) -> MoveCandidate? {
         let allNights = nightlyTotals()
         guard allNights.count >= 6 else { return nil }
         let overallAvg = Double(allNights.reduce(0) { $0 + $1.cents }) / Double(allNights.count)
@@ -1119,18 +1188,24 @@ struct StatsEngine {
 
         let weekdayName = Calendar.current.weekdaySymbols[best.weekday - 1]
         let annualImpact = Int(Double(deltaCents) * MoveThresholds.assumedWeeksPerYear)
-        return Move(
+        let closingClause = annualizedClause(
+            "Getting back to a regular \(weekdayName) is worth about \(Money.wholeDollarString(fromCents: annualImpact)) a year.",
+            MoveComparisonSide(count: best.count, singular: weekdayName, plural: "\(weekdayName)s"),
+            MoveComparisonSide(count: allNights.count, singular: "night", plural: "nights")
+        )
+        let move = Move(
             id: "lapsedWinner",
             title: "\(weekdayName) Has Gone Quiet",
-            body: "You haven't worked a \(weekdayName) in a few weeks, but it's one of your best - averaging \(Money.string(fromCents: Int(best.avg.rounded()))) a day across \(best.count) \(weekdayName)s. Getting back to a regular \(weekdayName) is worth about \(Money.wholeDollarString(fromCents: annualImpact)) a year.",
+            body: "You haven't worked a \(weekdayName) in a few weeks, but it's one of your best - averaging \(Money.string(fromCents: Int(best.avg.rounded()))) a day across \(best.count) \(weekdayName)s. \(closingClause)",
             annualImpactCents: annualImpact
         )
+        return MoveCandidate(move: move, weekdaySubject: best.weekday)
     }
 
     /// Doubles are usually judged by $/shift (see doublesSoloFacts); this
     /// checks the same split by $/hr, which can point the other way once
     /// the extra hours are accounted for.
-    private func doublesVerdictMove(referenceDate: Date) -> Move? {
+    private func doublesVerdictMove(referenceDate: Date) -> MoveCandidate? {
         let doubleDates = doubleDayDateSet(from: shiftFacts(from: records))
         guard !doubleDates.isEmpty else { return nil }
         let allRates = nightlyRates()
@@ -1153,18 +1228,24 @@ struct StatsEngine {
         let annualImpact = Int(abs(doubleRate - soloRate) * avgDoubleHours * doublesPerYear * 100)
 
         let doubleWins = doubleRate > soloRate
-        return Move(
+        let closingClause = annualizedClause(
+            "At your current pace, that's worth about \(Money.wholeDollarString(fromCents: annualImpact)) a year.",
+            MoveComparisonSide(count: doubleDayCount, singular: "double", plural: "doubles"),
+            MoveComparisonSide(count: soloRates.count, singular: "solo shift", plural: "solo shifts")
+        )
+        let move = Move(
             id: "doublesVerdict",
             title: doubleWins ? "Doubles Pay Off" : "Doubles Cost You",
-            body: "Doubles average \(Money.wholeDollarString(fromCents: Int((doubleRate * 100).rounded())))/hr across \(countPhrase(doubleDayCount, singular: "double", plural: "doubles")), against \(Money.wholeDollarString(fromCents: Int((soloRate * 100).rounded())))/hr solo across \(countPhrase(soloRates.count, singular: "solo shift", plural: "solo shifts")) - doubles \(doubleWins ? "pay better" : "pay worse") per hour, not just per shift. At your current pace, that's worth about \(Money.wholeDollarString(fromCents: annualImpact)) a year.",
+            body: "Doubles average \(Money.wholeDollarString(fromCents: Int((doubleRate * 100).rounded())))/hr across \(countPhrase(doubleDayCount, singular: "double", plural: "doubles")), against \(Money.wholeDollarString(fromCents: Int((soloRate * 100).rounded())))/hr solo across \(countPhrase(soloRates.count, singular: "solo shift", plural: "solo shifts")) - doubles \(doubleWins ? "pay better" : "pay worse") per hour, not just per shift. \(closingClause)",
             annualImpactCents: annualImpact
         )
+        return MoveCandidate(move: move, weekdaySubject: nil)
     }
 
     /// The best-paying weekday by $/hr against the overall $/hr average -
     /// a genuinely different fact from weekdaySwapMove, which compares
     /// $/night.
-    private func rateLeaderMove() -> Move? {
+    private func rateLeaderMove() -> MoveCandidate? {
         guard let best = bestDollarsPerHourWeekday(), let overallRate = averageDollarsPerHour() else { return nil }
         let deltaPerHourCents = Int(((best.rate - overallRate) * 100).rounded())
 
@@ -1189,12 +1270,18 @@ struct StatsEngine {
         guard annualImpact >= MoveThresholds.minimumAnnualImpactCents else { return nil }
 
         let weekdayName = Calendar.current.weekdaySymbols[best.weekday - 1]
-        return Move(
+        let closingClause = annualizedClause(
+            "Working \(weekdayName)s regularly is worth about \(Money.wholeDollarString(fromCents: annualImpact)) a year over your average rate.",
+            MoveComparisonSide(count: weekdayRates.count, singular: weekdayName, plural: "\(weekdayName)s"),
+            MoveComparisonSide(count: otherRates.count, singular: "shift", plural: "shifts")
+        )
+        let move = Move(
             id: "rateLeader",
             title: "\(weekdayName) Pays Best Per Hour",
-            body: "\(weekdayName)s average \(Money.wholeDollarString(fromCents: Int((best.rate * 100).rounded())))/hr across \(countPhrase(weekdayRates.count, singular: "shift", plural: "shifts")), against \(Money.wholeDollarString(fromCents: Int((overallRate * 100).rounded())))/hr overall. Working \(weekdayName)s regularly is worth about \(Money.wholeDollarString(fromCents: annualImpact)) a year over your average rate.",
+            body: "\(weekdayName)s average \(Money.wholeDollarString(fromCents: Int((best.rate * 100).rounded())))/hr across \(countPhrase(weekdayRates.count, singular: "shift", plural: "shifts")), against \(Money.wholeDollarString(fromCents: Int((overallRate * 100).rounded())))/hr overall. \(closingClause)",
             annualImpactCents: annualImpact
         )
+        return MoveCandidate(move: move, weekdaySubject: best.weekday)
     }
 
     /// Best-paying start-hour bucket against worst-paying (see
@@ -1202,7 +1289,7 @@ struct StatsEngine {
     /// (which compares weekdays) and weekdaySwapMove ($/night): this is
     /// about WHEN a shift starts, recomputed over ALL history like every
     /// other Move here, not the 180-day insights window.
-    private func startTimeLeaderMove() -> Move? {
+    private func startTimeLeaderMove() -> MoveCandidate? {
         guard let facts = startTimeFacts(from: shiftFacts(from: records)) else { return nil }
         let deltaPerHourCents = Int(((facts.bestDollarsPerHour - facts.worstDollarsPerHour) * 100).rounded())
         guard deltaPerHourCents >= MoveThresholds.minimumRateDeltaCents else { return nil }
@@ -1231,12 +1318,20 @@ struct StatsEngine {
         // "later"/"earlier" is a real directional claim, not filler — get it
         // right regardless of which bucket happens to be the best one.
         let direction = facts.bestStartHour > facts.worstStartHour ? "later" : "earlier"
-        return Move(
+        let bestHourLabel = hourLabel(facts.bestStartHour)
+        let worstHourLabel = hourLabel(facts.worstStartHour)
+        let closingClause = annualizedClause(
+            "The \(direction) start is worth about \(Money.wholeDollarString(fromCents: annualImpact)) a year at your usual hours.",
+            MoveComparisonSide(count: facts.bestShiftCount, singular: "\(bestHourLabel) start", plural: "\(bestHourLabel) starts"),
+            MoveComparisonSide(count: facts.worstShiftCount, singular: "\(worstHourLabel) start", plural: "\(worstHourLabel) starts")
+        )
+        let move = Move(
             id: "startTimeLeader",
-            title: "\(hourLabel(facts.bestStartHour)) Starts Pay Best",
-            body: "Shifts you start around \(hourLabel(facts.bestStartHour)) average \(Money.wholeDollarString(fromCents: Int((facts.bestDollarsPerHour * 100).rounded())))/hr across \(countPhrase(facts.bestShiftCount, singular: "shift", plural: "shifts")), against \(Money.wholeDollarString(fromCents: Int((facts.worstDollarsPerHour * 100).rounded())))/hr around \(hourLabel(facts.worstStartHour)) - the \(direction) start is worth about \(Money.wholeDollarString(fromCents: annualImpact)) a year at your usual hours.",
+            title: "\(bestHourLabel) Starts Pay Best",
+            body: "Shifts you start around \(bestHourLabel) average \(Money.wholeDollarString(fromCents: Int((facts.bestDollarsPerHour * 100).rounded())))/hr across \(countPhrase(facts.bestShiftCount, singular: "shift", plural: "shifts")), against \(Money.wholeDollarString(fromCents: Int((facts.worstDollarsPerHour * 100).rounded())))/hr around \(worstHourLabel). \(closingClause)",
             annualImpactCents: annualImpact
         )
+        return MoveCandidate(move: move, weekdaySubject: nil)
     }
 
     /// Renders a start-hour bucket key as "5 PM" / "11 AM" — builds an
@@ -1249,7 +1344,7 @@ struct StatsEngine {
     }
 
     /// The best tip-percent weekday against the overall tip-percent average.
-    private func tipPercentSignalMove() -> Move? {
+    private func tipPercentSignalMove() -> MoveCandidate? {
         guard let overallPercent = averageTipPercent() else { return nil }
         let weekdayPercents = (1...7).compactMap { weekday -> (weekday: Int, percent: Double)? in
             averageTipPercent(forWeekday: weekday).map { (weekday: weekday, percent: $0) }
@@ -1265,12 +1360,18 @@ struct StatsEngine {
         guard annualImpact >= MoveThresholds.minimumAnnualImpactCents else { return nil }
 
         let weekdayName = Calendar.current.weekdaySymbols[best.weekday - 1]
-        return Move(
+        let closingClause = annualizedClause(
+            "At that rate on a typical \(weekdayName), the difference is worth about \(Money.wholeDollarString(fromCents: annualImpact)) a year.",
+            MoveComparisonSide(count: weekdaySales.count, singular: weekdayName, plural: "\(weekdayName)s"),
+            MoveComparisonSide(count: nightlySalesRates().count, singular: "shift", plural: "shifts")
+        )
+        let move = Move(
             id: "tipPercentSignal",
             title: "\(weekdayName) Tips Best",
-            body: "You're tipped \(String(format: "%.1f", best.percent))% of sales on \(weekdayName)s across \(countPhrase(weekdaySales.count, singular: "shift", plural: "shifts")), against \(String(format: "%.1f", overallPercent))% overall. At that rate on a typical \(weekdayName), the difference is worth about \(Money.wholeDollarString(fromCents: annualImpact)) a year.",
+            body: "You're tipped \(String(format: "%.1f", best.percent))% of sales on \(weekdayName)s across \(countPhrase(weekdaySales.count, singular: "shift", plural: "shifts")), against \(String(format: "%.1f", overallPercent))% overall. \(closingClause)",
             annualImpactCents: annualImpact
         )
+        return MoveCandidate(move: move, weekdaySubject: nil)
     }
 
     /// Per-weekday averages over ALL of a person's history, requiring at

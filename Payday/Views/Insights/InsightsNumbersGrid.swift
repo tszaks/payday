@@ -24,6 +24,14 @@ enum InsightsNumbersGrid {
     /// Matches the early-read hedge InsightsService's prompt enforces for
     /// narration, applied here too since the grid makes the same claims.
     private static let earlyReadSuffix = " · early read"
+    /// A tile's own sample count stops earning a place in its caption once
+    /// it clears this bar — below it, the count IS the honesty signal
+    /// (design law: every number states its basis when the basis is thin)
+    /// and must survive; at or above it, restating "across 160 shifts" on
+    /// every tile just repeats the same fact and says nothing new. Same
+    /// calibration as StatsEngine.MoveThresholds.minimumShiftsForAnnualizedImpact,
+    /// applied here to captions instead of Moves' dollar projections.
+    private static let minimumShiftsForFullSample = 8
 
     static func rows(for facts: InsightsFacts) -> [[InsightsNumberTile]] {
         var rows: [[InsightsNumberTile]] = []
@@ -61,7 +69,7 @@ enum InsightsNumbersGrid {
             id: "hourly",
             label: "HOURLY",
             value: "\(Money.wholeDollarString(fromCents: Int((rate.overallDollarsPerHour * 100).rounded())))/hr",
-            context: hedged("across \(shiftsPhrase(rate.nightsWithHours))", count: rate.nightsWithHours)
+            context: hedged("", count: rate.nightsWithHours, countPhrase: "across \(shiftsPhrase(rate.nightsWithHours))")
         )
     }
 
@@ -70,7 +78,7 @@ enum InsightsNumbersGrid {
             id: "tipPercent",
             label: "TIP PERCENT",
             value: "\(String(format: "%.1f", sales.overallTipPercent))%",
-            context: hedged("of sales · \(shiftsPhrase(sales.nightsWithSales))", count: sales.nightsWithSales)
+            context: hedged("of sales", count: sales.nightsWithSales, countPhrase: shiftsPhrase(sales.nightsWithSales))
         )
     }
 
@@ -82,7 +90,7 @@ enum InsightsNumbersGrid {
             id: "lunch",
             label: "LUNCH",
             value: "\(Money.wholeDollarString(fromCents: average))/shift",
-            context: hedged(shiftsPhrase(facts.lunchShiftCount), count: facts.lunchShiftCount)
+            context: hedged("", count: facts.lunchShiftCount, countPhrase: shiftsPhrase(facts.lunchShiftCount))
         )
     }
 
@@ -92,7 +100,7 @@ enum InsightsNumbersGrid {
             id: "dinner",
             label: "DINNER",
             value: "\(Money.wholeDollarString(fromCents: average))/shift",
-            context: hedged(shiftsPhrase(facts.dinnerShiftCount), count: facts.dinnerShiftCount)
+            context: hedged("", count: facts.dinnerShiftCount, countPhrase: shiftsPhrase(facts.dinnerShiftCount))
         )
     }
 
@@ -101,7 +109,7 @@ enum InsightsNumbersGrid {
             id: "doubles",
             label: "DOUBLES",
             value: "\(Money.wholeDollarString(fromCents: facts.doublePerShiftCents))/shift",
-            context: hedged(doubleDaysPhrase(facts.doubleCount), count: facts.doubleCount)
+            context: hedged("", count: facts.doubleCount, countPhrase: doubleDaysPhrase(facts.doubleCount))
         )
     }
 
@@ -110,9 +118,9 @@ enum InsightsNumbersGrid {
     private static func soloTile(_ facts: DoublesSoloFacts) -> InsightsNumberTile {
         InsightsNumberTile(
             id: "solo",
-            label: "SOLO",
+            label: "ONE SHIFT",
             value: "\(Money.wholeDollarString(fromCents: facts.soloAverageCents))/shift",
-            context: hedged(daysPhrase(facts.soloCount), count: facts.soloCount)
+            context: hedged("", count: facts.soloCount, countPhrase: daysPhrase(facts.soloCount))
         )
     }
 
@@ -136,16 +144,24 @@ enum InsightsNumbersGrid {
     private static func startTimesTile(_ facts: StartTimeFacts) -> InsightsNumberTile {
         let bestRate = Money.wholeDollarString(fromCents: Int((facts.bestDollarsPerHour * 100).rounded()))
         let worstRate = Money.wholeDollarString(fromCents: Int((facts.worstDollarsPerHour * 100).rounded()))
+        let sampleCount = min(facts.bestShiftCount, facts.worstShiftCount)
         return InsightsNumberTile(
             id: "startTimes",
             label: "START TIMES",
             value: "\(bestRate)/hr at \(hourLabel(facts.bestStartHour))",
-            context: hedged("vs \(worstRate)/hr at \(hourLabel(facts.worstStartHour))", count: min(facts.bestShiftCount, facts.worstShiftCount))
+            context: hedged("vs \(worstRate)/hr at \(hourLabel(facts.worstStartHour))", count: sampleCount, countPhrase: shiftsPhrase(sampleCount))
         )
     }
 
-    private static func hedged(_ text: String, count: Int) -> String {
-        count < 3 ? text + earlyReadSuffix : text
+    /// Builds a tile's caption from a non-count context (e.g. "of sales",
+    /// or "" when a tile has nothing else to say) and the count phrase that
+    /// backs it. Below minimumShiftsForFullSample, the count phrase
+    /// survives (further flagged as an early read below 3); at or above
+    /// it, only the non-count context remains.
+    private static func hedged(_ nonCountContext: String, count: Int, countPhrase: String) -> String {
+        guard count < minimumShiftsForFullSample else { return nonCountContext }
+        let withCount = nonCountContext.isEmpty ? countPhrase : "\(nonCountContext) · \(countPhrase)"
+        return count < 3 ? withCount + earlyReadSuffix : withCount
     }
 
     private static func shiftsPhrase(_ count: Int) -> String {
