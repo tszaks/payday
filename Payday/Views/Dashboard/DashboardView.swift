@@ -42,6 +42,10 @@ private struct DashboardFacts {
     /// The `end` of the period the payday moment is showing, so the dismiss
     /// button can remember which one was closed.
     let paydayPeriodEnd: Date?
+    /// Which of the card's two moments this is: the day or two after the period
+    /// closed, or the day the check actually lands. nil when the card is not
+    /// showing at all.
+    let paydayPhase: PaydayMoment.Phase?
     let shiftCount: Int
     let shiftDays: [(day: Date, shiftID: UUID, items: [TipEntry])]
     /// Calendar days that hold 2+ shifts — a "double" — so a row can label
@@ -58,7 +62,7 @@ private struct DashboardFacts {
     let predictedPayDate: Date
     let tonightLine: String?
 
-    init(allEntries: [TipEntry], schedule: PaySchedule?, now: Date, forcePaydayMoment: Bool, dismissedPaydayEnd: Date?, wageCentsPerHour: Int?) {
+    init(allEntries: [TipEntry], schedule: PaySchedule?, now: Date, forcedPaydayPhase: PaydayMoment.Phase?, dismissedClosedEnd: Date?, dismissedCheckEnd: Date?, wageCentsPerHour: Int?) {
         let calendar = Calendar.current
         calculator = PayPeriodCalculator(schedule: schedule ?? .fallback)
         let period = calculator.period(containing: now)
@@ -91,20 +95,23 @@ private struct DashboardFacts {
         }
         projectedTotalCents = statsEngine.projectedPeriodTotal(period: period, asOf: now, rhythm: statsEngine.workRhythm(referenceDate: now))
 
-        // The "period complete" moment belongs to a FINISHED period whose
-        // check is still pending — the day after its last shift, never a day
-        // still workable (see PaydayMoment). forcePaydayMoment is the DEBUG
-        // screenshot hook and pins it to the current period regardless.
-        let finished: PayPeriod?
-        if forcePaydayMoment {
-            finished = period
+        // The payday card belongs to a FINISHED period, and shows twice: the
+        // day or two after its last shift, then again the day the check lands
+        // (see PaydayMoment). Never on a day still workable.
+        // forcedPaydayPhase is the DEBUG screenshot hook and pins it to the
+        // current period regardless.
+        let moment: PaydayMoment.Moment?
+        if let forcedPaydayPhase {
+            moment = PaydayMoment.Moment(period: period, phase: forcedPaydayPhase)
         } else {
-            finished = PaydayMoment.finishedPeriod(now: now, calculator: calculator, dismissedEnd: dismissedPaydayEnd)
+            moment = PaydayMoment.moment(now: now, calculator: calculator, dismissedClosedEnd: dismissedClosedEnd, dismissedCheckEnd: dismissedCheckEnd)
         }
-        // Nothing to celebrate if that period had no earnings.
-        let paydayPeriod = finished.flatMap { statsEngine.periodToDateTotal(period: $0, asOf: $0.end) > 0 ? $0 : nil }
+        // Nothing to show if that period had no earnings.
+        let paydayMoment = moment.flatMap { statsEngine.periodToDateTotal(period: $0.period, asOf: $0.period.end) > 0 ? $0 : nil }
+        let paydayPeriod = paydayMoment?.period
         isPaydayMoment = paydayPeriod != nil
         paydayPeriodEnd = paydayPeriod?.end
+        paydayPhase = paydayMoment?.phase
 
         // Tips-only net for whichever period becomes the hero — wages fold
         // in below, after heroPeriod is settled.
@@ -244,7 +251,11 @@ struct DashboardView: View {
     /// The `end` (as a reference-date interval) of the period whose completion
     /// card the person dismissed; 0 means none. Kept so the card stays gone
     /// once closed, without reappearing on the next launch.
-    @AppStorage("dismissedPaydayPeriodEnd") private var dismissedPaydayEndRaw: Double = 0
+    @AppStorage("dismissedPaydayPeriodEnd") private var dismissedClosedEndRaw: Double = 0
+    /// The same, for the PAYDAY appearance of that card. Separate on purpose:
+    /// closing the "period complete" summary on Monday says nothing about
+    /// whether you want the check-verification prompt on Friday.
+    @AppStorage("dismissedCheckDayPeriodEnd") private var dismissedCheckEndRaw: Double = 0
 
     private static let maxShiftRows = 5
 
@@ -258,19 +269,27 @@ struct DashboardView: View {
         return "\(timeOfDay), \(firstName)"
     }
 
-    private var forcePaydayMoment: Bool {
+    /// Screenshot/QA hook: pins the payday card to the current period in one of
+    /// its two moments, so both can be inspected without waiting for a real
+    /// payroll calendar. `-DebugForcePaydayMoment` is the close summary,
+    /// `-DebugForceCheckDay` the payday appearance.
+    private var forcedPaydayPhase: PaydayMoment.Phase? {
         #if DEBUG
-        return ProcessInfo.processInfo.arguments.contains("-DebugForcePaydayMoment")
+        let arguments = ProcessInfo.processInfo.arguments
+        if arguments.contains("-DebugForceCheckDay") { return .checkDay }
+        if arguments.contains("-DebugForcePaydayMoment") { return .periodClosed }
+        return nil
         #else
-        return false
+        return nil
         #endif
     }
 
     private let paydayVerificationTip = PaydayVerificationTip()
 
     var body: some View {
-        let dismissedPaydayEnd = dismissedPaydayEndRaw == 0 ? nil : Date(timeIntervalSinceReferenceDate: dismissedPaydayEndRaw)
-        let facts = DashboardFacts(allEntries: allEntries, schedule: scheduleStore.schedule, now: .now, forcePaydayMoment: forcePaydayMoment, dismissedPaydayEnd: dismissedPaydayEnd, wageCentsPerHour: preferencesStore.baseHourlyWageCents)
+        let dismissedClosedEnd = dismissedClosedEndRaw == 0 ? nil : Date(timeIntervalSinceReferenceDate: dismissedClosedEndRaw)
+        let dismissedCheckEnd = dismissedCheckEndRaw == 0 ? nil : Date(timeIntervalSinceReferenceDate: dismissedCheckEndRaw)
+        let facts = DashboardFacts(allEntries: allEntries, schedule: scheduleStore.schedule, now: .now, forcedPaydayPhase: forcedPaydayPhase, dismissedClosedEnd: dismissedClosedEnd, dismissedCheckEnd: dismissedCheckEnd, wageCentsPerHour: preferencesStore.baseHourlyWageCents)
         NavigationStack {
             // A ScrollView, deliberately NOT a List: the hero's drawer changes
             // height when it opens, and a List (UIKit-backed) animates the row
@@ -616,29 +635,40 @@ struct DashboardView: View {
     }
 
     private func paydayMomentSection(_ facts: DashboardFacts) -> some View {
-        VStack(spacing: 16) {
-            // "Period complete" shows ONLY when the hero above is still on the
-            // current period. Once the hero reads "Last pay period" over a
-            // full progress bar, "the period ended" is already on screen twice
-            // and this made it three times (Tyler, 2026-08-03: say it once).
+        let isCheckDay = facts.paydayPhase == .checkDay
+        return VStack(spacing: 16) {
+            // No header on payday: a green "Payday" here collided with the
+            // progress bar's own "Payday · Thu, Aug 13" a few lines above,
+            // which labels the CURRENT period's payday — two different dates
+            // under one word reads as "payday is Aug 13" on the very day the
+            // money arrives. "Today" moves into the caption below instead, where
+            // it belongs, and the card keeps one line rather than two.
+            //
+            // Otherwise the header names the state the card is reporting, and
+            // then only when the hero above isn't already saying it — once the
+            // hero reads "Last pay period" over a full progress bar, "the period
+            // ended" is on screen twice and this made it three times (Tyler,
+            // 2026-08-03: say it once).
             //
             // Best day is gone entirely — nobody opens the app for it, and it
             // was the one figure on this card measured tips-only, so it never
             // matched the wage-inclusive shift rows below it anyway.
-            if facts.heroIsCurrent {
+            if !isCheckDay, facts.heroIsCurrent {
                 Text("Period complete")
                     .font(PaydayFont.subheadline)
                     .foregroundStyle(PaydayColor.textSecondary)
                     .accessibilityAddTraits(.isHeader)
             }
-            if facts.isBestPeriodEver {
+            // Not on payday: this was already said when the period closed, and
+            // payday's job is verifying the check, not re-running the applause.
+            if facts.isBestPeriodEver && !isCheckDay {
                 Text("Your best period yet")
                     .font(PaydayFont.subheadline)
                     .foregroundStyle(PaydayColor.primary)
             }
 
             VStack(spacing: 4) {
-                Text("Your check should show")
+                Text(isCheckDay ? "Today's check should show" : "Your check should show")
                     .font(PaydayFont.caption)
                     .foregroundStyle(PaydayColor.textSecondary)
                 Text(Money.string(fromCents: facts.predictedPaycheckCents))
@@ -660,17 +690,23 @@ struct DashboardView: View {
         }
         .frame(maxWidth: .infinity)
         .overlay(alignment: .topTrailing) {
-            // The card clears on its own after a day or two, but let the
-            // person close it the moment they've seen it — it won't return
-            // for this period once dismissed.
+            // The card clears on its own, but let the person close it the moment
+            // they've seen it. Each of the two moments is dismissed on its own
+            // key, so closing the period summary does not also cancel the
+            // check-verification prompt days later.
             if let end = facts.paydayPeriodEnd {
                 Button {
-                    if reduceMotion {
-                        dismissedPaydayEndRaw = end.timeIntervalSinceReferenceDate
-                    } else {
-                        withAnimation(PaydayAnimation.premiumSpring) {
-                            dismissedPaydayEndRaw = end.timeIntervalSinceReferenceDate
+                    let dismiss = {
+                        if isCheckDay {
+                            dismissedCheckEndRaw = end.timeIntervalSinceReferenceDate
+                        } else {
+                            dismissedClosedEndRaw = end.timeIntervalSinceReferenceDate
                         }
+                    }
+                    if reduceMotion {
+                        dismiss()
+                    } else {
+                        withAnimation(PaydayAnimation.premiumSpring) { dismiss() }
                     }
                 } label: {
                     Image(systemName: "xmark")
@@ -680,7 +716,7 @@ struct DashboardView: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Dismiss period summary")
+                .accessibilityLabel(isCheckDay ? "Dismiss payday card" : "Dismiss period summary")
             }
         }
     }
