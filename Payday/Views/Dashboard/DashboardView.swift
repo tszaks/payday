@@ -60,6 +60,12 @@ private struct DashboardFacts {
     /// "$X, plus $Y in wages" on screen — that left the person adding it up.
     let predictedPaycheckCents: Int
     let predictedPayDate: Date
+    /// Cash tips in the payday-moment period — the ENTIRE gap between "You
+    /// kept" and the check, since cash is the one thing that never runs through
+    /// payroll. Named on the card so nobody has to subtract two big numbers to
+    /// find out why their check is smaller than what they made (Tyler, on his
+    /// own real period: "if i kept 3100 why would my check be 2600?? cash?").
+    let paydayCashCents: Int
     let tonightLine: String?
 
     init(allEntries: [TipEntry], schedule: PaySchedule?, now: Date, forcedPaydayPhase: PaydayMoment.Phase?, dismissedClosedEnd: Date?, dismissedCheckEnd: Date?, wageCentsPerHour: Int?) {
@@ -128,6 +134,7 @@ private struct DashboardFacts {
             let payWages = PeriodIncome.wages(entries: payEntries, wageCentsPerHour: wageCentsPerHour, firstWeekday: schedule?.firstWeekday)
             predictedPaycheckCents = PredictedPaycheck.cents(from: payBreakdown, wagesCents: payWages?.totalCents ?? 0)
             predictedPayDate = calculator.payDate(for: pay)
+            paydayCashCents = payBreakdown.cashCents
 
             // Only claims "best period yet" when there's at least one completed
             // period in history to actually beat.
@@ -177,6 +184,7 @@ private struct DashboardFacts {
             let currentWages = PeriodIncome.wages(entries: periodEntries, wageCentsPerHour: wageCentsPerHour, firstWeekday: schedule?.firstWeekday)
             predictedPaycheckCents = PredictedPaycheck.cents(from: breakdown, wagesCents: currentWages?.totalCents ?? 0)
             predictedPayDate = calculator.payDate(for: period)
+            paydayCashCents = breakdown.cashCents
             heroPeriod = period
             heroLabel = "This pay period"
             heroTipsNetCents = totalCents
@@ -685,6 +693,20 @@ struct DashboardView: View {
                     .font(PaydayFont.caption2)
                     .foregroundStyle(PaydayColor.textSecondary)
                     .multilineTextAlignment(.center)
+                // Closes the last gap on this card. The hero says what you kept
+                // and this says what the check carries, and the difference
+                // between them is ALWAYS exactly the cash — the only money that
+                // never runs through payroll. Without this line the reader has
+                // to subtract two four-figure numbers to learn that, and Tyler
+                // did exactly that on his own real period before asking "cash?".
+                // Not a repeat under rule 11: it does arithmetic for the reader
+                // rather than restating something already on screen.
+                if facts.paydayCashCents > 0 {
+                    Text("Your \(Money.string(fromCents: facts.paydayCashCents)) in cash already came home with you.")
+                        .font(PaydayFont.caption2)
+                        .foregroundStyle(PaydayColor.textSecondary)
+                        .multilineTextAlignment(.center)
+                }
             }
             .popoverTip(paydayVerificationTip)
         }
