@@ -59,30 +59,25 @@ struct PaycheckEntrySheet: View {
         allEntries.filter { $0.date >= period.start && $0.date <= period.end }
     }
 
-    /// Hours logged for this period, for the wages footnote only — never fed
-    /// into the tips amount this sheet records.
-    private var loggedHours: Double {
-        let shiftGroups = ShiftDays.groupedByShift(periodEntries, shiftID: \.shiftID, date: \.date, period: \.shiftPeriod).map(\.items)
-        return WageEstimate.loggedHours(shiftGroups: shiftGroups)
-    }
-
+    /// One instruction. It used to say "not the check total" and then, in a
+    /// second sentence, "your stub should also show $206.21 in wages for
+    /// 72h 52m; don't include that here" — the same "tips only, no wages" rule
+    /// stated twice, with a wage figure this sheet does not record.
     private var explainerText: String {
-        let base = "Enter the tips amount from the pay stub — not the check total."
-        guard let wageEstimateCents = WageEstimate.cents(wageCentsPerHour: preferencesStore.baseHourlyWageCents, hours: loggedHours) else {
-            return base
-        }
-        let wages = Money.string(fromCents: wageEstimateCents)
-        let hours = WageEstimate.hoursLabel(loggedHours)
-        return "\(base) Your stub should also show \(wages) in wages for \(hours); don't include that here."
+        "Enter the tips line from the pay stub, not the check total."
     }
 
-    /// Gross credit tips logged this period — the audit's ground truth for
-    /// the tips-vs-logged check. Nil (not zero) when nothing's been logged
-    /// as credit, same silence-over-nagging treatment as every other audit
-    /// input: a period that's cash-only isn't a discrepancy.
+    /// What the stub's tips line should read — the audit's ground truth for the
+    /// tips-vs-logged check, from the one shared formula. Credit tips NET OF
+    /// TIP-OUT: this used to compare a real stub against GROSS credit, so every
+    /// period with a tip-out was reported as short by exactly the tip-out.
+    /// Nil (not zero) when nothing's been logged as credit, same
+    /// silence-over-nagging treatment as every other audit input: a period
+    /// that's cash-only isn't a discrepancy.
     private var loggedCreditTipsCents: Int? {
-        let cents = TipBreakdown.total(of: periodEntries).creditCents
-        return cents > 0 ? cents : nil
+        let breakdown = TipBreakdown.total(of: periodEntries)
+        guard breakdown.creditCents > 0 else { return nil }
+        return PredictedPaycheck.tipsLineCents(from: breakdown)
     }
 
     /// Base + overtime wages PeriodIncome computes from this period's

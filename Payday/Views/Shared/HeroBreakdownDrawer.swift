@@ -3,16 +3,23 @@ import SwiftUI
 /// One breakdown row: a label and its dollar amount. A negative `cents`
 /// renders with a minus sign (e.g. "Tipped out"); `emphasized` bolds the
 /// row for the bottom Total line.
+///
+/// `dividerAbove` draws a rule before the row, which is what lets a ledger run
+/// additions → subtotal → subtractions → total instead of alternating signs
+/// (Tyler, 2026-08-03: "instead of going up, down, up, down, go up, up, up,
+/// down"). A reader can follow a column that only changes direction once.
 struct BreakdownRow: Identifiable {
     let id = UUID()
     let label: String
     let cents: Int
     let emphasized: Bool
+    let dividerAbove: Bool
 
-    init(_ label: String, cents: Int, emphasized: Bool = false) {
+    init(_ label: String, cents: Int, emphasized: Bool = false, dividerAbove: Bool = false) {
         self.label = label
         self.cents = cents
         self.emphasized = emphasized
+        self.dividerAbove = dividerAbove
     }
 }
 
@@ -113,6 +120,7 @@ struct HeroBreakdownDrawer<Card: View>: View {
             if isExpanded {
                 VStack(spacing: PaydaySpacing.p8) {
                     ForEach(rows) { row in
+                        if row.dividerAbove { Divider() }
                         breakdownRow(row)
                     }
                     Divider()

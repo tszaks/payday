@@ -98,28 +98,35 @@ struct PeriodDetailView: View {
         max(0, breakdown.cashCents + breakdown.creditCents - tipsNetCents)
     }
 
-    /// Drawer rows in reconciliation order: Cash, Credit, Tipped out (only
-    /// when logged), Wages (only when a rate is set; Overtime its own row
-    /// only when logged) — total = cash + credit − tipout + wages.
+    /// Everything that adds, then the subtotal, then everything that
+    /// subtracts, then what's left — the same one-direction-change ledger the
+    /// Dashboard hero uses, so the two screens read identically.
+    private var grossEarnedCents: Int {
+        breakdown.cashCents + breakdown.creditCents + (wages?.totalCents ?? 0)
+    }
+
     private var breakdownRows: [BreakdownRow] {
         var rows: [BreakdownRow] = [
-            BreakdownRow("Cash", cents: breakdown.cashCents),
-            BreakdownRow("Credit", cents: breakdown.creditCents),
+            BreakdownRow("Cash tips", cents: breakdown.cashCents),
+            BreakdownRow("Credit tips", cents: breakdown.creditCents),
         ]
-        if tipOutCents > 0 {
-            rows.append(BreakdownRow("Tipped out", cents: -tipOutCents))
-        }
         if let wages {
-            rows.append(BreakdownRow("Wages", cents: wages.regularCents))
+            // Regular hours only, not wages.hours (the total) — see the
+            // Dashboard's identical row.
+            rows.append(BreakdownRow("Wages · \(WageEstimate.hoursLabel(wages.hours - wages.overtimeHours))", cents: wages.regularCents))
             if wages.overtimeCents > 0 {
-                rows.append(BreakdownRow("Overtime", cents: wages.overtimeCents))
+                rows.append(BreakdownRow("Overtime · \(WageEstimate.hoursLabel(wages.overtimeHours))", cents: wages.overtimeCents))
             }
+        }
+        if tipOutCents > 0 {
+            rows.append(BreakdownRow("Earned", cents: grossEarnedCents, dividerAbove: true))
+            rows.append(BreakdownRow("Tipped out", cents: -tipOutCents))
         }
         return rows
     }
 
     private var predictedPaycheckCents: Int {
-        PredictedPaycheck.cents(from: breakdown)
+        PredictedPaycheck.cents(from: breakdown, wagesCents: wages?.totalCents ?? 0)
     }
 
     /// Logged hours for this period's shifts, for the wages estimate below —
@@ -129,20 +136,16 @@ struct PeriodDetailView: View {
         WageEstimate.loggedHours(shiftGroups: shiftDays.map(\.items))
     }
 
-    private var wageEstimateCents: Int? {
-        WageEstimate.cents(wageCentsPerHour: preferencesStore.baseHourlyWageCents, hours: loggedHours)
-    }
-
+    /// One number and one sentence. The old copy read "Payday expects $2,960.28
+    /// in card tips around Aug 7, plus $206.21 in wages for the 72h 52m you
+    /// logged (before taxes). Enter the tips line from your stub to check it."
+    /// That is two totals to add up, the hours the drawer already itemizes, and
+    /// an instruction the button immediately below it already gives.
     private var noPaycheckCaption: String {
         let predicted = Money.string(fromCents: predictedPaycheckCents)
         let dateText = payDate.formatted(.dateTime.month(.abbreviated).day())
-        let verb = isPayDateUpcoming ? "expects" : "expected"
-        guard let wageEstimateCents else {
-            return "Payday \(verb) \(predicted) around \(dateText). Enter the tips line from your stub to check it."
-        }
-        let wages = Money.string(fromCents: wageEstimateCents)
-        let hours = WageEstimate.hoursLabel(loggedHours)
-        return "Payday \(verb) \(predicted) in card tips around \(dateText), plus \(wages) in wages for the \(hours) you logged (before taxes). Enter the tips line from your stub to check it."
+        let verb = isPayDateUpcoming ? "should show" : "should have shown"
+        return "Your check \(verb) \(predicted) around \(dateText). Card tips minus tip-out, plus wages, before taxes."
     }
 
     private var paycheck: PaycheckRecord? {
@@ -161,9 +164,13 @@ struct PeriodDetailView: View {
         ScrollView {
             VStack(spacing: PaydaySpacing.p16) {
                 HeroBreakdownDrawer(
-                    lipText: "Cash \(Money.string(fromCents: breakdown.cashCents)) · Credit \(Money.string(fromCents: breakdown.creditCents))",
+                    // Must reconcile to the hero directly above it — gross
+                    // cash + credit did not (see the Dashboard's lip).
+                    lipText: tipOutCents > 0
+                        ? "Earned \(Money.string(fromCents: grossEarnedCents)) · Tipped out \(Money.string(fromCents: tipOutCents))"
+                        : "Cash \(Money.string(fromCents: breakdown.cashCents)) · Credit \(Money.string(fromCents: breakdown.creditCents))",
                     rows: breakdownRows,
-                    total: BreakdownRow("Total", cents: heroTotalCents, emphasized: true),
+                    total: BreakdownRow(tipOutCents > 0 ? "You kept" : "Total", cents: heroTotalCents, emphasized: true),
                     hasBreakdown: hasBreakdown,
                     isExpanded: $breakdownExpanded
                 ) {
@@ -335,10 +342,11 @@ struct PaycheckComparisonView: View {
     /// paycheck but zero credit is almost certainly legacy data — fall back
     /// to comparing the total rather than showing a nonsense full-overpay.
     private var usesCreditOnly: Bool { breakdown.creditCents > 0 }
-    // Gross, deliberately: this compares against a pay-stub's tips line,
-    // which reports gross credit tips — a separate question from income,
-    // which is net everywhere else in the app.
-    private var comparedCents: Int { usesCreditOnly ? breakdown.creditCents : breakdown.grossTotalCents }
+    // The stub's tips line — credit tips NET OF TIP-OUT, the one shared
+    // formula (PredictedPaycheck). This used to compare against gross credit,
+    // which made every period with a tip-out read as short by exactly the
+    // tip-out, in red, accusing payroll of a shortfall that never happened.
+    private var comparedCents: Int { PredictedPaycheck.tipsLineCents(from: breakdown) }
 
     private var deltaCents: Int { paycheck.paidTipsCents - comparedCents }
     private var isShort: Bool { deltaCents < 0 }
