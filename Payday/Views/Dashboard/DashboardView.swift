@@ -50,13 +50,12 @@ private struct DashboardFacts {
     let paceDeltaCents: Int?
     let projectedTotalCents: Int?
     let isPaydayMoment: Bool
-    let bestNightThisPeriod: (date: Date, cents: Int)?
     let isBestPeriodEver: Bool
+    /// The whole pre-tax check for the payday-moment period: the stub's tips
+    /// line plus wages, in ONE number (PredictedPaycheck). Never split into
+    /// "$X, plus $Y in wages" on screen — that left the person adding it up.
     let predictedPaycheckCents: Int
     let predictedPayDate: Date
-    /// Hours logged in the payday-moment period, for the wages estimate
-    /// caption only — tip analytics elsewhere in these facts never touch it.
-    let paydayLoggedHours: Double
     let tonightLine: String?
 
     init(allEntries: [TipEntry], schedule: PaySchedule?, now: Date, forcePaydayMoment: Bool, dismissedPaydayEnd: Date?, wageCentsPerHour: Int?) {
@@ -114,13 +113,14 @@ private struct DashboardFacts {
             let payEntries = allEntries.filter { $0.date >= pay.start && $0.date <= pay.end }
             let payBreakdown = TipBreakdown.total(of: payEntries)
             let payNetCents = statsEngine.periodToDateTotal(period: pay, asOf: pay.end)
-            bestNightThisPeriod = statsEngine.bestNight(in: pay)
-            // Credit tips are what land on a stub; cash never does. Gross, like
-            // PaycheckComparisonView — a stub reports gross, not net income.
-            predictedPaycheckCents = PredictedPaycheck.cents(from: payBreakdown)
+            // The whole pre-tax check in one number: credit tips minus
+            // tip-out (what payroll prints) plus wages. Wages come from
+            // PeriodIncome — the same function the hero total uses — so the
+            // check figure and the hero can never disagree about a week that
+            // crossed 40 hours, which is what WageEstimate used to do here.
+            let payWages = PeriodIncome.wages(entries: payEntries, wageCentsPerHour: wageCentsPerHour, firstWeekday: schedule?.firstWeekday)
+            predictedPaycheckCents = PredictedPaycheck.cents(from: payBreakdown, wagesCents: payWages?.totalCents ?? 0)
             predictedPayDate = calculator.payDate(for: pay)
-            let payShiftGroups = ShiftDays.groupedByShift(payEntries, shiftID: \.shiftID, date: \.date, period: \.shiftPeriod).map(\.items)
-            paydayLoggedHours = WageEstimate.loggedHours(shiftGroups: payShiftGroups)
 
             // Only claims "best period yet" when there's at least one completed
             // period in history to actually beat.
@@ -166,11 +166,10 @@ private struct DashboardFacts {
                 heroIsCurrent = true
             }
         } else {
-            bestNightThisPeriod = statsEngine.bestNight(in: period)
             isBestPeriodEver = false
-            predictedPaycheckCents = PredictedPaycheck.cents(from: breakdown)
+            let currentWages = PeriodIncome.wages(entries: periodEntries, wageCentsPerHour: wageCentsPerHour, firstWeekday: schedule?.firstWeekday)
+            predictedPaycheckCents = PredictedPaycheck.cents(from: breakdown, wagesCents: currentWages?.totalCents ?? 0)
             predictedPayDate = calculator.payDate(for: period)
-            paydayLoggedHours = 0
             heroPeriod = period
             heroLabel = "This pay period"
             heroTipsNetCents = totalCents
@@ -288,7 +287,7 @@ struct DashboardView: View {
                     tonightLineRow(facts)
 
                     if facts.periodEntries.isEmpty {
-                        emptyState
+                        emptyState(facts)
                     } else {
                         shiftsSection(facts)
                             .padding(.horizontal, PaydaySpacing.p16)
@@ -388,24 +387,42 @@ struct DashboardView: View {
         let wagesTotalCents = facts.heroWages?.totalCents ?? 0
         let tipsNetCents = facts.heroTotalCents - wagesTotalCents
         let tipOutCents = max(0, facts.heroCashCents + facts.heroCreditCents - tipsNetCents)
+        // Everything that ADDS, then the subtotal, then everything that
+        // SUBTRACTS, then what's left. The old order ran cash, credit, tipped
+        // out, wages, overtime — plus, plus, minus, plus, plus — so the eye had
+        // to track a sign that flipped twice on the way down a five-row column.
         var rows: [BreakdownRow] = [
-            BreakdownRow("Cash", cents: facts.heroCashCents),
-            BreakdownRow("Credit", cents: facts.heroCreditCents),
+            BreakdownRow("Cash tips", cents: facts.heroCashCents),
+            BreakdownRow("Credit tips", cents: facts.heroCreditCents),
         ]
-        if tipOutCents > 0 {
-            rows.append(BreakdownRow("Tipped out", cents: -tipOutCents))
-        }
         if let wages = facts.heroWages {
-            rows.append(BreakdownRow("Wages", cents: wages.regularCents))
+            // Regular hours only — `wages.hours` is the TOTAL, so labeling this
+            // row with it claims the base-rate line covers hours that are
+            // actually priced at 1.5x on the Overtime row below it. Identical
+            // when there's no overtime.
+            rows.append(BreakdownRow("Wages · \(WageEstimate.hoursLabel(wages.hours - wages.overtimeHours))", cents: wages.regularCents))
             if wages.overtimeCents > 0 {
-                rows.append(BreakdownRow("Overtime", cents: wages.overtimeCents))
+                rows.append(BreakdownRow("Overtime · \(WageEstimate.hoursLabel(wages.overtimeHours))", cents: wages.overtimeCents))
             }
+        }
+        // The subtotal only earns its rule when something is subtracted below
+        // it; with no tip-out logged, "Earned" and "You kept" would be the same
+        // number printed twice.
+        if tipOutCents > 0 {
+            rows.append(BreakdownRow("Earned", cents: facts.heroCashCents + facts.heroCreditCents + wagesTotalCents, dividerAbove: true))
+            rows.append(BreakdownRow("Tipped out", cents: -tipOutCents))
         }
 
         return HeroBreakdownDrawer(
-            lipText: "Cash \(Money.string(fromCents: facts.heroCashCents)) · Credit \(Money.string(fromCents: facts.heroCreditCents))",
+            // The lip has to reconcile to the number directly above it. It used
+            // to show gross cash + credit, which sum to MORE than the hero
+            // (tip-out is already out of the hero, wages are already in), so
+            // the closed card presented two figures that could not be squared.
+            lipText: tipOutCents > 0
+                ? "Earned \(Money.string(fromCents: facts.heroCashCents + facts.heroCreditCents + wagesTotalCents)) · Tipped out \(Money.string(fromCents: tipOutCents))"
+                : "Cash \(Money.string(fromCents: facts.heroCashCents)) · Credit \(Money.string(fromCents: facts.heroCreditCents))",
             rows: rows,
-            total: BreakdownRow("Total", cents: facts.heroTotalCents, emphasized: true),
+            total: BreakdownRow(tipOutCents > 0 ? "You kept" : "Total", cents: facts.heroTotalCents, emphasized: true),
             hasBreakdown: hasBreakdown,
             isExpanded: $breakdownExpanded
         ) {
@@ -600,40 +617,44 @@ struct DashboardView: View {
 
     private func paydayMomentSection(_ facts: DashboardFacts) -> some View {
         VStack(spacing: 16) {
-            VStack(spacing: 4) {
+            // "Period complete" shows ONLY when the hero above is still on the
+            // current period. Once the hero reads "Last pay period" over a
+            // full progress bar, "the period ended" is already on screen twice
+            // and this made it three times (Tyler, 2026-08-03: say it once).
+            //
+            // Best day is gone entirely — nobody opens the app for it, and it
+            // was the one figure on this card measured tips-only, so it never
+            // matched the wage-inclusive shift rows below it anyway.
+            if facts.heroIsCurrent {
                 Text("Period complete")
                     .font(PaydayFont.subheadline)
                     .foregroundStyle(PaydayColor.textSecondary)
                     .accessibilityAddTraits(.isHeader)
-                if let bestNightThisPeriod = facts.bestNightThisPeriod {
-                    Text("Best day: \(Money.string(fromCents: bestNightThisPeriod.cents)) on \(bestNightThisPeriod.date.formatted(.dateTime.month(.abbreviated).day()))")
-                        .font(PaydayFont.footnote)
-                        .foregroundStyle(PaydayColor.textSecondary)
-                        .monospacedDigit()
-                }
-                if facts.isBestPeriodEver {
-                    Text("Your best period yet")
-                        .font(PaydayFont.subheadline)
-                        .foregroundStyle(PaydayColor.primary)
-                }
+            }
+            if facts.isBestPeriodEver {
+                Text("Your best period yet")
+                    .font(PaydayFont.subheadline)
+                    .foregroundStyle(PaydayColor.primary)
             }
 
             VStack(spacing: 4) {
-                Text("Predicted paycheck")
+                Text("Your check should show")
                     .font(PaydayFont.caption)
                     .foregroundStyle(PaydayColor.textSecondary)
                 Text(Money.string(fromCents: facts.predictedPaycheckCents))
                     .font(PaydayFont.displayLarge)
                     .monospacedDigit()
                     .foregroundStyle(PaydayColor.textPrimary)
-                Text("Expect it around \(facts.predictedPayDate.formatted(.dateTime.month(.abbreviated).day()))")
+                // The arithmetic, stated out loud. This number used to be
+                // gross credit tips with the tip-out silently left in and the
+                // wages added back in a second sentence, which is exactly how
+                // a card ends up with two totals nobody can reconcile. The
+                // payday date is NOT repeated here — the progress bar above
+                // already labels where the period ends.
+                Text("Card tips minus tip-out, plus wages, before taxes.")
                     .font(PaydayFont.caption2)
                     .foregroundStyle(PaydayColor.textSecondary)
-                if let wageCents = WageEstimate.cents(wageCentsPerHour: preferencesStore.baseHourlyWageCents, hours: facts.paydayLoggedHours) {
-                    Text("Plus \(Money.string(fromCents: wageCents)) in wages for \(WageEstimate.hoursLabel(facts.paydayLoggedHours)) (before taxes).")
-                        .font(PaydayFont.caption2)
-                        .foregroundStyle(PaydayColor.textSecondary)
-                }
+                    .multilineTextAlignment(.center)
             }
             .popoverTip(paydayVerificationTip)
         }
@@ -729,13 +750,22 @@ struct DashboardView: View {
         }
     }
 
-    private var emptyState: some View {
-        ContentUnavailableView(
-            "Nothing logged yet this period",
-            systemImage: "tray",
-            description: Text("Log your tips and watch the total build toward payday.")
-        )
-        .padding(.vertical, 16)
+    /// Deliberately NOT ContentUnavailableView any more: its intrinsic height
+    /// wants most of a screen, so inside this ScrollView it sat down behind the
+    /// floating glass tab bar, which refracted the text into an unreadable
+    /// double image. Its description line ("Log your tips and watch the total
+    /// build toward payday") also only restated the title.
+    ///
+    /// The wording follows the hero: when the hero reads "Last pay period", the
+    /// empty list belongs to the NEW period, and "Nothing logged yet this
+    /// period" directly under a completed period's total reads like a
+    /// contradiction rather than a new start.
+    private func emptyState(_ facts: DashboardFacts) -> some View {
+        Text(facts.heroIsCurrent ? "Nothing logged yet this period" : "New period. Nothing logged yet.")
+            .font(PaydayFont.subheadline)
+            .foregroundStyle(PaydayColor.textSecondary)
+            .frame(maxWidth: .infinity, alignment: .center)
+            .padding(.vertical, PaydaySpacing.p24)
     }
 }
 

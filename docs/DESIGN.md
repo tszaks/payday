@@ -55,6 +55,24 @@ the rule is being applied wrong. Look at the render.
 10. **Calm, specific copy.** Evidence before advice. "Fridays average $142,
     your best day" beats "You should work more Fridays." No exclamation marks
     doing the enthusiasm's job.
+11. **Say it once.** No screen states the same fact twice. A progress bar that
+    is full, a label reading "Last pay period", and a header reading "Period
+    complete" are one fact billed three times; two of them are clutter. This
+    applies to dates (the bar already labels payday, so no caption repeats it),
+    to instructions (no sentence telling the person to do what the button
+    directly below it does), and to titles (no subtitle that paraphrases the
+    title it sits under). A derived fact is not a repeat: "That's 6h 23m" under
+    a start and end time earns its place because it does arithmetic the reader
+    would otherwise do. Before adding a line, find what already says it, and
+    delete one of them. (Tyler, 2026-08-03, after the Dashboard payday card
+    accumulated seven numbers to answer one question.)
+12. **One direction per ledger.** Any breakdown of money runs additions, then a
+    subtotal, then subtractions, then the total. Never alternating: cash, credit,
+    tipped out, wages, overtime makes the reader track a sign that flips twice
+    down a five-row column. "Up, up, up, then down" (Tyler's phrasing).
+    Every figure on the card face must reconcile to the hero above it. A closed
+    drawer showing gross figures that sum to more than the total they sit under
+    is a card arguing with itself.
 
 ## Implementation Plan
 

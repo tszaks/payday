@@ -76,8 +76,11 @@ enum PaydayPushScheduler {
 
         let periodEntries = allEntries.filter { $0.date >= period.start && $0.date <= period.end }
         let breakdown = TipBreakdown.total(of: periodEntries)
+        // The tips LINE, not the whole check: this is the figure the person is
+        // about to compare against a stub, and a stub prints tips and wages on
+        // separate lines. Net of tip-out, same as every other surface.
         let body = PredictedPaycheck.hasCreditTips(breakdown)
-            ? "Your check's tips line should read about \(Money.string(fromCents: PredictedPaycheck.cents(from: breakdown)))."
+            ? "Your check's tips line should read about \(Money.string(fromCents: PredictedPaycheck.tipsLineCents(from: breakdown)))."
             : "Your check lands today. Open Payday to check the period."
         return Decision(fireDate: fireDate, body: body)
     }

@@ -100,8 +100,7 @@ struct PeriodsView: View {
                             period: period,
                             isCurrent: index == 0,
                             loggedCents: periodBreakdown.netTotalCents + (periodWages?.totalCents ?? 0),
-                            loggedCreditCents: periodBreakdown.creditCents,
-                            tipsNetCents: periodBreakdown.netTotalCents,
+                            stubTipsLineCents: PredictedPaycheck.tipsLineCents(from: periodBreakdown),
                             payDate: calculator.payDate(for: period),
                             paycheck: paycheck(for: period)
                         )
@@ -175,11 +174,12 @@ private struct PeriodRow: View {
     let period: PayPeriod
     let isCurrent: Bool
     let loggedCents: Int
-    let loggedCreditCents: Int
-    /// Tips-only net (no wages), for the "checked" comparison's all-cash
-    /// fallback below — a paycheck's tips line never includes wages, so
-    /// that comparison can't use the wage-inclusive loggedCents either.
-    let tipsNetCents: Int
+    /// What the stub's tips line should read for this period, from the one
+    /// shared formula (PredictedPaycheck.tipsLineCents): credit tips net of
+    /// tip-out, never the wage-inclusive loggedCents. This row used to derive
+    /// it inline from gross credit, a second copy of the rule that then
+    /// disagreed with the period-detail screen the row navigates to.
+    let stubTipsLineCents: Int
     let payDate: Date
     let paycheck: PaycheckRecord?
 
@@ -214,13 +214,7 @@ private struct PeriodRow: View {
             // consistently regardless of what else is showing.
             HStack(spacing: 6) {
                 if let paycheck {
-                    // Match PaycheckComparisonView: credit if any, else fall
-                    // back to the tips-only total (legacy all-cash periods
-                    // have no credit to compare) — never the wage-inclusive
-                    // loggedCents, since a paycheck's tips line never
-                    // includes wages either.
-                    let comparedCents = loggedCreditCents > 0 ? loggedCreditCents : tipsNetCents
-                    let delta = paycheck.paidTipsCents - comparedCents
+                    let delta = paycheck.paidTipsCents - stubTipsLineCents
                     VStack(alignment: .trailing, spacing: 2) {
                         Text(deltaString(delta))
                             .font(PaydayFont.displaySmall)

@@ -304,9 +304,20 @@ into a defaulted non-optional.
   sum in `StatsEngine` — nightly totals, pace, period-to-date, projections,
   Insights totals, Moves — nets a shift's tip-out out automatically via
   `TipRecord.netCents`/`TipEntry.netCents`. The one deliberate exception:
-  paycheck comparison keeps reading logged credit as-is (matching what's
-  actually printed on a check stub), and tip percent is measured against
-  **gross**, matching how the industry always measures it. Gross and the
+  tip percent is measured against **gross**, matching how the industry always
+  measures it.
+
+  Paycheck comparison follows the same rule the exception was written to serve,
+  **match what payroll actually prints**, which means credit tips NET OF
+  TIP-OUT, not gross (corrected 2026-08-03). Tip-out is withheld from declared
+  tips and paid out to whoever was tipped out, so it never appears on the
+  server's own stub: "I never see tip out, it goes straight into the paychecks
+  of whoever is getting tipped out" (Tyler). Reading gross here made every
+  period with a tip-out report as short by exactly the tip-out amount, in red,
+  accusing payroll of a shortfall that never happened. `PredictedPaycheck` owns
+  both figures now — `tipsLineCents` (the stub's tips line) and
+  `cents(from:wagesCents:)` (the whole pre-tax check) — and every surface reads
+  one of the two, never its own inline derivation. Gross and the
   tip-out that produced net stay one glance away everywhere net is shown
   (the reveal's gross+tip-out subtitle, the Period-detail hero's "$X tipped
   out" caption) — never hidden, never silently subtracted.
