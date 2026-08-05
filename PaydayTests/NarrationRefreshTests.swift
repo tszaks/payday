@@ -198,3 +198,43 @@ struct InsightsNoteRecencyTests {
         #expect(laterFacts?.shiftCount == records.count)
     }
 }
+
+/// A narration written under superseded rules must not linger. Before the rule
+/// version existed, changing what narration may say meant waiting out the
+/// multi-day refresh interval before the change took effect on screen.
+@Suite("Insights rule versioning")
+struct InsightsRuleVersionTests {
+    private func freshDefaults() -> UserDefaults {
+        UserDefaults(suiteName: "payday.tests.insightsRuleVersion.\(UUID().uuidString)")!
+    }
+
+    @Test("a snapshot from an older rule version is discarded on load")
+    func staleRulesDiscardSnapshot() {
+        let defaults = freshDefaults()
+        let store = InsightsStore(defaults: defaults)
+        store.snapshot = InsightsSnapshot(
+            sections: [InsightSection(title: "July 17 Split", body: "A Toast error.")],
+            generatedAt: .now,
+            facts: nil
+        )
+        // Wipe the stamp, i.e. any build from before versioning existed.
+        defaults.removeObject(forKey: "com.szakacsmedia.payday.insightsRuleVersion")
+
+        let reloaded = InsightsStore(defaults: defaults)
+        #expect(reloaded.snapshot == nil)
+    }
+
+    @Test("a snapshot from the current rule version survives")
+    func currentRulesKeepSnapshot() {
+        let defaults = freshDefaults()
+        let store = InsightsStore(defaults: defaults)
+        store.snapshot = InsightsSnapshot(
+            sections: [InsightSection(title: "Overall", body: "Steady.")],
+            generatedAt: .now,
+            facts: nil
+        )
+        // The first init already stamped the current version, so this reload keeps it.
+        let reloaded = InsightsStore(defaults: defaults)
+        #expect(reloaded.snapshot?.sections.first?.title == "Overall")
+    }
+}

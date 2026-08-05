@@ -21,6 +21,22 @@ final class InsightsStore {
     private static let key = "com.szakacsmedia.payday.insightsSnapshot"
     private static let lastAttemptFailedKey = "com.szakacsmedia.payday.insightsLastAttemptFailed"
     private static let lastAttemptAtKey = "com.szakacsmedia.payday.insightsLastAttemptAt"
+    private static let ruleVersionKey = "com.szakacsmedia.payday.insightsRuleVersion"
+
+    /// Bump this whenever the rules that PRODUCE a narration change — the
+    /// facts sent, the prompt, or what's allowed to be said. A cached
+    /// narration written under the old rules is discarded once on the next
+    /// launch, so a rule change takes effect immediately instead of waiting
+    /// out the multi-day refresh interval.
+    ///
+    /// Version 2 (2026-08-05): notes gained a 30-day window and the prompt
+    /// gained a retirement clause. Without this bump, a WORTH KNOWING section
+    /// explaining July 17 would have stayed on screen for another four days
+    /// after both fixes shipped — the snapshot was fresh, so nothing was due.
+    /// This is the general form of the one-off cash-vs-credit scrub below,
+    /// which had to filter fossils by title because there was no version to
+    /// key on.
+    private static let currentRuleVersion = 2
     private let defaults: UserDefaults
 
     var snapshot: InsightsSnapshot? {
@@ -56,10 +72,23 @@ final class InsightsStore {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        self.snapshot = Self.load(from: defaults)
+        // A narration written under superseded rules is dropped, not shown. The
+        // next visit to Insights sees no snapshot and regenerates immediately.
+        let storedRuleVersion = defaults.integer(forKey: Self.ruleVersionKey)
+        let rulesChanged = storedRuleVersion != Self.currentRuleVersion
+        self.snapshot = rulesChanged ? nil : Self.load(from: defaults)
         self.lastAttemptFailed = defaults.bool(forKey: Self.lastAttemptFailedKey)
         let storedAttemptAt = defaults.double(forKey: Self.lastAttemptAtKey)
         self.lastAttemptAt = storedAttemptAt == 0 ? nil : Date(timeIntervalSinceReferenceDate: storedAttemptAt)
+
+        if rulesChanged {
+            // Clear the stored narration too, and record the new version so the
+            // discard happens exactly once. lastAttemptAt is left alone: a
+            // rule change is not a failed attempt, and the empty snapshot is
+            // itself enough to make the next visit refresh.
+            defaults.removeObject(forKey: Self.key)
+            defaults.set(Self.currentRuleVersion, forKey: Self.ruleVersionKey)
+        }
     }
 
     private static func load(from defaults: UserDefaults) -> InsightsSnapshot? {
