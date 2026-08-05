@@ -22,11 +22,8 @@ struct InsightsView: View {
     @State private var errorMessage: String?
     @State private var isShowingBackfillSheet = false
 
-    /// Upper bound on refresh cadence — "maybe weekly, twice a week at
-    /// most." A visit to this tab checks whether this much time has passed
-    /// since the last refresh; it never forces one sooner. A failed
-    /// attempt is the one exception (see isRefreshDue).
-    private static let minimumRefreshInterval: TimeInterval = 3.5 * 24 * 3600
+    // Cadence and the failure cooldown both live in NarrationRefresh, which is
+    // pure and tested — this rule decides when real money gets spent.
 
     private var isModelAvailable: Bool {
         InsightsService.isConfigured
@@ -46,10 +43,17 @@ struct InsightsView: View {
     /// gate entirely so a network hiccup gets one retry on the very next
     /// visit instead of waiting out the full interval with no recourse.
     private func isRefreshDue(facts: InsightsFacts) -> Bool {
-        if insightsStore.lastAttemptFailed { return true }
-        guard let snapshot = insightsStore.snapshot else { return true }
-        guard facts != snapshot.facts else { return false }
-        return Date.now.timeIntervalSince(snapshot.generatedAt) >= Self.minimumRefreshInterval
+        let snapshot = insightsStore.snapshot
+        return NarrationRefresh.isDue(
+            now: .now,
+            snapshotGeneratedAt: snapshot?.generatedAt,
+            // flatMap, not `snapshot?.facts`, to keep this a single-level
+            // optional compare — snapshot is optional AND its facts are
+            // optional (a snapshot persisted before that field existed).
+            factsMatchSnapshot: snapshot.flatMap(\.facts) == facts,
+            lastAttemptFailed: insightsStore.lastAttemptFailed,
+            lastAttemptAt: insightsStore.lastAttemptAt
+        )
     }
 
     var body: some View {
@@ -372,9 +376,16 @@ struct InsightsView: View {
             )
             insightsStore.snapshot = InsightsSnapshot(sections: sections, generatedAt: .now, facts: facts)
             insightsStore.lastAttemptFailed = false
+            insightsStore.lastAttemptAt = .now
         } catch {
             errorMessage = error.localizedDescription
-            insightsStore.lastAttemptFailed = true
+            // Only a retryable failure earns the interval bypass. A 4xx or an
+            // unparseable answer will fail the same way on the same input, so
+            // it waits for the facts to change or the normal interval — the
+            // parse case has already been billed once and must not bill again
+            // on the next visit to this tab.
+            insightsStore.lastAttemptFailed = (error as? InsightsError)?.isRetryable ?? true
+            insightsStore.lastAttemptAt = .now
         }
     }
 }

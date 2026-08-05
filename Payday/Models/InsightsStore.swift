@@ -20,24 +20,46 @@ struct InsightsSnapshot: Codable {
 final class InsightsStore {
     private static let key = "com.szakacsmedia.payday.insightsSnapshot"
     private static let lastAttemptFailedKey = "com.szakacsmedia.payday.insightsLastAttemptFailed"
+    private static let lastAttemptAtKey = "com.szakacsmedia.payday.insightsLastAttemptAt"
     private let defaults: UserDefaults
 
     var snapshot: InsightsSnapshot? {
         didSet { persistSnapshot() }
     }
 
-    /// Set on a failed refresh, cleared on the next success. While true,
-    /// the next visit retries immediately, bypassing the normal interval
-    /// gate — a network hiccup shouldn't lock someone out of a refresh
-    /// for days with no "Analyze Again" button to fall back on.
+    /// Set on a RETRYABLE failed refresh (no network, a timeout, a 5xx),
+    /// cleared on the next success. While true, a visit may retry ahead of the
+    /// normal interval — a network hiccup shouldn't lock someone out of a
+    /// refresh for days with no "Analyze Again" button to fall back on.
+    ///
+    /// Deliberately NOT set for a deterministic failure (a 4xx, or an answer
+    /// that won't parse): retrying byte-identical input fails identically, and
+    /// in the parse case the OpenAI call has already been billed.
     var lastAttemptFailed: Bool {
         didSet { defaults.set(lastAttemptFailed, forKey: Self.lastAttemptFailedKey) }
+    }
+
+    /// When the last refresh attempt ran, successful or not. Pairs with
+    /// `lastAttemptFailed` to make the early retry once per COOLDOWN WINDOW
+    /// rather than once per visit to the tab, which is what it used to be.
+    /// nil (a build that predates this, or no attempt yet) reads as "cooldown
+    /// elapsed" so an upgrade can never wedge itself into never retrying.
+    var lastAttemptAt: Date? {
+        didSet {
+            guard let lastAttemptAt else {
+                defaults.removeObject(forKey: Self.lastAttemptAtKey)
+                return
+            }
+            defaults.set(lastAttemptAt.timeIntervalSinceReferenceDate, forKey: Self.lastAttemptAtKey)
+        }
     }
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         self.snapshot = Self.load(from: defaults)
         self.lastAttemptFailed = defaults.bool(forKey: Self.lastAttemptFailedKey)
+        let storedAttemptAt = defaults.double(forKey: Self.lastAttemptAtKey)
+        self.lastAttemptAt = storedAttemptAt == 0 ? nil : Date(timeIntervalSinceReferenceDate: storedAttemptAt)
     }
 
     private static func load(from defaults: UserDefaults) -> InsightsSnapshot? {

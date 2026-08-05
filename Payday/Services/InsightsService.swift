@@ -34,12 +34,30 @@ private struct ResponsesEnvelope: Decodable {
 
 enum InsightsError: LocalizedError {
     case notEnoughData
+    /// Transient — no network, a timeout, or a 5xx from narration. Retrying
+    /// the same input later can plausibly succeed.
     case generationFailed(String)
+    /// Deterministic — narration was reached and refused the request (4xx), or
+    /// it answered and the answer couldn't be parsed. Retrying byte-identical
+    /// input produces a byte-identical failure, so this must never earn the
+    /// retry that bypasses the refresh interval. The parse case is the
+    /// expensive one: the OpenAI call already succeeded and was already
+    /// billed by the time it failed here.
+    case requestRejected(String)
 
     var errorDescription: String? {
         switch self {
         case .notEnoughData: "Log a few more shifts before analyzing patterns."
         case .generationFailed(let message): message
+        case .requestRejected(let message): message
+        }
+    }
+
+    /// Whether retrying the SAME input soon could plausibly succeed.
+    var isRetryable: Bool {
+        switch self {
+        case .generationFailed: true
+        case .notEnoughData, .requestRejected: false
         }
     }
 }
@@ -98,15 +116,19 @@ enum InsightsService {
             // pointed a ten-day outage at the network, the key, and the OpenAI
             // balance, none of which were involved.
             if (400..<500).contains(httpResponse.statusCode) {
-                throw InsightsError.generationFailed("Narration turned down this request (\(httpResponse.statusCode)).")
+                throw InsightsError.requestRejected("Narration turned down this request (\(httpResponse.statusCode)).")
             }
             throw InsightsError.generationFailed("Couldn't reach narration right now.")
         }
 
+        // Reaching here means OpenAI answered and the call was BILLED. A parse
+        // failure is therefore the one failure that must not retry on its own:
+        // identical input yields an identical unparseable answer, and every
+        // attempt costs money.
         guard let outputText = try JSONDecoder().decode(ResponsesEnvelope.self, from: data).outputText,
               let jsonData = outputText.data(using: .utf8)
         else {
-            throw InsightsError.generationFailed("Couldn't read the analysis.")
+            throw InsightsError.requestRejected("Couldn't read the analysis.")
         }
 
         // Empty is a legitimate answer now, not a failure — the prompt
