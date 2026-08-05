@@ -70,7 +70,13 @@ enum UnlockProgress {
     /// ranked by how few shifts remain, with weekday/hourlyRate/tipPercent as
     /// the tiebreak order. Empty when nothing qualifies — a mature account
     /// has nothing left to anticipate.
-    static func nextUnlocks(records: [TipRecord], asOf: Date = .now, calendar: Calendar = .current, limit: Int = 2) -> [Unlock] {
+    ///
+    /// `usualWeekdays` is the rotation from StatsEngine.workRhythm — the same
+    /// signal the PLAN section uses to name "your usual nights." A weekday
+    /// unlock is only offered for a weekday in that set, so the two sections
+    /// can't contradict each other. Empty (not enough history to judge) keeps
+    /// the pre-rotation behavior.
+    static func nextUnlocks(records: [TipRecord], usualWeekdays: Set<Int> = [], asOf: Date = .now, calendar: Calendar = .current, limit: Int = 2) -> [Unlock] {
         let shifts = groupedShifts(records: records, calendar: calendar)
 
         let insightsNeed = StatsEngine.minimumShiftsForInsights
@@ -81,7 +87,7 @@ enum UnlockProgress {
         // Order index used only to break remaining-count ties, per spec:
         // weekday, then hourlyRate, then tipPercent.
         var rest: [(order: Int, unlock: Unlock)] = []
-        if let weekday = weekdayUnlock(shifts: shifts, asOf: asOf, calendar: calendar) {
+        if let weekday = weekdayUnlock(shifts: shifts, asOf: asOf, calendar: calendar, usualWeekdays: usualWeekdays) {
             rest.append((0, weekday))
         }
         if let hourly = thresholdUnlock(shifts: shifts, need: StatsEngine.minimumNightsForRate, kind: .hourlyRate, predicate: { ($0.hoursWorked ?? 0) > 0 }) {
@@ -108,15 +114,32 @@ enum UnlockProgress {
 
     /// At most one weekday candidate: a weekday worked only 1 or 2 times,
     /// whose most recent shift is within 45 days of `asOf` (a Sunday pickup
-    /// from months ago shouldn't nag forever). Smallest remaining wins; ties
-    /// go to whichever weekday was worked more recently.
-    private static func weekdayUnlock(shifts: [(day: Date, shiftID: UUID, items: [TipRecord])], asOf: Date, calendar: Calendar) -> Unlock? {
+    /// from months ago shouldn't nag forever), AND which is part of the
+    /// person's actual rotation. Smallest remaining wins; ties go to whichever
+    /// weekday was worked more recently.
+    ///
+    /// The rotation test is the important one. Without it, covering two
+    /// Wednesdays reads as intent, and "1 more Wednesday shift and Wednesdays
+    /// get their own read" sits on screen for six weeks directly beneath a PLAN
+    /// section listing five usual nights that don't include Wednesday (Tyler,
+    /// 2026-08-05: "I don't traditionally work Wednesdays or Thursdays. So is
+    /// that just going to sit there forever?"). An unlock is an invitation to
+    /// keep doing what you already do, never a nudge to pick up a shift you
+    /// don't work. `usualWeekdays` empty means not enough history to judge yet,
+    /// not "works nothing" — fall back to the old behavior there.
+    private static func weekdayUnlock(
+        shifts: [(day: Date, shiftID: UUID, items: [TipRecord])],
+        asOf: Date,
+        calendar: Calendar,
+        usualWeekdays: Set<Int>
+    ) -> Unlock? {
         let need = StatsEngine.minimumNightsForWeekdayBest
         let today = calendar.startOfDay(for: asOf)
         let byWeekday = Dictionary(grouping: shifts) { calendar.component(.weekday, from: $0.day) }
 
         let candidates: [(weekday: Int, count: Int, mostRecent: Date)] = byWeekday.compactMap { weekday, group in
             guard group.count == 1 || group.count == 2, let mostRecent = group.map(\.day).max() else { return nil }
+            guard usualWeekdays.isEmpty || usualWeekdays.contains(weekday) else { return nil }
             let daysSince = calendar.dateComponents([.day], from: mostRecent, to: today).day ?? Int.max
             guard abs(daysSince) <= 45 else { return nil }
             return (weekday: weekday, count: group.count, mostRecent: mostRecent)
