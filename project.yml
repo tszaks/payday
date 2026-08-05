@@ -98,6 +98,10 @@ targets:
       - path: Payday/Utilities/Money.swift
       - path: Payday/Utilities/TipBreakdown.swift
       - path: Payday/Utilities/StatsEngine.swift
+      # StatsEngine's Move copy spells its counts through this — the widget
+      # compiles StatsEngine, so it needs it too or the build fails with
+      # "cannot find 'NumberWords' in scope".
+      - path: Payday/Utilities/NumberWords.swift
       - path: Payday/Utilities/WageEstimate.swift
       - path: Payday/Utilities/ShiftDays.swift
       - path: Payday/Utilities/ShiftDetails.swift

@@ -415,7 +415,9 @@ private struct InsightsPageFacts {
         moves = statsEngine.moves()
         followUps = statsEngine.followUps(ledger: ledger)
         recentNights = Array(statsEngine.nightlyTotals().suffix(30))
-        unlocks = UnlockProgress.nextUnlocks(records: records)
+        // The same rotation PLAN names as "your usual nights" — so NEXT UP can
+        // never dangle a weekday the section above it just said you don't work.
+        unlocks = UnlockProgress.nextUnlocks(records: records, usualWeekdays: statsEngine.workRhythm().usualWeekdays)
         shiftCount = UnlockProgress.shiftCount(records: records)
         plan = statsEngine.planForward()
     }

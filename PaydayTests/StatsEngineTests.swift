@@ -568,8 +568,8 @@ struct MovesTests {
         let engine = StatsEngine(records: records)
         let swap = engine.moves(referenceDate: date(2026, 7, 24)).first { $0.id == "weekdaySwap" }
         #expect(swap != nil)
-        #expect(swap?.body.contains("across 3 Fridays") == true)
-        #expect(swap?.body.contains("across 3 Mondays") == true)
+        #expect(swap?.body.contains("across three Fridays") == true)
+        #expect(swap?.body.contains("across three Mondays") == true)
     }
 
     @Test("rate leader stays silent when a real-looking $/hr delta sits inside noisy history")
@@ -670,9 +670,9 @@ struct MovesTests {
         #expect(swap != nil)
         // The comparison itself (both per-side averages and counts) still
         // renders in full - only the year-long projection is withheld.
-        #expect(swap?.body.contains("across 10 Fridays") == true)
-        #expect(swap?.body.contains("across 3 Mondays") == true)
-        #expect(swap?.body.hasSuffix("Only 3 Mondays to compare against so far.") == true)
+        #expect(swap?.body.contains("across ten Fridays") == true)
+        #expect(swap?.body.contains("across three Mondays") == true)
+        #expect(swap?.body.hasSuffix("Only three Mondays to compare against so far.") == true)
         #expect(swap?.body.contains("worth about") == false)
         #expect(swap?.body.contains("a year") == false)
     }
@@ -1365,7 +1365,7 @@ struct RevealCopyTests {
     @Test("weekday average copy self-discloses a thin sample below 5 nights")
     func weekdayAverageDisclosesThinSample() {
         let text = RevealCopy.comparison(for: .weekdayAverage(weekday: 2, deltaCents: 3400, periodRank: nil, periodNightCount: 1, sampleCount: 2))
-        #expect(text.contains("(across 2 Mondays)"))
+        #expect(text.contains("(across two Mondays)"))
     }
 
     @Test("weekday average copy stays clean at 5 nights or more")

@@ -728,6 +728,15 @@ struct StatsEngine {
 
     static let minimumShiftsForInsights = 5
     static let insightsRecentWindowDays = 180
+    /// Notes get a much shorter window than the facts do. A note explains one
+    /// day, and its explanatory value decays fast — the 180-day facts window
+    /// meant a Toast-error note from July 17 was still the highest-priority
+    /// thing narration could say on August 5, three weeks later, because notes
+    /// were capped by COUNT and never by age (Tyler: "Why is it surfacing one
+    /// single thing from July 17th? ... Of all the things that it thinks are
+    /// worth surfacing, that's what it decides to pick"). Thirty days keeps a
+    /// note useful while the day it explains is still in recent memory.
+    static let insightsNoteWindowDays = 30
     /// Lower bar than minimumShiftsForInsights on purpose — hours-logging
     /// is optional, so RATE facts should surface as soon as there's a
     /// handful of nights to blend, not wait for the full insights gate.
@@ -785,7 +794,9 @@ struct StatsEngine {
         // (a shift's rows share one note), capped in count and length so
         // the prompt stays bounded.
         var seenNoteKeys = Set<String>()
+        let noteCutoff = calendar.date(byAdding: .day, value: -Self.insightsNoteWindowDays, to: referenceDate) ?? .distantPast
         let notes: [InsightsFacts.NoteFact] = recent
+            .filter { $0.date >= noteCutoff }
             .sorted { $0.date > $1.date }
             .compactMap { record in
                 guard let raw = record.note?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { return nil }
@@ -1067,8 +1078,9 @@ struct StatsEngine {
               sideB.count >= MoveThresholds.minimumShiftsForAnnualizedImpact
         else {
             let thin = sideA.count <= sideB.count ? sideA : sideB
-            let noun = thin.count == 1 ? thin.singular : thin.plural
-            return "Only \(thin.count) \(noun) to compare against so far."
+            // Spelled, not "Only 5 5PM starts" — the thin side's noun is often a
+            // clock time, so a digit count here butts straight against it.
+            return "Only \(NumberWords.phrase(thin.count, singular: thin.singular, plural: thin.plural)) to compare against so far."
         }
         return sentence()
     }
@@ -1151,7 +1163,7 @@ struct StatsEngine {
         let move = Move(
             id: "weekdaySwap",
             title: "\(bestName) Beats \(worstName)",
-            body: "\(bestName)s average \(Money.string(fromCents: Int(best.avg.rounded()))) across \(best.count) \(bestName)s, against \(Money.string(fromCents: Int(worst.avg.rounded()))) across \(worst.count) \(worstName)s. \(closingClause)",
+            body: "\(bestName)s average \(Money.string(fromCents: Int(best.avg.rounded()))) across \(NumberWords.spell(best.count)) \(bestName)s, against \(Money.string(fromCents: Int(worst.avg.rounded()))) across \(NumberWords.spell(worst.count)) \(worstName)s. \(closingClause)",
             annualImpactCents: annualImpact
         )
         return MoveCandidate(move: move, weekdaySubject: best.weekday)
@@ -1196,7 +1208,7 @@ struct StatsEngine {
         let move = Move(
             id: "lapsedWinner",
             title: "\(weekdayName) Has Gone Quiet",
-            body: "You haven't worked a \(weekdayName) in a few weeks, but it's one of your best - averaging \(Money.string(fromCents: Int(best.avg.rounded()))) a day across \(best.count) \(weekdayName)s. \(closingClause)",
+            body: "You haven't worked a \(weekdayName) in a few weeks, but it's one of your best - averaging \(Money.string(fromCents: Int(best.avg.rounded()))) a day across \(NumberWords.spell(best.count)) \(weekdayName)s. \(closingClause)",
             annualImpactCents: annualImpact
         )
         return MoveCandidate(move: move, weekdaySubject: best.weekday)
@@ -1380,8 +1392,11 @@ struct StatsEngine {
     /// can legitimately be 1 (unlike the weekday-keyed moves above, which
     /// already require >= 3) routes through this instead of hand-rolling
     /// pluralization at each call site.
+    /// Counts are SPELLED here — "seven shifts", not "7 shifts". Digits belong
+    /// to money and clock times (Tyler's rule, 2026-08-05); the sentence that
+    /// forced it was "Only 5 5PM starts to compare against so far."
     private func countPhrase(_ count: Int, singular: String, plural: String) -> String {
-        "\(count) \(count == 1 ? singular : plural)"
+        NumberWords.phrase(count, singular: singular, plural: plural)
     }
 
     /// weekday-keyed move above. Carries the raw per-night cents too, for
@@ -1827,7 +1842,7 @@ enum RevealCopy {
         let isAbove = deltaCents >= 0
         var base = "\(Money.string(fromCents: abs(deltaCents))) \(isAbove ? "above" : "below") your \(weekdayName(weekday)) average."
         if sampleCount < minimumSampleForCleanAverage {
-            base = "\(Money.string(fromCents: abs(deltaCents))) \(isAbove ? "above" : "below") your \(weekdayName(weekday)) average (across \(sampleCount) \(weekdayName(weekday))s)."
+            base = "\(Money.string(fromCents: abs(deltaCents))) \(isAbove ? "above" : "below") your \(weekdayName(weekday)) average (across \(NumberWords.spell(sampleCount)) \(weekdayName(weekday))s)."
         }
         guard let periodRank else { return base }
         let rankText: String
