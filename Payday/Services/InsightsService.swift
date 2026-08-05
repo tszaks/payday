@@ -88,7 +88,18 @@ enum InsightsService {
         ])
 
         let (data, response) = try await URLSession.shared.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse, (200..<300).contains(httpResponse.statusCode) else {
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw InsightsError.generationFailed("Couldn't reach narration right now.")
+        }
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            // A 4xx means narration WAS reached and turned the request down —
+            // our bug (an oversized prompt is the one that actually happened),
+            // not a connectivity problem. Collapsing both into "couldn't reach"
+            // pointed a ten-day outage at the network, the key, and the OpenAI
+            // balance, none of which were involved.
+            if (400..<500).contains(httpResponse.statusCode) {
+                throw InsightsError.generationFailed("Narration turned down this request (\(httpResponse.statusCode)).")
+            }
             throw InsightsError.generationFailed("Couldn't reach narration right now.")
         }
 
