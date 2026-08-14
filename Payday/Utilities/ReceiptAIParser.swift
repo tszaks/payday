@@ -200,6 +200,7 @@ enum ReceiptAIParser {
     enum ParseError: LocalizedError, Sendable {
         case notConfigured
         case imageUnavailable
+        case quotaExhausted
         case requestFailed
         case invalidResponse
         case noFieldsFound
@@ -210,6 +211,8 @@ enum ReceiptAIParser {
                 "AI receipt reading is not configured for this build."
             case .imageUnavailable:
                 "The receipt photo could not be prepared."
+            case .quotaExhausted:
+                "AI receipt credits have run out. Add API credits, then try again."
             case .requestFailed:
                 "AI receipt reading is temporarily unavailable."
             case .invalidResponse:
@@ -259,10 +262,9 @@ enum ReceiptAIParser {
         request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
 
         let (data, response) = try await URLSession.shared.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse,
-              (200..<300).contains(httpResponse.statusCode)
-        else {
-            throw ParseError.requestFailed
+        guard let httpResponse = response as? HTTPURLResponse else { throw ParseError.requestFailed }
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            throw requestError(statusCode: httpResponse.statusCode, responseData: data)
         }
 
         let parsed = try parse(responseData: data)
@@ -314,6 +316,27 @@ enum ReceiptAIParser {
             clockIn: clockTime(values.clockIn),
             clockOut: clockTime(values.clockOut)
         )
+    }
+
+    /// Keeps billing failures actionable without exposing raw API responses
+    /// or account details in the UI. Other HTTP failures retain the generic,
+    /// retry-friendly message.
+    static func requestError(statusCode: Int, responseData: Data) -> ParseError {
+        struct ErrorEnvelope: Decodable {
+            struct APIError: Decodable {
+                let type: String?
+                let code: String?
+            }
+
+            let error: APIError
+        }
+
+        if statusCode == 429,
+           let envelope = try? JSONDecoder().decode(ErrorEnvelope.self, from: responseData),
+           envelope.error.type == "insufficient_quota" || envelope.error.code == "credit_balance_exhausted" {
+            return .quotaExhausted
+        }
+        return .requestFailed
     }
 
     private static var apiKey: String? {

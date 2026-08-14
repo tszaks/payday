@@ -102,4 +102,20 @@ struct ReceiptAIParserTests {
         #expect(parsed.tableCount == nil)
         #expect(parsed.tableCountSource == nil)
     }
+
+    @Test("reports exhausted API credits with an actionable message")
+    func reportsExhaustedCredits() {
+        let response = Data(#"{"error":{"type":"insufficient_quota","code":"credit_balance_exhausted"}}"#.utf8)
+
+        let error = ReceiptAIParser.requestError(statusCode: 429, responseData: response)
+
+        #expect(error.errorDescription == "AI receipt credits have run out. Add API credits, then try again.")
+    }
+
+    @Test("keeps unrelated HTTP failures generic")
+    func keepsOtherRequestFailuresGeneric() {
+        let error = ReceiptAIParser.requestError(statusCode: 503, responseData: Data())
+
+        #expect(error.errorDescription == "AI receipt reading is temporarily unavailable.")
+    }
 }
