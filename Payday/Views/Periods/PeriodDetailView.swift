@@ -393,6 +393,9 @@ struct PaycheckComparisonView: View {
         if let overtimeWagesCents = paycheck.overtimeWagesCents {
             lines.append((label: "Overtime wages", text: "Overtime wages \(Money.string(fromCents: overtimeWagesCents))"))
         }
+        if let gratuityCents = paycheck.gratuityCents {
+            lines.append((label: "Gratuity", text: "Gratuity \(Money.string(fromCents: gratuityCents))"))
+        }
         if let grossPayCents = paycheck.grossPayCents {
             lines.append((label: "Gross", text: "Gross \(Money.string(fromCents: grossPayCents))"))
         }

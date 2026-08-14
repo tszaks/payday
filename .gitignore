@@ -7,4 +7,5 @@ xcuserdata/
 *.xcuserstate
 Generated/
 Secrets.local.xcconfig
+payday_api_key.txt
 .pallium/

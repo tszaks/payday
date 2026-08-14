@@ -28,9 +28,28 @@ struct PaycheckAudit {
         let tipsCents: Int?
         let regularWagesCents: Int?
         let overtimeWagesCents: Int?
+        let gratuityCents: Int?
         let grossCents: Int?
         let taxesCents: Int?
         let netCents: Int?
+
+        init(
+            tipsCents: Int?,
+            regularWagesCents: Int?,
+            overtimeWagesCents: Int?,
+            gratuityCents: Int? = nil,
+            grossCents: Int?,
+            taxesCents: Int?,
+            netCents: Int?
+        ) {
+            self.tipsCents = tipsCents
+            self.regularWagesCents = regularWagesCents
+            self.overtimeWagesCents = overtimeWagesCents
+            self.gratuityCents = gratuityCents
+            self.grossCents = grossCents
+            self.taxesCents = taxesCents
+            self.netCents = netCents
+        }
     }
 
     /// Rounding slop on stub-printed figures — pay stubs occasionally carry
@@ -54,14 +73,15 @@ struct PaycheckAudit {
 
     private static func grossMathFinding(stub: Stub) -> Finding? {
         guard let tipsCents = stub.tipsCents, let grossCents = stub.grossCents else { return nil }
-        let earnedCents = tipsCents + (stub.regularWagesCents ?? 0) + (stub.overtimeWagesCents ?? 0)
+        let earnedCents = tipsCents + (stub.regularWagesCents ?? 0) + (stub.overtimeWagesCents ?? 0) + (stub.gratuityCents ?? 0)
+        let components = stub.gratuityCents == nil ? "Tips and wages" : "Tips, wages, and gratuity"
         guard abs(earnedCents - grossCents) > centsTolerance else {
-            return Finding(id: "gross-math", severity: .reconciles, message: "Tips and wages add up to the gross.")
+            return Finding(id: "gross-math", severity: .reconciles, message: "\(components) add up to the gross.")
         }
         let earned = moneyString(earnedCents)
         let gross = moneyString(grossCents)
         let unaccounted = moneyString(abs(grossCents - earnedCents))
-        return Finding(id: "gross-math", severity: .discrepancy, message: "Tips and wages come to \(earned) - the stub's gross is \(gross). \(unaccounted) unaccounted.")
+        return Finding(id: "gross-math", severity: .discrepancy, message: "\(components) come to \(earned) - the stub's gross is \(gross). \(unaccounted) unaccounted.")
     }
 
     private static func netMathFinding(stub: Stub) -> Finding? {

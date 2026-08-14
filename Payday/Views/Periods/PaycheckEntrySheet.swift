@@ -25,6 +25,7 @@ struct PaycheckEntrySheet: View {
     // (2026-07-27) means none of these ever read the Settings wage.
     @State private var regularWagesCents: Int = 0
     @State private var overtimeWagesCents: Int = 0
+    @State private var gratuityCents: Int = 0
     @State private var grossPayCents: Int = 0
     @State private var taxesCents: Int = 0
     @State private var netPayCents: Int = 0
@@ -44,18 +45,19 @@ struct PaycheckEntrySheet: View {
         _note = State(initialValue: existing?.note ?? "")
         _regularWagesCents = State(initialValue: existing?.regularWagesCents ?? 0)
         _overtimeWagesCents = State(initialValue: existing?.overtimeWagesCents ?? 0)
+        _gratuityCents = State(initialValue: existing?.gratuityCents ?? 0)
         _grossPayCents = State(initialValue: existing?.grossPayCents ?? 0)
         _taxesCents = State(initialValue: existing?.taxesCents ?? 0)
         _netPayCents = State(initialValue: existing?.netPayCents ?? 0)
     }
 
     /// Forward-only reading-order chain: Regular wages -> Overtime wages ->
-    /// Gross income -> Taxes -> Net income -> nil (Save sits right beside
-    /// Next at that point).
+    /// Gratuity -> Gross income -> Taxes -> Net income -> nil.
     private func nextDetailField(after field: PaycheckDetailField) -> PaycheckDetailField? {
         switch field {
         case .regularWages: return .overtimeWages
-        case .overtimeWages: return .grossIncome
+        case .overtimeWages: return .gratuity
+        case .gratuity: return .grossIncome
         case .grossIncome: return .taxes
         case .taxes: return .netIncome
         case .netIncome: return nil
@@ -102,6 +104,7 @@ struct PaycheckEntrySheet: View {
             tipsCents: amountCents > 0 ? amountCents : nil,
             regularWagesCents: regularWagesCents > 0 ? regularWagesCents : nil,
             overtimeWagesCents: overtimeWagesCents > 0 ? overtimeWagesCents : nil,
+            gratuityCents: gratuityCents > 0 ? gratuityCents : nil,
             grossCents: grossPayCents > 0 ? grossPayCents : nil,
             taxesCents: taxesCents > 0 ? taxesCents : nil,
             netCents: netPayCents > 0 ? netPayCents : nil
@@ -184,7 +187,7 @@ struct PaycheckEntrySheet: View {
                 }
                 // The tips field above autofocuses on its own and has no
                 // external FocusState (CurrencyAmountField owns it
-                // internally) — this Next chain covers only the five detail
+                // internally) — this Next chain covers only the six detail
                 // fields below it, in reading order.
                 if let focusedDetailField {
                     ToolbarItemGroup(placement: .keyboard) {
@@ -214,7 +217,11 @@ struct PaycheckEntrySheet: View {
                 showPhotoPicker = true
             }
         } message: {
-            Text("Payday will read the amounts on the image and fill the form for you.")
+            if PaycheckAIParser.isConfigured {
+                Text("Payday will send the photo to OpenAI to read and combine the pay-period totals, then fill the form for you.")
+            } else {
+                Text("Payday will read the amounts on the image on this device and fill the form for you.")
+            }
         }
         .photosPicker(isPresented: $showPhotoPicker, selection: $selectedPhotoItem, matching: .images)
         .sheet(item: $photoSource) { source in
@@ -251,7 +258,7 @@ struct PaycheckEntrySheet: View {
                 HStack(spacing: 8) {
                     ProgressView()
                         .controlSize(.small)
-                    Text("Reading your pay stub on this device…")
+                    Text(PaycheckAIParser.isConfigured ? "Reading your pay stub with AI…" : "Reading your pay stub on this device…")
                 }
                 .font(PaydayFont.footnote)
                 .foregroundStyle(PaydayColor.textSecondary)
@@ -268,15 +275,17 @@ struct PaycheckEntrySheet: View {
     // MARK: Stub details — capture-only, below the tips verification anchor
 
     /// The stub's other printed facts, in the order Tyler reads a stub:
-    /// Regular -> Overtime -> Gross -> Taxes -> Net. Same recessed-fill,
+    /// Regular -> Overtime -> Gratuity -> Gross -> Taxes -> Net. Same recessed-fill,
     /// divider-separated grammar as LogTipSheet's shiftDetailsCard. Every
-    /// row is optional; leaving all five at zero saves exactly what this
+    /// row is optional; leaving all six at zero saves exactly what this
     /// sheet always saved before this existed.
     private var paycheckDetailsCard: some View {
         VStack(spacing: 0) {
             paycheckDetailRow(label: "Regular Wages", cents: $regularWagesCents, field: .regularWages, caption: "Base pay for the period.")
             Divider()
             paycheckDetailRow(label: "Overtime Wages", cents: $overtimeWagesCents, field: .overtimeWages)
+            Divider()
+            paycheckDetailRow(label: "Gratuity", cents: $gratuityCents, field: .gratuity)
             Divider()
             paycheckDetailRow(label: "Gross Income", cents: $grossPayCents, field: .grossIncome, caption: "Before taxes and deductions.")
             Divider()
@@ -362,12 +371,13 @@ struct PaycheckEntrySheet: View {
             if let tipsCents = parsed.tipsCents { amountCents = tipsCents }
             if let regularWagesCents = parsed.regularWagesCents { self.regularWagesCents = regularWagesCents }
             if let overtimeWagesCents = parsed.overtimeWagesCents { self.overtimeWagesCents = overtimeWagesCents }
+            if let gratuityCents = parsed.gratuityCents { self.gratuityCents = gratuityCents }
             if let grossPayCents = parsed.grossPayCents { self.grossPayCents = grossPayCents }
             if let taxesCents = parsed.taxesCents { self.taxesCents = taxesCents }
             if let netPayCents = parsed.netPayCents { self.netPayCents = netPayCents }
 
-            if parsed.filledFieldCount == 6 {
-                scanStatus = "All six fields filled. Review the numbers before saving."
+            if parsed.filledFieldCount == 7 {
+                scanStatus = "All seven fields filled. Review the numbers before saving."
             } else {
                 let fieldWord = parsed.filledFieldCount == 1 ? "field" : "fields"
                 scanStatus = "Filled " + String(parsed.filledFieldCount) + " " + fieldWord + ". Review the remaining fields before saving."
@@ -381,6 +391,7 @@ struct PaycheckEntrySheet: View {
     private func save() {
         let effectiveRegularWagesCents = regularWagesCents > 0 ? regularWagesCents : nil
         let effectiveOvertimeWagesCents = overtimeWagesCents > 0 ? overtimeWagesCents : nil
+        let effectiveGratuityCents = gratuityCents > 0 ? gratuityCents : nil
         let effectiveGrossPayCents = grossPayCents > 0 ? grossPayCents : nil
         let effectiveTaxesCents = taxesCents > 0 ? taxesCents : nil
         let effectiveNetPayCents = netPayCents > 0 ? netPayCents : nil
@@ -391,6 +402,7 @@ struct PaycheckEntrySheet: View {
             existing.note = note.isEmpty ? nil : note
             existing.regularWagesCents = effectiveRegularWagesCents
             existing.overtimeWagesCents = effectiveOvertimeWagesCents
+            existing.gratuityCents = effectiveGratuityCents
             existing.grossPayCents = effectiveGrossPayCents
             existing.taxesCents = effectiveTaxesCents
             existing.netPayCents = effectiveNetPayCents
@@ -405,6 +417,7 @@ struct PaycheckEntrySheet: View {
                 netPayCents: effectiveNetPayCents,
                 regularWagesCents: effectiveRegularWagesCents,
                 overtimeWagesCents: effectiveOvertimeWagesCents,
+                gratuityCents: effectiveGratuityCents,
                 taxesCents: effectiveTaxesCents
             )
             modelContext.insert(record)
@@ -435,6 +448,7 @@ struct PaycheckEntrySheet: View {
 private enum PaycheckDetailField: Hashable {
     case regularWages
     case overtimeWages
+    case gratuity
     case grossIncome
     case taxes
     case netIncome

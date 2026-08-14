@@ -5,18 +5,19 @@ import Vision
 
 /// On-device pay-stub reading. Vision recognizes the words, then this type
 /// matches those words to the fields Payday already captures. No image or
-/// recognized text leaves the phone.
+/// recognized text leaves the phone when the AI parser is unavailable.
 enum PaycheckOCR {
     struct ParsedPaycheck: Equatable, Sendable {
         var tipsCents: Int?
         var regularWagesCents: Int?
         var overtimeWagesCents: Int?
+        var gratuityCents: Int?
         var grossPayCents: Int?
         var taxesCents: Int?
         var netPayCents: Int?
 
         var filledFieldCount: Int {
-            [tipsCents, regularWagesCents, overtimeWagesCents, grossPayCents, taxesCents, netPayCents]
+            [tipsCents, regularWagesCents, overtimeWagesCents, gratuityCents, grossPayCents, taxesCents, netPayCents]
                 .compactMap { $0 }
                 .count
         }
@@ -42,14 +43,7 @@ enum PaycheckOCR {
     /// Parses OCR output without touching UIKit or Vision. Keeping this pure
     /// makes the label matching easy to test with representative pay stubs.
     static func parse(lines: [String]) -> ParsedPaycheck {
-        var result = ParsedPaycheck(
-            tipsCents: nil,
-            regularWagesCents: nil,
-            overtimeWagesCents: nil,
-            grossPayCents: nil,
-            taxesCents: nil,
-            netPayCents: nil
-        )
+        var result = ParsedPaycheck(tipsCents: nil, regularWagesCents: nil, overtimeWagesCents: nil, gratuityCents: nil, grossPayCents: nil, taxesCents: nil, netPayCents: nil)
         var taxLineCents: [Int] = []
         var explicitTaxesCents: Int?
 
@@ -71,25 +65,29 @@ enum PaycheckOCR {
                 continue
             }
 
-            if result.overtimeWagesCents == nil, matches(normalized, anyOf: [
-                "OVERTIME PAY", "OVERTIME WAGES", "OVERTIME EARNINGS", "OT PAY", "OT WAGES"
+            if matches(normalized, anyOf: [
+                "OVERTIME", "OVERTIME PAY", "OVERTIME WAGES", "OVERTIME EARNINGS", "OT PAY", "OT WAGES"
             ]) {
-                result.overtimeWagesCents = cents
+                result.overtimeWagesCents = (result.overtimeWagesCents ?? 0) + cents
                 continue
             }
 
-            if result.regularWagesCents == nil, matches(normalized, anyOf: [
-                "REGULAR PAY", "REGULAR WAGES", "REGULAR EARNINGS", "BASE PAY", "BASE WAGES"
+            if matches(normalized, anyOf: [
+                "REGULAR", "REGULAR PAY", "REGULAR WAGES", "REGULAR EARNINGS", "BASE PAY", "BASE WAGES"
             ]) || normalized == "REGULAR" || normalized == "SALARY" {
-                result.regularWagesCents = cents
+                result.regularWagesCents = (result.regularWagesCents ?? 0) + cents
                 continue
             }
 
-            if result.tipsCents == nil,
-               matches(normalized, anyOf: ["CARD TIPS", "CREDIT TIPS", "TIP EARNINGS", "TIPS", "GRATUITY"]),
+            if matches(normalized, anyOf: ["GRATUITY", "GRATUITIES"]) {
+                result.gratuityCents = (result.gratuityCents ?? 0) + cents
+                continue
+            }
+
+            if matches(normalized, anyOf: ["CARD TIPS", "CREDIT TIPS", "TIP EARNINGS", "TIPS"]),
                !matches(normalized, anyOf: ["TIP OUT", "TIPOUT", "WITHHELD"])
             {
-                result.tipsCents = cents
+                result.tipsCents = (result.tipsCents ?? 0) + cents
                 continue
             }
 
@@ -111,8 +109,24 @@ enum PaycheckOCR {
     }
 
     /// Runs Apple's on-device OCR away from the main actor, then parses the
-    /// recognized lines into the existing paycheck fields.
+    /// recognized lines into the existing paycheck fields. The AI parser gets
+    /// first chance when a local key is present because it understands that
+    /// repeated weekly rows can belong to one biweekly paycheck. Vision stays
+    /// as a private, offline fallback.
     static func parse(image: UIImage) async throws -> ParsedPaycheck {
+        if PaycheckAIParser.isConfigured {
+            do {
+                return try await PaycheckAIParser.parse(image: image)
+            } catch {
+                // A temporary network or model failure should not make the
+                // photo feature unusable. Fall through to on-device Vision.
+            }
+        }
+
+        return try await parseWithVision(image: image)
+    }
+
+    private static func parseWithVision(image: UIImage) async throws -> ParsedPaycheck {
         guard let imageData = image.jpegData(compressionQuality: 1) else {
             throw ScanError.imageUnavailable
         }
