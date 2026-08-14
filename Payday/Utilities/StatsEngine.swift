@@ -48,6 +48,11 @@ struct TipRecord: Sendable, Hashable {
     /// TipEntry stays faithful once that analysis exists.
     let serverCount: Int?
 
+    /// Rich printout facts captured by the receipt scanner. Like every other
+    /// shift-level value, this lives on one canonical record and is resolved
+    /// once before analysis.
+    let receiptMetrics: ShiftReceiptMetrics?
+
     /// The worker's own note for this shift, passed through to Insights as
     /// context — a note like "POS outage, lunch tips paid out at dinner" is
     /// the difference between explaining an anomalous day and reading a
@@ -62,7 +67,7 @@ struct TipRecord: Sendable, Hashable {
     /// how tip percent is measured everywhere in the industry.
     var netCents: Int { amountCents - (tipOutCents ?? 0) }
 
-    init(date: Date, amountCents: Int, kind: TipKind, isDouble: Bool, recordedAt: Date? = nil, hoursWorked: Double? = nil, tipOutCents: Int? = nil, salesCents: Int? = nil, shiftPeriod: ShiftPeriod? = nil, shiftID: UUID? = nil, clockIn: Date? = nil, clockOut: Date? = nil, serverCount: Int? = nil, note: String? = nil) {
+    init(date: Date, amountCents: Int, kind: TipKind, isDouble: Bool, recordedAt: Date? = nil, hoursWorked: Double? = nil, tipOutCents: Int? = nil, salesCents: Int? = nil, shiftPeriod: ShiftPeriod? = nil, shiftID: UUID? = nil, clockIn: Date? = nil, clockOut: Date? = nil, serverCount: Int? = nil, receiptMetrics: ShiftReceiptMetrics? = nil, note: String? = nil) {
         self.date = date
         self.amountCents = amountCents
         self.kind = kind
@@ -76,13 +81,14 @@ struct TipRecord: Sendable, Hashable {
         self.clockIn = clockIn
         self.clockOut = clockOut
         self.serverCount = serverCount
+        self.receiptMetrics = receiptMetrics
         self.note = note
     }
 }
 
 extension TipRecord {
     init(entry: TipEntry) {
-        self.init(date: entry.date, amountCents: entry.amountCents, kind: entry.kind, isDouble: entry.isDouble, recordedAt: entry.recordedAt, hoursWorked: entry.hoursWorked, tipOutCents: entry.tipOutCents, salesCents: entry.salesCents, shiftPeriod: entry.shiftPeriod, shiftID: entry.shiftID, clockIn: entry.clockIn, clockOut: entry.clockOut, serverCount: entry.serverCount, note: entry.note)
+        self.init(date: entry.date, amountCents: entry.amountCents, kind: entry.kind, isDouble: entry.isDouble, recordedAt: entry.recordedAt, hoursWorked: entry.hoursWorked, tipOutCents: entry.tipOutCents, salesCents: entry.salesCents, shiftPeriod: entry.shiftPeriod, shiftID: entry.shiftID, clockIn: entry.clockIn, clockOut: entry.clockOut, serverCount: entry.serverCount, receiptMetrics: entry.receiptMetrics, note: entry.note)
     }
 }
 
@@ -150,6 +156,7 @@ private struct ShiftFacts {
     /// How many servers were on the floor — resolved the same
     /// credit-preferred way, no analytics reads it yet (see TipRecord).
     let serverCount: Int?
+    let receiptMetrics: ShiftReceiptMetrics?
 
     /// Gross minus the one canonical tip-out for the shift — see the type
     /// doc above for why this is never a per-record sum.
@@ -207,7 +214,8 @@ struct StatsEngine {
                     recordedAt: credit?.recordedAt ?? cash?.recordedAt,
                     clockIn: credit?.clockIn ?? cash?.clockIn,
                     clockOut: credit?.clockOut ?? cash?.clockOut,
-                    serverCount: credit?.serverCount ?? cash?.serverCount
+                    serverCount: credit?.serverCount ?? cash?.serverCount,
+                    receiptMetrics: credit?.receiptMetrics ?? cash?.receiptMetrics
                 )
             }
             .sorted { $0.date < $1.date }
@@ -743,6 +751,9 @@ struct StatsEngine {
     static let minimumNightsForRate = 3
     /// Same reasoning as minimumNightsForRate, for sales-logging.
     static let minimumNightsForSales = 3
+    /// Receipt-derived performance facts need the same small-but-repeatable
+    /// floor as rate and sales. One unusually large party is not a pattern.
+    static let minimumShiftsForReceiptPerformance = 3
     /// A start-hour bucket (see StartTimeFacts) needs at least this many
     /// qualifying shifts before its blended rate counts as anything more
     /// than noise — same >= 3 floor every other weekday-keyed comparison
@@ -818,7 +829,125 @@ struct StatsEngine {
             sales: salesFacts(from: shifts),
             startTime: startTimeFacts(from: shifts),
             cashWeekday: cashWeekdayFacts(from: shifts),
+            receiptPerformance: receiptPerformanceFacts(from: shifts),
             notes: Array(notes.prefix(10))
+        )
+    }
+
+    /// Blends receipt facts using totals, never an average of nightly
+    /// averages. Spend uses pre-tax net sales because that is the basis of
+    /// the restaurant's printed average-spend-per-guest number; the existing
+    /// shift Sales field remains post-tax for Tyler's historical continuity.
+    private func receiptPerformanceFacts(from shifts: [ShiftFacts]) -> ReceiptPerformanceFacts? {
+        let guestCandidates = shifts.filter {
+            guard let guests = $0.receiptMetrics?.guestCount,
+                  let netSales = $0.receiptMetrics?.netSalesCents
+            else { return false }
+            return guests > 0 && netSales > 0
+        }
+        let guestShifts = guestCandidates.count >= Self.minimumShiftsForReceiptPerformance ? guestCandidates : []
+
+        let tableCandidates = shifts.filter {
+            guard let tables = $0.receiptMetrics?.tableCount,
+                  let netSales = $0.receiptMetrics?.netSalesCents
+            else { return false }
+            return tables > 0 && netSales > 0
+        }
+        let tableShifts = tableCandidates.count >= Self.minimumShiftsForReceiptPerformance ? tableCandidates : []
+
+        guard !guestShifts.isEmpty || !tableShifts.isEmpty else { return nil }
+
+        let totalGuests = guestShifts.reduce(0) { $0 + ($1.receiptMetrics?.guestCount ?? 0) }
+        let guestNetSales = guestShifts.reduce(0) { $0 + ($1.receiptMetrics?.netSalesCents ?? 0) }
+        let guestGrossTips = guestShifts.reduce(0) { $0 + $1.grossCents }
+        let guestNetTips = guestShifts.reduce(0) { $0 + $1.netCents }
+
+        let totalTables = tableShifts.reduce(0) { $0 + ($1.receiptMetrics?.tableCount ?? 0) }
+        let tableNetSales = tableShifts.reduce(0) { $0 + ($1.receiptMetrics?.netSalesCents ?? 0) }
+        let tableNetTips = tableShifts.reduce(0) { $0 + $1.netCents }
+        let estimatedTableShiftCount = tableShifts.filter { $0.receiptMetrics?.tableCountSource?.isEstimated == true }.count
+
+        let guestAndTableShifts = shifts.filter {
+            guard let guests = $0.receiptMetrics?.guestCount,
+                  let tables = $0.receiptMetrics?.tableCount
+            else { return false }
+            return guests > 0 && tables > 0
+        }
+        let averageGuestsPerTable: Double? = guestAndTableShifts.count >= Self.minimumShiftsForReceiptPerformance
+            ? Double(guestAndTableShifts.reduce(0) { $0 + ($1.receiptMetrics?.guestCount ?? 0) })
+                / Double(guestAndTableShifts.reduce(0) { $0 + ($1.receiptMetrics?.tableCount ?? 0) })
+            : nil
+
+        let checkCandidates = shifts.filter {
+            guard $0.receiptMetrics?.cashSalesCents == 0,
+                  let checks = $0.receiptMetrics?.creditCheckCount,
+                  let netSales = $0.receiptMetrics?.netSalesCents
+            else { return false }
+            return checks > 0 && netSales > 0
+        }
+        let averageCheckCents: Int? = checkCandidates.count >= Self.minimumShiftsForReceiptPerformance
+            ? checkCandidates.reduce(0) { $0 + ($1.receiptMetrics?.netSalesCents ?? 0) }
+                / checkCandidates.reduce(0) { $0 + ($1.receiptMetrics?.creditCheckCount ?? 0) }
+            : nil
+
+        let throughputCandidates = guestShifts.filter { ($0.hoursWorked ?? 0) > 0 }
+        let guestsPerHour: Double? = throughputCandidates.count >= Self.minimumShiftsForReceiptPerformance
+            ? Double(throughputCandidates.reduce(0) { $0 + ($1.receiptMetrics?.guestCount ?? 0) })
+                / throughputCandidates.reduce(0) { $0 + ($1.hoursWorked ?? 0) }
+            : nil
+
+        let tipOutCandidates = shifts.filter {
+            $0.receiptMetrics != nil && $0.tipOutCents != nil && $0.grossCents > 0
+        }
+        let tipOutPercent: Double? = tipOutCandidates.count >= Self.minimumShiftsForReceiptPerformance
+            ? Double(tipOutCandidates.reduce(0) { $0 + ($1.tipOutCents ?? 0) })
+                / Double(tipOutCandidates.reduce(0) { $0 + $1.grossCents }) * 100
+            : nil
+
+        let categoryShifts = shifts.filter {
+            guard let categories = $0.receiptMetrics?.categorySales, !categories.isEmpty else { return false }
+            return categories.allSatisfy { $0.netSalesCents != nil }
+        }
+        let topCategories: [CategoryMixFact]
+        if categoryShifts.count >= Self.minimumShiftsForReceiptPerformance {
+            var totals: [String: (name: String, cents: Int)] = [:]
+            for category in categoryShifts.flatMap({ $0.receiptMetrics?.categorySales ?? [] }) {
+                guard let cents = category.netSalesCents, cents > 0 else { continue }
+                let name = category.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !name.isEmpty else { continue }
+                let key = name.lowercased()
+                let existing = totals[key]
+                totals[key] = (name: existing?.name ?? name, cents: (existing?.cents ?? 0) + cents)
+            }
+            let categoryTotal = totals.values.reduce(0) { $0 + $1.cents }
+            topCategories = categoryTotal > 0
+                ? totals.values.sorted {
+                    if $0.cents != $1.cents { return $0.cents > $1.cents }
+                    return $0.name.lowercased() < $1.name.lowercased()
+                }.prefix(4).map {
+                    CategoryMixFact(name: $0.name, netSalesCents: $0.cents, sharePercent: Double($0.cents) / Double(categoryTotal) * 100)
+                }
+                : []
+        } else {
+            topCategories = []
+        }
+
+        return ReceiptPerformanceFacts(
+            guestShiftCount: guestShifts.count,
+            totalGuests: totalGuests,
+            averageSpendPerGuestCents: totalGuests > 0 ? guestNetSales / totalGuests : nil,
+            grossTipsPerGuestCents: totalGuests > 0 ? guestGrossTips / totalGuests : nil,
+            netTipsPerGuestCents: totalGuests > 0 ? guestNetTips / totalGuests : nil,
+            tableShiftCount: tableShifts.count,
+            totalTables: totalTables,
+            estimatedTableShiftCount: estimatedTableShiftCount,
+            averageSpendPerTableCents: totalTables > 0 ? tableNetSales / totalTables : nil,
+            netTipsPerTableCents: totalTables > 0 ? tableNetTips / totalTables : nil,
+            averageGuestsPerTable: averageGuestsPerTable,
+            averageCheckCents: averageCheckCents,
+            guestsPerHour: guestsPerHour,
+            tipOutPercentOfGrossTips: tipOutPercent,
+            topCategories: topCategories
         )
     }
 
@@ -1662,9 +1791,37 @@ struct InsightsFacts: Equatable, Codable, Sendable {
     // (JSONDecoder ignores its now-gone "cashCents"/"creditCents" keys
     // rather than failing), which self-heals on the next refresh.
     var cashWeekday: CashWeekdayFacts? = nil
+    var receiptPerformance: ReceiptPerformanceFacts? = nil
     /// Newest-first, one per noted shift, capped — context for the narration,
     /// never an arithmetic input.
     var notes: [NoteFact] = []
+}
+
+/// Receipt-derived guest, table, and sales-mix performance. Each average is
+/// blended from totals across qualifying shifts. Table figures carry their
+/// estimated-shift count because checks are only a proxy for physical tables.
+struct ReceiptPerformanceFacts: Equatable, Codable, Sendable {
+    let guestShiftCount: Int
+    let totalGuests: Int
+    let averageSpendPerGuestCents: Int?
+    let grossTipsPerGuestCents: Int?
+    let netTipsPerGuestCents: Int?
+    let tableShiftCount: Int
+    let totalTables: Int
+    let estimatedTableShiftCount: Int
+    let averageSpendPerTableCents: Int?
+    let netTipsPerTableCents: Int?
+    let averageGuestsPerTable: Double?
+    let averageCheckCents: Int?
+    let guestsPerHour: Double?
+    let tipOutPercentOfGrossTips: Double?
+    let topCategories: [CategoryMixFact]
+}
+
+struct CategoryMixFact: Equatable, Codable, Sendable {
+    let name: String
+    let netSalesCents: Int
+    let sharePercent: Double
 }
 
 /// The one cash fact Insights may ever surface: a weekday that runs
@@ -1883,4 +2040,3 @@ enum RevealCopy {
         return "\(sign)\(Money.string(fromCents: abs(deltaCents))) vs last period"
     }
 }
-

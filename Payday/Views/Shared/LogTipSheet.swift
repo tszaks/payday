@@ -79,6 +79,10 @@ struct LogTipSheet: View {
     /// TipEntry.serverCount), same optional/shift-level treatment as
     /// everything else in this group.
     @State private var serverCount: Int?
+    /// Rich facts captured from the end-of-shift printout. Only Guests and
+    /// Tables are editable here; the rest stays attached to the shift for
+    /// analysis without turning closeout into a long questionnaire.
+    @State private var receiptMetrics: ShiftReceiptMetrics?
 
     init(target: TipEntrySheetTarget) {
         self.target = target
@@ -119,6 +123,7 @@ struct LogTipSheet: View {
             _clockIn = State(initialValue: entry.clockIn)
             _clockOut = State(initialValue: entry.clockOut)
             _serverCount = State(initialValue: entry.serverCount)
+            _receiptMetrics = State(initialValue: entry.receiptMetrics)
         }
     }
 
@@ -199,7 +204,13 @@ struct LogTipSheet: View {
             clockIn = resolved.clockIn
             clockOut = resolved.clockOut
             serverCount = resolved.serverCount
+            receiptMetrics = resolved.receiptMetrics
         }
+    }
+
+    private func handleSheetAppear() {
+        applyLiveShiftEndModeIfNeeded()
+        seedShiftDetailDefaults()
     }
 
     /// Every entry belonging to the same shift (closeout) as `entry` — the
@@ -371,10 +382,7 @@ struct LogTipSheet: View {
                         proxy.scrollTo(newField, anchor: .center)
                     }
                 }
-                .onAppear {
-                    applyLiveShiftEndModeIfNeeded()
-                    seedShiftDetailDefaults()
-                }
+                .onAppear(perform: handleSheetAppear)
                 .onDisappear { pruneZeroedRows() }
             }
         }
@@ -504,7 +512,8 @@ struct LogTipSheet: View {
     }
 
     /// While the details group is expanded (always true when editing), Next
-    /// cycles Cash -> Credit -> Tip-out -> Sales -> Servers -> back to Cash.
+    /// cycles Cash -> Credit -> Tip-out -> Sales -> Servers, then through
+    /// receipt-only Guests/Tables when those rows are present.
     /// Collapsed, only Cash and Credit are on screen, so the chain shortens
     /// to Cash -> Credit -> nil (Save sits right beside Next at that point,
     /// nothing left to advance into).
@@ -517,7 +526,9 @@ struct LogTipSheet: View {
         case .credit: return .tipOut
         case .tipOut: return .sales
         case .sales: return .servers
-        case .servers: return .cash
+        case .servers: return receiptMetrics == nil ? .cash : .guests
+        case .guests: return .tables
+        case .tables: return .cash
         }
     }
 
@@ -691,9 +702,53 @@ struct LogTipSheet: View {
                 }
                 .padding(.vertical, 14)
                 .id(CurrencyRowField.servers)
+                receiptDetailRows
             }
             .padding()
             .tint(PaydayColor.textPrimary)
+        }
+    }
+
+    /// Receipt-only rows stay in their own builder so adding them does not
+    /// push the parent sheet body's generic type past Swift's checking limit.
+    @ViewBuilder
+    private var receiptDetailRows: some View {
+        if receiptMetrics != nil {
+            Divider()
+            HStack {
+                Text("Guests")
+                Spacer()
+                CompactCountField(count: guestCountBinding, field: .guests, focusedField: $focusedCurrencyField, maxDigits: 3)
+            }
+            .padding(.vertical, 14)
+            .id(CurrencyRowField.guests)
+            Divider()
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Tables")
+                    if receiptMetrics?.tableCountSource?.isEstimated == true {
+                        Text("Estimated from checks")
+                            .font(PaydayFont.caption2)
+                            .foregroundStyle(PaydayColor.textSecondary)
+                    } else if receiptMetrics?.tableCountSource == .confirmed {
+                        Text("Confirmed")
+                            .font(PaydayFont.caption2)
+                            .foregroundStyle(PaydayColor.textSecondary)
+                    }
+                }
+                Spacer()
+                CompactCountField(count: tableCountBinding, field: .tables, focusedField: $focusedCurrencyField, maxDigits: 3)
+            }
+            .padding(.vertical, 14)
+            .id(CurrencyRowField.tables)
+
+            if let receiptMetricsSummary {
+                Text(receiptMetricsSummary)
+                    .font(PaydayFont.caption)
+                    .foregroundStyle(PaydayColor.textSecondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 4)
+            }
         }
     }
 
@@ -747,6 +802,46 @@ struct LogTipSheet: View {
             get: { serverCount ?? 0 },
             set: { serverCount = $0 > 0 ? $0 : nil }
         )
+    }
+
+    private var guestCountBinding: Binding<Int> {
+        Binding(
+            get: { receiptMetrics?.guestCount ?? 0 },
+            set: { newValue in
+                var metrics = receiptMetrics ?? ShiftReceiptMetrics()
+                metrics.guestCount = newValue > 0 ? newValue : nil
+                receiptMetrics = metrics.isEmpty ? nil : metrics
+                liveSaveEdit()
+            }
+        )
+    }
+
+    private var tableCountBinding: Binding<Int> {
+        Binding(
+            get: { receiptMetrics?.tableCount ?? 0 },
+            set: { newValue in
+                var metrics = receiptMetrics ?? ShiftReceiptMetrics()
+                metrics.tableCount = newValue > 0 ? newValue : nil
+                metrics.tableCountSource = newValue > 0 ? .confirmed : nil
+                receiptMetrics = metrics.isEmpty ? nil : metrics
+                liveSaveEdit()
+            }
+        )
+    }
+
+    /// One compact proof that the scan captured more than the visible form.
+    /// Average spend follows the restaurant receipt convention and therefore
+    /// uses pre-tax net sales, unlike the editable post-tax Sales field.
+    private var receiptMetricsSummary: String? {
+        guard let metrics = receiptMetrics else { return nil }
+        var parts: [String] = []
+        if let average = metrics.averageSpendPerGuestCents {
+            parts.append("\(Money.string(fromCents: average)) average spend per guest")
+        }
+        if let count = metrics.categorySales?.count, count > 0 {
+            parts.append("\(count) sales \(count == 1 ? "category" : "categories") captured")
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
     /// Screenshot/QA hook only: lets a launch argument force the keyboard
@@ -813,6 +908,9 @@ struct LogTipSheet: View {
             if let serverCount = parsed.serverCount {
                 self.serverCount = serverCount
             }
+            if let metrics = parsed.receiptMetrics {
+                receiptMetrics = receiptMetrics?.merging(metrics) ?? metrics
+            }
             let parsedReceiptDate: Date?
             if let shiftDate = parsed.shiftDate {
                 parsedReceiptDate = receiptDate(from: shiftDate)
@@ -836,11 +934,12 @@ struct LogTipSheet: View {
             if let clockIn, let clockOut {
                 hoursWorked = ShiftTimes.hours(clockIn: clockIn, clockOut: clockOut)
             }
-            if parsed.tipOutCents != nil || parsed.salesCents != nil || parsed.serverCount != nil || parsed.shiftDate != nil || parsed.clockIn != nil || parsed.clockOut != nil {
+            if parsed.tipOutCents != nil || parsed.salesCents != nil || parsed.serverCount != nil || parsed.receiptMetrics != nil || parsed.shiftDate != nil || parsed.clockIn != nil || parsed.clockOut != nil {
                 isDetailsExpanded = true
             }
             let fieldWord = parsed.filledFieldCount == 1 ? "field" : "fields"
             receiptScanStatus = "Filled \(parsed.filledFieldCount) receipt \(fieldWord). Review before saving."
+            liveSaveEdit()
             PaydayHaptics.success()
         } catch {
             receiptScanError = error.localizedDescription
@@ -922,7 +1021,8 @@ struct LogTipSheet: View {
             shiftPeriod: shiftPeriod,
             clockIn: clockIn,
             clockOut: clockOut,
-            serverCount: serverCount
+            serverCount: serverCount,
+            receiptMetrics: receiptMetrics
         )
 
         revealResult = reveal
@@ -991,6 +1091,7 @@ struct LogTipSheet: View {
             clockIn: clockIn,
             clockOut: clockOut,
             serverCount: serverCount,
+            receiptMetrics: receiptMetrics,
             into: rows
         )
 
@@ -1121,9 +1222,9 @@ private struct CompactCountField: View {
     var focusedField: FocusState<CurrencyRowField?>.Binding
     var autoFocus: Bool = false
     var placeholderCount: Int? = nil
+    var maxDigits: Int = 2
     @State private var digitsText: String = ""
 
-    private static let maxDigits = 2
     private var isFocused: Bool { focusedField.wrappedValue == field }
 
     var body: some View {
@@ -1165,7 +1266,7 @@ private struct CompactCountField: View {
             if autoFocus { focusedField.wrappedValue = field }
         }
         .onChange(of: digitsText) { _, newValue in
-            let filtered = String(newValue.filter(\.isNumber).prefix(Self.maxDigits))
+            let filtered = String(newValue.filter(\.isNumber).prefix(maxDigits))
             if filtered != newValue { digitsText = filtered }
             count = Int(filtered) ?? 0
         }

@@ -28,6 +28,9 @@ enum InsightsFactsCopy {
         if let sales = facts.sales {
             sections.append(tipPercent(sales))
         }
+        if let receipt = facts.receiptPerformance {
+            sections.append(guestsAndTables(receipt))
+        }
         if let startTime = facts.startTime {
             sections.append(startTimes(startTime))
         }
@@ -101,6 +104,21 @@ enum InsightsFactsCopy {
             body += " \(weekdayName) tips best at \(String(format: "%.1f", bestPercent))% across \(shiftsPhrase(count))."
         }
         return InsightSection(title: "Tip Percent", body: body)
+    }
+
+    private static func guestsAndTables(_ facts: ReceiptPerformanceFacts) -> InsightSection {
+        var sentences: [String] = []
+        if let spend = facts.averageSpendPerGuestCents, let tips = facts.netTipsPerGuestCents {
+            sentences.append("Guests spent \(Money.string(fromCents: spend)) before tax on average, and you kept \(Money.string(fromCents: tips)) in tips per guest across \(shiftsPhrase(facts.guestShiftCount)).")
+        }
+        if let tips = facts.netTipsPerTableCents {
+            var tableSentence = "You kept \(Money.string(fromCents: tips)) in tips per table across \(shiftsPhrase(facts.tableShiftCount))."
+            if facts.estimatedTableShiftCount > 0 {
+                tableSentence += " Table counts were estimated from checks on \(shiftsPhrase(facts.estimatedTableShiftCount)), so split checks can make that figure run high."
+            }
+            sentences.append(tableSentence)
+        }
+        return InsightSection(title: "Guests and Tables", body: sentences.joined(separator: " "))
     }
 
     /// We only ever know a shift's total, never how pay was distributed

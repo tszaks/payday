@@ -84,4 +84,76 @@ struct ShiftReceiptMetrics: Codable, Equatable, Hashable, Sendable {
             && (categorySales?.isEmpty ?? true)
             && (tipSharing?.isEmpty ?? true)
     }
+
+    /// Adds facts from a newer scan without letting an unreadable or cropped
+    /// rescan erase values captured previously. A value that is actually
+    /// present in the newer scan wins, including an explicit zero amount.
+    func merging(_ newer: ShiftReceiptMetrics) -> ShiftReceiptMetrics {
+        let invalidatesInferredTables = tableCountSource == .inferredFromChecks
+            && newer.tableCount == nil
+            && newer.cashSalesCents.map { $0 != 0 } == true
+        let mergedTableCount = invalidatesInferredTables ? nil : (newer.tableCount ?? tableCount)
+        let mergedTableCountSource = invalidatesInferredTables ? nil : (newer.tableCountSource ?? tableCountSource)
+
+        return ShiftReceiptMetrics(
+            guestCount: newer.guestCount ?? guestCount,
+            creditCheckCount: newer.creditCheckCount ?? creditCheckCount,
+            tableCount: mergedTableCount,
+            tableCountSource: mergedTableCountSource,
+            netSalesCents: newer.netSalesCents ?? netSalesCents,
+            taxCents: newer.taxCents ?? taxCents,
+            printedTipPercentHundredths: newer.printedTipPercentHundredths ?? printedTipPercentHundredths,
+            averageSpendPerGuestCents: newer.averageSpendPerGuestCents ?? averageSpendPerGuestCents,
+            cashSalesCents: newer.cashSalesCents ?? cashSalesCents,
+            gratuityFeesCents: newer.gratuityFeesCents ?? gratuityFeesCents,
+            categorySales: Self.mergeCategorySales(categorySales, newer.categorySales),
+            tipSharing: Self.mergeTipSharing(tipSharing, newer.tipSharing)
+        )
+    }
+
+    private static func mergeCategorySales(
+        _ older: [CategorySales]?,
+        _ newer: [CategorySales]?
+    ) -> [CategorySales]? {
+        mergeRows(older, newer) { $0.name }
+    }
+
+    private static func mergeTipSharing(
+        _ older: [TipSharingLine]?,
+        _ newer: [TipSharingLine]?
+    ) -> [TipSharingLine]? {
+        mergeRows(older, newer) { $0.role }
+    }
+
+    /// A rescan can be cropped, so named receipt rows are updated by identity
+    /// while rows absent from the newer image stay intact. Existing order is
+    /// retained and genuinely new rows are appended in receipt order.
+    private static func mergeRows<Row>(
+        _ older: [Row]?,
+        _ newer: [Row]?,
+        name: (Row) -> String
+    ) -> [Row]? {
+        guard let newer else { return older }
+        guard let older else { return newer }
+
+        var result = older
+        var indices: [String: Int] = [:]
+        for (index, row) in older.enumerated() {
+            indices[normalizedIdentity(name(row))] = index
+        }
+        for row in newer {
+            let identity = normalizedIdentity(name(row))
+            if let index = indices[identity] {
+                result[index] = row
+            } else {
+                indices[identity] = result.count
+                result.append(row)
+            }
+        }
+        return result
+    }
+
+    private static func normalizedIdentity(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
 }

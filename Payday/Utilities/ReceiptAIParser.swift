@@ -16,21 +16,60 @@ enum ReceiptAIParser {
     - tip_out: the final Total in a "TIP SHARING" section, or an explicitly labeled tip-out/tipout total. Prefer the printed section total instead of adding its individual rows.
     - sales: post-tax sales only, meaning the shift's sales total including sales tax but excluding tips. On a Shift Review Summary, use "Gross sales" under "SALES & TAXES SUMMARY." Never use Total amount, net sales, pre-tax sales, taxable sales, a credit-audit Subtotal, or another subtotal. If an after-tax sales number is not unambiguous, return null.
     - server_count: number of servers, staff, or server count when explicitly printed.
+    - guest_count: the explicitly printed "Total guests served" count.
+    - credit_check_count: count the distinct check data rows in the "CREDIT TIP AUDIT" section. Exclude its header and Total row.
+    - table_count: the number of physical tables only when explicitly printed. Do not infer tables from checks; the app handles that estimate separately.
+    - net_sales: the explicitly printed pre-tax "Total net sales" amount.
+    - tax: the explicitly printed sales tax amount.
+    - printed_tip_percent: the explicitly printed tip percentage as a percent number, so 20.3% is 20.3.
+    - average_spend_per_guest: the explicitly printed average spend per guest.
+    - cash_sales: the explicitly printed collected cash sales amount, including a zero when one is printed. Do not use cash tips.
+    - gratuity_fees: the explicitly printed total gratuity and fees.
+    - category_sales: rows from the "SALES & TAXES SUMMARY" that represent sales categories. For each row return its printed name, quantity, and pre-tax net sales. Exclude totals, tax, tips, gratuity/fees, discounts, and payment rows. Return an empty array when unavailable.
+    - tip_sharing: numeric role/amount rows from "TIP SHARING." Exclude the Total row and skip rows whose amount is NA or missing. Return an empty array when unavailable.
     - shift_date: the date printed for this shift, formatted YYYY-MM-DD.
     - clock_in: the start of the printed shift time range, formatted HH:mm in 24-hour time.
     - clock_out: the end of the printed shift time range, formatted HH:mm in 24-hour time.
 
-    The same value may be printed in multiple sections. Never sum duplicated shift totals. "Total guests served" and any guest count are not a server count; return server_count as null unless the number of working servers or staff is explicitly printed. Ignore standalone tax amounts, checks, payment totals, discounts, employee IDs, and any weekly or year-to-date values. Do not add tax to a pre-tax number yourself. Do not infer a cash/credit split from a combined tip total. Do not calculate a missing field from another field.
+    The same value may be printed in multiple sections. Never sum duplicated shift totals. "Total guests served" and any guest count are never a server count. A check is not necessarily a physical table because one table can split into multiple checks. Do not infer a table count. Ignore check identifiers, card last-four digits, employee IDs, and any weekly or year-to-date values. Do not add tax to a pre-tax number yourself. Do not infer a cash/credit split from a combined tip total. Do not calculate a missing field from another field.
 
-    Return money as numbers in dollars, with up to two decimal places. Return null when a field is not present or not unambiguous. Return server_count as an integer or null. Return shift_date, clock_in, and clock_out as strings in the requested formats or null.
+    Return money as numbers in dollars, with up to two decimal places. Return null when a scalar field is not present or not unambiguous. Return counts as integers or null. Return shift_date, clock_in, and clock_out as strings in the requested formats or null.
     """
 
     struct ParsedValues: Decodable {
+        struct CategoryValue: Decodable {
+            let name: String
+            let quantity: Int?
+            let netSales: Double?
+
+            enum CodingKeys: String, CodingKey {
+                case name
+                case quantity
+                case netSales = "net_sales"
+            }
+        }
+
+        struct TipSharingValue: Decodable {
+            let role: String
+            let amount: Double
+        }
+
         let cashTips: Double?
         let creditTips: Double?
         let tipOut: Double?
         let sales: Double?
         let serverCount: Int?
+        let guestCount: Int?
+        let creditCheckCount: Int?
+        let tableCount: Int?
+        let netSales: Double?
+        let tax: Double?
+        let printedTipPercent: Double?
+        let averageSpendPerGuest: Double?
+        let cashSales: Double?
+        let gratuityFees: Double?
+        let categorySales: [CategoryValue]
+        let tipSharing: [TipSharingValue]
         let shiftDate: String?
         let clockIn: String?
         let clockOut: String?
@@ -41,6 +80,17 @@ enum ReceiptAIParser {
             case tipOut = "tip_out"
             case sales
             case serverCount = "server_count"
+            case guestCount = "guest_count"
+            case creditCheckCount = "credit_check_count"
+            case tableCount = "table_count"
+            case netSales = "net_sales"
+            case tax
+            case printedTipPercent = "printed_tip_percent"
+            case averageSpendPerGuest = "average_spend_per_guest"
+            case cashSales = "cash_sales"
+            case gratuityFees = "gratuity_fees"
+            case categorySales = "category_sales"
+            case tipSharing = "tip_sharing"
             case shiftDate = "shift_date"
             case clockIn = "clock_in"
             case clockOut = "clock_out"
@@ -83,16 +133,67 @@ enum ReceiptAIParser {
         let tipOutCents: Int?
         let salesCents: Int?
         let serverCount: Int?
+        let guestCount: Int?
+        let creditCheckCount: Int?
+        let printedTableCount: Int?
+        let netSalesCents: Int?
+        let taxCents: Int?
+        let printedTipPercentHundredths: Int?
+        let averageSpendPerGuestCents: Int?
+        let cashSalesCents: Int?
+        let gratuityFeesCents: Int?
+        let categorySales: [ShiftReceiptMetrics.CategorySales]
+        let tipSharing: [ShiftReceiptMetrics.TipSharingLine]
         let shiftDate: ShiftDate?
         let clockIn: ClockTime?
         let clockOut: ClockTime?
 
+        /// Physical table count when printed; otherwise a conservative check
+        /// proxy only when the receipt explicitly says there were no cash
+        /// sales. Cash checks can be absent from a credit audit, so a nonzero
+        /// or unknown cash-sales value disables the estimate.
+        var tableCount: Int? {
+            if let printedTableCount { return printedTableCount }
+            guard let creditCheckCount, cashSalesCents == 0 else { return nil }
+            return creditCheckCount
+        }
+
+        var tableCountSource: TableCountSource? {
+            if printedTableCount != nil { return .printed }
+            return tableCount == nil ? nil : .inferredFromChecks
+        }
+
+        var receiptMetrics: ShiftReceiptMetrics? {
+            let metrics = ShiftReceiptMetrics(
+                guestCount: guestCount,
+                creditCheckCount: creditCheckCount,
+                tableCount: tableCount,
+                tableCountSource: tableCountSource,
+                netSalesCents: netSalesCents,
+                taxCents: taxCents,
+                printedTipPercentHundredths: printedTipPercentHundredths,
+                averageSpendPerGuestCents: averageSpendPerGuestCents,
+                cashSalesCents: cashSalesCents,
+                gratuityFeesCents: gratuityFeesCents,
+                categorySales: categorySales.isEmpty ? nil : categorySales,
+                tipSharing: tipSharing.isEmpty ? nil : tipSharing
+            )
+            return metrics.isEmpty ? nil : metrics
+        }
+
+        /// Count only fields a person can review in the compact shift form.
+        /// Rich category and tip-sharing rows are saved in the background.
         var filledFieldCount: Int {
             let amountCount = [cashTipsCents, creditTipsCents, tipOutCents, salesCents, serverCount]
                 .compactMap { $0 }.count
             let dateAndTimeCount = [shiftDate != nil, clockIn != nil, clockOut != nil]
                 .filter { $0 }.count
-            return amountCount + dateAndTimeCount
+            let peopleAndTablesCount = [guestCount, tableCount].compactMap { $0 }.count
+            return amountCount + dateAndTimeCount + peopleAndTablesCount
+        }
+
+        var hasCapturedFacts: Bool {
+            filledFieldCount > 0 || receiptMetrics != nil
         }
     }
 
@@ -165,7 +266,7 @@ enum ReceiptAIParser {
         }
 
         let parsed = try parse(responseData: data)
-        guard parsed.filledFieldCount > 0 else { throw ParseError.noFieldsFound }
+        guard parsed.hasCapturedFacts else { throw ParseError.noFieldsFound }
         return parsed
     }
 
@@ -186,6 +287,29 @@ enum ReceiptAIParser {
             tipOutCents: cents(values.tipOut),
             salesCents: cents(values.sales),
             serverCount: positiveCount(values.serverCount),
+            guestCount: positiveCount(values.guestCount),
+            creditCheckCount: positiveCount(values.creditCheckCount),
+            printedTableCount: positiveCount(values.tableCount),
+            netSalesCents: cents(values.netSales),
+            taxCents: cents(values.tax),
+            printedTipPercentHundredths: hundredths(values.printedTipPercent),
+            averageSpendPerGuestCents: cents(values.averageSpendPerGuest),
+            cashSalesCents: cents(values.cashSales),
+            gratuityFeesCents: cents(values.gratuityFees),
+            categorySales: values.categorySales.compactMap { category in
+                let name = category.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !name.isEmpty else { return nil }
+                return ShiftReceiptMetrics.CategorySales(
+                    name: name,
+                    quantity: positiveCount(category.quantity),
+                    netSalesCents: cents(category.netSales)
+                )
+            },
+            tipSharing: values.tipSharing.compactMap { line in
+                let role = line.role.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !role.isEmpty, let amountCents = cents(line.amount) else { return nil }
+                return ShiftReceiptMetrics.TipSharingLine(role: role, amountCents: amountCents)
+            },
             shiftDate: shiftDate(values.shiftDate),
             clockIn: clockTime(values.clockIn),
             clockOut: clockTime(values.clockOut)
@@ -203,6 +327,11 @@ enum ReceiptAIParser {
     private static func cents(_ dollars: Double?) -> Int? {
         guard let dollars else { return nil }
         return max(0, Int((dollars * 100).rounded()))
+    }
+
+    private static func hundredths(_ percent: Double?) -> Int? {
+        guard let percent else { return nil }
+        return max(0, Int((percent * 100).rounded()))
     }
 
     private static func positiveCount(_ count: Int?) -> Int? {
@@ -250,11 +379,45 @@ enum ReceiptAIParser {
                 "tip_out": ["type": ["number", "null"]],
                 "sales": ["type": ["number", "null"]],
                 "server_count": ["type": ["integer", "null"]],
+                "guest_count": ["type": ["integer", "null"]],
+                "credit_check_count": ["type": ["integer", "null"]],
+                "table_count": ["type": ["integer", "null"]],
+                "net_sales": ["type": ["number", "null"]],
+                "tax": ["type": ["number", "null"]],
+                "printed_tip_percent": ["type": ["number", "null"]],
+                "average_spend_per_guest": ["type": ["number", "null"]],
+                "cash_sales": ["type": ["number", "null"]],
+                "gratuity_fees": ["type": ["number", "null"]],
+                "category_sales": [
+                    "type": "array",
+                    "items": [
+                        "type": "object",
+                        "properties": [
+                            "name": ["type": "string"],
+                            "quantity": ["type": ["integer", "null"]],
+                            "net_sales": ["type": ["number", "null"]]
+                        ],
+                        "required": ["name", "quantity", "net_sales"],
+                        "additionalProperties": false
+                    ]
+                ],
+                "tip_sharing": [
+                    "type": "array",
+                    "items": [
+                        "type": "object",
+                        "properties": [
+                            "role": ["type": "string"],
+                            "amount": ["type": "number"]
+                        ],
+                        "required": ["role", "amount"],
+                        "additionalProperties": false
+                    ]
+                ],
                 "shift_date": ["type": ["string", "null"]],
                 "clock_in": ["type": ["string", "null"]],
                 "clock_out": ["type": ["string", "null"]]
             ],
-            "required": ["cash_tips", "credit_tips", "tip_out", "sales", "server_count", "shift_date", "clock_in", "clock_out"],
+            "required": ["cash_tips", "credit_tips", "tip_out", "sales", "server_count", "guest_count", "credit_check_count", "table_count", "net_sales", "tax", "printed_tip_percent", "average_spend_per_guest", "cash_sales", "gratuity_fees", "category_sales", "tip_sharing", "shift_date", "clock_in", "clock_out"],
             "additionalProperties": false
         ]
     }

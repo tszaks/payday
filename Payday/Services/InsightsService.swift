@@ -180,6 +180,30 @@ enum InsightsService {
             }
             lines.append(salesLine)
         }
+        if let receipt = facts.receiptPerformance {
+            var receiptParts: [String] = []
+            if let spend = receipt.averageSpendPerGuestCents, let grossTips = receipt.grossTipsPerGuestCents, let netTips = receipt.netTipsPerGuestCents {
+                receiptParts.append("across \(receipt.guestShiftCount) shifts and \(receipt.totalGuests) guests: pre-tax spend \(Money.string(fromCents: spend)) per guest, gross tips \(Money.string(fromCents: grossTips)) per guest, net tips \(Money.string(fromCents: netTips)) per guest")
+            }
+            if let spend = receipt.averageSpendPerTableCents, let tips = receipt.netTipsPerTableCents {
+                receiptParts.append("across \(receipt.tableShiftCount) shifts and \(receipt.totalTables) tables: pre-tax spend \(Money.string(fromCents: spend)) per table and net tips \(Money.string(fromCents: tips)) per table; \(receipt.estimatedTableShiftCount) of those shifts use check count as an estimated table count, so split checks can overstate tables")
+            }
+            if let averageCheck = receipt.averageCheckCents {
+                receiptParts.append("average check \(Money.string(fromCents: averageCheck)) on no-cash-sales shifts")
+            }
+            if let guestsPerHour = receipt.guestsPerHour {
+                receiptParts.append("\(String(format: "%.1f", guestsPerHour)) guests per hour")
+            }
+            if let tipOutPercent = receipt.tipOutPercentOfGrossTips {
+                receiptParts.append("tip-out is \(String(format: "%.1f", tipOutPercent))% of gross tips")
+            }
+            if !receipt.topCategories.isEmpty {
+                receiptParts.append("sales mix: " + receipt.topCategories.map { "\($0.name) \(String(format: "%.0f", $0.sharePercent))%" }.joined(separator: ", "))
+            }
+            if !receiptParts.isEmpty {
+                lines.append("GUESTS, TABLES, AND SALES MIX: " + receiptParts.joined(separator: "; ") + ".")
+            }
+        }
         if let startTime = facts.startTime {
             let bestHour = hourLabel(startTime.bestStartHour)
             let worstHour = hourLabel(startTime.worstStartHour)
@@ -207,7 +231,7 @@ enum InsightsService {
             lines.append("SINCE THEN (a follow-up on a past Move, already shown to the reader as its own card, above everything you write, including TOP MOVE - never repeat it as an item): \(latestFollowUp.title) - \(latestFollowUp.body)")
         }
 
-        lines.append("THE READER ALREADY SEES ALL OF THE ABOVE AS NUMBERS ON SCREEN, in a stat grid directly below TOP MOVE/SINCE THEN: hourly rate, tip percent, lunch vs dinner per shift, doubles vs solo per shift, cash weekday (when one qualifies), and start times, each already hedged there when the sample is thin. Your job is NOT to restate any of those figures and NOT to write one item per fact / narrate section-by-section - the grid already does that job better than prose can. Return 1 to 3 items in the sections array, and only when something is actually worth flagging beyond the numbers themselves: (a) an explanation for an anomaly or unusual number - especially one grounded in a SHIFT NOTE above - (b) a caveat about how to read the data (e.g. why a figure is thin or noisy) that the grid's own hedge doesn't already cover, or (c) one synthesis connecting two or more of the facts above into a takeaway the grid doesn't spell out on its own. Each item's title must be 4 words or fewer; each item's body must be 1-2 sentences, never more. If nothing above actually clears that bar, return an empty sections array rather than padding it with a restated number or a generic remark.")
+        lines.append("THE READER ALREADY SEES ALL OF THE ABOVE AS NUMBERS ON SCREEN, in a stat grid directly below TOP MOVE/SINCE THEN: hourly rate, tip percent, spend per guest, tips per table, lunch vs dinner per shift, doubles vs solo per shift, cash weekday (when one qualifies), and start times, each already hedged there when the sample is thin. Your job is NOT to restate any of those figures and NOT to write one item per fact / narrate section-by-section - the grid already does that job better than prose can. Return 1 to 3 items in the sections array, and only when something is actually worth flagging beyond the numbers themselves: (a) an explanation for an anomaly or unusual number - especially one grounded in a SHIFT NOTE above - (b) a caveat about how to read the data (e.g. why a figure is thin or noisy) that the grid's own hedge doesn't already cover, or (c) one synthesis connecting two or more of the facts above into a takeaway the grid doesn't spell out on its own. Each item's title must be 4 words or fewer; each item's body must be 1-2 sentences, never more. If nothing above actually clears that bar, return an empty sections array rather than padding it with a restated number or a generic remark.")
 
         var promptSections = ["NEW FACTS TO REFLECT:", lines.joined(separator: "\n")]
         if let previousSections, !previousSections.isEmpty {

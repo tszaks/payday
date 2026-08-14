@@ -16,6 +16,26 @@ struct InsightsNumbersGridTests {
         return facts
     }
 
+    private var receiptPerformance: ReceiptPerformanceFacts {
+        ReceiptPerformanceFacts(
+            guestShiftCount: 5,
+            totalGuests: 42,
+            averageSpendPerGuestCents: 2_950,
+            grossTipsPerGuestCents: 600,
+            netTipsPerGuestCents: 520,
+            tableShiftCount: 5,
+            totalTables: 21,
+            estimatedTableShiftCount: 4,
+            averageSpendPerTableCents: 5_900,
+            netTipsPerTableCents: 1_040,
+            averageGuestsPerTable: 2,
+            averageCheckCents: 5_900,
+            guestsPerHour: 1.7,
+            tipOutPercentOfGrossTips: 13.3,
+            topCategories: []
+        )
+    }
+
     @Test("empty facts produce no rows")
     func emptyFacts() {
         #expect(InsightsNumbersGrid.rows(for: baseFacts()).isEmpty)
@@ -59,6 +79,49 @@ struct InsightsNumbersGridTests {
         let rows = InsightsNumbersGrid.rows(for: facts)
         #expect(rows.count == 1)
         #expect(rows[0].map(\.id) == ["hourly"])
+    }
+
+    @Test("receipt performance shows pre-tax spend per guest and estimated tips per table")
+    func receiptPerformanceRow() {
+        var facts = baseFacts()
+        facts.receiptPerformance = receiptPerformance
+
+        let rows = InsightsNumbersGrid.rows(for: facts)
+
+        #expect(rows.count == 1)
+        #expect(rows[0].map(\.id) == ["spendPerGuest", "tipsPerTable"])
+        #expect(rows[0][0].value == "$29.50")
+        #expect(rows[0][0].context == "pre-tax sales · 5 shifts")
+        #expect(rows[0][1].value == "$10.40")
+        #expect(rows[0][1].context == "net tips · tables estimated on 4 of 5 shifts")
+    }
+
+    @Test("confirmed table metrics disclose a thin shift count")
+    func confirmedTableMetricDisclosesThinSample() {
+        var facts = baseFacts()
+        var confirmed = receiptPerformance
+        confirmed = ReceiptPerformanceFacts(
+            guestShiftCount: confirmed.guestShiftCount,
+            totalGuests: confirmed.totalGuests,
+            averageSpendPerGuestCents: confirmed.averageSpendPerGuestCents,
+            grossTipsPerGuestCents: confirmed.grossTipsPerGuestCents,
+            netTipsPerGuestCents: confirmed.netTipsPerGuestCents,
+            tableShiftCount: 5,
+            totalTables: confirmed.totalTables,
+            estimatedTableShiftCount: 0,
+            averageSpendPerTableCents: confirmed.averageSpendPerTableCents,
+            netTipsPerTableCents: confirmed.netTipsPerTableCents,
+            averageGuestsPerTable: confirmed.averageGuestsPerTable,
+            averageCheckCents: confirmed.averageCheckCents,
+            guestsPerHour: confirmed.guestsPerHour,
+            tipOutPercentOfGrossTips: confirmed.tipOutPercentOfGrossTips,
+            topCategories: confirmed.topCategories
+        )
+        facts.receiptPerformance = confirmed
+
+        let tableTile = InsightsNumbersGrid.rows(for: facts)[0][1]
+
+        #expect(tableTile.context == "net tips · confirmed tables · 5 shifts")
     }
 
     @Test("lunch and dinner always land in the same row, per-shift averages")
@@ -170,10 +233,12 @@ struct InsightsNumbersGridTests {
         facts.rate = RateFacts(overallDollarsPerHour: 42, nightsWithHours: 7, bestWeekday: nil, bestWeekdayDollarsPerHour: nil, bestWeekdayNightCount: nil, lunchDollarsPerHour: nil, dinnerDollarsPerHour: nil, doubleDollarsPerHour: nil, soloDollarsPerHour: nil)
         facts.sales = SalesFacts(overallTipPercent: 16.7, nightsWithSales: 5, bestWeekday: nil, bestWeekdayTipPercent: nil, bestWeekdayNightCount: nil)
         facts.startTime = StartTimeFacts(bestStartHour: 11, bestDollarsPerHour: 17, bestShiftCount: 4, worstStartHour: 17, worstDollarsPerHour: 14, worstShiftCount: 4)
+        facts.receiptPerformance = receiptPerformance
 
         let rows = InsightsNumbersGrid.rows(for: facts)
         #expect(rows.map { $0.map(\.id) } == [
             ["hourly", "tipPercent"],
+            ["spendPerGuest", "tipsPerTable"],
             ["lunch", "dinner"],
             ["doubles", "solo"],
             ["cashNights"],

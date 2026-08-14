@@ -52,7 +52,8 @@ private func duplicateShift(_ entries: [TipEntry], into context: ModelContext) {
             shiftID: shiftID,
             clockIn: entry.clockIn,
             clockOut: entry.clockOut,
-            serverCount: entry.serverCount
+            serverCount: entry.serverCount,
+            receiptMetrics: entry.receiptMetrics
         )
         context.insert(copy)
     }
