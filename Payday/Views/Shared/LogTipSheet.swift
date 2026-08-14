@@ -26,6 +26,10 @@ struct LogTipSheet: View {
     // with, whether this is a brand-new shift or an existing one being edited.
     @State private var cashCents: Int = 0
     @State private var creditCents: Int = 0
+    @State private var isShowingReceiptCamera = false
+    @State private var isScanningReceipt = false
+    @State private var receiptScanStatus: String?
+    @State private var receiptScanError: String?
     @FocusState private var focusedCurrencyField: CurrencyRowField?
 
     // Shared
@@ -384,6 +388,20 @@ struct LogTipSheet: View {
         .presentationDetents(debugSuppressAutoFocus ? [.large] : [.height(isEditing ? 560 : 600), .large])
         .presentationDragIndicator(.visible)
         .presentationBackground(PaydayColor.background)
+        .sheet(isPresented: $isShowingReceiptCamera) {
+            ReceiptImagePicker { image in
+                Task { await scanReceipt(image) }
+            }
+            .ignoresSafeArea()
+        }
+        .alert("Receipt scan", isPresented: Binding(
+            get: { receiptScanError != nil },
+            set: { if !$0 { receiptScanError = nil } }
+        )) {
+            Button("OK") { receiptScanError = nil }
+        } message: {
+            Text(receiptScanError ?? "")
+        }
         #if DEBUG
         .onAppear {
             let args = ProcessInfo.processInfo.arguments
@@ -433,6 +451,8 @@ struct LogTipSheet: View {
                 }
             }
 
+            receiptScanButton
+
             VStack(spacing: 12) {
                 // The debug hooks below (-DebugFocusTipOut/-DebugFocusServers)
                 // exist to screenshot ONE specific field focused above the
@@ -447,6 +467,40 @@ struct LogTipSheet: View {
             }
             .padding(.horizontal)
         }
+    }
+
+    /// Direct camera access is deliberate: receipt capture is a fast closeout
+    /// action, so it skips a source picker and goes straight from one tap to
+    /// point-and-shoot.
+    private var receiptScanButton: some View {
+        VStack(spacing: 8) {
+            Button {
+                receiptScanStatus = nil
+                focusedCurrencyField = nil
+                isShowingReceiptCamera = true
+            } label: {
+                Label("Point at receipt", systemImage: "camera.viewfinder")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.glass)
+            .disabled(isScanningReceipt || !UIImagePickerController.isSourceTypeAvailable(.camera))
+            .accessibilityHint("Take a receipt photo and fill the shift fields")
+
+            if isScanningReceipt {
+                HStack(spacing: 8) {
+                    ProgressView()
+                    Text("Reading receipt with AI…")
+                }
+                .font(PaydayFont.caption)
+                .foregroundStyle(PaydayColor.textSecondary)
+            } else if let receiptScanStatus {
+                Text(receiptScanStatus)
+                    .font(PaydayFont.caption)
+                    .foregroundStyle(PaydayColor.textSecondary)
+                    .multilineTextAlignment(.center)
+            }
+        }
+        .padding(.horizontal)
     }
 
     /// While the details group is expanded (always true when editing), Next
@@ -735,6 +789,40 @@ struct LogTipSheet: View {
     }
 
     // MARK: Actions
+
+    @MainActor
+    private func scanReceipt(_ image: UIImage) async {
+        isScanningReceipt = true
+        receiptScanStatus = nil
+        defer { isScanningReceipt = false }
+
+        do {
+            let parsed = try await ReceiptAIParser.parse(image: image)
+            if let cashTipsCents = parsed.cashTipsCents {
+                cashCents = cashTipsCents
+            }
+            if let creditTipsCents = parsed.creditTipsCents {
+                creditCents = creditTipsCents
+            }
+            if let tipOutCents = parsed.tipOutCents {
+                self.tipOutCents = tipOutCents
+            }
+            if let salesCents = parsed.salesCents {
+                self.salesCents = salesCents
+            }
+            if let serverCount = parsed.serverCount {
+                self.serverCount = serverCount
+            }
+            if parsed.tipOutCents != nil || parsed.salesCents != nil || parsed.serverCount != nil {
+                isDetailsExpanded = true
+            }
+            let fieldWord = parsed.filledFieldCount == 1 ? "field" : "fields"
+            receiptScanStatus = "Filled \(parsed.filledFieldCount) receipt \(fieldWord). Review before saving."
+            PaydayHaptics.success()
+        } catch {
+            receiptScanError = error.localizedDescription
+        }
+    }
 
     /// Creation flow only: writes the entries, then shows the post-log
     /// reveal instead of dismissing immediately. Stats are computed from
@@ -1040,6 +1128,10 @@ private struct CompactCountField: View {
             let filtered = String(newValue.filter(\.isNumber).prefix(Self.maxDigits))
             if filtered != newValue { digitsText = filtered }
             count = Int(filtered) ?? 0
+        }
+        .onChange(of: count) { _, newValue in
+            guard Int(digitsText) ?? 0 != newValue else { return }
+            digitsText = newValue == 0 ? "" : String(newValue)
         }
     }
 }
