@@ -813,7 +813,30 @@ struct LogTipSheet: View {
             if let serverCount = parsed.serverCount {
                 self.serverCount = serverCount
             }
-            if parsed.tipOutCents != nil || parsed.salesCents != nil || parsed.serverCount != nil {
+            let parsedReceiptDate: Date?
+            if let shiftDate = parsed.shiftDate {
+                parsedReceiptDate = receiptDate(from: shiftDate)
+            } else {
+                parsedReceiptDate = nil
+            }
+            if let parsedReceiptDate {
+                date = min(parsedReceiptDate, .now)
+            }
+            let clockDate = parsedReceiptDate ?? date
+            if let parsedClockIn = parsed.clockIn {
+                clockIn = receiptDate(on: clockDate, at: parsedClockIn)
+            }
+            if let parsedClockOut = parsed.clockOut {
+                var parsedEnd = receiptDate(on: clockDate, at: parsedClockOut)
+                if let parsedStart = clockIn, let end = parsedEnd, end <= parsedStart {
+                    parsedEnd = Calendar.current.date(byAdding: .day, value: 1, to: end)
+                }
+                clockOut = parsedEnd
+            }
+            if let clockIn, let clockOut {
+                hoursWorked = ShiftTimes.hours(clockIn: clockIn, clockOut: clockOut)
+            }
+            if parsed.tipOutCents != nil || parsed.salesCents != nil || parsed.serverCount != nil || parsed.shiftDate != nil || parsed.clockIn != nil || parsed.clockOut != nil {
                 isDetailsExpanded = true
             }
             let fieldWord = parsed.filledFieldCount == 1 ? "field" : "fields"
@@ -822,6 +845,23 @@ struct LogTipSheet: View {
         } catch {
             receiptScanError = error.localizedDescription
         }
+    }
+
+    private func receiptDate(from shiftDate: ReceiptAIParser.ParsedReceipt.ShiftDate) -> Date? {
+        Calendar.current.date(from: DateComponents(
+            year: shiftDate.year,
+            month: shiftDate.month,
+            day: shiftDate.day
+        ))
+    }
+
+    private func receiptDate(on day: Date, at time: ReceiptAIParser.ParsedReceipt.ClockTime) -> Date? {
+        Calendar.current.date(
+            bySettingHour: time.hour,
+            minute: time.minute,
+            second: 0,
+            of: day
+        )
     }
 
     /// Creation flow only: writes the entries, then shows the post-log
