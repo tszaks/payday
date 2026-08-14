@@ -6,11 +6,12 @@ private func stub(
     tips: Int? = nil,
     regular: Int? = nil,
     overtime: Int? = nil,
+    gratuity: Int? = nil,
     gross: Int? = nil,
     taxes: Int? = nil,
     net: Int? = nil
 ) -> PaycheckAudit.Stub {
-    PaycheckAudit.Stub(tipsCents: tips, regularWagesCents: regular, overtimeWagesCents: overtime, grossCents: gross, taxesCents: taxes, netCents: net)
+    PaycheckAudit.Stub(tipsCents: tips, regularWagesCents: regular, overtimeWagesCents: overtime, gratuityCents: gratuity, grossCents: gross, taxesCents: taxes, netCents: net)
 }
 
 private func findings(
@@ -38,6 +39,16 @@ struct PaycheckAuditGrossMathTests {
     func wagesFoldIntoEarned() {
         let result = findings(stub(tips: 3000, regular: 1000, overtime: 500, gross: 4500))
         #expect(finding(result, id: "gross-math")?.severity == .reconciles)
+    }
+
+    @Test("gratuity is included in gross reconciliation")
+    func gratuityIsIncluded() {
+        let result = findings(stub(tips: 232493, regular: 20699, gratuity: 15420, gross: 268612))
+        #expect(finding(result, id: "gross-math") == PaycheckAudit.Finding(
+            id: "gross-math",
+            severity: .reconciles,
+            message: "Tips, wages, and gratuity add up to the gross."
+        ))
     }
 
     @Test("within the 5-cent tolerance still reconciles")
@@ -341,5 +352,43 @@ struct PaycheckOCRTests {
         ])
 
         #expect(parsed.tipsCents == 61824)
+    }
+
+    @Test("adds repeated weekly rows into one pay-period total")
+    func addsRepeatedWeeklyRows() {
+        let parsed = PaycheckOCR.parse(lines: [
+            "REGULAR $108.96 $919.20 38.50",
+            "REGULAR $98.03 $919.20 34.64",
+            "OVERTIME $0.00 0.00",
+            "Tips Owed $1,244.37 $8,013.46",
+            "Tips Owed $1,080.56 $8,013.46",
+            "Gratuity Owed - Credit Card & Other $96.80 $154.20",
+            "Gratuity Owed - Credit Card & Other $57.40 $154.20",
+            "Gross Earnings $2,686.12 $9,384.13",
+            "Total Taxes $493.10 $1,634.78",
+            "Net Pay $2,193.02 $7,749.35"
+        ])
+
+        #expect(parsed.regularWagesCents == 20699)
+        #expect(parsed.overtimeWagesCents == 0)
+        #expect(parsed.tipsCents == 232493)
+        #expect(parsed.gratuityCents == 15420)
+        #expect(parsed.grossPayCents == 268612)
+        #expect(parsed.taxesCents == 49310)
+        #expect(parsed.netPayCents == 219302)
+        #expect(parsed.filledFieldCount == 7)
+    }
+
+    @Test("decodes AI totals as cents")
+    func decodesAITotals() {
+        let response = Data(#"{"output":[{"type":"message","content":[{"type":"output_text","text":"{\"tips\":2324.93,\"regular_wages\":206.99,\"overtime_wages\":0,\"gratuity\":154.20,\"gross_pay\":2686.12,\"taxes\":493.10,\"net_pay\":2193.02}"}]}]}"#.utf8)
+        let parsed = try? PaycheckAIParser.parse(responseData: response)
+
+        #expect(parsed?.tipsCents == 232493)
+        #expect(parsed?.regularWagesCents == 20699)
+        #expect(parsed?.gratuityCents == 15420)
+        #expect(parsed?.grossPayCents == 268612)
+        #expect(parsed?.taxesCents == 49310)
+        #expect(parsed?.netPayCents == 219302)
     }
 }

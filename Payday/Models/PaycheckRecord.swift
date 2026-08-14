@@ -43,6 +43,9 @@ final class PaycheckRecord {
     /// Overtime pay for the period, as printed on the stub.
     var overtimeWagesCents: Int?
 
+    /// Gratuity owed on the stub, separate from tips.
+    var gratuityCents: Int?
+
     /// Taxes withheld, as printed on the stub.
     var taxesCents: Int?
 
@@ -58,6 +61,7 @@ final class PaycheckRecord {
         netPayCents: Int? = nil,
         regularWagesCents: Int? = nil,
         overtimeWagesCents: Int? = nil,
+        gratuityCents: Int? = nil,
         taxesCents: Int? = nil
     ) {
         self.id = id
@@ -71,6 +75,7 @@ final class PaycheckRecord {
         self.netPayCents = netPayCents
         self.regularWagesCents = regularWagesCents
         self.overtimeWagesCents = overtimeWagesCents
+        self.gratuityCents = gratuityCents
         self.taxesCents = taxesCents
     }
 }
