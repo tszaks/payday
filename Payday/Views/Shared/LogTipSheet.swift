@@ -1,6 +1,7 @@
 import SwiftUI
 import SwiftData
 import PhotosUI
+import OSLog
 import UIKit
 
 /// Owns its own dismissal and save logic.
@@ -13,6 +14,11 @@ import UIKit
 /// explicit Save; editing live-saves every field straight through, same as
 /// the Vero sheet standard, with the toolbar reduced to a single Done.
 struct LogTipSheet: View {
+    private static let receiptLogger = Logger(
+        subsystem: "com.szakacsmedia.payday",
+        category: "ReceiptScanUI"
+    )
+
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
     @Environment(PayScheduleStore.self) private var scheduleStore
@@ -418,6 +424,8 @@ struct LogTipSheet: View {
                 Task { await scanReceipt(image) }
             }
             .ignoresSafeArea()
+            .presentationDetents([.medium])
+            .presentationDragIndicator(.visible)
         }
         .onChange(of: selectedReceiptPhotoItem) { _, item in
             guard let item else { return }
@@ -905,9 +913,19 @@ struct LogTipSheet: View {
 
     @MainActor
     private func scanReceipt(_ image: UIImage) async {
+        let scanStartedAt = Date()
+        Self.receiptLogger.notice(
+            "Receipt scan UI started. source=camera pixels=\(Int(image.size.width))x\(Int(image.size.height))"
+        )
         isScanningReceipt = true
         receiptScanStatus = nil
-        defer { isScanningReceipt = false }
+        defer {
+            isScanningReceipt = false
+            let elapsedMilliseconds = Int(Date().timeIntervalSince(scanStartedAt) * 1_000)
+            Self.receiptLogger.notice(
+                "Receipt scan UI ended. source=camera elapsedMs=\(elapsedMilliseconds)"
+            )
+        }
 
         do {
             let parsed = try await ReceiptAIParser.parse(image: image)
@@ -957,9 +975,16 @@ struct LogTipSheet: View {
             }
             let fieldWord = parsed.filledFieldCount == 1 ? "field" : "fields"
             receiptScanStatus = "Filled \(parsed.filledFieldCount) receipt \(fieldWord). Review before saving."
+            Self.receiptLogger.notice(
+                "Receipt scan UI applied result. filledFields=\(parsed.filledFieldCount)"
+            )
             liveSaveEdit()
             PaydayHaptics.success()
         } catch {
+            let errorType = String(describing: type(of: error))
+            Self.receiptLogger.error(
+                "Receipt scan UI received failure. type=\(errorType, privacy: .public) message=\(error.localizedDescription, privacy: .public)"
+            )
             receiptScanError = error.localizedDescription
         }
     }
@@ -967,9 +992,12 @@ struct LogTipSheet: View {
     @MainActor
     private func scanReceipt(photoItem: PhotosPickerItem) async {
         guard !isScanningReceipt else {
+            Self.receiptLogger.notice("Receipt photo-library import ignored because a scan is already active")
             selectedReceiptPhotoItem = nil
             return
         }
+        let importStartedAt = Date()
+        Self.receiptLogger.notice("Receipt photo-library import started")
         isScanningReceipt = true
         receiptScanStatus = nil
         defer {
@@ -982,8 +1010,16 @@ struct LogTipSheet: View {
             else {
                 throw ReceiptAIParser.ParseError.imageUnavailable
             }
+            let importMilliseconds = Int(Date().timeIntervalSince(importStartedAt) * 1_000)
+            Self.receiptLogger.notice(
+                "Receipt photo-library import completed. bytes=\(data.count) elapsedMs=\(importMilliseconds)"
+            )
             await scanReceipt(image)
         } catch {
+            let errorType = String(describing: type(of: error))
+            Self.receiptLogger.error(
+                "Receipt photo-library import failed. type=\(errorType, privacy: .public) message=\(error.localizedDescription, privacy: .public)"
+            )
             receiptScanError = error.localizedDescription
         }
     }

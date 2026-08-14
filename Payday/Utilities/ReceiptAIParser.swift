@@ -1,12 +1,20 @@
 import Foundation
+import ImageIO
+import OSLog
 import UIKit
+import Vision
 
 /// Reads a restaurant shift closeout receipt and returns only the fields that
 /// are explicitly printed on that receipt. This is intentionally separate
 /// from PaycheckAIParser because a receipt is one shift, not one pay period.
 enum ReceiptAIParser {
-    private static let model = "gpt-5.6-terra"
+    private static let model = "gpt-5.6-sol"
+    private static let reasoningEffort = "medium"
     private static let requestTimeout: TimeInterval = 30
+    private static let logger = Logger(
+        subsystem: "com.szakacsmedia.payday",
+        category: "ReceiptAnalysis"
+    )
     private static let session: URLSession = {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = requestTimeout
@@ -207,6 +215,7 @@ enum ReceiptAIParser {
     enum ParseError: LocalizedError, Sendable {
         case notConfigured
         case imageUnavailable
+        case noTextFound
         case quotaExhausted
         case timedOut
         case requestFailed
@@ -219,6 +228,8 @@ enum ReceiptAIParser {
                 "Receipt analysis is not configured for this build."
             case .imageUnavailable:
                 "The receipt photo could not be prepared."
+            case .noTextFound:
+                "No readable receipt text was found. Try a closer, well-lit photo."
             case .quotaExhausted:
                 "Receipt analysis credits have run out. Add API credits, then try again."
             case .timedOut:
@@ -238,55 +249,98 @@ enum ReceiptAIParser {
     }
 
     static func parse(image: UIImage) async throws -> ParsedReceipt {
-        guard let apiKey else { throw ParseError.notConfigured }
-        guard let imageData = jpegData(for: image) else {
-            throw ParseError.imageUnavailable
+        let analysisStartedAt = Date()
+        logger.notice(
+            "Receipt analysis invoked. model=\(model, privacy: .public) timeoutSeconds=\(Int(requestTimeout)) sourcePixels=\(Int(image.size.width))x\(Int(image.size.height))"
+        )
+        guard let apiKey else {
+            logger.error("Receipt analysis stopped before request: API key unavailable")
+            throw ParseError.notConfigured
         }
-
-        let imageURL = "data:image/jpeg;base64,\(imageData.base64EncodedString())"
-        let requestBody: [String: Any] = [
-            "model": model,
-            "reasoning": ["effort": "medium"],
-            "input": [[
-                "role": "user",
-                "content": [
-                    ["type": "input_text", "text": prompt],
-                    ["type": "input_image", "image_url": imageURL, "detail": "high"]
-                ]
-            ]],
-            "text": [
-                "format": [
-                    "type": "json_schema",
-                    "name": "shift_receipt_values",
-                    "strict": true,
-                    "schema": schema()
-                ]
-            ]
-        ]
+        let ocrStartedAt = Date()
+        let transcript: String
+        do {
+            transcript = try await recognizeTranscript(in: image)
+        } catch {
+            let errorType = String(describing: type(of: error))
+            logger.error(
+                "Receipt OCR failed. type=\(errorType, privacy: .public)"
+            )
+            throw error
+        }
+        let ocrMilliseconds = Int(Date().timeIntervalSince(ocrStartedAt) * 1_000)
+        logger.notice(
+            "Receipt OCR completed. characters=\(transcript.count) elapsedMs=\(ocrMilliseconds)"
+        )
 
         var request = URLRequest(url: URL(string: "https://api.openai.com/v1/responses")!)
         request.httpMethod = "POST"
         request.timeoutInterval = requestTimeout
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
+        request.httpBody = try JSONSerialization.data(withJSONObject: requestBody(transcript: transcript))
+        logger.notice(
+            "Receipt request encoded. bodyBytes=\(request.httpBody?.count ?? 0)"
+        )
 
         let data: Data
         let response: URLResponse
+        let networkStartedAt = Date()
+        logger.notice("Receipt network request started")
         do {
             (data, response) = try await session.data(for: request)
         } catch let error as URLError where error.code == .timedOut {
+            let elapsedMilliseconds = Int(Date().timeIntervalSince(networkStartedAt) * 1_000)
+            logger.error(
+                "Receipt network request timed out. elapsedMs=\(elapsedMilliseconds) code=\(error.code.rawValue)"
+            )
             throw ParseError.timedOut
+        } catch let error as URLError {
+            let elapsedMilliseconds = Int(Date().timeIntervalSince(networkStartedAt) * 1_000)
+            logger.error(
+                "Receipt network request failed. elapsedMs=\(elapsedMilliseconds) code=\(error.code.rawValue)"
+            )
+            throw ParseError.requestFailed
         } catch {
+            let elapsedMilliseconds = Int(Date().timeIntervalSince(networkStartedAt) * 1_000)
+            let errorType = String(describing: type(of: error))
+            logger.error(
+                "Receipt network request failed. elapsedMs=\(elapsedMilliseconds) type=\(errorType, privacy: .public)"
+            )
             throw ParseError.requestFailed
         }
-        guard let httpResponse = response as? HTTPURLResponse else { throw ParseError.requestFailed }
+        guard let httpResponse = response as? HTTPURLResponse else {
+            logger.error("Receipt network request returned a non-HTTP response")
+            throw ParseError.requestFailed
+        }
+        let networkMilliseconds = Int(Date().timeIntervalSince(networkStartedAt) * 1_000)
+        let requestID = httpResponse.value(forHTTPHeaderField: "x-request-id") ?? "unavailable"
+        logger.notice(
+            "Receipt network request completed. status=\(httpResponse.statusCode) responseBytes=\(data.count) elapsedMs=\(networkMilliseconds) requestId=\(requestID, privacy: .public)"
+        )
         guard (200..<300).contains(httpResponse.statusCode) else {
+            logger.error("Receipt API rejected request. status=\(httpResponse.statusCode)")
             throw requestError(statusCode: httpResponse.statusCode, responseData: data)
         }
 
-        let parsed = try parse(responseData: data)
-        guard parsed.hasCapturedFacts else { throw ParseError.noFieldsFound }
+        let parsed: ParsedReceipt
+        do {
+            parsed = try parse(responseData: data)
+        } catch {
+            let errorType = String(describing: type(of: error))
+            logger.error(
+                "Receipt response decoding failed. type=\(errorType, privacy: .public)"
+            )
+            throw error
+        }
+        guard parsed.hasCapturedFacts else {
+            logger.error("Receipt response decoded but contained no captured facts")
+            throw ParseError.noFieldsFound
+        }
+        let totalMilliseconds = Int(Date().timeIntervalSince(analysisStartedAt) * 1_000)
+        logger.notice(
+            "Receipt analysis succeeded. filledFields=\(parsed.filledFieldCount) hasMetrics=\(parsed.receiptMetrics != nil) elapsedMs=\(totalMilliseconds)"
+        )
         return parsed
     }
 
@@ -400,15 +454,108 @@ enum ReceiptAIParser {
         return ParsedReceipt.ClockTime(hour: parts[0], minute: parts[1])
     }
 
-    private static func jpegData(for image: UIImage) -> Data? {
-        let maxDimension: CGFloat = 2400
-        let longestSide = max(image.size.width, image.size.height)
-        let scale = min(1, maxDimension / max(longestSide, 1))
-        let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
-        let renderer = UIGraphicsImageRenderer(size: size)
-        return renderer.jpegData(withCompressionQuality: 0.84) { _ in
-            image.draw(in: CGRect(origin: .zero, size: size))
+    struct OCRFragment: Equatable, Sendable {
+        let text: String
+        let minX: Double
+        let midY: Double
+    }
+
+    static func transcript(fragments: [OCRFragment]) -> String {
+        let sorted = fragments.sorted { lhs, rhs in
+            if abs(lhs.midY - rhs.midY) > 0.000_1 {
+                return lhs.midY > rhs.midY
+            }
+            return lhs.minX < rhs.minX
         }
+
+        var rows: [[OCRFragment]] = []
+        for fragment in sorted {
+            if let rowIndex = rows.indices.last,
+               let anchorY = rows[rowIndex].first?.midY,
+               abs(anchorY - fragment.midY) <= 0.0045
+            {
+                rows[rowIndex].append(fragment)
+            } else {
+                rows.append([fragment])
+            }
+        }
+
+        return rows.map { row in
+            let rowText = row
+                .sorted { $0.minX < $1.minX }
+                .map(\.text)
+                .joined(separator: " | ")
+            return "[row] \(rowText)"
+        }
+        .joined(separator: "\n")
+    }
+
+    static func requestBody(transcript: String) -> [String: Any] {
+        let instructions = """
+        \(prompt)
+
+        Apple Vision recognized the receipt text below on-device. Rows are top-to-bottom; items separated by | share a printed row. Correct an obvious word misspelling only when the receipt context is unambiguous. Never alter or infer a number. Count distinct data rows under CREDIT TIP AUDIT even when OCR missed a check identifier.
+
+        \(transcript)
+        """
+
+        return [
+            "model": model,
+            "reasoning": ["effort": reasoningEffort],
+            "input": [[
+                "role": "user",
+                "content": [["type": "input_text", "text": instructions]]
+            ]],
+            "text": [
+                "format": [
+                    "type": "json_schema",
+                    "name": "shift_receipt_values_ocr",
+                    "strict": true,
+                    "schema": schema()
+                ]
+            ]
+        ]
+    }
+
+    private static func recognizeTranscript(in image: UIImage) async throws -> String {
+        guard let imageData = image.jpegData(compressionQuality: 1) else {
+            throw ParseError.imageUnavailable
+        }
+
+        return try await Task.detached(priority: .userInitiated) {
+            guard let localImage = UIImage(data: imageData),
+                  let cgImage = localImage.cgImage
+            else {
+                throw ParseError.imageUnavailable
+            }
+
+            let request = VNRecognizeTextRequest()
+            request.recognitionLevel = .accurate
+            request.usesLanguageCorrection = true
+            request.recognitionLanguages = ["en-US"]
+            request.customWords = [
+                "Kooma", "Sake", "Sushi", "Busser", "Gratuity", "Tipout"
+            ]
+            request.minimumTextHeight = 0.003
+
+            let handler = VNImageRequestHandler(
+                cgImage: cgImage,
+                orientation: localImage.receiptOCROrientation,
+                options: [:]
+            )
+            try handler.perform([request])
+
+            let fragments = (request.results ?? []).compactMap { observation -> OCRFragment? in
+                guard let text = observation.topCandidates(1).first?.string else { return nil }
+                return OCRFragment(
+                    text: text,
+                    minX: Double(observation.boundingBox.minX),
+                    midY: Double(observation.boundingBox.midY)
+                )
+            }
+            guard !fragments.isEmpty else { throw ParseError.noTextFound }
+            return transcript(fragments: fragments)
+        }.value
     }
 
     private static func schema() -> [String: Any] {
@@ -461,5 +608,21 @@ enum ReceiptAIParser {
             "required": ["cash_tips", "credit_tips", "tip_out", "sales", "server_count", "guest_count", "credit_check_count", "table_count", "net_sales", "tax", "printed_tip_percent", "average_spend_per_guest", "cash_sales", "gratuity_fees", "category_sales", "tip_sharing", "shift_date", "clock_in", "clock_out"],
             "additionalProperties": false
         ]
+    }
+}
+
+private extension UIImage {
+    var receiptOCROrientation: CGImagePropertyOrientation {
+        switch imageOrientation {
+        case .up: .up
+        case .upMirrored: .upMirrored
+        case .down: .down
+        case .downMirrored: .downMirrored
+        case .left: .left
+        case .leftMirrored: .leftMirrored
+        case .right: .right
+        case .rightMirrored: .rightMirrored
+        @unknown default: .up
+        }
     }
 }

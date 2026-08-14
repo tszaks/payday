@@ -1,9 +1,15 @@
 import SwiftUI
 import SwiftData
 import PhotosUI
+import OSLog
 import UIKit
 
 struct PaycheckEntrySheet: View {
+    private static let scanLogger = Logger(
+        subsystem: "com.szakacsmedia.payday",
+        category: "PaycheckScanUI"
+    )
+
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
     @Environment(PayScheduleStore.self) private var scheduleStore
@@ -228,6 +234,9 @@ struct PaycheckEntrySheet: View {
             PaydayCameraView(title: "Scan pay stub") { image in
                 Task { await scan(image: image) }
             }
+            .ignoresSafeArea()
+            .presentationDetents([.medium])
+            .presentationDragIndicator(.visible)
         }
         .onChange(of: selectedPhotoItem) { _, item in
             guard let item else { return }
@@ -348,9 +357,12 @@ struct PaycheckEntrySheet: View {
     @MainActor
     private func scan(photoItem: PhotosPickerItem) async {
         guard !isScanning else {
+            Self.scanLogger.notice("Paycheck photo-library import ignored because a scan is already active")
             selectedPhotoItem = nil
             return
         }
+        let importStartedAt = Date()
+        Self.scanLogger.notice("Paycheck photo-library import started")
         isScanning = true
         scanStatus = nil
         defer {
@@ -363,17 +375,35 @@ struct PaycheckEntrySheet: View {
             else {
                 throw PaycheckOCR.ScanError.imageUnavailable
             }
+            let importMilliseconds = Int(Date().timeIntervalSince(importStartedAt) * 1_000)
+            Self.scanLogger.notice(
+                "Paycheck photo-library import completed. bytes=\(data.count) elapsedMs=\(importMilliseconds)"
+            )
             await scan(image: image)
         } catch {
+            let errorType = String(describing: type(of: error))
+            Self.scanLogger.error(
+                "Paycheck photo-library import failed. type=\(errorType, privacy: .public) message=\(error.localizedDescription, privacy: .public)"
+            )
             scanError = error.localizedDescription
         }
     }
 
     @MainActor
     private func scan(image: UIImage) async {
+        let scanStartedAt = Date()
+        Self.scanLogger.notice(
+            "Paycheck scan UI started. pixels=\(Int(image.size.width))x\(Int(image.size.height))"
+        )
         isScanning = true
         scanStatus = nil
-        defer { isScanning = false }
+        defer {
+            isScanning = false
+            let elapsedMilliseconds = Int(Date().timeIntervalSince(scanStartedAt) * 1_000)
+            Self.scanLogger.notice(
+                "Paycheck scan UI ended. elapsedMs=\(elapsedMilliseconds)"
+            )
+        }
 
         do {
             let parsed = try await PaycheckOCR.parse(image: image)
@@ -391,8 +421,15 @@ struct PaycheckEntrySheet: View {
                 let fieldWord = parsed.filledFieldCount == 1 ? "field" : "fields"
                 scanStatus = "Filled " + String(parsed.filledFieldCount) + " " + fieldWord + ". Review the remaining fields before saving."
             }
+            Self.scanLogger.notice(
+                "Paycheck scan UI applied result. filledFields=\(parsed.filledFieldCount)"
+            )
             PaydayHaptics.success()
         } catch {
+            let errorType = String(describing: type(of: error))
+            Self.scanLogger.error(
+                "Paycheck scan UI received failure. type=\(errorType, privacy: .public) message=\(error.localizedDescription, privacy: .public)"
+            )
             scanError = error.localizedDescription
         }
     }

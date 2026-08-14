@@ -1,6 +1,12 @@
 import SwiftUI
 @preconcurrency import AVFoundation
+import OSLog
 import UIKit
+
+private enum PaydayCameraDiagnostics {
+    static let logger = Logger(subsystem: "com.szakacsmedia.payday", category: "Camera")
+    static let buildMarker = "camera-analysis-2026-08-14-v2"
+}
 
 enum ReceiptPhotoSource: String, Identifiable {
     case camera
@@ -47,9 +53,8 @@ final class PaydayCameraViewController: UIViewController, @preconcurrency AVCapt
     private let shutterButton = UIButton(type: .custom)
     private let cancelButton = UIButton(type: .system)
     private let openSettingsButton = UIButton(type: .system)
-    private let guideView = CameraGuideView()
-    private let bottomBar = UIView()
     private var previewLayer: AVCaptureVideoPreviewLayer?
+    // These two flags are UI state and are only read or written on the main actor.
     private var isConfigured = false
     private var isCapturing = false
 
@@ -71,6 +76,9 @@ final class PaydayCameraViewController: UIViewController, @preconcurrency AVCapt
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        PaydayCameraDiagnostics.logger.notice(
+            "Camera opened. marker=\(PaydayCameraDiagnostics.buildMarker, privacy: .public) iosAppOnMac=\(ProcessInfo.processInfo.isiOSAppOnMac)"
+        )
         view.backgroundColor = .black
         configureInterface()
         NotificationCenter.default.addObserver(
@@ -106,15 +114,6 @@ final class PaydayCameraViewController: UIViewController, @preconcurrency AVCapt
             previewView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
         ])
 
-        guideView.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(guideView)
-        NSLayoutConstraint.activate([
-            guideView.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            guideView.centerYAnchor.constraint(equalTo: view.centerYAnchor, constant: -36),
-            guideView.widthAnchor.constraint(equalTo: view.widthAnchor, multiplier: 0.84),
-            guideView.heightAnchor.constraint(equalTo: view.heightAnchor, multiplier: 0.42)
-        ])
-
         titleLabel.text = titleText
         titleLabel.textColor = .white
         titleLabel.font = .systemFont(ofSize: 17, weight: .semibold)
@@ -122,29 +121,22 @@ final class PaydayCameraViewController: UIViewController, @preconcurrency AVCapt
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(titleLabel)
 
-        cancelButton.setTitle("Cancel", for: .normal)
-        cancelButton.setTitleColor(.white, for: .normal)
-        cancelButton.titleLabel?.font = .systemFont(ofSize: 16, weight: .medium)
+        let cancelSymbol = UIImage.SymbolConfiguration(pointSize: 17, weight: .semibold)
+        cancelButton.setImage(
+            UIImage(systemName: "chevron.left", withConfiguration: cancelSymbol),
+            for: .normal
+        )
+        cancelButton.tintColor = .white
+        cancelButton.backgroundColor = UIColor.black.withAlphaComponent(0.55)
+        cancelButton.layer.cornerRadius = 22
+        cancelButton.accessibilityLabel = "Cancel"
         cancelButton.addTarget(self, action: #selector(cancel), for: .touchUpInside)
         cancelButton.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(cancelButton)
 
         NSLayoutConstraint.activate([
             titleLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            titleLabel.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 16),
-            cancelButton.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 20),
-            cancelButton.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor)
-        ])
-
-        bottomBar.backgroundColor = UIColor.black.withAlphaComponent(0.64)
-        bottomBar.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(bottomBar)
-
-        NSLayoutConstraint.activate([
-            bottomBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            bottomBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            bottomBar.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            bottomBar.heightAnchor.constraint(equalToConstant: 148)
+            titleLabel.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 16)
         ])
 
         shutterButton.backgroundColor = .white
@@ -155,13 +147,20 @@ final class PaydayCameraViewController: UIViewController, @preconcurrency AVCapt
         shutterButton.isEnabled = false
         shutterButton.addTarget(self, action: #selector(capturePhoto), for: .touchUpInside)
         shutterButton.translatesAutoresizingMaskIntoConstraints = false
-        bottomBar.addSubview(shutterButton)
+        view.addSubview(shutterButton)
 
         NSLayoutConstraint.activate([
-            shutterButton.centerXAnchor.constraint(equalTo: bottomBar.centerXAnchor),
-            shutterButton.centerYAnchor.constraint(equalTo: bottomBar.centerYAnchor),
+            shutterButton.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            shutterButton.bottomAnchor.constraint(
+                equalTo: view.safeAreaLayoutGuide.bottomAnchor,
+                constant: -24
+            ),
             shutterButton.widthAnchor.constraint(equalToConstant: 76),
-            shutterButton.heightAnchor.constraint(equalToConstant: 76)
+            shutterButton.heightAnchor.constraint(equalToConstant: 76),
+            cancelButton.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 24),
+            cancelButton.centerYAnchor.constraint(equalTo: shutterButton.centerYAnchor),
+            cancelButton.widthAnchor.constraint(equalToConstant: 44),
+            cancelButton.heightAnchor.constraint(equalToConstant: 44)
         ])
 
         statusLabel.textColor = .white
@@ -191,16 +190,29 @@ final class PaydayCameraViewController: UIViewController, @preconcurrency AVCapt
     }
 
     private func requestCameraAccess() {
-        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        prepareForCameraStart()
+        let authorization = AVCaptureDevice.authorizationStatus(for: .video)
+        PaydayCameraDiagnostics.logger.notice(
+            "Camera authorization checked. status=\(authorization.rawValue)"
+        )
+
+        switch authorization {
         case .authorized:
             configureSession()
         case .notDetermined:
             AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
-                DispatchQueue.main.async {
-                    guard let self else { return }
-                    if granted {
-                        self.configureSession()
-                    } else {
+                guard let self else { return }
+                PaydayCameraDiagnostics.logger.notice(
+                    "Camera authorization request completed. granted=\(granted)"
+                )
+                if granted {
+                    // Camera configuration immediately enters the session queue.
+                    self.cameraSession.configure { @MainActor [weak self] succeeded in
+                        self?.finishCameraStart(succeeded: succeeded)
+                    }
+                } else {
+                    Task { @MainActor [weak self] in
+                        guard let self else { return }
                         self.showPermissionDenied()
                     }
                 }
@@ -212,32 +224,40 @@ final class PaydayCameraViewController: UIViewController, @preconcurrency AVCapt
         }
     }
 
-    private func configureSession() {
+    private func prepareForCameraStart() {
         shutterButton.isHidden = false
         shutterButton.isEnabled = false
         statusLabel.isHidden = true
         openSettingsButton.isHidden = true
+    }
 
+    private func configureSession() {
         cameraSession.configure { @MainActor [weak self] succeeded in
-            guard let self else { return }
-            guard succeeded else {
-                showCameraUnavailable()
-                return
-            }
-
-            isConfigured = true
-            if previewLayer == nil {
-                let layer = AVCaptureVideoPreviewLayer(session: cameraSession.session)
-                layer.videoGravity = .resizeAspectFill
-                layer.frame = previewView.bounds
-                previewView.layer.addSublayer(layer)
-                previewLayer = layer
-            }
-            shutterButton.isHidden = false
-            shutterButton.isEnabled = true
-            statusLabel.isHidden = true
-            openSettingsButton.isHidden = true
+            self?.finishCameraStart(succeeded: succeeded)
         }
+    }
+
+    private func finishCameraStart(succeeded: Bool) {
+        PaydayCameraDiagnostics.logger.notice(
+            "Camera start returned to UI. succeeded=\(succeeded)"
+        )
+        guard succeeded else {
+            showCameraUnavailable()
+            return
+        }
+
+        isConfigured = true
+        if previewLayer == nil {
+            let layer = AVCaptureVideoPreviewLayer(session: cameraSession.session)
+            layer.videoGravity = .resizeAspectFill
+            layer.frame = previewView.bounds
+            previewView.layer.addSublayer(layer)
+            previewLayer = layer
+        }
+        shutterButton.isHidden = false
+        shutterButton.isEnabled = true
+        statusLabel.isHidden = true
+        openSettingsButton.isHidden = true
     }
 
     private func showCameraUnavailable() {
@@ -257,6 +277,7 @@ final class PaydayCameraViewController: UIViewController, @preconcurrency AVCapt
 
     @objc private func capturePhoto() {
         guard isConfigured, !isCapturing else { return }
+        PaydayCameraDiagnostics.logger.notice("Photo capture requested")
         isCapturing = true
         shutterButton.isEnabled = false
         let settings = AVCapturePhotoSettings()
@@ -287,6 +308,10 @@ final class PaydayCameraViewController: UIViewController, @preconcurrency AVCapt
               let data = photo.fileDataRepresentation(),
               let image = UIImage(data: data)
         else {
+            let failure = error.map { String(describing: type(of: $0)) } ?? "image-data-unavailable"
+            PaydayCameraDiagnostics.logger.error(
+                "Photo capture failed. reason=\(failure, privacy: .public)"
+            )
             DispatchQueue.main.async { [weak self] in
                 self?.isCapturing = false
                 self?.shutterButton.isEnabled = true
@@ -296,6 +321,9 @@ final class PaydayCameraViewController: UIViewController, @preconcurrency AVCapt
             return
         }
 
+        PaydayCameraDiagnostics.logger.notice(
+            "Photo capture completed. jpegBytes=\(data.count) pixels=\(Int(image.size.width))x\(Int(image.size.height))"
+        )
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             onImage(image)
@@ -308,11 +336,16 @@ private final class CameraSessionController: @unchecked Sendable {
     let session = AVCaptureSession()
     let photoOutput = AVCapturePhotoOutput()
 
-    private let queue = DispatchQueue(label: "com.szakacsmedia.payday.camera-session")
+    // All AVCaptureSession work and session configuration state live on this queue.
+    private let sessionQueue = DispatchQueue(label: "app.payday.camera.session")
     private var isConfigured = false
 
     func configure(completion: @escaping @MainActor @Sendable (Bool) -> Void) {
-        queue.async { [self] in
+        sessionQueue.async { [self] in
+            let configurationStartedAt = Date()
+            PaydayCameraDiagnostics.logger.notice(
+                "Camera session queue entered. configured=\(self.isConfigured) running=\(self.session.isRunning)"
+            )
             if !isConfigured {
                 session.beginConfiguration()
                 session.sessionPreset = .photo
@@ -326,16 +359,33 @@ private final class CameraSessionController: @unchecked Sendable {
                    session.canAddInput(input),
                    session.canAddOutput(photoOutput)
                 {
+                    PaydayCameraDiagnostics.logger.notice(
+                        "Camera selected. name=\(camera.localizedName, privacy: .public) type=\(camera.deviceType.rawValue, privacy: .public) position=\(camera.position.rawValue) connected=\(camera.isConnected) suspended=\(camera.isSuspended)"
+                    )
                     session.addInput(input)
                     session.addOutput(photoOutput)
                     isConfigured = true
+                } else {
+                    PaydayCameraDiagnostics.logger.error(
+                        "Built-in back wide-angle camera configuration failed"
+                    )
                 }
 
                 session.commitConfiguration()
+                let configurationMilliseconds = Int(Date().timeIntervalSince(configurationStartedAt) * 1_000)
+                PaydayCameraDiagnostics.logger.notice(
+                    "Camera configuration committed. succeeded=\(self.isConfigured) elapsedMs=\(configurationMilliseconds)"
+                )
             }
 
             if isConfigured, !session.isRunning {
+                let startRunningAt = Date()
+                PaydayCameraDiagnostics.logger.notice("Camera startRunning beginning")
                 session.startRunning()
+                let startMilliseconds = Int(Date().timeIntervalSince(startRunningAt) * 1_000)
+                PaydayCameraDiagnostics.logger.notice(
+                    "Camera startRunning completed. running=\(self.session.isRunning) elapsedMs=\(startMilliseconds)"
+                )
             }
             let succeeded = isConfigured
             Task { @MainActor in
@@ -345,19 +395,16 @@ private final class CameraSessionController: @unchecked Sendable {
     }
 
     func stop() {
-        queue.async { [self] in
+        sessionQueue.async { [self] in
             if session.isRunning {
+                let stopRunningAt = Date()
+                PaydayCameraDiagnostics.logger.notice("Camera stopRunning beginning")
                 session.stopRunning()
+                let stopMilliseconds = Int(Date().timeIntervalSince(stopRunningAt) * 1_000)
+                PaydayCameraDiagnostics.logger.notice(
+                    "Camera stopRunning completed. elapsedMs=\(stopMilliseconds)"
+                )
             }
         }
-    }
-}
-
-private final class CameraGuideView: UIView {
-    override func draw(_ rect: CGRect) {
-        UIColor.white.withAlphaComponent(0.84).setStroke()
-        let path = UIBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), cornerRadius: 18)
-        path.lineWidth = 2
-        path.stroke()
     }
 }
