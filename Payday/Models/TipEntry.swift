@@ -118,6 +118,29 @@ final class TipEntry {
     /// ShiftDetails, nil for legacy rows.
     var serverCount: Int?
 
+    /// Detailed printed facts captured from an end-of-shift receipt. Stored
+    /// as optional JSON so this private, CloudKit-backed model gains one
+    /// additive field instead of a column for every receipt label.
+    var receiptMetricsJSON: String?
+
+    var receiptMetrics: ShiftReceiptMetrics? {
+        get {
+            guard let receiptMetricsJSON,
+                  let data = receiptMetricsJSON.data(using: .utf8)
+            else { return nil }
+            return try? JSONDecoder().decode(ShiftReceiptMetrics.self, from: data)
+        }
+        set {
+            guard let newValue, !newValue.isEmpty,
+                  let data = try? JSONEncoder().encode(newValue)
+            else {
+                receiptMetricsJSON = nil
+                return
+            }
+            receiptMetricsJSON = String(data: data, encoding: .utf8)
+        }
+    }
+
     // Same optional-raw-string-to-enum split as kindRaw/kind, but WITHOUT
     // a non-optional fallback: "never set" is a real, meaningful state
     // here (unlike kind, which must always resolve to something), so the
@@ -150,7 +173,8 @@ final class TipEntry {
         shiftID: UUID? = nil,
         clockIn: Date? = nil,
         clockOut: Date? = nil,
-        serverCount: Int? = nil
+        serverCount: Int? = nil,
+        receiptMetrics: ShiftReceiptMetrics? = nil
     ) {
         self.id = id
         self.date = date
@@ -167,5 +191,6 @@ final class TipEntry {
         self.clockIn = clockIn
         self.clockOut = clockOut
         self.serverCount = serverCount
+        self.receiptMetrics = receiptMetrics
     }
 }

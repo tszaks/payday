@@ -16,7 +16,7 @@ enum ShiftDetails {
     /// covering one shift, resolved from whichever entry actually holds
     /// it — credit first, falling back to cash — and NEVER summed across
     /// entries.
-    static func resolve(from entries: [TipEntry]) -> (hoursWorked: Double?, tipOutCents: Int?, salesCents: Int?, shiftPeriod: ShiftPeriod?, clockIn: Date?, clockOut: Date?, serverCount: Int?) {
+    static func resolve(from entries: [TipEntry]) -> (hoursWorked: Double?, tipOutCents: Int?, salesCents: Int?, shiftPeriod: ShiftPeriod?, clockIn: Date?, clockOut: Date?, serverCount: Int?, receiptMetrics: ShiftReceiptMetrics?) {
         let credit = entries.first { $0.kind == .credit }
         let cash = entries.first { $0.kind == .cash }
         return (
@@ -26,7 +26,8 @@ enum ShiftDetails {
             shiftPeriod: credit?.shiftPeriod ?? cash?.shiftPeriod,
             clockIn: credit?.clockIn ?? cash?.clockIn,
             clockOut: credit?.clockOut ?? cash?.clockOut,
-            serverCount: credit?.serverCount ?? cash?.serverCount
+            serverCount: credit?.serverCount ?? cash?.serverCount,
+            receiptMetrics: credit?.receiptMetrics ?? cash?.receiptMetrics
         )
     }
 
@@ -37,7 +38,7 @@ enum ShiftDetails {
     /// more than one entry. clockIn/clockOut/serverCount default to nil so
     /// existing call sites (and tests) that only care about the earlier
     /// fields keep compiling.
-    static func write(hoursWorked: Double?, tipOutCents: Int?, salesCents: Int?, shiftPeriod: ShiftPeriod?, clockIn: Date? = nil, clockOut: Date? = nil, serverCount: Int? = nil, into entries: [TipEntry]) {
+    static func write(hoursWorked: Double?, tipOutCents: Int?, salesCents: Int?, shiftPeriod: ShiftPeriod?, clockIn: Date? = nil, clockOut: Date? = nil, serverCount: Int? = nil, receiptMetrics: ShiftReceiptMetrics? = nil, into entries: [TipEntry]) {
         guard let primary = entries.first(where: { $0.kind == .credit }) ?? entries.first else { return }
         for entry in entries where entry.id != primary.id {
             entry.hoursWorked = nil
@@ -47,6 +48,7 @@ enum ShiftDetails {
             entry.clockIn = nil
             entry.clockOut = nil
             entry.serverCount = nil
+            entry.receiptMetrics = nil
         }
         primary.hoursWorked = hoursWorked
         primary.tipOutCents = tipOutCents
@@ -55,5 +57,6 @@ enum ShiftDetails {
         primary.clockIn = clockIn
         primary.clockOut = clockOut
         primary.serverCount = serverCount
+        primary.receiptMetrics = receiptMetrics
     }
 }
