@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import PhotosUI
 import UIKit
 
 /// Owns its own dismissal and save logic.
@@ -26,7 +27,10 @@ struct LogTipSheet: View {
     // with, whether this is a brand-new shift or an existing one being edited.
     @State private var cashCents: Int = 0
     @State private var creditCents: Int = 0
-    @State private var isShowingReceiptCamera = false
+    @State private var showReceiptScanOptions = false
+    @State private var showReceiptPhotoPicker = false
+    @State private var selectedReceiptPhotoItem: PhotosPickerItem?
+    @State private var receiptPhotoSource: ReceiptPhotoSource?
     @State private var isScanningReceipt = false
     @State private var receiptScanStatus: String?
     @State private var receiptScanError: String?
@@ -396,11 +400,28 @@ struct LogTipSheet: View {
         .presentationDetents(debugSuppressAutoFocus ? [.large] : [.height(isEditing ? 560 : 600), .large])
         .presentationDragIndicator(.visible)
         .presentationBackground(PaydayColor.background)
-        .sheet(isPresented: $isShowingReceiptCamera) {
-            ReceiptImagePicker { image in
+        .confirmationDialog("Scan receipt", isPresented: $showReceiptScanOptions, titleVisibility: .visible) {
+            if PaydayCameraView.isCameraAvailable {
+                Button("Take Photo", systemImage: "camera") {
+                    receiptPhotoSource = .camera
+                }
+            }
+            Button("Choose from Photos", systemImage: "photo") {
+                showReceiptPhotoPicker = true
+            }
+        } message: {
+            Text("Take a new receipt photo or choose one already in your library. Payday will read it and fill the shift fields.")
+        }
+        .photosPicker(isPresented: $showReceiptPhotoPicker, selection: $selectedReceiptPhotoItem, matching: .images)
+        .sheet(item: $receiptPhotoSource) { source in
+            PaydayCameraView(title: "Scan receipt") { image in
                 Task { await scanReceipt(image) }
             }
             .ignoresSafeArea()
+        }
+        .onChange(of: selectedReceiptPhotoItem) { _, item in
+            guard let item else { return }
+            Task { await scanReceipt(photoItem: item) }
         }
         .alert("Receipt scan", isPresented: Binding(
             get: { receiptScanError != nil },
@@ -477,27 +498,24 @@ struct LogTipSheet: View {
         }
     }
 
-    /// Direct camera access is deliberate: receipt capture is a fast closeout
-    /// action, so it skips a source picker and goes straight from one tap to
-    /// point-and-shoot.
     private var receiptScanButton: some View {
         VStack(spacing: 8) {
             Button {
                 receiptScanStatus = nil
                 focusedCurrencyField = nil
-                isShowingReceiptCamera = true
+                showReceiptScanOptions = true
             } label: {
-                Label("Point at receipt", systemImage: "camera.viewfinder")
+                Label("Scan receipt", systemImage: "camera.viewfinder")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.glass)
-            .disabled(isScanningReceipt || !UIImagePickerController.isSourceTypeAvailable(.camera))
-            .accessibilityHint("Take a receipt photo and fill the shift fields")
+            .disabled(isScanningReceipt)
+            .accessibilityHint("Take a receipt photo or choose one from Photos to fill the shift fields")
 
             if isScanningReceipt {
                 HStack(spacing: 8) {
                     ProgressView()
-                    Text("Reading receipt with AI…")
+                    Text("Analyzing…")
                 }
                 .font(PaydayFont.caption)
                 .foregroundStyle(PaydayColor.textSecondary)
@@ -941,6 +959,30 @@ struct LogTipSheet: View {
             receiptScanStatus = "Filled \(parsed.filledFieldCount) receipt \(fieldWord). Review before saving."
             liveSaveEdit()
             PaydayHaptics.success()
+        } catch {
+            receiptScanError = error.localizedDescription
+        }
+    }
+
+    @MainActor
+    private func scanReceipt(photoItem: PhotosPickerItem) async {
+        guard !isScanningReceipt else {
+            selectedReceiptPhotoItem = nil
+            return
+        }
+        isScanningReceipt = true
+        receiptScanStatus = nil
+        defer {
+            isScanningReceipt = false
+            selectedReceiptPhotoItem = nil
+        }
+        do {
+            guard let data = try await photoItem.loadTransferable(type: Data.self),
+                  let image = UIImage(data: data)
+            else {
+                throw ReceiptAIParser.ParseError.imageUnavailable
+            }
+            await scanReceipt(image)
         } catch {
             receiptScanError = error.localizedDescription
         }

@@ -109,13 +109,13 @@ struct ReceiptAIParserTests {
 
         let error = ReceiptAIParser.requestError(statusCode: 429, responseData: response)
 
-        #expect(error.errorDescription == "AI receipt credits have run out. Add API credits, then try again.")
+        #expect(error.errorDescription == "Receipt analysis credits have run out. Add API credits, then try again.")
     }
 
     @Test("keeps unrelated HTTP failures generic")
     func keepsOtherRequestFailuresGeneric() {
         let error = ReceiptAIParser.requestError(statusCode: 503, responseData: Data())
 
-        #expect(error.errorDescription == "AI receipt reading is temporarily unavailable.")
+        #expect(error.errorDescription == "Receipt analysis is temporarily unavailable.")
     }
 }
