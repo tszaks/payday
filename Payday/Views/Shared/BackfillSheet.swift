@@ -155,7 +155,7 @@ struct BackfillSheet: View {
         switch field {
         case .cash: return .credit
         case .credit: return .tipOut
-        case .tipOut, .sales, .servers: return .cash
+        case .tipOut, .sales, .servers, .guests, .tables: return .cash
         }
     }
 

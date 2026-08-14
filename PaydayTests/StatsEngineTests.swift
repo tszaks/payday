@@ -11,7 +11,7 @@ private func date(_ year: Int, _ month: Int, _ day: Int) -> Date {
     return calendar.date(from: DateComponents(year: year, month: month, day: day))!
 }
 
-private func record(_ year: Int, _ month: Int, _ day: Int, cents: Int, kind: TipKind = .cash, isDouble: Bool = false, recordedHour: Int? = nil, hoursWorked: Double? = nil, tipOutCents: Int? = nil, salesCents: Int? = nil, shiftPeriod: ShiftPeriod? = nil, shiftID: UUID? = nil, clockInHour: Int? = nil, clockOutHour: Int? = nil, note: String? = nil) -> TipRecord {
+private func record(_ year: Int, _ month: Int, _ day: Int, cents: Int, kind: TipKind = .cash, isDouble: Bool = false, recordedHour: Int? = nil, hoursWorked: Double? = nil, tipOutCents: Int? = nil, salesCents: Int? = nil, shiftPeriod: ShiftPeriod? = nil, shiftID: UUID? = nil, clockInHour: Int? = nil, clockOutHour: Int? = nil, receiptMetrics: ShiftReceiptMetrics? = nil, note: String? = nil) -> TipRecord {
     let shiftDate = date(year, month, day)
     var calendar = Calendar(identifier: .gregorian)
     calendar.timeZone = TimeZone.current
@@ -24,7 +24,19 @@ private func record(_ year: Int, _ month: Int, _ day: Int, cents: Int, kind: Tip
     let clockOut = clockOutHour.flatMap { hour in
         calendar.date(bySettingHour: hour, minute: 0, second: 0, of: shiftDate)
     }
-    return TipRecord(date: shiftDate, amountCents: cents, kind: kind, isDouble: isDouble, recordedAt: recordedAt, hoursWorked: hoursWorked, tipOutCents: tipOutCents, salesCents: salesCents, shiftPeriod: shiftPeriod, shiftID: shiftID, clockIn: clockIn, clockOut: clockOut, note: note)
+    return TipRecord(date: shiftDate, amountCents: cents, kind: kind, isDouble: isDouble, recordedAt: recordedAt, hoursWorked: hoursWorked, tipOutCents: tipOutCents, salesCents: salesCents, shiftPeriod: shiftPeriod, shiftID: shiftID, clockIn: clockIn, clockOut: clockOut, receiptMetrics: receiptMetrics, note: note)
+}
+
+private func receiptFacts(guests: Int, checks: Int, tables: Int, tableSource: TableCountSource, netSalesCents: Int, categories: [ShiftReceiptMetrics.CategorySales] = []) -> ShiftReceiptMetrics {
+    ShiftReceiptMetrics(
+        guestCount: guests,
+        creditCheckCount: checks,
+        tableCount: tables,
+        tableCountSource: tableSource,
+        netSalesCents: netSalesCents,
+        cashSalesCents: 0,
+        categorySales: categories
+    )
 }
 
 /// Two distinct shift ids for building emergent "double" days in tests — a
@@ -1764,6 +1776,104 @@ struct InsightsFactsTests {
         // would be non-nil — the whole point of this test is that they don't.
         #expect(engine.insightsFacts(referenceDate: date(2026, 7, 10))?.startTime == nil)
     }
+
+    @Test("receipt performance waits for three scanned shifts")
+    func receiptPerformanceNeedsThreeShifts() {
+        let records = [
+            record(2026, 7, 1, cents: 2400, receiptMetrics: receiptFacts(guests: 4, checks: 2, tables: 2, tableSource: .inferredFromChecks, netSalesCents: 11800)),
+            record(2026, 7, 2, cents: 3000, receiptMetrics: receiptFacts(guests: 5, checks: 3, tables: 3, tableSource: .confirmed, netSalesCents: 20000)),
+            record(2026, 7, 3, cents: 1000),
+            record(2026, 7, 4, cents: 1000),
+            record(2026, 7, 5, cents: 1000),
+        ]
+
+        let facts = StatsEngine(records: records).insightsFacts(referenceDate: date(2026, 7, 10))
+
+        #expect(facts?.receiptPerformance == nil)
+    }
+
+    @Test("receipt performance blends guest, table, check, throughput, and category totals")
+    func receiptPerformanceBlendsTotals() {
+        let kitchen = ShiftReceiptMetrics.CategorySales(name: "Kitchen", quantity: 4, netSalesCents: 5500)
+        let sushi = ShiftReceiptMetrics.CategorySales(name: "Sushi", quantity: 5, netSalesCents: 3800)
+        let records = [
+            record(2026, 7, 1, cents: 2400, hoursWorked: 3, tipOutCents: 321, receiptMetrics: receiptFacts(guests: 4, checks: 2, tables: 2, tableSource: .inferredFromChecks, netSalesCents: 11800, categories: [kitchen, sushi])),
+            record(2026, 7, 2, cents: 3000, hoursWorked: 4, tipOutCents: 500, receiptMetrics: receiptFacts(guests: 5, checks: 3, tables: 3, tableSource: .confirmed, netSalesCents: 20000, categories: [kitchen])),
+            record(2026, 7, 3, cents: 1800, hoursWorked: 3, tipOutCents: 300, receiptMetrics: receiptFacts(guests: 3, checks: 2, tables: 2, tableSource: .inferredFromChecks, netSalesCents: 9000, categories: [sushi])),
+            record(2026, 7, 4, cents: 1000),
+            record(2026, 7, 5, cents: 1000),
+        ]
+
+        let facts = StatsEngine(records: records).insightsFacts(referenceDate: date(2026, 7, 10))?.receiptPerformance
+
+        #expect(facts?.guestShiftCount == 3)
+        #expect(facts?.totalGuests == 12)
+        #expect(facts?.averageSpendPerGuestCents == 3400)
+        #expect(facts?.grossTipsPerGuestCents == 600)
+        #expect(facts?.netTipsPerGuestCents == 506)
+        #expect(facts?.tableShiftCount == 3)
+        #expect(facts?.totalTables == 7)
+        #expect(facts?.estimatedTableShiftCount == 2)
+        #expect(facts?.averageSpendPerTableCents == 5828)
+        #expect(facts?.netTipsPerTableCents == 868)
+        #expect(facts.map { abs(($0.averageGuestsPerTable ?? 0) - (12.0 / 7.0)) < 0.001 } == true)
+        #expect(facts?.averageCheckCents == 5828)
+        #expect(facts.map { abs(($0.guestsPerHour ?? 0) - 1.2) < 0.001 } == true)
+        #expect(facts.map { abs(($0.tipOutPercentOfGrossTips ?? 0) - (1121.0 / 7200.0 * 100)) < 0.001 } == true)
+        #expect(facts?.topCategories.map(\.name) == ["Kitchen", "Sushi"])
+    }
+
+    @Test("receipt performance does not treat missing tip-outs as zero")
+    func receiptPerformanceRequiresRecordedTipOuts() {
+        let records = [
+            record(2026, 7, 1, cents: 2400, tipOutCents: 300, receiptMetrics: receiptFacts(guests: 4, checks: 2, tables: 2, tableSource: .confirmed, netSalesCents: 11800)),
+            record(2026, 7, 2, cents: 3000, receiptMetrics: receiptFacts(guests: 5, checks: 3, tables: 3, tableSource: .confirmed, netSalesCents: 20000)),
+            record(2026, 7, 3, cents: 1800, receiptMetrics: receiptFacts(guests: 3, checks: 2, tables: 2, tableSource: .confirmed, netSalesCents: 9000)),
+            record(2026, 7, 4, cents: 1000),
+            record(2026, 7, 5, cents: 1000),
+        ]
+
+        let facts = StatsEngine(records: records).insightsFacts(referenceDate: date(2026, 7, 10))?.receiptPerformance
+
+        #expect(facts?.tipOutPercentOfGrossTips == nil)
+    }
+
+    @Test("receipt performance excludes a shift with incomplete category amounts")
+    func receiptPerformanceRejectsIncompleteCategoryTotals() {
+        let kitchen = ShiftReceiptMetrics.CategorySales(name: "Kitchen", quantity: 4, netSalesCents: 5500)
+        let unreadable = ShiftReceiptMetrics.CategorySales(name: "Sushi", quantity: 5, netSalesCents: nil)
+        let records = [
+            record(2026, 7, 1, cents: 2400, receiptMetrics: receiptFacts(guests: 4, checks: 2, tables: 2, tableSource: .confirmed, netSalesCents: 11800, categories: [kitchen, unreadable])),
+            record(2026, 7, 2, cents: 3000, receiptMetrics: receiptFacts(guests: 5, checks: 3, tables: 3, tableSource: .confirmed, netSalesCents: 20000, categories: [kitchen])),
+            record(2026, 7, 3, cents: 1800, receiptMetrics: receiptFacts(guests: 3, checks: 2, tables: 2, tableSource: .confirmed, netSalesCents: 9000, categories: [kitchen])),
+            record(2026, 7, 4, cents: 1000),
+            record(2026, 7, 5, cents: 1000),
+        ]
+
+        let facts = StatsEngine(records: records).insightsFacts(referenceDate: date(2026, 7, 10))?.receiptPerformance
+
+        #expect(facts?.topCategories.isEmpty == true)
+    }
+
+    @Test("equal category totals use stable alphabetical ordering")
+    func receiptPerformanceCategoryTieOrderingIsStable() {
+        let sushi = ShiftReceiptMetrics.CategorySales(name: "Sushi", quantity: 1, netSalesCents: 1_000)
+        let kitchen = ShiftReceiptMetrics.CategorySales(name: "Kitchen", quantity: 1, netSalesCents: 1_000)
+        let records = (1...3).map {
+            record(2026, 7, $0, cents: 1_000, receiptMetrics: receiptFacts(
+                guests: 2,
+                checks: 1,
+                tables: 1,
+                tableSource: .confirmed,
+                netSalesCents: 2_000,
+                categories: [sushi, kitchen]
+            ))
+        } + [record(2026, 7, 4, cents: 1_000), record(2026, 7, 5, cents: 1_000)]
+
+        let facts = StatsEngine(records: records).insightsFacts(referenceDate: date(2026, 7, 10))?.receiptPerformance
+
+        #expect(facts?.topCategories.map(\.name) == ["Kitchen", "Sushi"])
+    }
 }
 
 @Suite("Insights facts copy (no-AI fallback)")
@@ -1819,5 +1929,33 @@ struct InsightsFactsCopyTests {
         let bestHourLabel = Calendar.current.date(bySettingHour: 17, minute: 0, second: 0, of: .now)!.formatted(.dateTime.hour())
         #expect(body.contains(bestHourLabel))
         #expect(body.contains("6 shifts")) // matches the shiftsPhrase convention every other section here uses
+    }
+
+
+    @Test("guest and table copy states the pre-tax basis and inferred-table caveat")
+    func guestAndTableCopy() {
+        var facts = InsightsFacts(totalCents: 10000, shiftCount: 5, averagePerShiftCents: 2000, topDays: [], lunchDinner: nil, doublesSolo: nil)
+        facts.receiptPerformance = ReceiptPerformanceFacts(
+            guestShiftCount: 5,
+            totalGuests: 42,
+            averageSpendPerGuestCents: 2950,
+            grossTipsPerGuestCents: 600,
+            netTipsPerGuestCents: 520,
+            tableShiftCount: 5,
+            totalTables: 21,
+            estimatedTableShiftCount: 4,
+            averageSpendPerTableCents: 5900,
+            netTipsPerTableCents: 1040,
+            averageGuestsPerTable: 2,
+            averageCheckCents: nil,
+            guestsPerHour: nil,
+            tipOutPercentOfGrossTips: nil,
+            topCategories: []
+        )
+
+        let section = InsightsFactsCopy.sections(for: facts).first { $0.title == "Guests and Tables" }
+
+        #expect(section?.body.contains("$29.50 before tax") == true)
+        #expect(section?.body.contains("split checks") == true)
     }
 }

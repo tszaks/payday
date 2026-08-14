@@ -23,6 +23,7 @@ struct DeletedTipSnapshot {
     let clockIn: Date?
     let clockOut: Date?
     let serverCount: Int?
+    let receiptMetrics: ShiftReceiptMetrics?
 
     init(entry: TipEntry) {
         id = entry.id
@@ -39,10 +40,11 @@ struct DeletedTipSnapshot {
         clockIn = entry.clockIn
         clockOut = entry.clockOut
         serverCount = entry.serverCount
+        receiptMetrics = entry.receiptMetrics
     }
 
     func restored() -> TipEntry {
-        TipEntry(id: id, date: date, amountCents: amountCents, kind: kind, note: note, recordedAt: recordedAt, hoursWorked: hoursWorked, tipOutCents: tipOutCents, salesCents: salesCents, shiftPeriod: shiftPeriod, shiftID: shiftID, clockIn: clockIn, clockOut: clockOut, serverCount: serverCount)
+        TipEntry(id: id, date: date, amountCents: amountCents, kind: kind, note: note, recordedAt: recordedAt, hoursWorked: hoursWorked, tipOutCents: tipOutCents, salesCents: salesCents, shiftPeriod: shiftPeriod, shiftID: shiftID, clockIn: clockIn, clockOut: clockOut, serverCount: serverCount, receiptMetrics: receiptMetrics)
     }
 }
 

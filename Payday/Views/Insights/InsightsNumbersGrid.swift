@@ -45,6 +45,17 @@ enum InsightsNumbersGrid {
         }
         if !rateRow.isEmpty { rows.append(rateRow) }
 
+        if let receipt = facts.receiptPerformance {
+            var receiptRow: [InsightsNumberTile] = []
+            if let spendPerGuest = receipt.averageSpendPerGuestCents {
+                receiptRow.append(spendPerGuestTile(receipt, cents: spendPerGuest))
+            }
+            if let tipsPerTable = receipt.netTipsPerTableCents {
+                receiptRow.append(tipsPerTableTile(receipt, cents: tipsPerTable))
+            }
+            if !receiptRow.isEmpty { rows.append(receiptRow) }
+        }
+
         if let lunchDinner = facts.lunchDinner {
             rows.append([lunchTile(lunchDinner), dinnerTile(lunchDinner)])
         }
@@ -79,6 +90,32 @@ enum InsightsNumbersGrid {
             label: "TIP PERCENT",
             value: "\(String(format: "%.1f", sales.overallTipPercent))%",
             context: hedged("of sales", count: sales.nightsWithSales, countPhrase: shiftsPhrase(sales.nightsWithSales))
+        )
+    }
+
+    private static func spendPerGuestTile(_ facts: ReceiptPerformanceFacts, cents: Int) -> InsightsNumberTile {
+        InsightsNumberTile(
+            id: "spendPerGuest",
+            label: "SPEND / GUEST",
+            value: Money.string(fromCents: cents),
+            context: hedged("pre-tax sales", count: facts.guestShiftCount, countPhrase: shiftsPhrase(facts.guestShiftCount))
+        )
+    }
+
+    private static func tipsPerTableTile(_ facts: ReceiptPerformanceFacts, cents: Int) -> InsightsNumberTile {
+        let estimated = facts.estimatedTableShiftCount
+        let context = estimated > 0
+            ? "net tips · tables estimated on \(estimated) of \(facts.tableShiftCount) shifts"
+            : hedged(
+                "net tips · confirmed tables",
+                count: facts.tableShiftCount,
+                countPhrase: shiftsPhrase(facts.tableShiftCount)
+            )
+        return InsightsNumberTile(
+            id: "tipsPerTable",
+            label: "TIPS / TABLE",
+            value: Money.string(fromCents: cents),
+            context: context
         )
     }
 
