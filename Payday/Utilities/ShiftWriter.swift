@@ -26,7 +26,8 @@ enum ShiftWriter {
         shiftPeriod: ShiftPeriod? = nil,
         clockIn: Date? = nil,
         clockOut: Date? = nil,
-        serverCount: Int? = nil
+        serverCount: Int? = nil,
+        receiptMetrics: ShiftReceiptMetrics? = nil
     ) -> [TipEntry] {
         // Clamp to today: callers may pass an unclamped date, but a shift
         // can never be logged for the future.
@@ -49,7 +50,7 @@ enum ShiftWriter {
         }
         // Shift-level details land on one canonical entry (credit
         // preferred), never split across both — see ShiftDetails.
-        ShiftDetails.write(hoursWorked: hoursWorked, tipOutCents: tipOutCents, salesCents: salesCents, shiftPeriod: shiftPeriod, clockIn: clockIn, clockOut: clockOut, serverCount: serverCount, into: newEntries)
+        ShiftDetails.write(hoursWorked: hoursWorked, tipOutCents: tipOutCents, salesCents: salesCents, shiftPeriod: shiftPeriod, clockIn: clockIn, clockOut: clockOut, serverCount: serverCount, receiptMetrics: receiptMetrics, into: newEntries)
 
         return newEntries
     }
