@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 import UIKit
 
 /// Reads a pay stub with the private app's configured OpenAI key. This is a
@@ -7,6 +8,10 @@ import UIKit
 enum PaycheckAIParser {
     private static let model = "gpt-5.6-terra"
     private static let requestTimeout: TimeInterval = 30
+    private static let logger = Logger(
+        subsystem: "com.szakacsmedia.payday",
+        category: "PaycheckAnalysis"
+    )
     private static let session: URLSession = {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = requestTimeout
@@ -93,10 +98,19 @@ enum PaycheckAIParser {
     }
 
     static func parse(image: UIImage) async throws -> PaycheckOCR.ParsedPaycheck {
-        guard let apiKey else { throw ParseError.notConfigured }
+        let analysisStartedAt = Date()
+        logger.notice(
+            "Paycheck analysis invoked. model=\(model, privacy: .public) timeoutSeconds=\(Int(requestTimeout)) sourcePixels=\(Int(image.size.width))x\(Int(image.size.height))"
+        )
+        guard let apiKey else {
+            logger.error("Paycheck analysis stopped before request: API key unavailable")
+            throw ParseError.notConfigured
+        }
         guard let imageData = jpegData(for: image) else {
+            logger.error("Paycheck analysis stopped before request: JPEG preparation failed")
             throw PaycheckOCR.ScanError.imageUnavailable
         }
+        logger.notice("Paycheck JPEG prepared. bytes=\(imageData.count)")
 
         let imageURL = "data:image/jpeg;base64,\(imageData.base64EncodedString())"
         let requestBody: [String: Any] = [
@@ -125,23 +139,64 @@ enum PaycheckAIParser {
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
+        logger.notice(
+            "Paycheck request encoded. bodyBytes=\(request.httpBody?.count ?? 0)"
+        )
 
         let data: Data
         let response: URLResponse
+        let networkStartedAt = Date()
+        logger.notice("Paycheck network request started")
         do {
             (data, response) = try await session.data(for: request)
         } catch let error as URLError where error.code == .timedOut {
+            let elapsedMilliseconds = Int(Date().timeIntervalSince(networkStartedAt) * 1_000)
+            logger.error(
+                "Paycheck network request timed out. elapsedMs=\(elapsedMilliseconds) code=\(error.code.rawValue)"
+            )
             throw ParseError.timedOut
+        } catch let error as URLError {
+            let elapsedMilliseconds = Int(Date().timeIntervalSince(networkStartedAt) * 1_000)
+            logger.error(
+                "Paycheck network request failed. elapsedMs=\(elapsedMilliseconds) code=\(error.code.rawValue)"
+            )
+            throw ParseError.requestFailed
         } catch {
+            let elapsedMilliseconds = Int(Date().timeIntervalSince(networkStartedAt) * 1_000)
+            let errorType = String(describing: type(of: error))
+            logger.error(
+                "Paycheck network request failed. elapsedMs=\(elapsedMilliseconds) type=\(errorType, privacy: .public)"
+            )
             throw ParseError.requestFailed
         }
-        guard let httpResponse = response as? HTTPURLResponse,
-              (200..<300).contains(httpResponse.statusCode)
-        else {
+        guard let httpResponse = response as? HTTPURLResponse else {
+            logger.error("Paycheck network request returned a non-HTTP response")
+            throw ParseError.requestFailed
+        }
+        let networkMilliseconds = Int(Date().timeIntervalSince(networkStartedAt) * 1_000)
+        let requestID = httpResponse.value(forHTTPHeaderField: "x-request-id") ?? "unavailable"
+        logger.notice(
+            "Paycheck network request completed. status=\(httpResponse.statusCode) responseBytes=\(data.count) elapsedMs=\(networkMilliseconds) requestId=\(requestID, privacy: .public)"
+        )
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            logger.error("Paycheck API rejected request. status=\(httpResponse.statusCode)")
             throw ParseError.requestFailed
         }
 
-        return try parse(responseData: data)
+        do {
+            let parsed = try parse(responseData: data)
+            let totalMilliseconds = Int(Date().timeIntervalSince(analysisStartedAt) * 1_000)
+            logger.notice(
+                "Paycheck analysis succeeded. filledFields=\(parsed.filledFieldCount) elapsedMs=\(totalMilliseconds)"
+            )
+            return parsed
+        } catch {
+            let errorType = String(describing: type(of: error))
+            logger.error(
+                "Paycheck response decoding failed. type=\(errorType, privacy: .public)"
+            )
+            throw error
+        }
     }
 
     /// Pure response decoding keeps the model contract testable without

@@ -4,6 +4,31 @@ import Testing
 
 @Suite("ReceiptAIParser")
 struct ReceiptAIParserTests {
+    @Test("preserves OCR row order and left-to-right values")
+    func preservesOCRRows() {
+        let transcript = ReceiptAIParser.transcript(fragments: [
+            .init(text: "$44.67", minX: 0.54, midY: 0.692),
+            .init(text: "21", minX: 0.56, midY: 0.703),
+            .init(text: "Average spend per guest", minX: 0.39, midY: 0.690),
+            .init(text: "Total guests served", minX: 0.39, midY: 0.701)
+        ])
+
+        #expect(transcript == "[row] Total guests served | 21\n[row] Average spend per guest | $44.67")
+    }
+
+    @Test("sends compact OCR text to the accuracy-first model")
+    func buildsCompactOCRRequest() throws {
+        let body = ReceiptAIParser.requestBody(transcript: "[row] Gross sales | $985.04")
+        let data = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
+        let encoded = try #require(String(data: data, encoding: .utf8))
+
+        #expect(encoded.contains(#""model":"gpt-5.6-sol""#))
+        #expect(encoded.contains(#""effort":"medium""#))
+        #expect(encoded.contains(#"[row] Gross sales | $985.04"#))
+        #expect(!encoded.contains("input_image"))
+        #expect(!encoded.contains("data:image"))
+    }
+
     @Test("decodes shift fields in dollars into cents")
     func decodesShiftFields() throws {
         let response = Data(#"{"output":[{"type":"message","content":[{"type":"output_text","text":"{\"cash_tips\":100.50,\"credit_tips\":300.25,\"tip_out\":25,\"sales\":2200,\"server_count\":4,\"guest_count\":12,\"credit_check_count\":6,\"table_count\":5,\"net_sales\":2050,\"tax\":150,\"printed_tip_percent\":19.54,\"average_spend_per_guest\":170.83,\"cash_sales\":40,\"gratuity_fees\":0,\"category_sales\":[{\"name\":\"Kitchen\",\"quantity\":8,\"net_sales\":1100}],\"tip_sharing\":[{\"role\":\"Busser\",\"amount\":12.50}],\"shift_date\":\"2026-07-21\",\"clock_in\":\"10:31\",\"clock_out\":\"13:21\"}"}]}]}"#.utf8)
@@ -31,6 +56,27 @@ struct ReceiptAIParserTests {
         #expect(parsed.clockIn == .init(hour: 10, minute: 31))
         #expect(parsed.clockOut == .init(hour: 13, minute: 21))
         #expect(parsed.filledFieldCount == 10)
+    }
+
+    @Test("decodes the exact full-resolution receipt benchmark")
+    func decodesExactReceiptBenchmark() throws {
+        let response = Data(#"{"output":[{"type":"message","content":[{"type":"output_text","text":"{\"cash_tips\":null,\"credit_tips\":167.32,\"tip_out\":26.39,\"sales\":985.04,\"server_count\":null,\"guest_count\":21,\"credit_check_count\":12,\"table_count\":null,\"net_sales\":938.05,\"tax\":46.99,\"printed_tip_percent\":17.8,\"average_spend_per_guest\":44.67,\"cash_sales\":0,\"gratuity_fees\":44.05,\"category_sales\":[{\"name\":\"Kitchen\",\"quantity\":25,\"net_sales\":471},{\"name\":\"Liquor\",\"quantity\":4,\"net_sales\":58},{\"name\":\"NA Beverage\",\"quantity\":7,\"net_sales\":55},{\"name\":\"Sake\",\"quantity\":3,\"net_sales\":49},{\"name\":\"Sushi\",\"quantity\":23,\"net_sales\":251.25},{\"name\":\"Wine\",\"quantity\":4,\"net_sales\":48},{\"name\":\"No Category\",\"quantity\":2,\"net_sales\":5.8}],\"tip_sharing\":[{\"role\":\"Busser\",\"amount\":9.32},{\"role\":\"Food Runner\",\"amount\":9.32},{\"role\":\"Bartender\",\"amount\":7.75}],\"shift_date\":\"2026-08-04\",\"clock_in\":\"16:42\",\"clock_out\":\"21:16\"}"}]}]}"#.utf8)
+
+        let parsed = try ReceiptAIParser.parse(responseData: response)
+
+        #expect(parsed.creditTipsCents == 16_732)
+        #expect(parsed.tipOutCents == 2_639)
+        #expect(parsed.salesCents == 98_504)
+        #expect(parsed.guestCount == 21)
+        #expect(parsed.creditCheckCount == 12)
+        #expect(parsed.netSalesCents == 93_805)
+        #expect(parsed.taxCents == 4_699)
+        #expect(parsed.cashSalesCents == 0)
+        #expect(parsed.categorySales.first(where: { $0.name == "Sake" })?.quantity == 3)
+        #expect(parsed.tipSharing.count == 3)
+        #expect(parsed.shiftDate == .init(year: 2026, month: 8, day: 4))
+        #expect(parsed.clockIn == .init(hour: 16, minute: 42))
+        #expect(parsed.clockOut == .init(hour: 21, minute: 16))
     }
 
     @Test("keeps explicitly missing values empty")
