@@ -7,13 +7,11 @@ import SwiftData
 /// passes cloudKitDatabase: .none so it never stands up a second sync
 /// engine against the same store.
 enum SharedModelContainer {
+    private static let cloudKitContainerIdentifier = "iCloud.com.szakacsmedia.payday"
+
     static let shared: ModelContainer = {
         let url = AppGroup.containerURL.appendingPathComponent("Payday.sqlite")
-        #if WIDGET_EXTENSION
-        let cloudKitDatabase: ModelConfiguration.CloudKitDatabase = .none
-        #else
-        let cloudKitDatabase: ModelConfiguration.CloudKitDatabase = .private("iCloud.com.szakacsmedia.payday")
-        #endif
+        let cloudKitDatabase = Self.cloudKitDatabase
         let configuration = ModelConfiguration(url: url, cloudKitDatabase: cloudKitDatabase)
         do {
             return try ModelContainer(for: TipEntry.self, PaycheckRecord.self, configurations: configuration)
@@ -21,4 +19,17 @@ enum SharedModelContainer {
             fatalError("Failed to load the shared Payday store: \(error)")
         }
     }()
+
+    private static var cloudKitDatabase: ModelConfiguration.CloudKitDatabase {
+        #if WIDGET_EXTENSION
+        return .none
+        #elseif targetEnvironment(simulator)
+        // Simulator builds may be unsigned or missing the iCloud
+        // entitlements. SwiftData starts CloudKit during ModelContainer
+        // creation, and that state otherwise terminates the app at launch.
+        return .none
+        #else
+        return .private(cloudKitContainerIdentifier)
+        #endif
+    }
 }
