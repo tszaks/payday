@@ -42,5 +42,12 @@ struct CurrencyAmountField: View {
             if filtered != newValue { digitsText = filtered }
             cents = Int(filtered) ?? 0
         }
+        // OCR can update the binding while this field is not focused. Keep
+        // the hidden digit buffer aligned so the first edit starts from the
+        // scanned amount instead of replacing it with stale text.
+        .onChange(of: cents) { _, newValue in
+            guard Int(digitsText) ?? 0 != newValue else { return }
+            digitsText = newValue == 0 ? "" : String(newValue)
+        }
     }
 }

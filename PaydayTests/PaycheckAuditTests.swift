@@ -285,3 +285,61 @@ struct PaycheckAuditOrderingTests {
         #expect(findings(stub()).isEmpty)
     }
 }
+
+@Suite("PaycheckOCR")
+struct PaycheckOCRTests {
+    @Test("maps common pay-stub labels and adds tax lines")
+    func mapsCommonLabels() {
+        let parsed = PaycheckOCR.parse(lines: [
+            "Card Tips $618.24",
+            "Regular Pay $1,234.56",
+            "Overtime Pay $123.45",
+            "Gross Pay $1,976.25",
+            "Federal Income Tax $200.00",
+            "State Tax $50.00",
+            "Social Security $120.00",
+            "Medicare $28.00",
+            "Net Pay $1,578.25"
+        ])
+
+        #expect(parsed.tipsCents == 61824)
+        #expect(parsed.regularWagesCents == 123456)
+        #expect(parsed.overtimeWagesCents == 12345)
+        #expect(parsed.grossPayCents == 197625)
+        #expect(parsed.taxesCents == 39800)
+        #expect(parsed.netPayCents == 157825)
+        #expect(parsed.filledFieldCount == 6)
+    }
+
+    @Test("prefers the printed total taxes line over its breakdown")
+    func prefersTotalTaxes() {
+        let parsed = PaycheckOCR.parse(lines: [
+            "Federal Tax $200.00",
+            "State Tax $50.00",
+            "Total Taxes $275.00"
+        ])
+
+        #expect(parsed.taxesCents == 27500)
+    }
+
+    @Test("uses the current amount before the YTD amount")
+    func usesCurrentAmount() {
+        let parsed = PaycheckOCR.parse(lines: [
+            "Gross Pay $1,976.25 $12,500.00 YTD",
+            "Net Pay $1,578.25 $10,000.00 YTD"
+        ])
+
+        #expect(parsed.grossPayCents == 197625)
+        #expect(parsed.netPayCents == 157825)
+    }
+
+    @Test("does not mistake tip-out for tips earned")
+    func excludesTipOut() {
+        let parsed = PaycheckOCR.parse(lines: [
+            "Tip Out $100.00",
+            "Credit Tips $618.24"
+        ])
+
+        #expect(parsed.tipsCents == 61824)
+    }
+}
