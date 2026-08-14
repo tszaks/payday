@@ -11,15 +11,18 @@ enum ReceiptAIParser {
     Read this restaurant shift closeout receipt. It represents one current shift, not a paycheck or a weekly/pay-period summary. Extract only values that are explicitly printed for this shift.
 
     Return:
-    - cash_tips: cash tips, cash tips owed, or cash payout when explicitly labeled as tips. Do not use cash sales.
-    - credit_tips: credit, card, or charge tips when explicitly labeled.
-    - tip_out: tip-out, tipout, or paid-out amount when explicitly labeled.
-    - sales: post-tax sales only, meaning the shift's sales total including sales tax but excluding tips. Prefer a clearly labeled after-tax, gross, or final sales total. Never use net sales, pre-tax sales, taxable sales, or subtotal. If an after-tax sales number is not unambiguous, return null.
+    - cash_tips: cash tips when explicitly labeled, including a "Cash tips (declared)" line. Do not use Cash in hand, Cash in drawer, Cash bank, Owed to employee, cash sales, or cash payments.
+    - credit_tips: credit, card, charge, or "Non-cash tips" when explicitly labeled. A credit-tip audit may repeat the same tip total shown in the summary. Return that shift total once; never add repeated summary and audit values together.
+    - tip_out: the final Total in a "TIP SHARING" section, or an explicitly labeled tip-out/tipout total. Prefer the printed section total instead of adding its individual rows.
+    - sales: post-tax sales only, meaning the shift's sales total including sales tax but excluding tips. On a Shift Review Summary, use "Gross sales" under "SALES & TAXES SUMMARY." Never use Total amount, net sales, pre-tax sales, taxable sales, a credit-audit Subtotal, or another subtotal. If an after-tax sales number is not unambiguous, return null.
     - server_count: number of servers, staff, or server count when explicitly printed.
+    - shift_date: the date printed for this shift, formatted YYYY-MM-DD.
+    - clock_in: the start of the printed shift time range, formatted HH:mm in 24-hour time.
+    - clock_out: the end of the printed shift time range, formatted HH:mm in 24-hour time.
 
-    Ignore standalone tax amounts, checks, payment totals, discounts, totals that are not labeled as sales or tips, dates, employee IDs, and any weekly or year-to-date values. Do not add tax to a pre-tax number yourself. Do not infer a cash/credit split from a combined tip total. Do not calculate a missing field from another field.
+    The same value may be printed in multiple sections. Never sum duplicated shift totals. "Total guests served" and any guest count are not a server count; return server_count as null unless the number of working servers or staff is explicitly printed. Ignore standalone tax amounts, checks, payment totals, discounts, employee IDs, and any weekly or year-to-date values. Do not add tax to a pre-tax number yourself. Do not infer a cash/credit split from a combined tip total. Do not calculate a missing field from another field.
 
-    Return money as numbers in dollars, with up to two decimal places. Return null when a field is not present or not unambiguous. Return server_count as an integer or null.
+    Return money as numbers in dollars, with up to two decimal places. Return null when a field is not present or not unambiguous. Return server_count as an integer or null. Return shift_date, clock_in, and clock_out as strings in the requested formats or null.
     """
 
     struct ParsedValues: Decodable {
@@ -28,6 +31,9 @@ enum ReceiptAIParser {
         let tipOut: Double?
         let sales: Double?
         let serverCount: Int?
+        let shiftDate: String?
+        let clockIn: String?
+        let clockOut: String?
 
         enum CodingKeys: String, CodingKey {
             case cashTips = "cash_tips"
@@ -35,6 +41,9 @@ enum ReceiptAIParser {
             case tipOut = "tip_out"
             case sales
             case serverCount = "server_count"
+            case shiftDate = "shift_date"
+            case clockIn = "clock_in"
+            case clockOut = "clock_out"
         }
     }
 
@@ -58,16 +67,32 @@ enum ReceiptAIParser {
     }
 
     struct ParsedReceipt: Equatable, Sendable {
+        struct ShiftDate: Equatable, Sendable {
+            let year: Int
+            let month: Int
+            let day: Int
+        }
+
+        struct ClockTime: Equatable, Sendable {
+            let hour: Int
+            let minute: Int
+        }
+
         let cashTipsCents: Int?
         let creditTipsCents: Int?
         let tipOutCents: Int?
         let salesCents: Int?
         let serverCount: Int?
+        let shiftDate: ShiftDate?
+        let clockIn: ClockTime?
+        let clockOut: ClockTime?
 
         var filledFieldCount: Int {
-            [cashTipsCents, creditTipsCents, tipOutCents, salesCents, serverCount]
-                .compactMap { $0 }
-                .count
+            let amountCount = [cashTipsCents, creditTipsCents, tipOutCents, salesCents, serverCount]
+                .compactMap { $0 }.count
+            let dateAndTimeCount = [shiftDate != nil, clockIn != nil, clockOut != nil]
+                .filter { $0 }.count
+            return amountCount + dateAndTimeCount
         }
     }
 
@@ -160,7 +185,10 @@ enum ReceiptAIParser {
             creditTipsCents: cents(values.creditTips),
             tipOutCents: cents(values.tipOut),
             salesCents: cents(values.sales),
-            serverCount: positiveCount(values.serverCount)
+            serverCount: positiveCount(values.serverCount),
+            shiftDate: shiftDate(values.shiftDate),
+            clockIn: clockTime(values.clockIn),
+            clockOut: clockTime(values.clockOut)
         )
     }
 
@@ -182,6 +210,26 @@ enum ReceiptAIParser {
         return count
     }
 
+    private static func shiftDate(_ value: String?) -> ParsedReceipt.ShiftDate? {
+        guard let value else { return nil }
+        let parts = value.split(separator: "-").compactMap { Int($0) }
+        guard parts.count == 3,
+              (1...12).contains(parts[1]),
+              (1...31).contains(parts[2])
+        else { return nil }
+        return ParsedReceipt.ShiftDate(year: parts[0], month: parts[1], day: parts[2])
+    }
+
+    private static func clockTime(_ value: String?) -> ParsedReceipt.ClockTime? {
+        guard let value else { return nil }
+        let parts = value.split(separator: ":").compactMap { Int($0) }
+        guard parts.count == 2,
+              (0...23).contains(parts[0]),
+              (0...59).contains(parts[1])
+        else { return nil }
+        return ParsedReceipt.ClockTime(hour: parts[0], minute: parts[1])
+    }
+
     private static func jpegData(for image: UIImage) -> Data? {
         let maxDimension: CGFloat = 2400
         let longestSide = max(image.size.width, image.size.height)
@@ -201,9 +249,12 @@ enum ReceiptAIParser {
                 "credit_tips": ["type": ["number", "null"]],
                 "tip_out": ["type": ["number", "null"]],
                 "sales": ["type": ["number", "null"]],
-                "server_count": ["type": ["integer", "null"]]
+                "server_count": ["type": ["integer", "null"]],
+                "shift_date": ["type": ["string", "null"]],
+                "clock_in": ["type": ["string", "null"]],
+                "clock_out": ["type": ["string", "null"]]
             ],
-            "required": ["cash_tips", "credit_tips", "tip_out", "sales", "server_count"],
+            "required": ["cash_tips", "credit_tips", "tip_out", "sales", "server_count", "shift_date", "clock_in", "clock_out"],
             "additionalProperties": false
         ]
     }
