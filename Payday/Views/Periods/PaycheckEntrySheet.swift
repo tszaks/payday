@@ -1,5 +1,7 @@
 import SwiftUI
 import SwiftData
+import PhotosUI
+import UIKit
 
 struct PaycheckEntrySheet: View {
     @Environment(\.dismiss) private var dismiss
@@ -27,6 +29,13 @@ struct PaycheckEntrySheet: View {
     @State private var taxesCents: Int = 0
     @State private var netPayCents: Int = 0
     @FocusState private var focusedDetailField: PaycheckDetailField?
+    @State private var showScanOptions = false
+    @State private var showPhotoPicker = false
+    @State private var selectedPhotoItem: PhotosPickerItem?
+    @State private var photoSource: PaycheckPhotoSource?
+    @State private var isScanning = false
+    @State private var scanStatus: String?
+    @State private var scanError: String?
 
     init(period: PayPeriod, existing: PaycheckRecord?) {
         self.period = period
@@ -120,6 +129,8 @@ struct PaycheckEntrySheet: View {
                             .foregroundStyle(PaydayColor.textSecondary)
                             .multilineTextAlignment(.center)
                             .padding(.horizontal)
+
+                        scanPaycheckButton
                     }
                     .padding(.top, 8)
 
@@ -193,6 +204,65 @@ struct PaycheckEntrySheet: View {
         }
         .presentationDetents([.medium, .large])
         .presentationBackground(PaydayColor.background)
+        .confirmationDialog("Scan pay stub", isPresented: $showScanOptions, titleVisibility: .visible) {
+            if UIImagePickerController.isSourceTypeAvailable(.camera) {
+                Button("Take Photo", systemImage: "camera") {
+                    photoSource = .camera
+                }
+            }
+            Button("Choose from Photos", systemImage: "photo") {
+                showPhotoPicker = true
+            }
+        } message: {
+            Text("Payday will read the amounts on the image and fill the form for you.")
+        }
+        .photosPicker(isPresented: $showPhotoPicker, selection: $selectedPhotoItem, matching: .images)
+        .sheet(item: $photoSource) { source in
+            PaycheckImagePicker(sourceType: source.sourceType) { image in
+                Task { await scan(image: image) }
+            }
+        }
+        .onChange(of: selectedPhotoItem) { _, item in
+            guard let item else { return }
+            Task { await scan(photoItem: item) }
+        }
+        .alert("Pay stub scan", isPresented: Binding(
+            get: { scanError != nil },
+            set: { if !$0 { scanError = nil } }
+        )) {
+            Button("OK") { scanError = nil }
+        } message: {
+            Text(scanError ?? "")
+        }
+    }
+
+    private var scanPaycheckButton: some View {
+        VStack(spacing: 8) {
+            Button {
+                showScanOptions = true
+            } label: {
+                Label("Scan pay stub", systemImage: "camera.viewfinder")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.glass)
+            .disabled(isScanning)
+
+            if isScanning {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Reading your pay stub on this device…")
+                }
+                .font(PaydayFont.footnote)
+                .foregroundStyle(PaydayColor.textSecondary)
+            } else if let scanStatus {
+                Text(scanStatus)
+                    .font(PaydayFont.footnote)
+                    .foregroundStyle(PaydayColor.primary)
+                    .multilineTextAlignment(.center)
+            }
+        }
+        .padding(.horizontal)
     }
 
     // MARK: Stub details — capture-only, below the tips verification anchor
@@ -263,6 +333,48 @@ struct PaycheckEntrySheet: View {
         case .reconciles: PaydayColor.textTertiary
         case .note: PaydayColor.textSecondary
         case .discrepancy: PaydayColor.error
+        }
+    }
+
+    @MainActor
+    private func scan(photoItem: PhotosPickerItem) async {
+        defer { selectedPhotoItem = nil }
+        do {
+            guard let data = try await photoItem.loadTransferable(type: Data.self),
+                  let image = UIImage(data: data)
+            else {
+                throw PaycheckOCR.ScanError.imageUnavailable
+            }
+            await scan(image: image)
+        } catch {
+            scanError = error.localizedDescription
+        }
+    }
+
+    @MainActor
+    private func scan(image: UIImage) async {
+        isScanning = true
+        scanStatus = nil
+        defer { isScanning = false }
+
+        do {
+            let parsed = try await PaycheckOCR.parse(image: image)
+            if let tipsCents = parsed.tipsCents { amountCents = tipsCents }
+            if let regularWagesCents = parsed.regularWagesCents { self.regularWagesCents = regularWagesCents }
+            if let overtimeWagesCents = parsed.overtimeWagesCents { self.overtimeWagesCents = overtimeWagesCents }
+            if let grossPayCents = parsed.grossPayCents { self.grossPayCents = grossPayCents }
+            if let taxesCents = parsed.taxesCents { self.taxesCents = taxesCents }
+            if let netPayCents = parsed.netPayCents { self.netPayCents = netPayCents }
+
+            if parsed.filledFieldCount == 6 {
+                scanStatus = "All six fields filled. Review the numbers before saving."
+            } else {
+                let fieldWord = parsed.filledFieldCount == 1 ? "field" : "fields"
+                scanStatus = "Filled " + String(parsed.filledFieldCount) + " " + fieldWord + ". Review the remaining fields before saving."
+            }
+            PaydayHaptics.success()
+        } catch {
+            scanError = error.localizedDescription
         }
     }
 
@@ -371,6 +483,64 @@ private struct PaycheckCurrencyField: View {
             let filtered = String(newValue.filter(\.isNumber).prefix(Self.maxDigits))
             if filtered != newValue { digitsText = filtered }
             cents = Int(filtered) ?? 0
+        }
+    }
+}
+
+private enum PaycheckPhotoSource: String, Identifiable {
+    case camera
+
+    var id: String { rawValue }
+
+    var sourceType: UIImagePickerController.SourceType {
+        switch self {
+        case .camera: .camera
+        }
+    }
+}
+
+private struct PaycheckImagePicker: UIViewControllerRepresentable {
+    let sourceType: UIImagePickerController.SourceType
+    let onImage: (UIImage) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onImage: onImage, dismiss: dismiss)
+    }
+
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let picker = UIImagePickerController()
+        picker.sourceType = sourceType
+        picker.allowsEditing = false
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ picker: UIImagePickerController, context: Context) {
+        picker.sourceType = sourceType
+    }
+
+    final class Coordinator: NSObject, UINavigationControllerDelegate, UIImagePickerControllerDelegate {
+        private let onImage: (UIImage) -> Void
+        private let dismiss: DismissAction
+
+        init(onImage: @escaping (UIImage) -> Void, dismiss: DismissAction) {
+            self.onImage = onImage
+            self.dismiss = dismiss
+        }
+
+        func imagePickerController(
+            _ picker: UIImagePickerController,
+            didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]
+        ) {
+            if let image = info[.originalImage] as? UIImage {
+                onImage(image)
+            }
+            dismiss()
+        }
+
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+            dismiss()
         }
     }
 }
