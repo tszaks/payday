@@ -6,6 +6,13 @@ import UIKit
 /// to an empty value and automatically use PaycheckOCR's on-device fallback.
 enum PaycheckAIParser {
     private static let model = "gpt-5.6-terra"
+    private static let requestTimeout: TimeInterval = 30
+    private static let session: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = requestTimeout
+        configuration.timeoutIntervalForResource = requestTimeout
+        return URLSession(configuration: configuration)
+    }()
 
     private static let prompt = """
     Read this pay stub as one paycheck for one pay period. Repeated rows may show the two work weeks inside that single paycheck. Sum every repeated current-period row for the same category, and never return separate weekly values. Ignore YTD columns and values. Use the current-period values only.
@@ -63,17 +70,20 @@ enum PaycheckAIParser {
 
     enum ParseError: LocalizedError, Sendable {
         case notConfigured
+        case timedOut
         case requestFailed
         case invalidResponse
 
         var errorDescription: String? {
             switch self {
             case .notConfigured:
-                "AI pay-stub reading is not configured for this build."
+                "Pay stub analysis is not configured for this build."
+            case .timedOut:
+                "Pay stub analysis took too long. Check your connection and try again."
             case .requestFailed:
-                "AI pay-stub reading is temporarily unavailable."
+                "Pay stub analysis is temporarily unavailable."
             case .invalidResponse:
-                "AI pay-stub reading returned an unreadable result."
+                "Pay stub analysis returned an unreadable result."
             }
         }
     }
@@ -91,7 +101,7 @@ enum PaycheckAIParser {
         let imageURL = "data:image/jpeg;base64,\(imageData.base64EncodedString())"
         let requestBody: [String: Any] = [
             "model": model,
-            "reasoning": ["effort": "xhigh"],
+            "reasoning": ["effort": "medium"],
             "input": [[
                 "role": "user",
                 "content": [
@@ -111,12 +121,20 @@ enum PaycheckAIParser {
 
         var request = URLRequest(url: URL(string: "https://api.openai.com/v1/responses")!)
         request.httpMethod = "POST"
-        request.timeoutInterval = 60
+        request.timeoutInterval = requestTimeout
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch let error as URLError where error.code == .timedOut {
+            throw ParseError.timedOut
+        } catch {
+            throw ParseError.requestFailed
+        }
         guard let httpResponse = response as? HTTPURLResponse,
               (200..<300).contains(httpResponse.statusCode)
         else {

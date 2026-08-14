@@ -208,7 +208,7 @@ struct PaycheckEntrySheet: View {
         .presentationDetents([.medium, .large])
         .presentationBackground(PaydayColor.background)
         .confirmationDialog("Scan pay stub", isPresented: $showScanOptions, titleVisibility: .visible) {
-            if UIImagePickerController.isSourceTypeAvailable(.camera) {
+            if PaydayCameraView.isCameraAvailable {
                 Button("Take Photo", systemImage: "camera") {
                     photoSource = .camera
                 }
@@ -225,7 +225,7 @@ struct PaycheckEntrySheet: View {
         }
         .photosPicker(isPresented: $showPhotoPicker, selection: $selectedPhotoItem, matching: .images)
         .sheet(item: $photoSource) { source in
-            PaycheckImagePicker(sourceType: source.sourceType) { image in
+            PaydayCameraView(title: "Scan pay stub") { image in
                 Task { await scan(image: image) }
             }
         }
@@ -258,7 +258,7 @@ struct PaycheckEntrySheet: View {
                 HStack(spacing: 8) {
                     ProgressView()
                         .controlSize(.small)
-                    Text(PaycheckAIParser.isConfigured ? "Reading your pay stub with AI…" : "Reading your pay stub on this device…")
+                    Text("Analyzing…")
                 }
                 .font(PaydayFont.footnote)
                 .foregroundStyle(PaydayColor.textSecondary)
@@ -347,7 +347,16 @@ struct PaycheckEntrySheet: View {
 
     @MainActor
     private func scan(photoItem: PhotosPickerItem) async {
-        defer { selectedPhotoItem = nil }
+        guard !isScanning else {
+            selectedPhotoItem = nil
+            return
+        }
+        isScanning = true
+        scanStatus = nil
+        defer {
+            isScanning = false
+            selectedPhotoItem = nil
+        }
         do {
             guard let data = try await photoItem.loadTransferable(type: Data.self),
                   let image = UIImage(data: data)
@@ -505,56 +514,4 @@ private enum PaycheckPhotoSource: String, Identifiable {
     case camera
 
     var id: String { rawValue }
-
-    var sourceType: UIImagePickerController.SourceType {
-        switch self {
-        case .camera: .camera
-        }
-    }
-}
-
-private struct PaycheckImagePicker: UIViewControllerRepresentable {
-    let sourceType: UIImagePickerController.SourceType
-    let onImage: (UIImage) -> Void
-    @Environment(\.dismiss) private var dismiss
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(onImage: onImage, dismiss: dismiss)
-    }
-
-    func makeUIViewController(context: Context) -> UIImagePickerController {
-        let picker = UIImagePickerController()
-        picker.sourceType = sourceType
-        picker.allowsEditing = false
-        picker.delegate = context.coordinator
-        return picker
-    }
-
-    func updateUIViewController(_ picker: UIImagePickerController, context: Context) {
-        picker.sourceType = sourceType
-    }
-
-    final class Coordinator: NSObject, UINavigationControllerDelegate, UIImagePickerControllerDelegate {
-        private let onImage: (UIImage) -> Void
-        private let dismiss: DismissAction
-
-        init(onImage: @escaping (UIImage) -> Void, dismiss: DismissAction) {
-            self.onImage = onImage
-            self.dismiss = dismiss
-        }
-
-        func imagePickerController(
-            _ picker: UIImagePickerController,
-            didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]
-        ) {
-            if let image = info[.originalImage] as? UIImage {
-                onImage(image)
-            }
-            dismiss()
-        }
-
-        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
-            dismiss()
-        }
-    }
 }

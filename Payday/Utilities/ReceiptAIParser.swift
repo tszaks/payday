@@ -6,6 +6,13 @@ import UIKit
 /// from PaycheckAIParser because a receipt is one shift, not one pay period.
 enum ReceiptAIParser {
     private static let model = "gpt-5.6-terra"
+    private static let requestTimeout: TimeInterval = 30
+    private static let session: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = requestTimeout
+        configuration.timeoutIntervalForResource = requestTimeout
+        return URLSession(configuration: configuration)
+    }()
 
     private static let prompt = """
     Read this restaurant shift closeout receipt. It represents one current shift, not a paycheck or a weekly/pay-period summary. Extract only values that are explicitly printed for this shift.
@@ -201,6 +208,7 @@ enum ReceiptAIParser {
         case notConfigured
         case imageUnavailable
         case quotaExhausted
+        case timedOut
         case requestFailed
         case invalidResponse
         case noFieldsFound
@@ -208,15 +216,17 @@ enum ReceiptAIParser {
         var errorDescription: String? {
             switch self {
             case .notConfigured:
-                "AI receipt reading is not configured for this build."
+                "Receipt analysis is not configured for this build."
             case .imageUnavailable:
                 "The receipt photo could not be prepared."
             case .quotaExhausted:
-                "AI receipt credits have run out. Add API credits, then try again."
+                "Receipt analysis credits have run out. Add API credits, then try again."
+            case .timedOut:
+                "Receipt analysis took too long. Check your connection and try again."
             case .requestFailed:
-                "AI receipt reading is temporarily unavailable."
+                "Receipt analysis is temporarily unavailable."
             case .invalidResponse:
-                "AI receipt reading returned an unreadable result."
+                "Receipt analysis returned an unreadable result."
             case .noFieldsFound:
                 "No shift amounts were found. Take a closer, well-lit photo of the receipt."
             }
@@ -236,7 +246,7 @@ enum ReceiptAIParser {
         let imageURL = "data:image/jpeg;base64,\(imageData.base64EncodedString())"
         let requestBody: [String: Any] = [
             "model": model,
-            "reasoning": ["effort": "xhigh"],
+            "reasoning": ["effort": "medium"],
             "input": [[
                 "role": "user",
                 "content": [
@@ -256,12 +266,20 @@ enum ReceiptAIParser {
 
         var request = URLRequest(url: URL(string: "https://api.openai.com/v1/responses")!)
         request.httpMethod = "POST"
-        request.timeoutInterval = 60
+        request.timeoutInterval = requestTimeout
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch let error as URLError where error.code == .timedOut {
+            throw ParseError.timedOut
+        } catch {
+            throw ParseError.requestFailed
+        }
         guard let httpResponse = response as? HTTPURLResponse else { throw ParseError.requestFailed }
         guard (200..<300).contains(httpResponse.statusCode) else {
             throw requestError(statusCode: httpResponse.statusCode, responseData: data)
