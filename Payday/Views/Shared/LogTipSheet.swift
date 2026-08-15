@@ -551,7 +551,11 @@ struct LogTipSheet: View {
                 showReceiptPhotoPicker = true
             }
         } message: {
-            Text("Take a new receipt photo or choose one already in your library. Payday will read it and fill the shift fields.")
+            if ReceiptAIParser.isConfigured {
+                Text("Payday will send the receipt photo to OpenAI to read it and fill the shift fields for you.")
+            } else {
+                Text("Take a new receipt photo or choose one already in your library. Payday will read it and fill the shift fields.")
+            }
         }
         .photosPicker(isPresented: $showReceiptPhotoPicker, selection: $selectedReceiptPhotoItem, matching: .images)
         .sheet(item: $receiptPhotoSource) { source in

@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import UIKit
 @testable import Payday
 
 @Suite("ReceiptAIParser")
@@ -16,17 +17,41 @@ struct ReceiptAIParserTests {
         #expect(transcript == "[row] Total guests served | 21\n[row] Average spend per guest | $44.67")
     }
 
-    @Test("sends compact OCR text to the accuracy-first model")
-    func buildsCompactOCRRequest() throws {
-        let body = ReceiptAIParser.requestBody(transcript: "[row] Gross sales | $985.04")
+    @Test("sends OCR text and a compact receipt image to the accuracy-first model")
+    func buildsHybridReceiptRequest() throws {
+        let imageData = Data([0x01, 0x02, 0x03])
+        let body = ReceiptAIParser.requestBody(
+            transcript: "[row] Gross sales | $985.04",
+            imageData: imageData
+        )
         let data = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
         let encoded = try #require(String(data: data, encoding: .utf8))
 
         #expect(encoded.contains(#""model":"gpt-5.6-sol""#))
         #expect(encoded.contains(#""effort":"medium""#))
         #expect(encoded.contains(#"[row] Gross sales | $985.04"#))
-        #expect(!encoded.contains("input_image"))
-        #expect(!encoded.contains("data:image"))
+        #expect(encoded.contains(#""type":"input_image""#))
+        #expect(encoded.contains(#""detail":"high""#))
+        #expect(encoded.contains(#"data:image\/jpeg;base64,AQID"#))
+    }
+
+    @Test("renders compressed receipt JPEGs at their intended pixel size")
+    func rendersCompressedJPEGAtOneX() throws {
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let source = UIGraphicsImageRenderer(
+            size: CGSize(width: 100, height: 200),
+            format: format
+        ).image { context in
+            UIColor.white.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 100, height: 200))
+        }
+
+        let data = try #require(ReceiptAIParser.jpegData(for: source, maxDimension: 24))
+        let image = try #require(UIImage(data: data))
+
+        #expect(image.cgImage?.width == 12)
+        #expect(image.cgImage?.height == 24)
     }
 
     @Test("decodes shift fields in dollars into cents")
