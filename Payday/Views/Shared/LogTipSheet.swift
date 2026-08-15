@@ -4,6 +4,92 @@ import PhotosUI
 import OSLog
 import UIKit
 
+enum ScanInputSlotState: Equatable {
+    case rest
+    case analyzing
+    case scanned
+    case error(String)
+}
+
+struct ScanInputLabel: View {
+    let title: String
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "doc.text.viewfinder")
+            Text(title)
+        }
+            .font(.system(size: 15, weight: .medium))
+            .foregroundStyle(PaydayColor.primary)
+    }
+}
+
+struct ScanInputSlot: View {
+    let title: String
+    let state: ScanInputSlotState
+    let onScan: () -> Void
+    let onUndo: () -> Void
+
+    var body: some View {
+        ZStack {
+            Button(action: onScan) {
+                ScanInputLabel(title: title)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .opacity(state == .rest ? 1 : 0)
+            .allowsHitTesting(state == .rest)
+            .accessibilityHidden(state != .rest)
+
+            HStack(spacing: 8) {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Analyzing…")
+            }
+            .font(.system(size: 15, weight: .medium))
+            .foregroundStyle(PaydayColor.textSecondary)
+            .opacity(state == .analyzing ? 1 : 0)
+            .accessibilityHidden(state != .analyzing)
+
+            HStack(spacing: 4) {
+                Text("Scanned ·")
+                    .foregroundStyle(PaydayColor.textSecondary)
+                Button("Undo", action: onUndo)
+                    .buttonStyle(.plain)
+                    .foregroundStyle(PaydayColor.primary)
+            }
+            .font(.system(size: 15, weight: .medium))
+            .opacity(state == .scanned ? 1 : 0)
+            .allowsHitTesting(state == .scanned)
+            .accessibilityHidden(state != .scanned)
+
+            Text(errorMessage)
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(PaydayColor.error)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: .infinity)
+                .opacity(isShowingError ? 1 : 0)
+                .accessibilityHidden(!isShowingError)
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 32)
+        .animation(.easeInOut(duration: 0.2), value: state)
+    }
+
+    private var errorMessage: String {
+        if case .error(let message) = state { return message }
+        return ""
+    }
+
+    private var isShowingError: Bool {
+        if case .error = state { return true }
+        return false
+    }
+}
+
 /// Owns its own dismissal and save logic.
 ///
 /// A shift is one closeout — cash and credit walked out with the same
@@ -14,6 +100,35 @@ import UIKit
 /// explicit Save; editing live-saves every field straight through, same as
 /// the Vero sheet standard, with the toolbar reduced to a single Done.
 struct LogTipSheet: View {
+    private enum ReceiptScannedField: Hashable {
+        case cash
+        case credit
+        case tipOut
+        case sales
+        case serverCount
+        case receiptMetrics
+        case date
+        case clockIn
+        case clockOut
+        case hoursWorked
+        case detailsExpanded
+    }
+
+    private struct ReceiptScanSnapshot {
+        let touched: Set<ReceiptScannedField>
+        let cashCents: Int
+        let creditCents: Int
+        let tipOutCents: Int
+        let salesCents: Int
+        let serverCount: Int?
+        let receiptMetrics: ShiftReceiptMetrics?
+        let date: Date
+        let clockIn: Date?
+        let clockOut: Date?
+        let hoursWorked: Double?
+        let isDetailsExpanded: Bool
+    }
+
     private static let receiptLogger = Logger(
         subsystem: "com.szakacsmedia.payday",
         category: "ReceiptScanUI"
@@ -38,8 +153,9 @@ struct LogTipSheet: View {
     @State private var selectedReceiptPhotoItem: PhotosPickerItem?
     @State private var receiptPhotoSource: ReceiptPhotoSource?
     @State private var isScanningReceipt = false
-    @State private var receiptScanStatus: String?
-    @State private var receiptScanError: String?
+    @State private var receiptScanSlotState: ScanInputSlotState = .rest
+    @State private var receiptScanSnapshot: ReceiptScanSnapshot?
+    @State private var receiptScanResetTask: Task<Void, Never>?
     @FocusState private var focusedCurrencyField: CurrencyRowField?
 
     // Shared
@@ -329,9 +445,13 @@ struct LogTipSheet: View {
                         // Next cycles every numberPad field in the sheet, and
                         // Save/Done sits right beside it so a rushed one-handed
                         // log never has to reach up to the nav bar.
-                        if let focusedCurrencyField {
-                            ToolbarItemGroup(placement: .keyboard) {
-                                Spacer()
+                        ToolbarItemGroup(placement: .keyboard) {
+                            Button(action: presentReceiptScanOptions) {
+                                ScanInputLabel(title: "Scan receipt")
+                            }
+                            .accessibilityHint("Take a receipt photo or choose one from Photos")
+                            Spacer()
+                            if let focusedCurrencyField {
                                 if let next = nextFocusField(after: focusedCurrencyField) {
                                     Button("Next") {
                                         PaydayHaptics.selection()
@@ -393,7 +513,10 @@ struct LogTipSheet: View {
                     }
                 }
                 .onAppear(perform: handleSheetAppear)
-                .onDisappear { pruneZeroedRows() }
+                .onDisappear {
+                    receiptScanResetTask?.cancel()
+                    pruneZeroedRows()
+                }
             }
         }
         // Fixed height for the common case, plus .large as an escape hatch so
@@ -431,17 +554,17 @@ struct LogTipSheet: View {
             guard let item else { return }
             Task { await scanReceipt(photoItem: item) }
         }
-        .alert("Receipt scan", isPresented: Binding(
-            get: { receiptScanError != nil },
-            set: { if !$0 { receiptScanError = nil } }
-        )) {
-            Button("OK") { receiptScanError = nil }
-        } message: {
-            Text(receiptScanError ?? "")
-        }
         #if DEBUG
         .onAppear {
             let args = ProcessInfo.processInfo.arguments
+            if let index = args.firstIndex(of: "-DebugScanSlot"), args.count > index + 1 {
+                switch args[index + 1] {
+                case "analyzing": receiptScanSlotState = .analyzing
+                case "scanned": receiptScanSlotState = .scanned
+                case "error": receiptScanSlotState = .error("Couldn’t analyze receipt.")
+                default: receiptScanSlotState = .rest
+                }
+            }
             if !isEditing, let index = args.firstIndex(of: "-DebugTriggerReveal"), args.count > index + 1,
                let cents = Int(args[index + 1]) {
                 cashCents = cents
@@ -467,6 +590,8 @@ struct LogTipSheet: View {
                     .animation(reduceMotion ? nil : PaydayAnimation.premiumSpring, value: shiftTotalCents)
                     .lineLimit(1)
                     .minimumScaleFactor(0.5)
+
+                receiptScanSlot
                 // The hero total and the fields below it ARE the
                 // decomposition (Tyler's money-language law, 2026-07-27): no
                 // restated amount in another dialect sits under the headline.
@@ -488,8 +613,6 @@ struct LogTipSheet: View {
                 }
             }
 
-            receiptScanButton
-
             VStack(spacing: 12) {
                 // The debug hooks below (-DebugFocusTipOut/-DebugFocusServers)
                 // exist to screenshot ONE specific field focused above the
@@ -497,44 +620,24 @@ struct LogTipSheet: View {
                 // race it, since both fire from an onAppear and whichever
                 // view happens to mount last wins. Deferring to the debug
                 // hooks here makes that deterministic instead of luck.
-                CurrencyAmountRow(label: "Cash", cents: $cashCents, field: .cash, focusedField: $focusedCurrencyField, autoFocus: !isEditing && !prefersCreditFirst && !debugAutoFocusTipOut && !debugAutoFocusServers)
+                CurrencyAmountRow(label: "Cash", cents: $cashCents, field: .cash, focusedField: $focusedCurrencyField, autoFocus: !isEditing && !prefersCreditFirst && !debugAutoFocusTipOut && !debugAutoFocusServers && !debugSuppressAutoFocus)
                     .id(CurrencyRowField.cash)
-                CurrencyAmountRow(label: "Credit", cents: $creditCents, field: .credit, focusedField: $focusedCurrencyField, autoFocus: !isEditing && prefersCreditFirst && !debugAutoFocusTipOut && !debugAutoFocusServers)
+                CurrencyAmountRow(label: "Credit", cents: $creditCents, field: .credit, focusedField: $focusedCurrencyField, autoFocus: !isEditing && prefersCreditFirst && !debugAutoFocusTipOut && !debugAutoFocusServers && !debugSuppressAutoFocus)
                     .id(CurrencyRowField.credit)
             }
             .padding(.horizontal)
         }
     }
 
-    private var receiptScanButton: some View {
-        VStack(spacing: 8) {
-            Button {
-                receiptScanStatus = nil
-                focusedCurrencyField = nil
-                showReceiptScanOptions = true
-            } label: {
-                Label("Scan receipt", systemImage: "camera.viewfinder")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.glass)
-            .disabled(isScanningReceipt)
-            .accessibilityHint("Take a receipt photo or choose one from Photos to fill the shift fields")
-
-            if isScanningReceipt {
-                HStack(spacing: 8) {
-                    ProgressView()
-                    Text("Analyzing…")
-                }
-                .font(PaydayFont.caption)
-                .foregroundStyle(PaydayColor.textSecondary)
-            } else if let receiptScanStatus {
-                Text(receiptScanStatus)
-                    .font(PaydayFont.caption)
-                    .foregroundStyle(PaydayColor.textSecondary)
-                    .multilineTextAlignment(.center)
-            }
-        }
+    private var receiptScanSlot: some View {
+        ScanInputSlot(
+            title: "Scan receipt",
+            state: receiptScanSlotState,
+            onScan: presentReceiptScanOptions,
+            onUndo: undoReceiptScan
+        )
         .padding(.horizontal)
+        .accessibilityHint("Take a receipt photo or choose one from Photos to fill the shift fields")
     }
 
     /// While the details group is expanded (always true when editing), Next
@@ -912,13 +1015,77 @@ struct LogTipSheet: View {
     // MARK: Actions
 
     @MainActor
+    private func presentReceiptScanOptions() {
+        guard !isScanningReceipt else { return }
+        receiptScanResetTask?.cancel()
+        receiptScanSnapshot = nil
+        setReceiptScanSlotState(.rest)
+        focusedCurrencyField = nil
+        UIApplication.shared.sendAction(
+            #selector(UIResponder.resignFirstResponder),
+            to: nil,
+            from: nil,
+            for: nil
+        )
+        Task { @MainActor in
+            await Task.yield()
+            showReceiptScanOptions = true
+        }
+    }
+
+    @MainActor
+    private func setReceiptScanSlotState(_ state: ScanInputSlotState, resetAfter seconds: Int? = nil) {
+        receiptScanResetTask?.cancel()
+        withAnimation(.easeInOut(duration: 0.2)) {
+            receiptScanSlotState = state
+        }
+
+        guard let seconds else { return }
+        receiptScanResetTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(seconds))
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeInOut(duration: 0.2)) {
+                receiptScanSlotState = .rest
+            }
+            receiptScanSnapshot = nil
+        }
+    }
+
+    @MainActor
+    private func undoReceiptScan() {
+        guard let snapshot = receiptScanSnapshot else {
+            setReceiptScanSlotState(.rest)
+            return
+        }
+
+        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25)) {
+            if snapshot.touched.contains(.cash) { cashCents = snapshot.cashCents }
+            if snapshot.touched.contains(.credit) { creditCents = snapshot.creditCents }
+            if snapshot.touched.contains(.tipOut) { tipOutCents = snapshot.tipOutCents }
+            if snapshot.touched.contains(.sales) { salesCents = snapshot.salesCents }
+            if snapshot.touched.contains(.serverCount) { serverCount = snapshot.serverCount }
+            if snapshot.touched.contains(.receiptMetrics) { receiptMetrics = snapshot.receiptMetrics }
+            if snapshot.touched.contains(.date) { date = snapshot.date }
+            if snapshot.touched.contains(.clockIn) { clockIn = snapshot.clockIn }
+            if snapshot.touched.contains(.clockOut) { clockOut = snapshot.clockOut }
+            if snapshot.touched.contains(.hoursWorked) { hoursWorked = snapshot.hoursWorked }
+            if snapshot.touched.contains(.detailsExpanded) { isDetailsExpanded = snapshot.isDetailsExpanded }
+        }
+        receiptScanSnapshot = nil
+        setReceiptScanSlotState(.rest)
+        liveSaveEdit()
+        PaydayHaptics.selection()
+    }
+
+    @MainActor
     private func scanReceipt(_ image: UIImage) async {
         let scanStartedAt = Date()
         Self.receiptLogger.notice(
             "Receipt scan UI started. source=camera pixels=\(Int(image.size.width))x\(Int(image.size.height))"
         )
         isScanningReceipt = true
-        receiptScanStatus = nil
+        receiptScanSnapshot = nil
+        setReceiptScanSlotState(.analyzing)
         defer {
             isScanningReceipt = false
             let elapsedMilliseconds = Int(Date().timeIntervalSince(scanStartedAt) * 1_000)
@@ -929,52 +1096,100 @@ struct LogTipSheet: View {
 
         do {
             let parsed = try await ReceiptAIParser.parse(image: image)
-            if let cashTipsCents = parsed.cashTipsCents {
-                cashCents = cashTipsCents
-            }
-            if let creditTipsCents = parsed.creditTipsCents {
-                creditCents = creditTipsCents
-            }
-            if let tipOutCents = parsed.tipOutCents {
-                self.tipOutCents = tipOutCents
-            }
-            if let salesCents = parsed.salesCents {
-                self.salesCents = salesCents
-            }
-            if let serverCount = parsed.serverCount {
-                self.serverCount = serverCount
-            }
-            if let metrics = parsed.receiptMetrics {
-                receiptMetrics = receiptMetrics?.merging(metrics) ?? metrics
-            }
+            let snapshotCashCents = cashCents
+            let snapshotCreditCents = creditCents
+            let snapshotTipOutCents = tipOutCents
+            let snapshotSalesCents = salesCents
+            let snapshotServerCount = serverCount
+            let snapshotReceiptMetrics = receiptMetrics
+            let snapshotDate = date
+            let snapshotClockIn = clockIn
+            let snapshotClockOut = clockOut
+            let snapshotHoursWorked = hoursWorked
+            let snapshotDetailsExpanded = isDetailsExpanded
+            var touched: Set<ReceiptScannedField> = []
+
             let parsedReceiptDate: Date?
             if let shiftDate = parsed.shiftDate {
                 parsedReceiptDate = receiptDate(from: shiftDate)
             } else {
                 parsedReceiptDate = nil
             }
-            if let parsedReceiptDate {
-                date = min(parsedReceiptDate, .now)
-            }
             let clockDate = parsedReceiptDate ?? date
-            if let parsedClockIn = parsed.clockIn {
-                clockIn = receiptDate(on: clockDate, at: parsedClockIn)
-            }
-            if let parsedClockOut = parsed.clockOut {
-                var parsedEnd = receiptDate(on: clockDate, at: parsedClockOut)
-                if let parsedStart = clockIn, let end = parsedEnd, end <= parsedStart {
-                    parsedEnd = Calendar.current.date(byAdding: .day, value: 1, to: end)
+            let shouldExpandDetails = parsed.tipOutCents != nil
+                || parsed.salesCents != nil
+                || parsed.serverCount != nil
+                || parsed.receiptMetrics != nil
+                || parsed.shiftDate != nil
+                || parsed.clockIn != nil
+                || parsed.clockOut != nil
+
+            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25)) {
+                if let cashTipsCents = parsed.cashTipsCents {
+                    touched.insert(.cash)
+                    cashCents = cashTipsCents
                 }
-                clockOut = parsedEnd
+                if let creditTipsCents = parsed.creditTipsCents {
+                    touched.insert(.credit)
+                    creditCents = creditTipsCents
+                }
+                if let parsedTipOutCents = parsed.tipOutCents {
+                    touched.insert(.tipOut)
+                    tipOutCents = parsedTipOutCents
+                }
+                if let parsedSalesCents = parsed.salesCents {
+                    touched.insert(.sales)
+                    salesCents = parsedSalesCents
+                }
+                if let parsedServerCount = parsed.serverCount {
+                    touched.insert(.serverCount)
+                    serverCount = parsedServerCount
+                }
+                if let metrics = parsed.receiptMetrics {
+                    touched.insert(.receiptMetrics)
+                    receiptMetrics = receiptMetrics?.merging(metrics) ?? metrics
+                }
+                if let parsedReceiptDate {
+                    touched.insert(.date)
+                    date = min(parsedReceiptDate, .now)
+                }
+                if let parsedClockIn = parsed.clockIn {
+                    touched.insert(.clockIn)
+                    clockIn = receiptDate(on: clockDate, at: parsedClockIn)
+                }
+                if let parsedClockOut = parsed.clockOut {
+                    touched.insert(.clockOut)
+                    var parsedEnd = receiptDate(on: clockDate, at: parsedClockOut)
+                    if let parsedStart = clockIn, let end = parsedEnd, end <= parsedStart {
+                        parsedEnd = Calendar.current.date(byAdding: .day, value: 1, to: end)
+                    }
+                    clockOut = parsedEnd
+                }
+                if let clockIn, let clockOut {
+                    touched.insert(.hoursWorked)
+                    hoursWorked = ShiftTimes.hours(clockIn: clockIn, clockOut: clockOut)
+                }
+                if shouldExpandDetails, !isDetailsExpanded {
+                    touched.insert(.detailsExpanded)
+                    isDetailsExpanded = true
+                }
             }
-            if let clockIn, let clockOut {
-                hoursWorked = ShiftTimes.hours(clockIn: clockIn, clockOut: clockOut)
-            }
-            if parsed.tipOutCents != nil || parsed.salesCents != nil || parsed.serverCount != nil || parsed.receiptMetrics != nil || parsed.shiftDate != nil || parsed.clockIn != nil || parsed.clockOut != nil {
-                isDetailsExpanded = true
-            }
-            let fieldWord = parsed.filledFieldCount == 1 ? "field" : "fields"
-            receiptScanStatus = "Filled \(parsed.filledFieldCount) receipt \(fieldWord). Review before saving."
+
+            receiptScanSnapshot = ReceiptScanSnapshot(
+                touched: touched,
+                cashCents: snapshotCashCents,
+                creditCents: snapshotCreditCents,
+                tipOutCents: snapshotTipOutCents,
+                salesCents: snapshotSalesCents,
+                serverCount: snapshotServerCount,
+                receiptMetrics: snapshotReceiptMetrics,
+                date: snapshotDate,
+                clockIn: snapshotClockIn,
+                clockOut: snapshotClockOut,
+                hoursWorked: snapshotHoursWorked,
+                isDetailsExpanded: snapshotDetailsExpanded
+            )
+            setReceiptScanSlotState(.scanned, resetAfter: 6)
             Self.receiptLogger.notice(
                 "Receipt scan UI applied result. filledFields=\(parsed.filledFieldCount)"
             )
@@ -985,7 +1200,8 @@ struct LogTipSheet: View {
             Self.receiptLogger.error(
                 "Receipt scan UI received failure. type=\(errorType, privacy: .public) message=\(error.localizedDescription, privacy: .public)"
             )
-            receiptScanError = error.localizedDescription
+            receiptScanSnapshot = nil
+            setReceiptScanSlotState(.error(error.localizedDescription), resetAfter: 4)
         }
     }
 
@@ -999,7 +1215,8 @@ struct LogTipSheet: View {
         let importStartedAt = Date()
         Self.receiptLogger.notice("Receipt photo-library import started")
         isScanningReceipt = true
-        receiptScanStatus = nil
+        receiptScanSnapshot = nil
+        setReceiptScanSlotState(.analyzing)
         defer {
             isScanningReceipt = false
             selectedReceiptPhotoItem = nil
@@ -1020,7 +1237,8 @@ struct LogTipSheet: View {
             Self.receiptLogger.error(
                 "Receipt photo-library import failed. type=\(errorType, privacy: .public) message=\(error.localizedDescription, privacy: .public)"
             )
-            receiptScanError = error.localizedDescription
+            receiptScanSnapshot = nil
+            setReceiptScanSlotState(.error(error.localizedDescription), resetAfter: 4)
         }
     }
 
