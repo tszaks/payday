@@ -96,7 +96,7 @@ this app will actually run on can't use it. Insights narration now calls
   narration has ever been generated, or when narration isn't configured.
   **Deviation:** the on-device Foundation Models gate (`isModelAvailable`
   checking hardware support) is gone; the new gate is
-  `InsightsService.isConfigured` (an API key present), and the fallback
+  `InsightsService.isConfigured` (the server proxy endpoint present), and the fallback
   path (InsightsFactsCopy's deterministic sections, no narration) now
   covers "not configured" or "network/API call failed" instead of
   "unsupported hardware."
@@ -105,7 +105,7 @@ this app will actually run on can't use it. Insights narration now calls
   of the footnote entirely now. The underlying fact (computed totals go to
   OpenAI, never raw entries/notes) is still true and still governs what
   the app is allowed to send; it's just not surfaced as UI copy anymore.
-- **Key storage, explicit tradeoff, hard release gate — CLEARED (2026-07-15):**
+- **Key storage, explicit tradeoff, hard release gate — CLEARED (updated 2026-08-15):**
   the OpenAI key used to live in `Secrets.local.xcconfig` (gitignored) →
   `OpenAIAPIKey` in Info.plist for every configuration, Debug and Release
   alike — the exact "key baked into the shipped binary" pattern this
@@ -114,21 +114,24 @@ this app will actually run on can't use it. Insights narration now calls
   empty `OPENAI_API_KEY`) as the Release configFile, so the archive
   carries no secret — verified via `PlistBuddy` (empty `OpenAIAPIKey`) and
   `strings` (no `sk-` anywhere in the app or widget binary). Insights
-  falls back to its deterministic facts sections with beta copy
-  ("Narrated summaries are coming soon.") in that build; narration comes
-  back once the proxy below is live.
+  fell back to its deterministic facts sections with beta copy
+  ("Narrated summaries are coming soon.") in that build.
   `InsightsService.swift` now drops the bundle-key path entirely — no more
   `Bundle.main` lookup, no more `OpenAIAPIKey` Info.plist property. It
   calls a small serverless proxy instead (`payday-website`'s
   `app/api/insights-narrate`, already committed there, same "app holds
   zero provider secrets" pattern Vero uses) — the proxy owns the model,
   instructions, and response schema; the app just sends the same facts
-  payload it always built. `isConfigured` is keyed off a `proxyHost`
-  constant left empty on purpose: the proxy hasn't been deployed with a
-  rotated key yet, so this stays inert (same graceful fallback as no key)
-  until that host is filled in post-deploy. The old, already-exposed key
-  in `Secrets.local.xcconfig` is still burned and still needs rotating
-  before the proxy goes live with a real key.
+  payload it always built. The proxy is live at the configured
+  `payday-website-eta.vercel.app` production alias, and its OpenAI key is a
+  sensitive, server-only Vercel environment variable.
+  Receipt scanning follows the same boundary through
+  `app/api/receipt-analyze`: Apple Vision OCR runs on-device, then the compact
+  receipt JPEG and transcript go to the narrow proxy. The server owns the
+  model, instructions, and schema, and a Vercel Firewall rule limits that
+  route to 20 requests per IP per hour. Release builds still contain no
+  provider key. The old local key remains development-only and must never be
+  copied into a Release configuration.
 
 ## Pillar 5: Woven into the OS (App Intents everywhere)
 

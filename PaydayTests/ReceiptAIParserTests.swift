@@ -17,7 +17,7 @@ struct ReceiptAIParserTests {
         #expect(transcript == "[row] Total guests served | 21\n[row] Average spend per guest | $44.67")
     }
 
-    @Test("sends OCR text and a compact receipt image to the accuracy-first model")
+    @Test("sends only OCR text and a compact receipt image to the secure proxy")
     func buildsHybridReceiptRequest() throws {
         let imageData = Data([0x01, 0x02, 0x03])
         let body = ReceiptAIParser.requestBody(
@@ -27,12 +27,11 @@ struct ReceiptAIParserTests {
         let data = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
         let encoded = try #require(String(data: data, encoding: .utf8))
 
-        #expect(encoded.contains(#""model":"gpt-5.6-sol""#))
-        #expect(encoded.contains(#""effort":"medium""#))
         #expect(encoded.contains(#"[row] Gross sales | $985.04"#))
-        #expect(encoded.contains(#""type":"input_image""#))
-        #expect(encoded.contains(#""detail":"high""#))
         #expect(encoded.contains(#"data:image\/jpeg;base64,AQID"#))
+        #expect(encoded.contains(#""image_data_url""#))
+        #expect(!encoded.contains("model"))
+        #expect(!encoded.contains("OPENAI_API_KEY"))
     }
 
     @Test("renders compressed receipt JPEGs at their intended pixel size")
