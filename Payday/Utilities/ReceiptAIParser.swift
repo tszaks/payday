@@ -272,13 +272,19 @@ enum ReceiptAIParser {
         logger.notice(
             "Receipt OCR completed. characters=\(transcript.count) elapsedMs=\(ocrMilliseconds)"
         )
+        guard let imageData = jpegData(for: image) else {
+            logger.error("Receipt analysis stopped before request: compressed image unavailable")
+            throw ParseError.imageUnavailable
+        }
 
         var request = URLRequest(url: URL(string: "https://api.openai.com/v1/responses")!)
         request.httpMethod = "POST"
         request.timeoutInterval = requestTimeout
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: requestBody(transcript: transcript))
+        request.httpBody = try JSONSerialization.data(
+            withJSONObject: requestBody(transcript: transcript, imageData: imageData)
+        )
         logger.notice(
             "Receipt request encoded. bodyBytes=\(request.httpBody?.count ?? 0)"
         )
@@ -490,7 +496,7 @@ enum ReceiptAIParser {
         .joined(separator: "\n")
     }
 
-    static func requestBody(transcript: String) -> [String: Any] {
+    static func requestBody(transcript: String, imageData: Data) -> [String: Any] {
         let instructions = """
         \(prompt)
 
@@ -498,13 +504,17 @@ enum ReceiptAIParser {
 
         \(transcript)
         """
+        let imageURL = "data:image/jpeg;base64,\(imageData.base64EncodedString())"
 
         return [
             "model": model,
             "reasoning": ["effort": reasoningEffort],
             "input": [[
                 "role": "user",
-                "content": [["type": "input_text", "text": instructions]]
+                "content": [
+                    ["type": "input_text", "text": instructions],
+                    ["type": "input_image", "image_url": imageURL, "detail": "high"]
+                ]
             ]],
             "text": [
                 "format": [
@@ -556,6 +566,21 @@ enum ReceiptAIParser {
             guard !fragments.isEmpty else { throw ParseError.noTextFound }
             return transcript(fragments: fragments)
         }.value
+    }
+
+    /// Apple Vision keeps the request fast and gives the model explicit row
+    /// order. The compact image is sent alongside it so a missed OCR label or
+    /// detached amount cannot silently turn an obvious printed fact into nil.
+    static func jpegData(for image: UIImage, maxDimension: CGFloat = 2_400) -> Data? {
+        let longestSide = max(image.size.width, image.size.height)
+        let scale = min(1, maxDimension / max(longestSide, 1))
+        let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let renderer = UIGraphicsImageRenderer(size: size, format: format)
+        return renderer.jpegData(withCompressionQuality: 0.84) { _ in
+            image.draw(in: CGRect(origin: .zero, size: size))
+        }
     }
 
     private static func schema() -> [String: Any] {
