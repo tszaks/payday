@@ -5,6 +5,27 @@ import OSLog
 import UIKit
 
 struct PaycheckEntrySheet: View {
+    private enum PaycheckScannedField: Hashable {
+        case tips
+        case regularWages
+        case overtimeWages
+        case gratuity
+        case grossPay
+        case taxes
+        case netPay
+    }
+
+    private struct PaycheckScanSnapshot {
+        let touched: Set<PaycheckScannedField>
+        let amountCents: Int
+        let regularWagesCents: Int
+        let overtimeWagesCents: Int
+        let gratuityCents: Int
+        let grossPayCents: Int
+        let taxesCents: Int
+        let netPayCents: Int
+    }
+
     private static let scanLogger = Logger(
         subsystem: "com.szakacsmedia.payday",
         category: "PaycheckScanUI"
@@ -14,6 +35,7 @@ struct PaycheckEntrySheet: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(PayScheduleStore.self) private var scheduleStore
     @Environment(UserPreferencesStore.self) private var preferencesStore
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Query private var allEntries: [TipEntry]
     @Query private var paycheckRecords: [PaycheckRecord]
 
@@ -41,8 +63,9 @@ struct PaycheckEntrySheet: View {
     @State private var selectedPhotoItem: PhotosPickerItem?
     @State private var photoSource: PaycheckPhotoSource?
     @State private var isScanning = false
-    @State private var scanStatus: String?
-    @State private var scanError: String?
+    @State private var scanSlotState: ScanInputSlotState = .rest
+    @State private var scanSnapshot: PaycheckScanSnapshot?
+    @State private var scanResetTask: Task<Void, Never>?
 
     init(period: PayPeriod, existing: PaycheckRecord?) {
         self.period = period
@@ -133,13 +156,12 @@ struct PaycheckEntrySheet: View {
                             .tracking(0.8)
                             .foregroundStyle(PaydayColor.primary)
                         CurrencyAmountField(cents: $amountCents)
+                        scanPaycheckSlot
                         Text(explainerText)
                             .font(PaydayFont.footnote)
                             .foregroundStyle(PaydayColor.textSecondary)
                             .multilineTextAlignment(.center)
                             .padding(.horizontal)
-
-                        scanPaycheckButton
                     }
                     .padding(.top, 8)
 
@@ -195,9 +217,12 @@ struct PaycheckEntrySheet: View {
                 // external FocusState (CurrencyAmountField owns it
                 // internally) — this Next chain covers only the six detail
                 // fields below it, in reading order.
-                if let focusedDetailField {
-                    ToolbarItemGroup(placement: .keyboard) {
-                        Spacer()
+                ToolbarItemGroup(placement: .keyboard) {
+                    Button(action: presentPaycheckScanOptions) {
+                        ScanInputLabel(title: "Scan pay stub")
+                    }
+                    Spacer()
+                    if let focusedDetailField {
                         if let next = nextDetailField(after: focusedDetailField) {
                             Button("Next") {
                                 PaydayHaptics.selection()
@@ -242,42 +267,29 @@ struct PaycheckEntrySheet: View {
             guard let item else { return }
             Task { await scan(photoItem: item) }
         }
-        .alert("Pay stub scan", isPresented: Binding(
-            get: { scanError != nil },
-            set: { if !$0 { scanError = nil } }
-        )) {
-            Button("OK") { scanError = nil }
-        } message: {
-            Text(scanError ?? "")
+        .onDisappear { scanResetTask?.cancel() }
+        #if DEBUG
+        .onAppear {
+            let args = ProcessInfo.processInfo.arguments
+            if let index = args.firstIndex(of: "-DebugScanSlot"), args.count > index + 1 {
+                switch args[index + 1] {
+                case "analyzing": scanSlotState = .analyzing
+                case "scanned": scanSlotState = .scanned
+                case "error": scanSlotState = .error("Couldn’t analyze pay stub.")
+                default: scanSlotState = .rest
+                }
+            }
         }
+        #endif
     }
 
-    private var scanPaycheckButton: some View {
-        VStack(spacing: 8) {
-            Button {
-                showScanOptions = true
-            } label: {
-                Label("Scan pay stub", systemImage: "camera.viewfinder")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.glass)
-            .disabled(isScanning)
-
-            if isScanning {
-                HStack(spacing: 8) {
-                    ProgressView()
-                        .controlSize(.small)
-                    Text("Analyzing…")
-                }
-                .font(PaydayFont.footnote)
-                .foregroundStyle(PaydayColor.textSecondary)
-            } else if let scanStatus {
-                Text(scanStatus)
-                    .font(PaydayFont.footnote)
-                    .foregroundStyle(PaydayColor.primary)
-                    .multilineTextAlignment(.center)
-            }
-        }
+    private var scanPaycheckSlot: some View {
+        ScanInputSlot(
+            title: "Scan pay stub",
+            state: scanSlotState,
+            onScan: presentPaycheckScanOptions,
+            onUndo: undoPaycheckScan
+        )
         .padding(.horizontal)
     }
 
@@ -355,6 +367,64 @@ struct PaycheckEntrySheet: View {
     }
 
     @MainActor
+    private func presentPaycheckScanOptions() {
+        guard !isScanning else { return }
+        scanResetTask?.cancel()
+        scanSnapshot = nil
+        setPaycheckScanSlotState(.rest)
+        focusedDetailField = nil
+        UIApplication.shared.sendAction(
+            #selector(UIResponder.resignFirstResponder),
+            to: nil,
+            from: nil,
+            for: nil
+        )
+        Task { @MainActor in
+            await Task.yield()
+            showScanOptions = true
+        }
+    }
+
+    @MainActor
+    private func setPaycheckScanSlotState(_ state: ScanInputSlotState, resetAfter seconds: Int? = nil) {
+        scanResetTask?.cancel()
+        withAnimation(.easeInOut(duration: 0.2)) {
+            scanSlotState = state
+        }
+
+        guard let seconds else { return }
+        scanResetTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(seconds))
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeInOut(duration: 0.2)) {
+                scanSlotState = .rest
+            }
+            scanSnapshot = nil
+        }
+    }
+
+    @MainActor
+    private func undoPaycheckScan() {
+        guard let snapshot = scanSnapshot else {
+            setPaycheckScanSlotState(.rest)
+            return
+        }
+
+        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25)) {
+            if snapshot.touched.contains(.tips) { amountCents = snapshot.amountCents }
+            if snapshot.touched.contains(.regularWages) { regularWagesCents = snapshot.regularWagesCents }
+            if snapshot.touched.contains(.overtimeWages) { overtimeWagesCents = snapshot.overtimeWagesCents }
+            if snapshot.touched.contains(.gratuity) { gratuityCents = snapshot.gratuityCents }
+            if snapshot.touched.contains(.grossPay) { grossPayCents = snapshot.grossPayCents }
+            if snapshot.touched.contains(.taxes) { taxesCents = snapshot.taxesCents }
+            if snapshot.touched.contains(.netPay) { netPayCents = snapshot.netPayCents }
+        }
+        scanSnapshot = nil
+        setPaycheckScanSlotState(.rest)
+        PaydayHaptics.selection()
+    }
+
+    @MainActor
     private func scan(photoItem: PhotosPickerItem) async {
         guard !isScanning else {
             Self.scanLogger.notice("Paycheck photo-library import ignored because a scan is already active")
@@ -364,7 +434,8 @@ struct PaycheckEntrySheet: View {
         let importStartedAt = Date()
         Self.scanLogger.notice("Paycheck photo-library import started")
         isScanning = true
-        scanStatus = nil
+        scanSnapshot = nil
+        setPaycheckScanSlotState(.analyzing)
         defer {
             isScanning = false
             selectedPhotoItem = nil
@@ -385,7 +456,8 @@ struct PaycheckEntrySheet: View {
             Self.scanLogger.error(
                 "Paycheck photo-library import failed. type=\(errorType, privacy: .public) message=\(error.localizedDescription, privacy: .public)"
             )
-            scanError = error.localizedDescription
+            scanSnapshot = nil
+            setPaycheckScanSlotState(.error(error.localizedDescription), resetAfter: 4)
         }
     }
 
@@ -396,7 +468,8 @@ struct PaycheckEntrySheet: View {
             "Paycheck scan UI started. pixels=\(Int(image.size.width))x\(Int(image.size.height))"
         )
         isScanning = true
-        scanStatus = nil
+        scanSnapshot = nil
+        setPaycheckScanSlotState(.analyzing)
         defer {
             isScanning = false
             let elapsedMilliseconds = Int(Date().timeIntervalSince(scanStartedAt) * 1_000)
@@ -407,20 +480,57 @@ struct PaycheckEntrySheet: View {
 
         do {
             let parsed = try await PaycheckOCR.parse(image: image)
-            if let tipsCents = parsed.tipsCents { amountCents = tipsCents }
-            if let regularWagesCents = parsed.regularWagesCents { self.regularWagesCents = regularWagesCents }
-            if let overtimeWagesCents = parsed.overtimeWagesCents { self.overtimeWagesCents = overtimeWagesCents }
-            if let gratuityCents = parsed.gratuityCents { self.gratuityCents = gratuityCents }
-            if let grossPayCents = parsed.grossPayCents { self.grossPayCents = grossPayCents }
-            if let taxesCents = parsed.taxesCents { self.taxesCents = taxesCents }
-            if let netPayCents = parsed.netPayCents { self.netPayCents = netPayCents }
+            let snapshotAmountCents = amountCents
+            let snapshotRegularWagesCents = regularWagesCents
+            let snapshotOvertimeWagesCents = overtimeWagesCents
+            let snapshotGratuityCents = gratuityCents
+            let snapshotGrossPayCents = grossPayCents
+            let snapshotTaxesCents = taxesCents
+            let snapshotNetPayCents = netPayCents
+            var touched: Set<PaycheckScannedField> = []
 
-            if parsed.filledFieldCount == 7 {
-                scanStatus = "All seven fields filled. Review the numbers before saving."
-            } else {
-                let fieldWord = parsed.filledFieldCount == 1 ? "field" : "fields"
-                scanStatus = "Filled " + String(parsed.filledFieldCount) + " " + fieldWord + ". Review the remaining fields before saving."
+            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25)) {
+                if let tipsCents = parsed.tipsCents {
+                    touched.insert(.tips)
+                    amountCents = tipsCents
+                }
+                if let parsedRegularWagesCents = parsed.regularWagesCents {
+                    touched.insert(.regularWages)
+                    regularWagesCents = parsedRegularWagesCents
+                }
+                if let parsedOvertimeWagesCents = parsed.overtimeWagesCents {
+                    touched.insert(.overtimeWages)
+                    overtimeWagesCents = parsedOvertimeWagesCents
+                }
+                if let parsedGratuityCents = parsed.gratuityCents {
+                    touched.insert(.gratuity)
+                    gratuityCents = parsedGratuityCents
+                }
+                if let parsedGrossPayCents = parsed.grossPayCents {
+                    touched.insert(.grossPay)
+                    grossPayCents = parsedGrossPayCents
+                }
+                if let parsedTaxesCents = parsed.taxesCents {
+                    touched.insert(.taxes)
+                    taxesCents = parsedTaxesCents
+                }
+                if let parsedNetPayCents = parsed.netPayCents {
+                    touched.insert(.netPay)
+                    netPayCents = parsedNetPayCents
+                }
             }
+
+            scanSnapshot = PaycheckScanSnapshot(
+                touched: touched,
+                amountCents: snapshotAmountCents,
+                regularWagesCents: snapshotRegularWagesCents,
+                overtimeWagesCents: snapshotOvertimeWagesCents,
+                gratuityCents: snapshotGratuityCents,
+                grossPayCents: snapshotGrossPayCents,
+                taxesCents: snapshotTaxesCents,
+                netPayCents: snapshotNetPayCents
+            )
+            setPaycheckScanSlotState(.scanned, resetAfter: 6)
             Self.scanLogger.notice(
                 "Paycheck scan UI applied result. filledFields=\(parsed.filledFieldCount)"
             )
@@ -430,7 +540,8 @@ struct PaycheckEntrySheet: View {
             Self.scanLogger.error(
                 "Paycheck scan UI received failure. type=\(errorType, privacy: .public) message=\(error.localizedDescription, privacy: .public)"
             )
-            scanError = error.localizedDescription
+            scanSnapshot = nil
+            setPaycheckScanSlotState(.error(error.localizedDescription), resetAfter: 4)
         }
     }
 
@@ -543,6 +654,10 @@ private struct PaycheckCurrencyField: View {
             let filtered = String(newValue.filter(\.isNumber).prefix(Self.maxDigits))
             if filtered != newValue { digitsText = filtered }
             cents = Int(filtered) ?? 0
+        }
+        .onChange(of: cents) { _, newValue in
+            guard Int(digitsText) ?? 0 != newValue else { return }
+            digitsText = newValue == 0 ? "" : String(newValue)
         }
     }
 }
