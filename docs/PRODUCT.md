@@ -123,8 +123,9 @@ this app will actually run on can't use it. Insights narration now calls
   zero provider secrets" pattern Vero uses) — the proxy owns the model,
   instructions, and response schema; the app just sends the same facts
   payload it always built. The proxy is live at the configured
-  `payday-website-eta.vercel.app` production alias, and its OpenAI key is a
-  sensitive, server-only Vercel environment variable.
+  `payday-website-eta.vercel.app` production alias. Server-side AI calls use
+  Vercel AI Gateway's deployment OIDC token first, with the sensitive OpenAI
+  environment variable retained only as a local/direct fallback.
   Receipt scanning follows the same boundary through
   `app/api/receipt-analyze`: Apple Vision OCR runs on-device, then the compact
   receipt JPEG and transcript go to the narrow proxy. The server owns the
