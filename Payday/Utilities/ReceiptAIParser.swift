@@ -8,8 +8,9 @@ import Vision
 /// are explicitly printed on that receipt. This is intentionally separate
 /// from PaycheckAIParser because a receipt is one shift, not one pay period.
 enum ReceiptAIParser {
-    private static let model = "gpt-5.6-sol"
-    private static let reasoningEffort = "medium"
+    private static let endpoint = URL(
+        string: "https://payday-website-eta.vercel.app/api/receipt-analyze"
+    )
     private static let requestTimeout: TimeInterval = 30
     private static let logger = Logger(
         subsystem: "com.szakacsmedia.payday",
@@ -21,35 +22,6 @@ enum ReceiptAIParser {
         configuration.timeoutIntervalForResource = requestTimeout
         return URLSession(configuration: configuration)
     }()
-
-    private static let prompt = """
-    Read this restaurant shift closeout receipt. It represents one current shift, not a paycheck or a weekly/pay-period summary. Extract only values that are explicitly printed for this shift.
-
-    Return:
-    - cash_tips: cash tips when explicitly labeled, including a "Cash tips (declared)" line. Do not use Cash in hand, Cash in drawer, Cash bank, Owed to employee, cash sales, or cash payments.
-    - credit_tips: credit, card, charge, or "Non-cash tips" when explicitly labeled. A credit-tip audit may repeat the same tip total shown in the summary. Return that shift total once; never add repeated summary and audit values together.
-    - tip_out: the final Total in a "TIP SHARING" section, or an explicitly labeled tip-out/tipout total. Prefer the printed section total instead of adding its individual rows.
-    - sales: post-tax sales only, meaning the shift's sales total including sales tax but excluding tips. On a Shift Review Summary, use "Gross sales" under "SALES & TAXES SUMMARY." Never use Total amount, net sales, pre-tax sales, taxable sales, a credit-audit Subtotal, or another subtotal. If an after-tax sales number is not unambiguous, return null.
-    - server_count: number of servers, staff, or server count when explicitly printed.
-    - guest_count: the explicitly printed "Total guests served" count.
-    - credit_check_count: count the distinct check data rows in the "CREDIT TIP AUDIT" section. Exclude its header and Total row.
-    - table_count: the number of physical tables only when explicitly printed. Do not infer tables from checks; the app handles that estimate separately.
-    - net_sales: the explicitly printed pre-tax "Total net sales" amount.
-    - tax: the explicitly printed sales tax amount.
-    - printed_tip_percent: the explicitly printed tip percentage as a percent number, so 20.3% is 20.3.
-    - average_spend_per_guest: the explicitly printed average spend per guest.
-    - cash_sales: the explicitly printed collected cash sales amount, including a zero when one is printed. Do not use cash tips.
-    - gratuity_fees: the explicitly printed total gratuity and fees.
-    - category_sales: rows from the "SALES & TAXES SUMMARY" that represent sales categories. For each row return its printed name, quantity, and pre-tax net sales. Exclude totals, tax, tips, gratuity/fees, discounts, and payment rows. Return an empty array when unavailable.
-    - tip_sharing: numeric role/amount rows from "TIP SHARING." Exclude the Total row and skip rows whose amount is NA or missing. Return an empty array when unavailable.
-    - shift_date: the date printed for this shift, formatted YYYY-MM-DD.
-    - clock_in: the start of the printed shift time range, formatted HH:mm in 24-hour time.
-    - clock_out: the end of the printed shift time range, formatted HH:mm in 24-hour time.
-
-    The same value may be printed in multiple sections. Never sum duplicated shift totals. "Total guests served" and any guest count are never a server count. A check is not necessarily a physical table because one table can split into multiple checks. Do not infer a table count. Ignore check identifiers, card last-four digits, employee IDs, and any weekly or year-to-date values. Do not add tax to a pre-tax number yourself. Do not infer a cash/credit split from a combined tip total. Do not calculate a missing field from another field.
-
-    Return money as numbers in dollars, with up to two decimal places. Return null when a scalar field is not present or not unambiguous. Return counts as integers or null. Return shift_date, clock_in, and clock_out as strings in the requested formats or null.
-    """
 
     struct ParsedValues: Decodable {
         struct CategoryValue: Decodable {
@@ -245,16 +217,16 @@ enum ReceiptAIParser {
     }
 
     static var isConfigured: Bool {
-        apiKey != nil
+        endpoint != nil
     }
 
     static func parse(image: UIImage) async throws -> ParsedReceipt {
         let analysisStartedAt = Date()
         logger.notice(
-            "Receipt analysis invoked. model=\(model, privacy: .public) timeoutSeconds=\(Int(requestTimeout)) sourcePixels=\(Int(image.size.width))x\(Int(image.size.height))"
+            "Receipt analysis invoked. route=payday-proxy timeoutSeconds=\(Int(requestTimeout)) sourcePixels=\(Int(image.size.width))x\(Int(image.size.height))"
         )
-        guard let apiKey else {
-            logger.error("Receipt analysis stopped before request: API key unavailable")
+        guard let endpoint else {
+            logger.error("Receipt analysis stopped before request: endpoint unavailable")
             throw ParseError.notConfigured
         }
         let ocrStartedAt = Date()
@@ -277,10 +249,9 @@ enum ReceiptAIParser {
             throw ParseError.imageUnavailable
         }
 
-        var request = URLRequest(url: URL(string: "https://api.openai.com/v1/responses")!)
+        var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
         request.timeoutInterval = requestTimeout
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(
             withJSONObject: requestBody(transcript: transcript, imageData: imageData)
@@ -417,14 +388,6 @@ enum ReceiptAIParser {
         return .requestFailed
     }
 
-    private static var apiKey: String? {
-        guard let value = Bundle.main.object(forInfoDictionaryKey: "OPENAI_API_KEY") as? String else {
-            return nil
-        }
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
-    }
-
     private static func cents(_ dollars: Double?) -> Int? {
         guard let dollars else { return nil }
         return max(0, Int((dollars * 100).rounded()))
@@ -497,33 +460,11 @@ enum ReceiptAIParser {
     }
 
     static func requestBody(transcript: String, imageData: Data) -> [String: Any] {
-        let instructions = """
-        \(prompt)
-
-        Apple Vision recognized the receipt text below on-device. Rows are top-to-bottom; items separated by | share a printed row. Correct an obvious word misspelling only when the receipt context is unambiguous. Never alter or infer a number. Count distinct data rows under CREDIT TIP AUDIT even when OCR missed a check identifier.
-
-        \(transcript)
-        """
         let imageURL = "data:image/jpeg;base64,\(imageData.base64EncodedString())"
 
         return [
-            "model": model,
-            "reasoning": ["effort": reasoningEffort],
-            "input": [[
-                "role": "user",
-                "content": [
-                    ["type": "input_text", "text": instructions],
-                    ["type": "input_image", "image_url": imageURL, "detail": "high"]
-                ]
-            ]],
-            "text": [
-                "format": [
-                    "type": "json_schema",
-                    "name": "shift_receipt_values_ocr",
-                    "strict": true,
-                    "schema": schema()
-                ]
-            ]
+            "transcript": transcript,
+            "image_data_url": imageURL
         ]
     }
 
@@ -571,69 +512,18 @@ enum ReceiptAIParser {
     /// Apple Vision keeps the request fast and gives the model explicit row
     /// order. The compact image is sent alongside it so a missed OCR label or
     /// detached amount cannot silently turn an obvious printed fact into nil.
-    static func jpegData(for image: UIImage, maxDimension: CGFloat = 2_400) -> Data? {
+    static func jpegData(for image: UIImage, maxDimension: CGFloat = 1_800) -> Data? {
         let longestSide = max(image.size.width, image.size.height)
         let scale = min(1, maxDimension / max(longestSide, 1))
         let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1
         let renderer = UIGraphicsImageRenderer(size: size, format: format)
-        return renderer.jpegData(withCompressionQuality: 0.84) { _ in
+        return renderer.jpegData(withCompressionQuality: 0.80) { _ in
             image.draw(in: CGRect(origin: .zero, size: size))
         }
     }
 
-    private static func schema() -> [String: Any] {
-        [
-            "type": "object",
-            "properties": [
-                "cash_tips": ["type": ["number", "null"]],
-                "credit_tips": ["type": ["number", "null"]],
-                "tip_out": ["type": ["number", "null"]],
-                "sales": ["type": ["number", "null"]],
-                "server_count": ["type": ["integer", "null"]],
-                "guest_count": ["type": ["integer", "null"]],
-                "credit_check_count": ["type": ["integer", "null"]],
-                "table_count": ["type": ["integer", "null"]],
-                "net_sales": ["type": ["number", "null"]],
-                "tax": ["type": ["number", "null"]],
-                "printed_tip_percent": ["type": ["number", "null"]],
-                "average_spend_per_guest": ["type": ["number", "null"]],
-                "cash_sales": ["type": ["number", "null"]],
-                "gratuity_fees": ["type": ["number", "null"]],
-                "category_sales": [
-                    "type": "array",
-                    "items": [
-                        "type": "object",
-                        "properties": [
-                            "name": ["type": "string"],
-                            "quantity": ["type": ["integer", "null"]],
-                            "net_sales": ["type": ["number", "null"]]
-                        ],
-                        "required": ["name", "quantity", "net_sales"],
-                        "additionalProperties": false
-                    ]
-                ],
-                "tip_sharing": [
-                    "type": "array",
-                    "items": [
-                        "type": "object",
-                        "properties": [
-                            "role": ["type": "string"],
-                            "amount": ["type": "number"]
-                        ],
-                        "required": ["role", "amount"],
-                        "additionalProperties": false
-                    ]
-                ],
-                "shift_date": ["type": ["string", "null"]],
-                "clock_in": ["type": ["string", "null"]],
-                "clock_out": ["type": ["string", "null"]]
-            ],
-            "required": ["cash_tips", "credit_tips", "tip_out", "sales", "server_count", "guest_count", "credit_check_count", "table_count", "net_sales", "tax", "printed_tip_percent", "average_spend_per_guest", "cash_sales", "gratuity_fees", "category_sales", "tip_sharing", "shift_date", "clock_in", "clock_out"],
-            "additionalProperties": false
-        ]
-    }
 }
 
 private extension UIImage {

@@ -552,7 +552,7 @@ struct LogTipSheet: View {
             }
         } message: {
             if ReceiptAIParser.isConfigured {
-                Text("Payday will send the receipt photo to OpenAI to read it and fill the shift fields for you.")
+                Text("Payday will send the receipt photo through its secure service to OpenAI to read it and fill the shift fields for you.")
             } else {
                 Text("Take a new receipt photo or choose one already in your library. Payday will read it and fill the shift fields.")
             }
