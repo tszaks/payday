@@ -525,6 +525,8 @@ struct LogTipSheet: View {
                 .onAppear(perform: handleSheetAppear)
                 .onDisappear {
                     receiptScanResetTask?.cancel()
+                    receiptScanSnapshot = nil
+                    isDeferringReceiptScanRowDeletion = false
                     pruneZeroedRows()
                 }
             }
@@ -1060,6 +1062,7 @@ struct LogTipSheet: View {
         receiptScanResetTask = Task { @MainActor in
             try? await Task.sleep(for: .seconds(seconds))
             guard !Task.isCancelled else { return }
+            let shouldReconcileDeferredRow = isDeferringReceiptScanRowDeletion
             withAnimation(.easeInOut(duration: 0.2)) {
                 receiptScanSlotState = .rest
             }
@@ -1067,7 +1070,9 @@ struct LogTipSheet: View {
             isDeferringReceiptScanRowDeletion = false
             // The Undo window has closed. Apply any explicit scanned zero
             // through the normal edit reconciliation only now.
-            liveSaveEdit()
+            if shouldReconcileDeferredRow {
+                liveSaveEdit()
+            }
         }
     }
 
@@ -1426,19 +1431,41 @@ struct LogTipSheet: View {
     /// liveSaveEdit's reconciliation above — but the anchor itself is
     /// deliberately never deleted while its sheet is still open, so this
     /// sweeps it up too if it's the one left holding a zero when the sheet
-    /// closes. Always leaves at least one row behind.
+    /// closes. Before deleting any zero row, migrate the shift-level facts to
+    /// the rows that will survive so removing the canonical credit row cannot
+    /// discard hours, tip-out, sales, times, or receipt metrics. Always leaves
+    /// at least one row behind.
     private func pruneZeroedRows() {
         guard case .edit(let anchor) = target else { return }
         let rows = sameShiftEntries(around: anchor)
         guard rows.count > 1 else { return }
         let zeroed = rows.filter { $0.amountCents == 0 }
-        guard zeroed.count < rows.count else {
-            // Every row is zero — keep the first so the shift isn't silently
-            // erased out from under the person who just closed the sheet.
-            for row in zeroed.dropFirst() { modelContext.delete(row) }
-            return
+        guard !zeroed.isEmpty else { return }
+
+        let resolved = ShiftDetails.resolve(from: rows)
+        let nonzeroRows = rows.filter { $0.amountCents > 0 }
+        // Every row is zero: keep the anchor if possible so the edit target is
+        // not erased out from under the sheet during dismissal.
+        let survivingRows = nonzeroRows.isEmpty
+            ? [rows.first(where: { $0.id == anchor.id }) ?? rows[0]]
+            : nonzeroRows
+
+        ShiftDetails.write(
+            hoursWorked: resolved.hoursWorked,
+            tipOutCents: resolved.tipOutCents,
+            salesCents: resolved.salesCents,
+            shiftPeriod: resolved.shiftPeriod,
+            clockIn: resolved.clockIn,
+            clockOut: resolved.clockOut,
+            serverCount: resolved.serverCount,
+            receiptMetrics: resolved.receiptMetrics,
+            into: survivingRows
+        )
+
+        let survivingIDs = Set(survivingRows.map(\.id))
+        for row in rows where !survivingIDs.contains(row.id) {
+            modelContext.delete(row)
         }
-        for row in zeroed { modelContext.delete(row) }
     }
 
     private func delete() {
