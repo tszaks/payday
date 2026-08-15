@@ -156,6 +156,11 @@ struct LogTipSheet: View {
     @State private var receiptScanSlotState: ScanInputSlotState = .rest
     @State private var receiptScanSnapshot: ReceiptScanSnapshot?
     @State private var receiptScanResetTask: Task<Void, Never>?
+    @State private var receiptScanScrollRequest = 0
+    // A scanned zero may temporarily zero an existing cash/credit row. Keep
+    // that exact row alive while Undo is offered so restoring the scan also
+    // restores its identity and recordedAt metadata, not a replacement row.
+    @State private var isDeferringReceiptScanRowDeletion = false
     @FocusState private var focusedCurrencyField: CurrencyRowField?
 
     // Shared
@@ -407,6 +412,11 @@ struct LogTipSheet: View {
                             .padding(.bottom, 32)
                         }
                         .scrollDismissesKeyboard(.interactively)
+                        .onChange(of: receiptScanScrollRequest) { _, _ in
+                            withAnimation(PaydayAnimation.premiumSpring) {
+                                proxy.scrollTo("receipt-scan-slot", anchor: .center)
+                            }
+                        }
                     }
                 }
                 .background(PaydayColor.background)
@@ -637,6 +647,7 @@ struct LogTipSheet: View {
             onUndo: undoReceiptScan
         )
         .padding(.horizontal)
+        .id("receipt-scan-slot")
         .accessibilityHint("Take a receipt photo or choose one from Photos to fill the shift fields")
     }
 
@@ -1021,6 +1032,7 @@ struct LogTipSheet: View {
         receiptScanSnapshot = nil
         setReceiptScanSlotState(.rest)
         focusedCurrencyField = nil
+        receiptScanScrollRequest += 1
         UIApplication.shared.sendAction(
             #selector(UIResponder.resignFirstResponder),
             to: nil,
@@ -1036,6 +1048,10 @@ struct LogTipSheet: View {
     @MainActor
     private func setReceiptScanSlotState(_ state: ScanInputSlotState, resetAfter seconds: Int? = nil) {
         receiptScanResetTask?.cancel()
+        if case .error = state {
+            isDeferringReceiptScanRowDeletion = false
+            receiptScanScrollRequest += 1
+        }
         withAnimation(.easeInOut(duration: 0.2)) {
             receiptScanSlotState = state
         }
@@ -1048,6 +1064,10 @@ struct LogTipSheet: View {
                 receiptScanSlotState = .rest
             }
             receiptScanSnapshot = nil
+            isDeferringReceiptScanRowDeletion = false
+            // The Undo window has closed. Apply any explicit scanned zero
+            // through the normal edit reconciliation only now.
+            liveSaveEdit()
         }
     }
 
@@ -1072,6 +1092,7 @@ struct LogTipSheet: View {
             if snapshot.touched.contains(.detailsExpanded) { isDetailsExpanded = snapshot.isDetailsExpanded }
         }
         receiptScanSnapshot = nil
+        isDeferringReceiptScanRowDeletion = false
         setReceiptScanSlotState(.rest)
         liveSaveEdit()
         PaydayHaptics.selection()
@@ -1108,6 +1129,10 @@ struct LogTipSheet: View {
             let snapshotHoursWorked = hoursWorked
             let snapshotDetailsExpanded = isDetailsExpanded
             var touched: Set<ReceiptScannedField> = []
+
+            // State-driven live saves fire as the bindings below change.
+            // Defer destructive row reconciliation until Undo expires.
+            isDeferringReceiptScanRowDeletion = true
 
             let parsedReceiptDate: Date?
             if let shiftDate = parsed.shiftDate {
@@ -1201,6 +1226,7 @@ struct LogTipSheet: View {
                 "Receipt scan UI received failure. type=\(errorType, privacy: .public) message=\(error.localizedDescription, privacy: .public)"
             )
             receiptScanSnapshot = nil
+            isDeferringReceiptScanRowDeletion = false
             setReceiptScanSlotState(.error(error.localizedDescription), resetAfter: 4)
         }
     }
@@ -1238,6 +1264,7 @@ struct LogTipSheet: View {
                 "Receipt photo-library import failed. type=\(errorType, privacy: .public) message=\(error.localizedDescription, privacy: .public)"
             )
             receiptScanSnapshot = nil
+            isDeferringReceiptScanRowDeletion = false
             setReceiptScanSlotState(.error(error.localizedDescription), resetAfter: 4)
         }
     }
@@ -1361,7 +1388,7 @@ struct LogTipSheet: View {
         for kind in [TipKind.cash, .credit] {
             let cents = kind == .cash ? cashCents : creditCents
             if let row = rows.first(where: { $0.kind == kind }) {
-                if cents > 0 || row.id == anchor.id || rows.count == 1 {
+                if cents > 0 || row.id == anchor.id || rows.count == 1 || isDeferringReceiptScanRowDeletion {
                     row.amountCents = cents          // never delete the anchor mid-edit
                 } else {
                     modelContext.delete(row)          // non-anchor row zeroed out
