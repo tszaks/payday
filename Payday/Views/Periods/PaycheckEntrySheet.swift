@@ -66,6 +66,7 @@ struct PaycheckEntrySheet: View {
     @State private var scanSlotState: ScanInputSlotState = .rest
     @State private var scanSnapshot: PaycheckScanSnapshot?
     @State private var scanResetTask: Task<Void, Never>?
+    @State private var scanScrollRequest = 0
 
     init(period: PayPeriod, existing: PaycheckRecord?) {
         self.period = period
@@ -148,90 +149,97 @@ struct PaycheckEntrySheet: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(spacing: 24) {
-                    VStack(spacing: 8) {
-                        Text("TIPS EARNED")
-                            .font(PaydayFont.caption2)
-                            .tracking(0.8)
-                            .foregroundStyle(PaydayColor.primary)
-                        CurrencyAmountField(cents: $amountCents)
-                        scanPaycheckSlot
-                        Text(explainerText)
-                            .font(PaydayFont.footnote)
-                            .foregroundStyle(PaydayColor.textSecondary)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal)
-                    }
-                    .padding(.top, 8)
-
-                    paycheckDetailsCard
-
-                    if !auditFindings.isEmpty {
-                        checksSection
-                    }
-
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Note")
-                            .font(PaydayFont.caption)
-                            .foregroundStyle(PaydayColor.textSecondary)
-                        TextField("Optional", text: $note, axis: .vertical)
-                            .lineLimit(2...6)
-                    }
-                    .padding()
-                    .background(PaydayColor.fieldBackground)
-                    .clipShape(RoundedRectangle(cornerRadius: PaydayRadius.lg))
-                    .padding(.horizontal)
-
-                    if existing != nil {
-                        Button(role: .destructive) { showDeleteConfirmation = true } label: {
-                            Text("Remove Paycheck")
-                                .frame(maxWidth: .infinity)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(spacing: 24) {
+                        VStack(spacing: 8) {
+                            Text("TIPS EARNED")
+                                .font(PaydayFont.caption2)
+                                .tracking(0.8)
+                                .foregroundStyle(PaydayColor.primary)
+                            CurrencyAmountField(cents: $amountCents)
+                            scanPaycheckSlot
+                            Text(explainerText)
+                                .font(PaydayFont.footnote)
+                                .foregroundStyle(PaydayColor.textSecondary)
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal)
                         }
-                        .buttonStyle(.glassProminent)
-                        .tint(PaydayColor.error)
+                        .padding(.top, 8)
+
+                        paycheckDetailsCard
+
+                        if !auditFindings.isEmpty {
+                            checksSection
+                        }
+
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Note")
+                                .font(PaydayFont.caption)
+                                .foregroundStyle(PaydayColor.textSecondary)
+                            TextField("Optional", text: $note, axis: .vertical)
+                                .lineLimit(2...6)
+                        }
+                        .padding()
+                        .background(PaydayColor.fieldBackground)
+                        .clipShape(RoundedRectangle(cornerRadius: PaydayRadius.lg))
                         .padding(.horizontal)
-                        .padding(.top, 4)
-                        .confirmationDialog("Remove this paycheck?", isPresented: $showDeleteConfirmation, titleVisibility: .visible) {
-                            Button("Remove Paycheck", role: .destructive) { delete() }
-                        }
-                    }
 
-                    Spacer()
-                }
-                .padding(.top, 16)
-            }
-            .background(PaydayColor.background)
-            .navigationTitle("Paycheck")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") { save() }
-                        .buttonStyle(.glassProminent)
-                        .disabled(amountCents == 0)
-                }
-                // The tips field above autofocuses on its own and has no
-                // external FocusState (CurrencyAmountField owns it
-                // internally) — this Next chain covers only the six detail
-                // fields below it, in reading order.
-                ToolbarItemGroup(placement: .keyboard) {
-                    Button(action: presentPaycheckScanOptions) {
-                        ScanInputLabel(title: "Scan pay stub")
-                    }
-                    Spacer()
-                    if let focusedDetailField {
-                        if let next = nextDetailField(after: focusedDetailField) {
-                            Button("Next") {
-                                PaydayHaptics.selection()
-                                self.focusedDetailField = next
+                        if existing != nil {
+                            Button(role: .destructive) { showDeleteConfirmation = true } label: {
+                                Text("Remove Paycheck")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.glassProminent)
+                            .tint(PaydayColor.error)
+                            .padding(.horizontal)
+                            .padding(.top, 4)
+                            .confirmationDialog("Remove this paycheck?", isPresented: $showDeleteConfirmation, titleVisibility: .visible) {
+                                Button("Remove Paycheck", role: .destructive) { delete() }
                             }
                         }
+
+                        Spacer()
+                    }
+                    .padding(.top, 16)
+                }
+                .background(PaydayColor.background)
+                .navigationTitle("Paycheck")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") { dismiss() }
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
                         Button("Save") { save() }
                             .buttonStyle(.glassProminent)
                             .disabled(amountCents == 0)
+                    }
+                    // The tips field above autofocuses on its own and has no
+                    // external FocusState (CurrencyAmountField owns it
+                    // internally) — this Next chain covers only the six detail
+                    // fields below it, in reading order.
+                    ToolbarItemGroup(placement: .keyboard) {
+                        Button(action: presentPaycheckScanOptions) {
+                            ScanInputLabel(title: "Scan pay stub")
+                        }
+                        Spacer()
+                        if let focusedDetailField {
+                            if let next = nextDetailField(after: focusedDetailField) {
+                                Button("Next") {
+                                    PaydayHaptics.selection()
+                                    self.focusedDetailField = next
+                                }
+                            }
+                            Button("Save") { save() }
+                                .buttonStyle(.glassProminent)
+                                .disabled(amountCents == 0)
+                        }
+                    }
+                }
+                .onChange(of: scanScrollRequest) { _, _ in
+                    withAnimation(PaydayAnimation.premiumSpring) {
+                        proxy.scrollTo("paycheck-scan-slot", anchor: .center)
                     }
                 }
             }
@@ -291,6 +299,7 @@ struct PaycheckEntrySheet: View {
             onUndo: undoPaycheckScan
         )
         .padding(.horizontal)
+        .id("paycheck-scan-slot")
     }
 
     // MARK: Stub details — capture-only, below the tips verification anchor
@@ -373,6 +382,7 @@ struct PaycheckEntrySheet: View {
         scanSnapshot = nil
         setPaycheckScanSlotState(.rest)
         focusedDetailField = nil
+        scanScrollRequest += 1
         UIApplication.shared.sendAction(
             #selector(UIResponder.resignFirstResponder),
             to: nil,
@@ -388,6 +398,9 @@ struct PaycheckEntrySheet: View {
     @MainActor
     private func setPaycheckScanSlotState(_ state: ScanInputSlotState, resetAfter seconds: Int? = nil) {
         scanResetTask?.cancel()
+        if case .error = state {
+            scanScrollRequest += 1
+        }
         withAnimation(.easeInOut(duration: 0.2)) {
             scanSlotState = state
         }
