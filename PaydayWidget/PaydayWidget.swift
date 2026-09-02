@@ -98,6 +98,8 @@ struct PaydayWidgetEntryView: View {
 
     // MARK: Home Screen (systemSmall)
 
+    @Environment(\.widgetRenderingMode) private var renderingMode
+
     private var homeScreenView: some View {
         VStack(alignment: .leading, spacing: PaydaySpacing.xxs) {
             HStack {
@@ -106,11 +108,26 @@ struct PaydayWidgetEntryView: View {
                     .foregroundStyle(PaydayColor.textSecondary)
                 Spacer()
                 Button(intent: OpenLogSheetIntent()) {
+                    // In iOS 26's clear and tinted modes the system re-renders
+                    // widget content monochrome, so a light glyph on a filled
+                    // accent circle became white-on-white and the button read as
+                    // a solid blank dot. Outside full colour, drop the fill and
+                    // keep the affordance with a hairline ring instead.
                     Image(systemName: "plus")
                         .font(PaydayFont.iconSmall.weight(.bold))
-                        .foregroundStyle(PaydayColor.onPrimary)
+                        .foregroundStyle(
+                            renderingMode == .fullColor
+                                ? PaydayColor.onPrimary
+                                : PaydayColor.textPrimary
+                        )
                         .frame(width: 26, height: 26)
-                        .background(PaydayColor.primary, in: .circle)
+                        .background {
+                            if renderingMode == .fullColor {
+                                Circle().fill(PaydayColor.primary)
+                            } else {
+                                Circle().strokeBorder(PaydayColor.textPrimary.opacity(0.35), lineWidth: 1)
+                            }
+                        }
                 }
                 .buttonStyle(.plain)
             }
