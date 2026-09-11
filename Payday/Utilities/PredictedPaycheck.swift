@@ -17,9 +17,10 @@ import Foundation
 ///   server earned. Falls back to net of ALL tips when no credit was logged at
 ///   all, so a cash-only period still gets a number to check against.
 ///
-/// - `cents(from:wagesCents:)` is the whole pre-tax check: that tips line plus
-///   base and overtime wages. One number, so no surface has to say "$X, plus
-///   $Y in wages" and leave the person adding it up themselves.
+/// - `cents(from:wagesCents:)` is the whole pre-tax check: that tips line,
+///   Toast mandatory gratuity/fees, and base/overtime wages. Mandatory
+///   gratuity is a separate non-tip wage line even though it is earned during
+///   the shift. One number, so no surface leaves the person adding it up.
 ///
 /// Neither figure accounts for tax withholding; every caller says "before
 /// taxes" out loud.
@@ -30,12 +31,19 @@ enum PredictedPaycheck {
         return max(0, base - breakdown.tipOutCents)
     }
 
-    /// The whole pre-tax check: the stub's tips line plus wages.
+    /// The whole pre-tax check: tips owed + mandatory gratuity + wages.
     static func cents(from breakdown: TipBreakdown, wagesCents: Int) -> Int {
-        tipsLineCents(from: breakdown) + wagesCents
+        tipsLineCents(from: breakdown) + breakdown.gratuityFeesCents + wagesCents
     }
 
     static func hasCreditTips(_ breakdown: TipBreakdown) -> Bool {
         breakdown.creditCents > 0
+    }
+
+    /// Combined tip and mandatory-gratuity earnings represented by a stub.
+    /// Keep this combination only for whole-check math; audits compare the
+    /// two categories independently so one cannot hide a shortage in another.
+    static func paidTipEarningsCents(tipsCents: Int, gratuityCents: Int?) -> Int {
+        tipsCents + (gratuityCents ?? 0)
     }
 }

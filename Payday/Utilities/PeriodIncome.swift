@@ -1,12 +1,10 @@
 import Foundation
 
 /// Base-wage + overtime math that becomes part of period INCOME (hero,
-/// drawer, period detail, periods list) — unlike WageEstimate, which stays a
-/// caption-only estimate for the paycheck-expectation copy. Tip income and
-/// every tips-only analytic (StatsEngine, TipBreakdown, charts, Insights,
-/// the calendar heatmap, reveal) never see this; it lives entirely on the
-/// wages side of the ledger, added in by the callers above, not folded into
-/// tip totals themselves.
+/// drawer, period detail, periods list) — unlike WageEstimate, which provides
+/// per-shift wage math. It lives entirely on the wages side of the ledger and
+/// is added by callers; it is never folded into either voluntary tips or
+/// Toast employee gratuity.
 enum PeriodIncome {
     struct Wages {
         let regularCents: Int
@@ -26,10 +24,15 @@ enum PeriodIncome {
     /// value (ShiftDetails.resolve), never summed per-row. Returns nil when
     /// no rate is set or no hours were logged — like WageEstimate, an
     /// estimate is never fabricated from a fallback.
-    static func wages(entries: [TipEntry], wageCentsPerHour: Int?, firstWeekday: Int? = nil) -> Wages? {
+    static func wages(
+        entries: [TipEntry],
+        wageCentsPerHour: Int?,
+        firstWeekday: Int? = nil,
+        calendar sourceCalendar: Calendar = .current
+    ) -> Wages? {
         guard let wageCentsPerHour else { return nil }
 
-        var calendar = Calendar.current
+        var calendar = sourceCalendar
         if let firstWeekday { calendar.firstWeekday = firstWeekday }
 
         let shifts = ShiftDays.groupedByShift(entries, shiftID: \.shiftID, date: \.date, period: \.shiftPeriod)

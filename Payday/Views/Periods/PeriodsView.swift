@@ -1,112 +1,159 @@
+import Combine
 import SwiftUI
 import SwiftData
 
+/// One immutable History render. Entries and paychecks are partitioned once
+/// instead of filtering the entire data set again for every visible period.
+struct PeriodsPageFacts {
+    struct Row {
+        let period: PayPeriod
+        let breakdown: TipBreakdown
+        let wages: PeriodIncome.Wages?
+        let paycheck: PaycheckRecord?
+    }
+
+    let calculator: PayPeriodCalculator
+    let rows: [Row]
+    let yearToDateNights: [(date: Date, cents: Int)]
+    let yearToDateWages: PeriodIncome.Wages?
+    let yearToDateShiftCount: Int
+
+    init(
+        allEntries: [TipEntry],
+        paycheckRecords: [PaycheckRecord],
+        schedule: PaySchedule?,
+        wageCentsPerHour: Int?,
+        now: Date = .now,
+        calendar: Calendar = .current
+    ) {
+        let periodCalculator = PayPeriodCalculator(schedule: schedule ?? .fallback, calendar: calendar)
+        calculator = periodCalculator
+
+        var periods: [PayPeriod] = []
+        var cursor = periodCalculator.period(containing: now)
+        periods.append(cursor)
+
+        let earliestEntryDate = allEntries.lazy.map(\.date).min()
+        let earliestPaycheckDate = paycheckRecords.lazy.map(\.periodStart).min()
+        let earliestRelevantDate = [earliestEntryDate, earliestPaycheckDate].compactMap { $0 }.min()
+        if let earliestRelevantDate {
+            while periods.count < 24, cursor.start > earliestRelevantDate {
+                let previousEnd = calendar.date(byAdding: .day, value: -1, to: cursor.start) ?? cursor.start
+                cursor = periodCalculator.period(containing: previousEnd)
+                periods.append(cursor)
+            }
+        }
+
+        let entriesByPeriod = Dictionary(grouping: allEntries) {
+            periodCalculator.period(containing: $0.date)
+        }
+        var paychecksByPeriod: [PayPeriod: PaycheckRecord] = [:]
+        for paycheck in paycheckRecords {
+            let period = periodCalculator.period(containing: paycheck.periodEnd)
+            if paychecksByPeriod[period] == nil {
+                paychecksByPeriod[period] = paycheck
+            }
+        }
+        rows = periods.map { period in
+            let entries = entriesByPeriod[period] ?? []
+            return Row(
+                period: period,
+                breakdown: TipBreakdown.total(of: entries),
+                wages: PeriodIncome.wages(
+                    entries: entries,
+                    wageCentsPerHour: wageCentsPerHour,
+                    firstWeekday: schedule?.firstWeekday
+                ),
+                paycheck: paychecksByPeriod[period]
+            )
+        }
+
+        let currentYear = calendar.component(.year, from: now)
+        let yearEntries = allEntries.filter {
+            calendar.component(.year, from: $0.date) == currentYear
+        }
+        yearToDateNights = StatsEngine(records: yearEntries.map(TipRecord.init)).nightlyTotals()
+        yearToDateWages = PeriodIncome.wages(
+            entries: yearEntries,
+            wageCentsPerHour: wageCentsPerHour,
+            firstWeekday: schedule?.firstWeekday
+        )
+        yearToDateShiftCount = ShiftDays.groupedByShift(
+            yearEntries,
+            shiftID: \.shiftID,
+            date: \.date,
+            period: \.shiftPeriod,
+            calendar: calendar
+        ).count
+    }
+}
+
+private struct PeriodsPageFactsKey: Equatable {
+    let entriesRevision: Int
+    let paychecksRevision: Int
+    let frequency: PayFrequency?
+    let anchorPeriodEnd: Date?
+    let payDelayDays: Int?
+    let firstWeekday: Int?
+    let wageCentsPerHour: Int?
+    let currentDay: Date
+}
+
+private struct PeriodsPageFactsCache {
+    let key: PeriodsPageFactsKey
+    let facts: PeriodsPageFacts
+}
+
 struct PeriodsView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @Environment(PayScheduleStore.self) private var scheduleStore
     @Environment(TabRouter.self) private var tabRouter
     @Environment(UserPreferencesStore.self) private var preferencesStore
     @Query private var allEntries: [TipEntry]
     @Query private var paycheckRecords: [PaycheckRecord]
 
-    private var calculator: PayPeriodCalculator {
-        PayPeriodCalculator(schedule: scheduleStore.schedule ?? .fallback)
-    }
-
-    /// Current period plus history, walking backward until we run out of
-    /// entries/paychecks to show, capped so the list stays bounded.
-    private var periods: [PayPeriod] {
-        var result: [PayPeriod] = []
-        var cursor = calculator.period(containing: .now)
-        result.append(cursor)
-
-        let earliestEntryDate = allEntries.map(\.date).min()
-        let earliestPaycheckDate = paycheckRecords.map(\.periodStart).min()
-        let earliestRelevantDate = [earliestEntryDate, earliestPaycheckDate].compactMap { $0 }.min()
-
-        guard let earliestRelevantDate else { return result }
-
-        while result.count < 24, cursor.start > earliestRelevantDate {
-            let previousEnd = Calendar.current.date(byAdding: .day, value: -1, to: cursor.start) ?? cursor.start
-            cursor = calculator.period(containing: previousEnd)
-            result.append(cursor)
-        }
-        return result
-    }
-
-    private func breakdown(for period: PayPeriod) -> TipBreakdown {
-        TipBreakdown.total(of: allEntries.filter { $0.date >= period.start && $0.date <= period.end })
-    }
-
-    /// Base wage + overtime for a period's shifts, same definition of period
-    /// income the dashboard hero and period detail use — nil when no rate
-    /// is set.
-    private func wages(for period: PayPeriod) -> PeriodIncome.Wages? {
-        let periodEntries = allEntries.filter { $0.date >= period.start && $0.date <= period.end }
-        return PeriodIncome.wages(entries: periodEntries, wageCentsPerHour: preferencesStore.baseHourlyWageCents, firstWeekday: scheduleStore.schedule?.firstWeekday)
-    }
-
-    private func paycheck(for period: PayPeriod) -> PaycheckRecord? {
-        // Containment match (see PeriodDetailView) so paychecks survive a
-        // schedule change instead of orphaning on exact-boundary equality.
-        paycheckRecords.first { $0.periodEnd >= period.start && $0.periodEnd <= period.end }
-    }
-
-    /// This calendar year's entries — every YTD figure below reads from
-    /// this single filtered set.
-    private var yearToDateEntries: [TipEntry] {
-        let year = Calendar.current.component(.year, from: .now)
-        return allEntries.filter { Calendar.current.component(.year, from: $0.date) == year }
-    }
-
-    /// Net of any tip-outs — same rule StatsEngine applies everywhere else
-    /// money gets summed. Tips-only; wages are added in separately below.
-    private var yearToDateNights: [(date: Date, cents: Int)] {
-        StatsEngine(records: yearToDateEntries.map(TipRecord.init)).nightlyTotals()
-    }
-
-    /// Base wage + overtime across the whole year, computed ONCE over all of
-    /// the year's entries (not per period) so overtime buckets by calendar
-    /// workweek exactly like a real paycheck, regardless of pay-period
-    /// boundaries — same definition of period income every other total here
-    /// uses, just widened to the year.
-    private var yearToDateWages: PeriodIncome.Wages? {
-        PeriodIncome.wages(entries: yearToDateEntries, wageCentsPerHour: preferencesStore.baseHourlyWageCents, firstWeekday: scheduleStore.schedule?.firstWeekday)
-    }
-
-    /// A shift, not a day — a double day is 2 shifts, same counting rule the
-    /// Dashboard's Shifts section uses.
-    private var yearToDateShiftCount: Int {
-        ShiftDays.groupedByShift(yearToDateEntries, shiftID: \.shiftID, date: \.date, period: \.shiftPeriod).count
-    }
-
     /// Owned by HistoryView's single NavigationStack — passed down rather
     /// than @State here so pushes from this lens and the QA/deep-link hooks
     /// below land on the same stack the Calendar lens shares.
     @Binding var path: NavigationPath
+    @State private var factsCache: PeriodsPageFactsCache?
+    @State private var dataRevision = 0
+    @State private var currentDay = Calendar.current.startOfDay(for: .now)
 
     var body: some View {
+        let schedule = scheduleStore.schedule
+        let key = PeriodsPageFactsKey(
+            entriesRevision: dataRevision,
+            paychecksRevision: dataRevision,
+            frequency: schedule?.frequency,
+            anchorPeriodEnd: schedule?.anchorPeriodEnd,
+            payDelayDays: schedule?.payDelayDays,
+            firstWeekday: schedule?.firstWeekday,
+            wageCentsPerHour: preferencesStore.baseHourlyWageCents,
+            currentDay: currentDay
+        )
+        let facts = factsCache?.key == key
+            ? factsCache!.facts
+            : makeFacts()
         ScrollView {
             LazyVStack(spacing: 0) {
-                if !yearToDateNights.isEmpty {
-                    yearToDateCard
+                if !facts.yearToDateNights.isEmpty {
+                    yearToDateCard(facts)
                     Divider()
                 }
-                ForEach(periods.indices, id: \.self) { index in
-                    let period = periods[index]
-                    let periodBreakdown = breakdown(for: period)
-                    let periodWages = wages(for: period)
-                    NavigationLink(value: period) {
+                ForEach(Array(facts.rows.enumerated()), id: \.element.period) { index, row in
+                    NavigationLink(value: row.period) {
                         PeriodRow(
-                            period: period,
+                            period: row.period,
                             isCurrent: index == 0,
-                            loggedCents: periodBreakdown.netTotalCents + (periodWages?.totalCents ?? 0),
-                            stubTipsLineCents: PredictedPaycheck.tipsLineCents(from: periodBreakdown),
-                            payDate: calculator.payDate(for: period),
-                            paycheck: paycheck(for: period)
+                            loggedCents: row.breakdown.netTotalCents + (row.wages?.totalCents ?? 0),
+                            expectedTipAndGratuityCents: PredictedPaycheck.tipsLineCents(from: row.breakdown) + row.breakdown.gratuityFeesCents,
+                            payDate: facts.calculator.payDate(for: row.period),
+                            paycheck: row.paycheck
                         )
                     }
                     .buttonStyle(PressableButtonStyle())
-                    if index < periods.count - 1 {
+                    if index < facts.rows.count - 1 {
                         Divider()
                     }
                 }
@@ -119,16 +166,43 @@ struct PeriodsView: View {
         #if DEBUG
         .onAppear {
             if ProcessInfo.processInfo.arguments.contains("-OpenPeriodWithPaycheck"), path.isEmpty,
-               let periodWithPaycheck = periods.first(where: { paycheck(for: $0) != nil }) {
+               let periodWithPaycheck = facts.rows.first(where: { $0.paycheck != nil })?.period {
                 path.append(periodWithPaycheck)
             }
         }
         #endif
-        .onAppear { consumePendingCurrentPeriodDetail() }
-        .onChange(of: tabRouter.pendingCurrentPeriodDetail) { _, _ in consumePendingCurrentPeriodDetail() }
+        .onAppear { consumePendingCurrentPeriodDetail(facts) }
+        .onChange(of: tabRouter.pendingCurrentPeriodDetail) { _, _ in consumePendingCurrentPeriodDetail(facts) }
+        .task(id: key) {
+            guard factsCache?.key != key else { return }
+            factsCache = PeriodsPageFactsCache(key: key, facts: facts)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: ModelContext.didSave)) { _ in
+            dataRevision &+= 1
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)) { _ in
+            refreshCurrentDay()
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { refreshCurrentDay() }
+        }
         .navigationDestination(for: PayPeriod.self) { period in
             PeriodDetailView(period: period)
         }
+    }
+
+    private func makeFacts() -> PeriodsPageFacts {
+        PeriodsPageFacts(
+            allEntries: allEntries,
+            paycheckRecords: paycheckRecords,
+            schedule: scheduleStore.schedule,
+            wageCentsPerHour: preferencesStore.baseHourlyWageCents,
+            now: currentDay
+        )
+    }
+
+    private func refreshCurrentDay() {
+        currentDay = Calendar.current.startOfDay(for: .now)
     }
 
     /// "See all" on Dashboard sets the flag and switches tabs in the same
@@ -136,8 +210,8 @@ struct PeriodsView: View {
     /// onAppear and onChange call through here rather than picking one.
     /// Only acts when the stack is empty, same guard the -OpenPeriodWithPaycheck
     /// debug hook uses, so it never interrupts navigation already in flight.
-    private func consumePendingCurrentPeriodDetail() {
-        guard tabRouter.pendingCurrentPeriodDetail, path.isEmpty, let currentPeriod = periods.first else { return }
+    private func consumePendingCurrentPeriodDetail(_ facts: PeriodsPageFacts) {
+        guard tabRouter.pendingCurrentPeriodDetail, path.isEmpty, let currentPeriod = facts.rows.first?.period else { return }
         path.append(currentPeriod)
         tabRouter.pendingCurrentPeriodDetail = false
     }
@@ -147,10 +221,10 @@ extension PeriodsView {
     /// A distinct header block, not a card — type hierarchy (the display-size
     /// amount) is what marks this as the year's headline figure, the same way
     /// the rest of this budget pass replaces elevation with typography.
-    fileprivate var yearToDateCard: some View {
-        let totalCents = yearToDateNights.reduce(0) { $0 + $1.cents } + (yearToDateWages?.totalCents ?? 0)
+    fileprivate func yearToDateCard(_ facts: PeriodsPageFacts) -> some View {
+        let totalCents = facts.yearToDateNights.reduce(0) { $0 + $1.cents } + (facts.yearToDateWages?.totalCents ?? 0)
         let year = Calendar.current.component(.year, from: .now)
-        let shiftCount = yearToDateShiftCount
+        let shiftCount = facts.yearToDateShiftCount
         return HStack {
             VStack(alignment: .leading, spacing: 3) {
                 Text("\(String(year)) Year to Date")
@@ -174,12 +248,10 @@ private struct PeriodRow: View {
     let period: PayPeriod
     let isCurrent: Bool
     let loggedCents: Int
-    /// What the stub's tips line should read for this period, from the one
-    /// shared formula (PredictedPaycheck.tipsLineCents): credit tips net of
-    /// tip-out, never the wage-inclusive loggedCents. This row used to derive
-    /// it inline from gross credit, a second copy of the rule that then
-    /// disagreed with the period-detail screen the row navigates to.
-    let stubTipsLineCents: Int
+    /// What the stub's Tips and Gratuity lines should total for this period:
+    /// credit tips net of tip-out plus separately logged employee gratuity.
+    /// This is never the wage-inclusive loggedCents.
+    let expectedTipAndGratuityCents: Int
     let payDate: Date
     let paycheck: PaycheckRecord?
 
@@ -214,7 +286,11 @@ private struct PeriodRow: View {
             // consistently regardless of what else is showing.
             HStack(spacing: 6) {
                 if let paycheck {
-                    let delta = paycheck.paidTipsCents - stubTipsLineCents
+                    let paidTipEarningsCents = PredictedPaycheck.paidTipEarningsCents(
+                        tipsCents: paycheck.reconciledPaidTipsCents,
+                        gratuityCents: paycheck.gratuityCents
+                    )
+                    let delta = paidTipEarningsCents - expectedTipAndGratuityCents
                     VStack(alignment: .trailing, spacing: 2) {
                         Text(deltaString(delta))
                             .font(PaydayFont.displaySmall)

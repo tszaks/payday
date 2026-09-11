@@ -21,6 +21,7 @@ struct PaydayCameraView: UIViewControllerRepresentable {
     let title: String
     let onImage: (UIImage) -> Void
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var colorScheme
 
     static var isCameraAvailable: Bool {
         AVCaptureDevice.default(for: .video) != nil
@@ -29,6 +30,7 @@ struct PaydayCameraView: UIViewControllerRepresentable {
     func makeUIViewController(context: Context) -> PaydayCameraViewController {
         PaydayCameraViewController(
             title: title,
+            interfaceStyle: colorScheme == .dark ? .dark : .light,
             onImage: onImage,
             onDismiss: { dismiss() }
         )
@@ -36,12 +38,19 @@ struct PaydayCameraView: UIViewControllerRepresentable {
 
     func updateUIViewController(_ controller: PaydayCameraViewController, context: Context) {
         controller.titleText = title
+        controller.interfaceStyle = colorScheme == .dark ? .dark : .light
     }
 }
 
 final class PaydayCameraViewController: UIViewController, @preconcurrency AVCapturePhotoCaptureDelegate {
     var titleText: String {
         didSet { titleLabel.text = titleText }
+    }
+    var interfaceStyle: UIUserInterfaceStyle {
+        didSet {
+            overrideUserInterfaceStyle = interfaceStyle
+            applyPalette(showingPreview: isConfigured)
+        }
     }
 
     private let onImage: (UIImage) -> Void
@@ -57,16 +66,21 @@ final class PaydayCameraViewController: UIViewController, @preconcurrency AVCapt
     // These two flags are UI state and are only read or written on the main actor.
     private var isConfigured = false
     private var isCapturing = false
+    private var isDeliveryCancelled = false
+    private var captureDeliveryTask: Task<Void, Never>?
 
     init(
         title: String,
+        interfaceStyle: UIUserInterfaceStyle,
         onImage: @escaping (UIImage) -> Void,
         onDismiss: @escaping () -> Void
     ) {
         self.titleText = title
+        self.interfaceStyle = interfaceStyle
         self.onImage = onImage
         self.onDismiss = onDismiss
         super.init(nibName: nil, bundle: nil)
+        overrideUserInterfaceStyle = interfaceStyle
     }
 
     @available(*, unavailable)
@@ -79,8 +93,8 @@ final class PaydayCameraViewController: UIViewController, @preconcurrency AVCapt
         PaydayCameraDiagnostics.logger.notice(
             "Camera opened. marker=\(PaydayCameraDiagnostics.buildMarker, privacy: .public) iosAppOnMac=\(ProcessInfo.processInfo.isiOSAppOnMac)"
         )
-        view.backgroundColor = .black
         configureInterface()
+        applyPalette(showingPreview: false)
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(appDidBecomeActive),
@@ -91,11 +105,15 @@ final class PaydayCameraViewController: UIViewController, @preconcurrency AVCapt
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        isDeliveryCancelled = false
         requestCameraAccess()
     }
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
+        isDeliveryCancelled = true
+        captureDeliveryTask?.cancel()
+        captureDeliveryTask = nil
         cameraSession.stop()
     }
 
@@ -225,6 +243,7 @@ final class PaydayCameraViewController: UIViewController, @preconcurrency AVCapt
     }
 
     private func prepareForCameraStart() {
+        applyPalette(showingPreview: true)
         shutterButton.isHidden = false
         shutterButton.isEnabled = false
         statusLabel.isHidden = true
@@ -241,12 +260,17 @@ final class PaydayCameraViewController: UIViewController, @preconcurrency AVCapt
         PaydayCameraDiagnostics.logger.notice(
             "Camera start returned to UI. succeeded=\(succeeded)"
         )
+        guard viewIfLoaded?.window != nil, !isDeliveryCancelled else {
+            cameraSession.stop()
+            return
+        }
         guard succeeded else {
             showCameraUnavailable()
             return
         }
 
         isConfigured = true
+        applyPalette(showingPreview: true)
         if previewLayer == nil {
             let layer = AVCaptureVideoPreviewLayer(session: cameraSession.session)
             layer.videoGravity = .resizeAspectFill
@@ -261,6 +285,8 @@ final class PaydayCameraViewController: UIViewController, @preconcurrency AVCapt
     }
 
     private func showCameraUnavailable() {
+        isConfigured = false
+        applyPalette(showingPreview: false)
         statusLabel.text = "Payday cannot access the camera on this device."
         statusLabel.isHidden = false
         shutterButton.isHidden = true
@@ -269,16 +295,38 @@ final class PaydayCameraViewController: UIViewController, @preconcurrency AVCapt
     private func showPermissionDenied() {
         isConfigured = false
         cameraSession.stop()
+        applyPalette(showingPreview: false)
         statusLabel.text = "Allow camera access in Settings to take a photo."
         statusLabel.isHidden = false
         openSettingsButton.isHidden = false
         shutterButton.isHidden = true
     }
 
+    /// Live camera imagery needs high-contrast white chrome. Permission and
+    /// unavailable states are ordinary app surfaces, so they use UIKit's
+    /// semantic colors under the explicit Payday appearance instead of a
+    /// fixed black screen.
+    private func applyPalette(showingPreview: Bool) {
+        view.backgroundColor = showingPreview ? .black : .systemBackground
+        previewView.backgroundColor = showingPreview ? .black : .systemBackground
+        let foreground: UIColor = showingPreview ? .white : .label
+        titleLabel.textColor = foreground
+        statusLabel.textColor = foreground
+        cancelButton.tintColor = foreground
+        cancelButton.backgroundColor = showingPreview
+            ? UIColor.black.withAlphaComponent(0.55)
+            : .tertiarySystemFill
+        openSettingsButton.setTitleColor(
+            UIColor(named: "AccentColor", in: .main, compatibleWith: traitCollection) ?? foreground,
+            for: .normal
+        )
+    }
+
     @objc private func capturePhoto() {
         guard isConfigured, !isCapturing else { return }
         PaydayCameraDiagnostics.logger.notice("Photo capture requested")
         isCapturing = true
+        isDeliveryCancelled = false
         shutterButton.isEnabled = false
         let settings = AVCapturePhotoSettings()
         settings.flashMode = .off
@@ -286,6 +334,10 @@ final class PaydayCameraViewController: UIViewController, @preconcurrency AVCapt
     }
 
     @objc private func cancel() {
+        isDeliveryCancelled = true
+        captureDeliveryTask?.cancel()
+        captureDeliveryTask = nil
+        cameraSession.stop()
         onDismiss()
     }
 
@@ -305,8 +357,7 @@ final class PaydayCameraViewController: UIViewController, @preconcurrency AVCapt
         error: Error?
     ) {
         guard error == nil,
-              let data = photo.fileDataRepresentation(),
-              let image = UIImage(data: data)
+              let data = photo.fileDataRepresentation()
         else {
             let failure = error.map { String(describing: type(of: $0)) } ?? "image-data-unavailable"
             PaydayCameraDiagnostics.logger.error(
@@ -321,14 +372,30 @@ final class PaydayCameraViewController: UIViewController, @preconcurrency AVCapt
             return
         }
 
-        PaydayCameraDiagnostics.logger.notice(
-            "Photo capture completed. jpegBytes=\(data.count) pixels=\(Int(image.size.width))x\(Int(image.size.height))"
-        )
-        DispatchQueue.main.async { [weak self] in
+        captureDeliveryTask?.cancel()
+        captureDeliveryTask = Task { @MainActor [weak self] in
             guard let self else { return }
+            guard !Task.isCancelled, !isDeliveryCancelled else { return }
+            guard let image = await PaydayImageDecoder.decode(data) else {
+                guard !Task.isCancelled, !isDeliveryCancelled else { return }
+                isCapturing = false
+                shutterButton.isEnabled = true
+                statusLabel.text = "Payday could not capture that photo. Try again."
+                statusLabel.isHidden = false
+                return
+            }
+            guard !Task.isCancelled, !isDeliveryCancelled else { return }
+            PaydayCameraDiagnostics.logger.notice(
+                "Photo capture completed. jpegBytes=\(data.count) pixels=\(Int(image.size.width))x\(Int(image.size.height))"
+            )
             onImage(image)
             onDismiss()
+            captureDeliveryTask = nil
         }
+    }
+
+    deinit {
+        captureDeliveryTask?.cancel()
     }
 }
 

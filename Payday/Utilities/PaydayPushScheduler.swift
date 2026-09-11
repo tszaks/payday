@@ -79,9 +79,17 @@ enum PaydayPushScheduler {
         // The tips LINE, not the whole check: this is the figure the person is
         // about to compare against a stub, and a stub prints tips and wages on
         // separate lines. Net of tip-out, same as every other surface.
-        let body = PredictedPaycheck.hasCreditTips(breakdown)
-            ? "Your check's tips line should read about \(Money.string(fromCents: PredictedPaycheck.tipsLineCents(from: breakdown)))."
-            : "Your check lands today. Open Payday to check the period."
+        let body: String
+        if PredictedPaycheck.hasCreditTips(breakdown) {
+            let tips = Money.string(fromCents: PredictedPaycheck.tipsLineCents(from: breakdown))
+            if breakdown.gratuityFeesCents > 0 {
+                body = "Your stub should show about \(tips) in tips and \(Money.string(fromCents: breakdown.gratuityFeesCents)) in gratuity."
+            } else {
+                body = "Your check's tips line should read about \(tips)."
+            }
+        } else {
+            body = "Your check lands today. Open Payday to check the period."
+        }
         return Decision(fireDate: fireDate, body: body)
     }
 

@@ -75,3 +75,49 @@ struct UserPreferencesStoreWageMigrationTests {
         #expect(third.baseHourlyWageCents == 1800)
     }
 }
+
+@Suite("Appearance preference")
+struct UserPreferencesStoreAppearanceTests {
+    private static let appearanceKey = "com.szakacsmedia.payday.appearance"
+
+    @Test("defaults to Automatic when no choice exists")
+    func defaultsToAutomatic() {
+        let store = UserPreferencesStore(defaults: freshDefaults(), wageDefaults: freshDefaults())
+
+        #expect(store.appearance == .system)
+    }
+
+    @Test("legacy appearance migrates to shared defaults and persists there")
+    func migratesAndPersistsSharedAppearance() {
+        let standard = freshDefaults()
+        let shared = freshDefaults()
+        standard.set(AppAppearance.dark.rawValue, forKey: Self.appearanceKey)
+
+        let store = UserPreferencesStore(defaults: standard, wageDefaults: shared)
+        #expect(store.appearance == .dark)
+        #expect(standard.object(forKey: Self.appearanceKey) == nil)
+        #expect(shared.string(forKey: Self.appearanceKey) == AppAppearance.dark.rawValue)
+
+        store.appearance = .light
+        let relaunched = UserPreferencesStore(defaults: standard, wageDefaults: shared)
+        #expect(relaunched.appearance == .light)
+    }
+
+    @Test("reading an untouched settings clock stays at the epoch")
+    func untouchedClockDoesNotBecomeANewEdit() {
+        let defaults = freshDefaults()
+
+        #expect(PaydaySettingsSyncClock.modifiedAt(in: defaults) == Date(timeIntervalSince1970: 0))
+        #expect(PaydaySettingsSyncClock.modifiedAt(in: defaults) == Date(timeIntervalSince1970: 0))
+    }
+
+    @Test("a real settings edit advances the settings clock")
+    func editAdvancesClock() {
+        let defaults = freshDefaults()
+        let editDate = Date(timeIntervalSince1970: 1_234)
+
+        PaydaySettingsSyncClock.touch(editDate, defaults: defaults)
+
+        #expect(PaydaySettingsSyncClock.modifiedAt(in: defaults) == editDate)
+    }
+}

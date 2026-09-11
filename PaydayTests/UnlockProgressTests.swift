@@ -172,34 +172,34 @@ struct UnlockCopyTests {
     @Test("insights copy is singular for exactly 1 remaining, plural otherwise")
     func insightsSingularPlural() {
         let singular = Unlock(kind: .insights, have: 4, need: 5)
-        #expect(singular.line == "1 more shift and Payday starts reading your patterns.")
+        #expect(singular.line == "1 more shift for insights")
         let plural = Unlock(kind: .insights, have: 3, need: 5)
-        #expect(plural.line == "2 more shifts and Payday starts reading your patterns.")
+        #expect(plural.line == "2 more shifts for insights")
     }
 
     @Test("weekday copy names the weekday and is singular for exactly 1 remaining, plural otherwise")
     func weekdaySingularPlural() {
         let friday = Calendar.current.component(.weekday, from: date(2026, 7, 3))
         let singular = Unlock(kind: .weekday(friday), have: 2, need: 3)
-        #expect(singular.line == "1 more Friday shift and Fridays get their own read.")
+        #expect(singular.line == "1 more Friday shift for a Friday average")
         let plural = Unlock(kind: .weekday(friday), have: 1, need: 3)
-        #expect(plural.line == "2 more Friday shifts and Fridays get their own read.")
+        #expect(plural.line == "2 more Friday shifts for a Friday average")
     }
 
     @Test("hourlyRate copy is singular for exactly 1 remaining, plural otherwise")
     func hourlyRateSingularPlural() {
         let singular = Unlock(kind: .hourlyRate, have: 2, need: 3)
-        #expect(singular.line == "1 more shift with times and your hourly rate unlocks.")
+        #expect(singular.line == "1 more timed shift for hourly rate")
         let plural = Unlock(kind: .hourlyRate, have: 1, need: 3)
-        #expect(plural.line == "2 more shifts with times and your hourly rate unlocks.")
+        #expect(plural.line == "2 more timed shifts for hourly rate")
     }
 
     @Test("tipPercent copy is singular for exactly 1 remaining, plural otherwise")
     func tipPercentSingularPlural() {
         let singular = Unlock(kind: .tipPercent, have: 2, need: 3)
-        #expect(singular.line == "1 more shift with sales and your tip percent unlocks.")
+        #expect(singular.line == "1 more shift with sales for tip percentage")
         let plural = Unlock(kind: .tipPercent, have: 1, need: 3)
-        #expect(plural.line == "2 more shifts with sales and your tip percent unlocks.")
+        #expect(plural.line == "2 more shifts with sales for tip percentage")
     }
 }
 

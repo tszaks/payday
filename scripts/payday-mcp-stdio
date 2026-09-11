@@ -1,0 +1,137 @@
+#!/usr/bin/env -S deno run --quiet --allow-net=bkkxunqqfkogxibyyjmc.supabase.co --allow-run=/usr/bin/security
+
+const endpoint =
+  "https://bkkxunqqfkogxibyyjmc.supabase.co/functions/v1/payday-api/mcp";
+const keychainService = "com.szakacsmedia.payday.agent-api";
+const keychainAccount = "codex-admin";
+const requestTimeoutMS = 30_000;
+let protocolVersion: string | undefined;
+
+async function loadToken(): Promise<string> {
+  const command = new Deno.Command("/usr/bin/security", {
+    args: [
+      "find-generic-password",
+      "-s",
+      keychainService,
+      "-a",
+      keychainAccount,
+      "-w",
+    ],
+    stdout: "piped",
+    stderr: "null",
+  });
+  const result = await command.output();
+  if (!result.success) {
+    throw new Error(
+      `Missing Keychain credential ${keychainService}/${keychainAccount}.`,
+    );
+  }
+  const token = new TextDecoder().decode(result.stdout).trim();
+  if (!token.startsWith("pd_live_")) throw new Error("Invalid Payday token in Keychain.");
+  return token;
+}
+
+async function forward(line: string, token: string): Promise<void> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line);
+  } catch {
+    console.log(JSON.stringify({
+      jsonrpc: "2.0",
+      id: null,
+      error: { code: -32700, message: "Parse error" },
+    }));
+    return;
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    console.log(JSON.stringify({
+      jsonrpc: "2.0",
+      id: null,
+      error: { code: -32600, message: "Invalid Request" },
+    }));
+    return;
+  }
+  const request = parsed as Record<string, unknown>;
+  const isNotification = !Object.prototype.hasOwnProperty.call(request, "id");
+
+  try {
+    const headers: Record<string, string> = {
+      authorization: `Bearer ${token}`,
+      "content-type": "application/json",
+      accept: "application/json, text/event-stream",
+    };
+    if (protocolVersion) headers["mcp-protocol-version"] = protocolVersion;
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers,
+      body: line,
+      signal: AbortSignal.timeout(requestTimeoutMS),
+    });
+    if (response.status === 202 || response.status === 204) return;
+    const negotiatedHeader = response.headers.get("mcp-protocol-version");
+    if (request.method === "initialize" && negotiatedHeader) {
+      protocolVersion = negotiatedHeader;
+    }
+    const contentType = response.headers.get("content-type") ?? "";
+    if (response.ok && contentType.includes("text/event-stream")) {
+      if (isNotification) return;
+      const stream = await response.text();
+      for (const event of stream.split(/\r?\n\r?\n/)) {
+        const data = event.split(/\r?\n/).filter((part) =>
+          part.startsWith("data:")
+        ).map((part) => part.slice(5).trimStart()).join("\n");
+        if (data) console.log(data);
+      }
+      return;
+    }
+    const body = await response.json();
+    if (response.ok && body?.jsonrpc === "2.0") {
+      if (
+        request.method === "initialize" &&
+        typeof body?.result?.protocolVersion === "string"
+      ) protocolVersion = body.result.protocolVersion;
+      if (!isNotification) console.log(JSON.stringify(body));
+      return;
+    }
+    if (isNotification) return;
+    const message = body?.error?.message ?? `Payday API returned HTTP ${response.status}.`;
+    console.log(JSON.stringify({
+      jsonrpc: "2.0",
+      id: request.id ?? null,
+      error: { code: -32000, message },
+    }));
+  } catch (error) {
+    if (isNotification) return;
+    console.log(JSON.stringify({
+      jsonrpc: "2.0",
+      id: request.id ?? null,
+      error: {
+        code: -32001,
+        message: error instanceof Error ? error.message : "Payday API request failed.",
+      },
+    }));
+  }
+}
+
+async function main(): Promise<void> {
+  const token = await loadToken();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for await (const chunk of Deno.stdin.readable) {
+    buffer += decoder.decode(chunk, { stream: true });
+    let newline = buffer.indexOf("\n");
+    while (newline >= 0) {
+      const line = buffer.slice(0, newline).trim();
+      buffer = buffer.slice(newline + 1);
+      if (line) await forward(line, token);
+      newline = buffer.indexOf("\n");
+    }
+  }
+  const finalLine = buffer.trim();
+  if (finalLine) await forward(finalLine, token);
+}
+
+main().catch((error) => {
+  console.error(error instanceof Error ? error.message : String(error));
+  Deno.exit(1);
+});

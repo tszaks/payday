@@ -6,19 +6,25 @@ struct RootView: View {
     @Environment(UserPreferencesStore.self) private var preferencesStore
     @Environment(\.scenePhase) private var scenePhase
     @State private var lockController = AppLockController()
+    @State private var hasEvaluatedInitialLock = false
     @Query private var allEntries: [TipEntry]
     @Query private var paycheckRecords: [PaycheckRecord]
 
     var body: some View {
         Group {
-            if scheduleStore.schedule != nil {
-                MainTabView()
+            if !hasEvaluatedInitialLock {
+                PaydayColor.background.ignoresSafeArea()
+            } else if lockController.isLocked {
+                LockGateView(lockController: lockController)
             } else {
-                FirstRunSetupView()
+                PaydayCloudGate {
+                    if scheduleStore.schedule != nil {
+                        MainTabView()
+                    } else {
+                        FirstRunSetupView()
+                    }
+                }
             }
-        }
-        .fullScreenCover(isPresented: $lockController.isLocked) {
-            LockGateView(lockController: lockController)
         }
         .onChange(of: scenePhase) { _, newPhase in
             switch newPhase {
@@ -31,7 +37,7 @@ struct RootView: View {
                 break
             }
         }
-        .onAppear {
+        .task {
             // Backgrounding an already-running app arms the lock via the
             // scenePhase handler above, but a fully-terminated app (swiped
             // away in the App Switcher, not just suspended) starts a brand
@@ -40,6 +46,7 @@ struct RootView: View {
             // launch always opened straight to unlocked content regardless
             // of the setting.
             lockController.armIfEnabled(preferencesStore)
+            hasEvaluatedInitialLock = true
         }
         #if DEBUG
         .onAppear {

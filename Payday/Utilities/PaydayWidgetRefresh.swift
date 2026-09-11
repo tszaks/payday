@@ -8,6 +8,6 @@ import WidgetKit
 /// reload requests, so there's no need to be stingy about it.
 enum PaydayWidgetRefresh {
     static func request() {
-        WidgetCenter.shared.reloadAllTimelines()
+        WidgetCenter.shared.reloadTimelines(ofKind: "PaydayWidget")
     }
 }

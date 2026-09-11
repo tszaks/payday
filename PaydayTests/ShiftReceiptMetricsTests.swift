@@ -15,6 +15,7 @@ struct ShiftReceiptMetricsTests {
         averageSpendPerGuestCents: 2_950,
         cashSalesCents: 0,
         gratuityFeesCents: 0,
+        totalAmountCents: 14_806,
         categorySales: [
             .init(name: "Kitchen", quantity: 4, netSalesCents: 5_500),
             .init(name: "Sushi", quantity: 5, netSalesCents: 3_800)
@@ -83,6 +84,7 @@ struct ShiftReceiptMetricsTests {
 
         #expect(merged.guestCount == 5)
         #expect(merged.taxCents == 606)
+        #expect(merged.totalAmountCents == 14_806)
         #expect(merged.categorySales == [
             .init(name: "Kitchen", quantity: 5, netSalesCents: 6_500),
             .init(name: "Sushi", quantity: 5, netSalesCents: 3_800)
@@ -101,5 +103,27 @@ struct ShiftReceiptMetricsTests {
         #expect(merged.cashSalesCents == 2_000)
         #expect(merged.tableCount == nil)
         #expect(merged.tableCountSource == nil)
+    }
+
+    @Test("legacy receipt JSON never starts double-counting captured gratuity")
+    func legacyJSONKeepsGratuityNonAdditive() throws {
+        let legacy = Data(#"{"gratuityFeesCents":4050}"#.utf8)
+        let decoded = try JSONDecoder().decode(ShiftReceiptMetrics.self, from: legacy)
+
+        #expect(decoded.gratuityFeesCents == 4_050)
+        #expect(decoded.earningsSchemaVersion == nil)
+        #expect(decoded.separatedGratuityFeesCents == 0)
+        #expect(decoded.voluntaryTipsCents(fromStoredAmount: 16_186) == 12_136)
+        #expect(decoded.employeeEarningsCents(fromStoredAmount: 16_186) == 16_186)
+    }
+
+    @Test("v2 receipt JSON adds gratuity as its own earnings category")
+    func versionTwoMakesGratuityAdditive() {
+        let metrics = ShiftReceiptMetrics(
+            earningsSchemaVersion: 2,
+            gratuityFeesCents: 4_050
+        )
+
+        #expect(metrics.separatedGratuityFeesCents == 4_050)
     }
 }

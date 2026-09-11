@@ -17,10 +17,17 @@ private func stub(
 private func findings(
     _ stub: PaycheckAudit.Stub,
     loggedCreditTipsCents: Int? = nil,
+    loggedGratuityCents: Int? = nil,
     computedWages: PeriodIncome.Wages? = nil,
     computedOvertimeHours: Double? = nil
 ) -> [PaycheckAudit.Finding] {
-    PaycheckAudit.run(stub: stub, loggedCreditTipsCents: loggedCreditTipsCents, computedWages: computedWages, computedOvertimeHours: computedOvertimeHours)
+    PaycheckAudit.run(
+        stub: stub,
+        loggedCreditTipsCents: loggedCreditTipsCents,
+        loggedGratuityCents: loggedGratuityCents,
+        computedWages: computedWages,
+        computedOvertimeHours: computedOvertimeHours
+    )
 }
 
 private func finding(_ findings: [PaycheckAudit.Finding], id: String) -> PaycheckAudit.Finding? {
@@ -143,7 +150,7 @@ struct PaycheckAuditTipsVsLoggedTests {
     @Test("reconciles when the stub's tips match what was logged")
     func exactMatchReconciles() {
         let result = findings(stub(tips: 5000), loggedCreditTipsCents: 5000)
-        #expect(finding(result, id: "tips-vs-logged") == PaycheckAudit.Finding(id: "tips-vs-logged", severity: .reconciles, message: "The tips line matches what you logged."))
+        #expect(finding(result, id: "tips-vs-logged") == PaycheckAudit.Finding(id: "tips-vs-logged", severity: .reconciles, message: "Tips match what you logged."))
     }
 
     @Test("within the 5-cent tolerance still reconciles")
@@ -158,7 +165,7 @@ struct PaycheckAuditTipsVsLoggedTests {
         #expect(finding(result, id: "tips-vs-logged") == PaycheckAudit.Finding(
             id: "tips-vs-logged",
             severity: .discrepancy,
-            message: "You logged $50 in credit tips; the stub pays $40. $10 short."
+            message: "You logged $50 in credit tips; the stub pays $40 in tips. $10 short."
         ))
     }
 
@@ -168,14 +175,67 @@ struct PaycheckAuditTipsVsLoggedTests {
         #expect(finding(result, id: "tips-vs-logged") == PaycheckAudit.Finding(
             id: "tips-vs-logged",
             severity: .discrepancy,
-            message: "You logged $50 in credit tips; the stub pays $60. $10 over."
+            message: "You logged $50 in credit tips; the stub pays $60 in tips. $10 over."
         ))
+    }
+
+    @Test("separate gratuity cannot hide a credit-tip shortage")
+    func gratuityDoesNotOffsetTipShortage() {
+        let result = findings(
+            stub(tips: 191_120, gratuity: 17_695),
+            loggedCreditTipsCents: 207_957,
+            loggedGratuityCents: 17_695
+        )
+        #expect(finding(result, id: "tips-vs-logged") == PaycheckAudit.Finding(
+            id: "tips-vs-logged",
+            severity: .discrepancy,
+            message: "You logged $2,079.57 in credit tips; the stub pays $1,911.20 in tips. $168.37 short."
+        ))
+        #expect(finding(result, id: "gratuity-vs-logged")?.severity == .reconciles)
     }
 
     @Test("absent when tips or logged credit tips is missing")
     func absentWhenInputMissing() {
         #expect(finding(findings(stub(), loggedCreditTipsCents: 5000), id: "tips-vs-logged") == nil)
         #expect(finding(findings(stub(tips: 5000), loggedCreditTipsCents: nil), id: "tips-vs-logged") == nil)
+    }
+}
+
+@Suite("PaycheckAudit gratuity-vs-logged")
+struct PaycheckAuditGratuityVsLoggedTests {
+    @Test("reconciles when the separate gratuity line matches")
+    func exactMatchReconciles() {
+        let result = findings(stub(gratuity: 17_695), loggedGratuityCents: 17_695)
+        #expect(finding(result, id: "gratuity-vs-logged") == PaycheckAudit.Finding(
+            id: "gratuity-vs-logged",
+            severity: .reconciles,
+            message: "Gratuity matches what you logged."
+        ))
+    }
+
+    @Test("a gratuity shortage is reported independently")
+    func shortReadsShort() {
+        let result = findings(stub(gratuity: 15_000), loggedGratuityCents: 17_695)
+        #expect(finding(result, id: "gratuity-vs-logged") == PaycheckAudit.Finding(
+            id: "gratuity-vs-logged",
+            severity: .discrepancy,
+            message: "You logged $176.95 in gratuity and fees; the stub pays $150 in gratuity. $26.95 short."
+        ))
+    }
+
+    @Test("logged gratuity with no entered stub line is a note")
+    func missingStubLineIsNote() {
+        let result = findings(stub(tips: 1), loggedGratuityCents: 4_050)
+        #expect(finding(result, id: "gratuity-vs-logged") == PaycheckAudit.Finding(
+            id: "gratuity-vs-logged",
+            severity: .note,
+            message: "You logged $40.50 in gratuity and fees; no gratuity line was entered from the stub."
+        ))
+    }
+
+    @Test("silent when no gratuity was logged")
+    func absentWhenLoggedInputMissing() {
+        #expect(finding(findings(stub(gratuity: 4_050)), id: "gratuity-vs-logged") == nil)
     }
 }
 
@@ -279,16 +339,17 @@ struct PaycheckAuditOvertimeMissingTests {
 
 @Suite("PaycheckAudit ordering and silence")
 struct PaycheckAuditOrderingTests {
-    @Test("findings come back in gross-math, net-math, tips-vs-logged, wages-vs-computed, overtime-missing order")
+    @Test("findings come back in gross, net, tips, gratuity, wages, overtime order")
     func findingsAreOrdered() {
         let computed = PeriodIncome.Wages(regularCents: 25000, overtimeCents: 0, hours: 45, overtimeHours: 5)
         let result = findings(
             stub(tips: 10000, regular: 20000, gross: 40000, taxes: 5000, net: 30000),
             loggedCreditTipsCents: 9000,
+            loggedGratuityCents: 1000,
             computedWages: computed,
             computedOvertimeHours: computed.overtimeHours
         )
-        #expect(result.map(\.id) == ["gross-math", "net-math", "tips-vs-logged", "wages-vs-computed", "overtime-missing"])
+        #expect(result.map(\.id) == ["gross-math", "net-math", "tips-vs-logged", "gratuity-vs-logged", "wages-vs-computed", "overtime-missing"])
     }
 
     @Test("a fully empty stub produces no findings at all")
@@ -379,6 +440,106 @@ struct PaycheckOCRTests {
         #expect(parsed.filledFieldCount == 7)
     }
 
+    @Test("rebuilds split Vision table observations into visual rows")
+    func rebuildsVisionRows() {
+        let observations = [
+            PaycheckOCR.RecognizedText(text: "Tips Owed", boundingBox: CGRect(x: 0.10, y: 0.70, width: 0.10, height: 0.01)),
+            PaycheckOCR.RecognizedText(text: "$879.09", boundingBox: CGRect(x: 0.30, y: 0.699, width: 0.08, height: 0.01)),
+            PaycheckOCR.RecognizedText(text: "$9,924.66", boundingBox: CGRect(x: 0.40, y: 0.699, width: 0.09, height: 0.01)),
+            PaycheckOCR.RecognizedText(text: "Tips Owed", boundingBox: CGRect(x: 0.10, y: 0.68, width: 0.10, height: 0.01)),
+            PaycheckOCR.RecognizedText(text: "$1,032.11", boundingBox: CGRect(x: 0.30, y: 0.679, width: 0.09, height: 0.01)),
+            PaycheckOCR.RecognizedText(text: "$9,924.66", boundingBox: CGRect(x: 0.40, y: 0.679, width: 0.09, height: 0.01))
+        ]
+
+        let parsed = PaycheckOCR.parse(lines: PaycheckOCR.visualLines(from: observations))
+
+        #expect(parsed.tipsCents == 191_120)
+    }
+
+    @Test("prefers a currency cell over hours and rate in a merged row")
+    func prefersCurrencyCell() {
+        let parsed = PaycheckOCR.parse(lines: ["REGULAR 29.15 $82.49 $1,114.89 2.83"])
+        #expect(parsed.regularWagesCents == 8_249)
+    }
+
+    @Test("does not guess wages from an unmarked multi-number row")
+    func rejectsAmbiguousUnmarkedWageRow() {
+        let parsed = PaycheckOCR.parse(lines: ["REGULAR 29.15 82.49 1,114.89 2.83"])
+        #expect(parsed.regularWagesCents == nil)
+    }
+
+    @Test("parses this Kooma paycheck's exact current-period rows")
+    func parsesKoomaAugustPaycheck() {
+        let parsed = PaycheckOCR.parse(lines: [
+            "REGULAR $82.49 $1,114.89 29.15 2.83",
+            "REGULAR $113.20 $1,114.89 40.00 2.83",
+            "OVERTIME $4.23 $46.95 0.60 7.05",
+            "Tips Owed $879.09 $9,924.66",
+            "Tips Owed $1,032.11 $9,924.66",
+            "Gratuity Owed - Credit Card & Other $128.65 $585.70",
+            "Gratuity Owed - Credit Card & Other $48.30 $585.70",
+            "Gross Earnings $2,288.07 $11,672.20",
+            "Total Taxes $385.56 $2,020.34",
+            "Net Pay $1,902.51 $9,651.86",
+            "Amount Paid $1,902.51",
+            "CHECK FACE $1902.51"
+        ]).correctingSmallGrossMismatch()
+
+        #expect(parsed.tipsCents == 191_120)
+        #expect(parsed.regularWagesCents == 19_569)
+        #expect(parsed.overtimeWagesCents == 423)
+        #expect(parsed.gratuityCents == 17_695)
+        #expect(parsed.grossPayCents == 228_807)
+        #expect(parsed.taxesCents == 38_556)
+        #expect(parsed.netPayCents == 190_251)
+        #expect(parsed.filledFieldCount == 7)
+    }
+
+    @Test("repairs a small tips OCR error when gross proves the printed amount")
+    func repairsSmallTipsErrorFromGross() {
+        let parsed = PaycheckOCR.ParsedPaycheck(
+            tipsCents: 191_102,
+            regularWagesCents: 19_569,
+            overtimeWagesCents: 423,
+            gratuityCents: 17_695,
+            grossPayCents: 228_807,
+            taxesCents: 38_556,
+            netPayCents: 190_251
+        ).correctingSmallGrossMismatch()
+
+        #expect(parsed.tipsCents == 191_120)
+    }
+
+    @Test("does not rewrite a large gross mismatch that may be another earning")
+    func preservesLargeGrossMismatch() {
+        let parsed = PaycheckOCR.ParsedPaycheck(
+            tipsCents: 100_000,
+            regularWagesCents: 20_000,
+            overtimeWagesCents: nil,
+            gratuityCents: nil,
+            grossPayCents: 125_000,
+            taxesCents: nil,
+            netPayCents: nil
+        ).correctingSmallGrossMismatch()
+
+        #expect(parsed.tipsCents == 100_000)
+    }
+
+    @Test("does not infer a correction when an earnings category was not read")
+    func doesNotCorrectIncompleteEarnings() {
+        let parsed = PaycheckOCR.ParsedPaycheck(
+            tipsCents: 191_102,
+            regularWagesCents: 19_569,
+            overtimeWagesCents: nil,
+            gratuityCents: 17_695,
+            grossPayCents: 228_807,
+            taxesCents: nil,
+            netPayCents: nil
+        ).correctingSmallGrossMismatch()
+
+        #expect(parsed.tipsCents == 191_102)
+    }
+
     @Test("decodes AI totals as cents")
     func decodesAITotals() {
         let response = Data(#"{"output":[{"type":"message","content":[{"type":"output_text","text":"{\"tips\":2324.93,\"regular_wages\":206.99,\"overtime_wages\":0,\"gratuity\":154.20,\"gross_pay\":2686.12,\"taxes\":493.10,\"net_pay\":2193.02}"}]}]}"#.utf8)
@@ -390,5 +551,19 @@ struct PaycheckOCRTests {
         #expect(parsed?.grossPayCents == 268612)
         #expect(parsed?.taxesCents == 49310)
         #expect(parsed?.netPayCents == 219302)
+    }
+
+    @Test("AI returns evidence rows and Payday combines the two paycheck weeks")
+    func combinesAIEvidenceRows() {
+        let response = Data(#"{"output":[{"type":"message","content":[{"type":"output_text","text":"{\"earnings_rows\":[{\"category\":\"regular_wages\",\"label\":\"REGULAR\",\"current_amount\":82.49},{\"category\":\"regular_wages\",\"label\":\"REGULAR\",\"current_amount\":113.20},{\"category\":\"overtime_wages\",\"label\":\"OVERTIME\",\"current_amount\":4.23},{\"category\":\"tips\",\"label\":\"Tips Owed\",\"current_amount\":879.09},{\"category\":\"tips\",\"label\":\"Tips Owed\",\"current_amount\":1032.11},{\"category\":\"gratuity\",\"label\":\"Gratuity Owed - Credit Card & Other\",\"current_amount\":128.65},{\"category\":\"gratuity\",\"label\":\"Gratuity Owed - Credit Card & Other\",\"current_amount\":48.30}],\"gross_pay\":2288.07,\"taxes\":385.56,\"net_pay\":1902.51}"}]}]}"#.utf8)
+        let parsed = try? PaycheckAIParser.parse(responseData: response)
+
+        #expect(parsed?.tipsCents == 191_120)
+        #expect(parsed?.regularWagesCents == 19_569)
+        #expect(parsed?.overtimeWagesCents == 423)
+        #expect(parsed?.gratuityCents == 17_695)
+        #expect(parsed?.grossPayCents == 228_807)
+        #expect(parsed?.taxesCents == 38_556)
+        #expect(parsed?.netPayCents == 190_251)
     }
 }

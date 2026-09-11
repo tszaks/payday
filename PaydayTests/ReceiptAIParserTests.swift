@@ -79,7 +79,7 @@ struct ReceiptAIParserTests {
         #expect(parsed.shiftDate == .init(year: 2026, month: 7, day: 21))
         #expect(parsed.clockIn == .init(hour: 10, minute: 31))
         #expect(parsed.clockOut == .init(hour: 13, minute: 21))
-        #expect(parsed.filledFieldCount == 10)
+        #expect(parsed.filledFieldCount == 11)
     }
 
     @Test("decodes the exact full-resolution receipt benchmark")
@@ -101,6 +101,24 @@ struct ReceiptAIParserTests {
         #expect(parsed.shiftDate == .init(year: 2026, month: 8, day: 4))
         #expect(parsed.clockIn == .init(hour: 16, minute: 42))
         #expect(parsed.clockOut == .init(hour: 21, minute: 16))
+    }
+
+    @Test("keeps credit audit total, gross sales, and report total distinct")
+    func decodesMixedTenderReceiptTotals() throws {
+        let response = Data(#"{"output":[{"type":"message","content":[{"type":"output_text","text":"{\"cash_tips\":null,\"credit_tips\":121.36,\"tip_out\":22.43,\"sales\":818.63,\"total_amount\":980.49,\"server_count\":null,\"guest_count\":18,\"credit_check_count\":6,\"table_count\":null,\"net_sales\":780.50,\"tax\":38.13,\"printed_tip_percent\":17.4,\"average_spend_per_guest\":43.36,\"cash_sales\":86.92,\"gratuity_fees\":40.50,\"category_sales\":[],\"tip_sharing\":[],\"shift_date\":\"2026-08-23\",\"clock_in\":\"16:06\",\"clock_out\":\"20:32\"}"}]}]}"#.utf8)
+
+        let parsed = try ReceiptAIParser.parse(responseData: response)
+
+        #expect(parsed.creditTipsCents == 12_136)
+        #expect(parsed.salesCents == 81_863)
+        #expect(parsed.totalAmountCents == 98_049)
+        #expect(parsed.salesCents != 89_357)
+        #expect(parsed.totalAmountCents != 89_357)
+        #expect(parsed.receiptMetrics?.netSalesCents == 78_050)
+        #expect(parsed.receiptMetrics?.taxCents == 3_813)
+        #expect(parsed.receiptMetrics?.totalAmountCents == 98_049)
+        #expect(parsed.receiptMetrics?.earningsSchemaVersion == 2)
+        #expect(parsed.receiptMetrics?.separatedGratuityFeesCents == 4_050)
     }
 
     @Test("keeps explicitly missing values empty")
@@ -160,6 +178,15 @@ struct ReceiptAIParserTests {
         #expect(parsed.shiftDate == nil)
         #expect(parsed.clockIn == nil)
         #expect(parsed.clockOut == nil)
+    }
+
+    @Test("rejects implausible receipt years")
+    func rejectsImplausibleReceiptYear() throws {
+        let response = Data(#"{"output":[{"type":"message","content":[{"type":"output_text","text":"{\"cash_tips\":null,\"credit_tips\":24,\"tip_out\":null,\"sales\":null,\"server_count\":null,\"guest_count\":null,\"credit_check_count\":null,\"table_count\":null,\"net_sales\":null,\"tax\":null,\"printed_tip_percent\":null,\"average_spend_per_guest\":null,\"cash_sales\":null,\"gratuity_fees\":null,\"category_sales\":[],\"tip_sharing\":[],\"shift_date\":\"0026-07-21\",\"clock_in\":null,\"clock_out\":null}"}]}]}"#.utf8)
+
+        let parsed = try ReceiptAIParser.parse(responseData: response)
+
+        #expect(parsed.shiftDate == nil)
     }
 
     @Test("does not infer tables when cash checks may be missing")

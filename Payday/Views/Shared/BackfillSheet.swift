@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import Combine
 
 /// Fast batch entry for shifts that happened before someone started using
 /// Payday — the whole point is letting the cold start (5+ shifts before the
@@ -25,6 +26,7 @@ struct BackfillSheet: View {
     @FocusState private var focusedField: CurrencyRowField?
 
     @State private var shiftsAddedCount = 0
+    @State private var datesWithExistingShifts: Set<Date> = []
     /// Entries saved this session, appended to allEntries when rescheduling
     /// the nudge at dismiss — same defensive concatenation LogTipSheet.saveNew
     /// uses, since allEntries' @Query isn't guaranteed to have refreshed by
@@ -43,9 +45,7 @@ struct BackfillSheet: View {
     /// Informational only, never blocking — two shifts a day is a
     /// legitimate double, not a mistake to prevent.
     private var selectedDayAlreadyHasShift: Bool {
-        let calendar = Calendar.current
-        let sameDay = allEntries.filter { calendar.isDate($0.date, inSameDayAs: selectedDate) }
-        return Set(sameDay.compactMap(\.shiftID)).count >= 1
+        datesWithExistingShifts.contains(Calendar.current.startOfDay(for: selectedDate))
     }
 
     var body: some View {
@@ -114,6 +114,12 @@ struct BackfillSheet: View {
                 PaydayPushScheduler.reschedule(preferencesStore: preferencesStore, schedule: scheduleStore.schedule, allEntries: allEntries + sessionEntries, paycheckRecords: paycheckRecords)
                 PaydayWidgetRefresh.request()
             }
+            .task {
+                refreshExistingShiftDates()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: ModelContext.didSave)) { _ in
+                refreshExistingShiftDates()
+            }
         }
         .presentationDragIndicator(.visible)
         .presentationBackground(PaydayColor.background)
@@ -155,7 +161,7 @@ struct BackfillSheet: View {
         switch field {
         case .cash: return .credit
         case .credit: return .tipOut
-        case .tipOut, .sales, .servers, .guests, .tables: return .cash
+        case .tipOut, .gratuityFees, .receiptTotal, .sales, .servers, .guests, .tables: return .cash
         }
     }
 
@@ -170,8 +176,18 @@ struct BackfillSheet: View {
             tipOutCents: tipOutCents > 0 ? tipOutCents : nil
         )
         sessionEntries.append(contentsOf: entries)
+        datesWithExistingShifts.insert(Calendar.current.startOfDay(for: selectedDate))
         PaydayHaptics.success()
         shiftsAddedCount += 1
+    }
+
+    private func refreshExistingShiftDates() {
+        datesWithExistingShifts = Set(
+            (allEntries + sessionEntries).compactMap { entry in
+                guard entry.shiftID != nil else { return nil }
+                return Calendar.current.startOfDay(for: entry.date)
+            }
+        )
     }
 
     /// Saves, then resets for the next entry: clears the three amounts,

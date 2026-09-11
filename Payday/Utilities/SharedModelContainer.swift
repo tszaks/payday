@@ -1,35 +1,49 @@
 import SwiftData
 
-/// The one SwiftData store, shared between the app and the widget
-/// extension via the App Group container. Both processes open the exact
-/// same file — the widget only ever reads, App Intents write. Only the
-/// app process drives CloudKit sync of that file; the widget extension
-/// passes cloudKitDatabase: .none so it never stands up a second sync
-/// engine against the same store.
+/// The replaceable on-device cache shared by the app, widget, and App
+/// Intents. Supabase owns the durable account data; every process opens this
+/// same App Group file with CloudKit disabled.
 enum SharedModelContainer {
-    private static let cloudKitContainerIdentifier = "iCloud.com.szakacsmedia.payday"
+    private struct Resolution {
+        let container: ModelContainer
+        let didFallBackToMemory: Bool
+    }
 
-    static let shared: ModelContainer = {
+    private static let resolution: Resolution = {
         let url = AppGroup.containerURL.appendingPathComponent("Payday.sqlite")
-        let cloudKitDatabase = Self.cloudKitDatabase
-        let configuration = ModelConfiguration(url: url, cloudKitDatabase: cloudKitDatabase)
+        let configuration = ModelConfiguration(url: url, cloudKitDatabase: .none)
         do {
-            return try ModelContainer(for: TipEntry.self, PaycheckRecord.self, configurations: configuration)
+            return Resolution(
+                container: try ModelContainer(
+                    for: TipEntry.self,
+                    PaycheckRecord.self,
+                    configurations: configuration
+                ),
+                didFallBackToMemory: false
+            )
         } catch {
-            fatalError("Failed to load the shared Payday store: \(error)")
+            // A damaged or temporarily unavailable cache must never crash the
+            // app or invite writes into a replacement file. Keep SwiftData's
+            // environment valid with an in-memory container, then let the app
+            // show a read-only recovery screen instead of RootView.
+            let fallback = ModelConfiguration(isStoredInMemoryOnly: true, cloudKitDatabase: .none)
+            do {
+                return Resolution(
+                    container: try ModelContainer(
+                        for: TipEntry.self,
+                        PaycheckRecord.self,
+                        configurations: fallback
+                    ),
+                    didFallBackToMemory: true
+                )
+            } catch {
+                // The in-memory schema has no external failure mode. If this
+                // fails too, the compiled model itself is invalid.
+                preconditionFailure("Payday's SwiftData model could not be constructed.")
+            }
         }
     }()
 
-    private static var cloudKitDatabase: ModelConfiguration.CloudKitDatabase {
-        #if WIDGET_EXTENSION
-        return .none
-        #elseif targetEnvironment(simulator)
-        // Simulator builds may be unsigned or missing the iCloud
-        // entitlements. SwiftData starts CloudKit during ModelContainer
-        // creation, and that state otherwise terminates the app at launch.
-        return .none
-        #else
-        return .private(cloudKitContainerIdentifier)
-        #endif
-    }
+    static var shared: ModelContainer { resolution.container }
+    static var openingFailed: Bool { resolution.didFallBackToMemory }
 }

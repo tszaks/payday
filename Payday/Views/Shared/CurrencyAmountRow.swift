@@ -3,7 +3,7 @@ import SwiftUI
 /// Which currency field the keypad is driving — owned by the parent
 /// (LogTipSheet) so a keyboard toolbar "Next" button can move focus from one
 /// field to another; a numberPad has no built-in Next/Return key of its own.
-/// tipOut/sales/servers/guests/tables are the same shared focus chain (see
+/// tipOut/gratuityFees/receiptTotal/sales/servers/guests/tables share the focus chain (see
 /// CompactCurrencyField/CompactCountField in LogTipSheet.swift), so the
 /// whole sheet is reachable bottom-thumb-only. servers isn't a currency
 /// field, but it shares this same one-numberPad-field-at-a-time chain, so
@@ -12,6 +12,8 @@ enum CurrencyRowField: Hashable {
     case cash
     case credit
     case tipOut
+    case gratuityFees
+    case receiptTotal
     case sales
     case servers
     case guests
@@ -79,6 +81,10 @@ struct CurrencyAmountRow: View {
             let filtered = String(newValue.filter(\.isNumber).prefix(Self.maxDigits))
             if filtered != newValue { digitsText = filtered }
             cents = Int(filtered) ?? 0
+        }
+        .onChange(of: cents) { _, newValue in
+            guard Int(digitsText) ?? 0 != newValue else { return }
+            digitsText = newValue == 0 ? "" : String(newValue)
         }
     }
 }

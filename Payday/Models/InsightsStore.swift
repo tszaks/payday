@@ -36,7 +36,7 @@ final class InsightsStore {
     /// This is the general form of the one-off cash-vs-credit scrub below,
     /// which had to filter fossils by title because there was no version to
     /// key on.
-    private static let currentRuleVersion = 3
+    private static let currentRuleVersion = 4
     private let defaults: UserDefaults
 
     var snapshot: InsightsSnapshot? {

@@ -328,6 +328,23 @@ into a defaulted non-optional.
 - **Sales + tip percent.** Optional `salesCents` on `TipEntry`. Tip percent
   (gross tips ÷ sales) blends the same total-over-total way as $/hr, overall
   and per weekday, only over nights with sales logged.
+- **Receipt gross sales vs total amount.** A scanned Shift Review Summary keeps
+  these as two different facts. `TipEntry.salesCents` is the `Gross sales` row
+  from `SALES & TAXES SUMMARY`, excluding employee gratuity and voluntary
+  tips, so tip-percent analytics retain the correct sales denominator.
+  `ShiftReceiptMetrics.totalAmountCents` is that section's final all-in
+  `Total amount`, including gratuity/fees and non-cash tips. A credit-audit
+  total or gift-card total is never allowed to populate either field.
+- **Toast gratuity is a third earnings category.** `Total gratuity and fees`
+  paid to the employee (including automatic/mandatory gratuity) is neither
+  restaurant sales nor a voluntary tip. New scans store voluntary non-cash
+  tips in the credit bucket and gratuity in
+  `ShiftReceiptMetrics.gratuityFeesCents`; earnings totals, effective tip
+  percent, and per-guest/table tip analytics add both because auto-grat
+  functionally replaces the guest's normal tip. The paycheck's Tips line
+  still uses voluntary tips only and compares Gratuity separately. Legacy
+  scans are interpreted as having gratuity folded into their stored credit
+  amount, then normalized on read, so upgrading cannot double-count old data.
 - **Moves.** `StatsEngine.moves(referenceDate:)` — a deterministic, pure,
   fully-tested function (no model, no network) emitting up to 3
   dollar-quantified, annualized observations, ranked by impact and gated by

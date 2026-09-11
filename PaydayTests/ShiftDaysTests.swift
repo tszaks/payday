@@ -46,18 +46,28 @@ struct ShiftDaysTests {
         #expect(groups.count == 1)
     }
 
-    @Test("a single-shift day reads as a plain human label")
-    func singleShiftLabelIsPlain() {
+    @Test("a single-shift day always shows its exact date and period")
+    func singleShiftLabelIsComplete() {
         let label = ShiftDays.shiftLabel(day: day(2026, 7, 1), period: .lunch, dayHasMultipleShifts: false, relativeTo: day(2026, 7, 1))
-        #expect(label == "Today")
+        #expect(label == "Wednesday, Jul 1 · Lunch")
     }
 
-    @Test("a double day labels each shift by its period")
+    @Test("a double day uses the same exact-date shape for each period")
     func doubleDayLabelsByPeriod() {
         let lunch = ShiftDays.shiftLabel(day: day(2026, 7, 1), period: .lunch, dayHasMultipleShifts: true, relativeTo: day(2026, 7, 1))
         let dinner = ShiftDays.shiftLabel(day: day(2026, 7, 1), period: .dinner, dayHasMultipleShifts: true, relativeTo: day(2026, 7, 1))
-        #expect(lunch == "Today · Lunch")
-        #expect(dinner == "Today · Dinner")
+        #expect(lunch == "Wednesday, Jul 1 · Lunch")
+        #expect(dinner == "Wednesday, Jul 1 · Dinner")
+    }
+
+    @Test("shift labels do not change as a record ages")
+    func shiftLabelsIgnoreRecency() {
+        let date = day(2026, 7, 1)
+        let recent = ShiftDays.shiftLabel(day: date, period: .dinner, dayHasMultipleShifts: false, relativeTo: date)
+        let older = ShiftDays.shiftLabel(day: date, period: .dinner, dayHasMultipleShifts: false, relativeTo: day(2026, 7, 20))
+
+        #expect(recent == "Wednesday, Jul 1 · Dinner")
+        #expect(older == recent)
     }
 
     @Test("5 worked days with 2 doubles count as 7 shifts, not 5 days — the YTD card's counting rule")

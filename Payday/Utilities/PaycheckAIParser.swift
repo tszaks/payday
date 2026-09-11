@@ -18,23 +18,44 @@ enum PaycheckAIParser {
         configuration.timeoutIntervalForResource = requestTimeout
         return URLSession(configuration: configuration)
     }()
+    private static let resultCache = ScanResultCache<PaycheckOCR.ParsedPaycheck>()
 
     private static let prompt = """
-    Read this pay stub as one paycheck for one pay period. Repeated rows may show the two work weeks inside that single paycheck. Sum every repeated current-period row for the same category, and never return separate weekly values. Ignore YTD columns and values. Use the current-period values only.
+    Read only the earnings statement/pay-stub portion of this image as one paycheck for one pay period. Ignore the negotiable check face, written-out check amount, MICR numbers, check number, payment-distribution rows, employer-paid benefits, and repeated copies of net pay outside the pay-stub totals. Repeated earnings rows may show the two work weeks inside that single paycheck. Sum every distinct repeated current-period row for the same category exactly once, and never return separate weekly values. In earnings and tax tables, use the Current or Amount column immediately to the right of the label. Never use the YTD, hours, rate, or non-worked-hours columns.
 
-    Return:
-    - tips: the sum of current-period Tips Owed, Card Tips, Credit Tips, or similar tip rows
-    - regular_wages: the sum of current-period REGULAR or base-pay rows
-    - overtime_wages: the sum of current-period OVERTIME rows, including zero when the stub explicitly shows zero
-    - gratuity: the sum of current-period gratuity rows, separate from tips
+    Return one earnings_rows item for every distinct current-period earnings row. Preserve repeated weekly rows as separate items. For each item, copy its printed label, classify it as tips, regular_wages, overtime_wages, or gratuity, and copy only the current Amount value. Classify Gratuity Owed only as gratuity, never tips. Payday will combine the rows deterministically; do not pre-sum or deduplicate them.
+
+    Also return:
     - gross_pay: current-period gross earnings or total gross
     - taxes: current-period total taxes, not the YTD total
     - net_pay: current-period net pay
 
-    Return money as numbers in dollars, with up to two decimal places. Return null only when a field is not present. Do not infer or calculate a missing field from another field.
+    Before returning, re-read every selected source amount and check whether tips + regular_wages + overtime_wages + gratuity equals gross_pay and whether gross_pay - taxes equals net_pay when the stub shows zero deductions. Use those identities only to detect and re-read a likely OCR digit; do not invent a missing field or silently force arithmetic to match. Return money as numbers in dollars, with up to two decimal places. Return null only when a field is not present.
     """
 
     private struct PaycheckValues: Decodable {
+        struct EarningsRow: Decodable {
+            enum Category: String, Decodable {
+                case tips
+                case regularWages = "regular_wages"
+                case overtimeWages = "overtime_wages"
+                case gratuity
+            }
+
+            let category: Category
+            let label: String
+            let currentAmount: Double
+
+            enum CodingKeys: String, CodingKey {
+                case category
+                case label
+                case currentAmount = "current_amount"
+            }
+        }
+
+        let earningsRows: [EarningsRow]?
+        // Keep decoding the original totals contract so an in-flight response
+        // or an older local fixture remains readable during this transition.
         let tips: Double?
         let regularWages: Double?
         let overtimeWages: Double?
@@ -44,6 +65,7 @@ enum PaycheckAIParser {
         let netPay: Double?
 
         enum CodingKeys: String, CodingKey {
+            case earningsRows = "earnings_rows"
             case tips
             case regularWages = "regular_wages"
             case overtimeWages = "overtime_wages"
@@ -111,7 +133,12 @@ enum PaycheckAIParser {
             throw PaycheckOCR.ScanError.imageUnavailable
         }
         logger.notice("Paycheck JPEG prepared. bytes=\(imageData.count)")
+        if let cached = await resultCache.value(for: imageData) {
+            logger.notice("Paycheck analysis reused a cached result; no network request needed")
+            return cached
+        }
 
+        return try await resultCache.value(for: imageData) {
         let imageURL = "data:image/jpeg;base64,\(imageData.base64EncodedString())"
         let requestBody: [String: Any] = [
             "model": model,
@@ -155,6 +182,8 @@ enum PaycheckAIParser {
                 "Paycheck network request timed out. elapsedMs=\(elapsedMilliseconds) code=\(error.code.rawValue)"
             )
             throw ParseError.timedOut
+        } catch let error as URLError where error.code == .cancelled {
+            throw CancellationError()
         } catch let error as URLError {
             let elapsedMilliseconds = Int(Date().timeIntervalSince(networkStartedAt) * 1_000)
             logger.error(
@@ -197,6 +226,7 @@ enum PaycheckAIParser {
             )
             throw error
         }
+        }
     }
 
     /// Pure response decoding keeps the model contract testable without
@@ -211,10 +241,10 @@ enum PaycheckAIParser {
         }
 
         return PaycheckOCR.ParsedPaycheck(
-            tipsCents: cents(values.tips),
-            regularWagesCents: cents(values.regularWages),
-            overtimeWagesCents: cents(values.overtimeWages),
-            gratuityCents: cents(values.gratuity),
+            tipsCents: combinedCents(.tips, in: values) ?? cents(values.tips),
+            regularWagesCents: combinedCents(.regularWages, in: values) ?? cents(values.regularWages),
+            overtimeWagesCents: combinedCents(.overtimeWages, in: values) ?? cents(values.overtimeWages),
+            gratuityCents: combinedCents(.gratuity, in: values) ?? cents(values.gratuity),
             grossPayCents: cents(values.grossPay),
             taxesCents: cents(values.taxes),
             netPayCents: cents(values.netPay)
@@ -234,30 +264,55 @@ enum PaycheckAIParser {
         return max(0, Int((dollars * 100).rounded()))
     }
 
-    private static func jpegData(for image: UIImage) -> Data? {
-        let maxDimension: CGFloat = 2400
-        let longestSide = max(image.size.width, image.size.height)
-        let scale = min(1, maxDimension / max(longestSide, 1))
-        let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
-        let renderer = UIGraphicsImageRenderer(size: size)
-        return renderer.jpegData(withCompressionQuality: 0.84) { _ in
-            image.draw(in: CGRect(origin: .zero, size: size))
+    private static func combinedCents(
+        _ category: PaycheckValues.EarningsRow.Category,
+        in values: PaycheckValues
+    ) -> Int? {
+        guard let rows = values.earningsRows else { return nil }
+        let matchingRows = rows.filter { $0.category == category }
+        guard !matchingRows.isEmpty else { return nil }
+        return matchingRows.reduce(0) { total, row in
+            total + (cents(row.currentAmount) ?? 0)
         }
+    }
+
+    private static func jpegData(for image: UIImage) -> Data? {
+        // A full paycheck photo can contain a small, dense earnings table plus
+        // a much larger check face. Preserve enough pixels for decimal points
+        // and narrow current-period columns to survive model-side resizing.
+        ScanImageEncoder.jpegData(
+            for: image,
+            maxDimension: 3_200,
+            maxBytes: 2_000_000,
+            initialQuality: 0.90
+        )
     }
 
     private static func schema() -> [String: Any] {
         [
             "type": "object",
             "properties": [
-                "tips": ["type": ["number", "null"]],
-                "regular_wages": ["type": ["number", "null"]],
-                "overtime_wages": ["type": ["number", "null"]],
-                "gratuity": ["type": ["number", "null"]],
+                "earnings_rows": [
+                    "type": "array",
+                    "items": [
+                        "type": "object",
+                        "properties": [
+                            "category": [
+                                "type": "string",
+                                "enum": ["tips", "regular_wages", "overtime_wages", "gratuity"]
+                            ],
+                            "label": ["type": "string"],
+                            "current_amount": ["type": "number"]
+                        ],
+                        "required": ["category", "label", "current_amount"],
+                        "additionalProperties": false
+                    ]
+                ],
                 "gross_pay": ["type": ["number", "null"]],
                 "taxes": ["type": ["number", "null"]],
                 "net_pay": ["type": ["number", "null"]]
             ],
-            "required": ["tips", "regular_wages", "overtime_wages", "gratuity", "gross_pay", "taxes", "net_pay"],
+            "required": ["earnings_rows", "gross_pay", "taxes", "net_pay"],
             "additionalProperties": false
         ]
     }

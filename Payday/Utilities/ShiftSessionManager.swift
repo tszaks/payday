@@ -27,6 +27,19 @@ final class ShiftSessionState {
 
 @MainActor
 enum ShiftSessionManager {
+    /// ActivityKit does not automatically redraw an already-running Live
+    /// Activity when an app-group preference changes. Re-publishing the same
+    /// semantic state makes the widget extension resolve the new appearance
+    /// without altering the shift's literal clock-in time.
+    static func refreshAppearance() async {
+        for activity in Activity<ShiftSessionAttributes>.activities {
+            let content = activity.content
+            await activity.update(
+                .init(state: content.state, staleDate: content.staleDate)
+            )
+        }
+    }
+
     /// No-op if a session is already active (ShiftSessionStore.start's own
     /// guard). A denied/failed Live Activity request never fails the punch
     /// itself — the session is already recorded before the request is made.

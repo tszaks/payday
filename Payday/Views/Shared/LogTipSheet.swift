@@ -19,7 +19,7 @@ struct ScanInputLabel: View {
             Image(systemName: "doc.text.viewfinder")
             Text(title)
         }
-            .font(.system(size: 15, weight: .medium))
+            .font(PaydayFont.subheadline)
             .foregroundStyle(PaydayColor.primary)
     }
 }
@@ -29,6 +29,7 @@ struct ScanInputSlot: View {
     let state: ScanInputSlotState
     let onScan: () -> Void
     let onUndo: () -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         ZStack {
@@ -48,7 +49,7 @@ struct ScanInputSlot: View {
                     .controlSize(.small)
                 Text("Analyzing…")
             }
-            .font(.system(size: 15, weight: .medium))
+            .font(PaydayFont.subheadline)
             .foregroundStyle(PaydayColor.textSecondary)
             .opacity(state == .analyzing ? 1 : 0)
             .accessibilityHidden(state != .analyzing)
@@ -60,13 +61,13 @@ struct ScanInputSlot: View {
                     .buttonStyle(.plain)
                     .foregroundStyle(PaydayColor.primary)
             }
-            .font(.system(size: 15, weight: .medium))
+            .font(PaydayFont.subheadline)
             .opacity(state == .scanned ? 1 : 0)
             .allowsHitTesting(state == .scanned)
             .accessibilityHidden(state != .scanned)
 
             Text(errorMessage)
-                .font(.system(size: 15, weight: .medium))
+                .font(PaydayFont.subheadline)
                 .foregroundStyle(PaydayColor.error)
                 .lineLimit(1)
                 .truncationMode(.tail)
@@ -76,7 +77,7 @@ struct ScanInputSlot: View {
         }
         .frame(maxWidth: .infinity)
         .frame(height: 32)
-        .animation(.easeInOut(duration: 0.2), value: state)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: state)
     }
 
     private var errorMessage: String {
@@ -156,11 +157,14 @@ struct LogTipSheet: View {
     @State private var receiptScanSlotState: ScanInputSlotState = .rest
     @State private var receiptScanSnapshot: ReceiptScanSnapshot?
     @State private var receiptScanResetTask: Task<Void, Never>?
+    @State private var receiptScanTask: Task<Void, Never>?
+    @State private var liveSaveTask: Task<Void, Never>?
     @State private var receiptScanScrollRequest = 0
     // A scanned zero may temporarily zero an existing cash/credit row. Keep
     // that exact row alive while Undo is offered so restoring the scan also
     // restores its identity and recordedAt metadata, not a replacement row.
     @State private var isDeferringReceiptScanRowDeletion = false
+    @State private var prefersCreditFirstCache: Bool?
     @FocusState private var focusedCurrencyField: CurrencyRowField?
 
     // Shared
@@ -168,15 +172,10 @@ struct LogTipSheet: View {
     @State private var note: String
     @State private var showDeleteConfirmation = false
     @State private var revealResult: RevealResult?
-    /// Whether revealResult.cents already has this shift's wages folded in
-    /// — set alongside revealResult, drives which unit the headline names
-    /// (Tyler's ruling, 2026-07-27: a shift speaks ONE number).
-    @State private var revealIncludesWages = false
-    /// Set alongside revealResult only when there's something to reconcile
-    /// the headline back to — a tip-out was logged, a wage got folded in,
-    /// or both — so the reveal never hides what its one number was built
-    /// from.
-    @State private var revealBreakdown: (grossCents: Int, tipOutCents: Int?, wageCents: Int?)?
+    /// Whether revealResult.cents contains any non-tip employee income —
+    /// wages or Toast mandatory gratuity. Set alongside revealResult so an
+    /// all-in number is never mislabeled as "tips."
+    @State private var revealIncludesNonTipIncome = false
     /// Set once, at appearance, when LiveShiftEndModeResolver decides this
     /// blank `.new` sheet exists to close out the shift already running —
     /// every creation path (the + tab, the widget, quick actions, deep
@@ -186,10 +185,6 @@ struct LogTipSheet: View {
     @State private var isEndingLiveShift = false
     /// Cancel-while-ending disambiguation — see the Cancel button.
     @State private var isShowingEndShiftCancelDialog = false
-    /// Captured alongside isEndingLiveShift, independent of the editable
-    /// `clockIn` field below — the caption always names the shift's real
-    /// start even if Started gets hand-edited before Save.
-    @State private var liveShiftStartedAt: Date?
     /// New-entry only: the details group opens collapsed behind a one-line
     /// belief sentence (ShiftBeliefLine) instead of every row at full volume.
     /// Editing never touches this — that flow keeps the card always open.
@@ -204,14 +199,18 @@ struct LogTipSheet: View {
     @State private var tipOutCents: Int = 0
     @State private var salesCents: Int = 0
     @State private var shiftPeriod: ShiftPeriod?
+    /// Automatic period inference follows the start time until the person
+    /// taps Lunch or Dinner. That tap becomes the explicit override.
+    @State private var hasManuallySelectedShiftPeriod = false
     @State private var clockIn: Date?
     @State private var clockOut: Date?
     /// How many servers were on the floor — capture-only for now (see
     /// TipEntry.serverCount), same optional/shift-level treatment as
     /// everything else in this group.
     @State private var serverCount: Int?
-    /// Rich facts captured from the end-of-shift printout. Only Guests and
-    /// Tables are editable here; the rest stays attached to the shift for
+    /// Rich facts captured from the end-of-shift printout. Employee
+    /// gratuity/fees, Guests, Tables, and the report-wide Total amount are
+    /// reviewable/editable here; the remaining facts stay attached for
     /// analysis without turning closeout into a long questionnaire.
     @State private var receiptMetrics: ShiftReceiptMetrics?
 
@@ -221,9 +220,11 @@ struct LogTipSheet: View {
         case .new(let defaultDate, let seedClockIn, let seedClockOut):
             _date = State(initialValue: defaultDate)
             _note = State(initialValue: "")
-            // Lunch/dinner is never guessed — not even from the clock.
-            // Tyler's no-assumptions law (2026-07-27): every shift is
-            // different; it stays unset until tapped.
+            if let start = seedClockIn ?? seedClockOut {
+                _shiftPeriod = State(initialValue: ShiftTimes.period(for: start))
+            } else if Calendar.current.isDateInToday(defaultDate) {
+                _shiftPeriod = State(initialValue: ShiftTimes.period(for: .now))
+            }
             // A just-ended live shift session already knows its exact
             // punches — seed Started/Ended from them directly, same as if
             // the pickers had been set by hand.
@@ -251,6 +252,7 @@ struct LogTipSheet: View {
             _tipOutCents = State(initialValue: entry.tipOutCents ?? 0)
             _salesCents = State(initialValue: entry.salesCents ?? 0)
             _shiftPeriod = State(initialValue: entry.shiftPeriod)
+            _hasManuallySelectedShiftPeriod = State(initialValue: entry.shiftPeriod != nil)
             _clockIn = State(initialValue: entry.clockIn)
             _clockOut = State(initialValue: entry.clockOut)
             _serverCount = State(initialValue: entry.serverCount)
@@ -267,22 +269,30 @@ struct LogTipSheet: View {
         cashCents > 0 || creditCents > 0
     }
 
-    /// The header figure: cash + credit, net of tip-out, plus this shift's
-    /// base-rate wages — the same "total = cash + credit - tip-out + wages"
-    /// law every other shift/day surface in the app now follows. Live as
-    /// every field changes, same as the header always was. Math lives in
-    /// WageEstimate.shiftTotalCents so it's testable independent of this view.
+    /// The header figure: voluntary cash + credit tips, plus Toast employee
+    /// gratuity/fees, net of tip-out, plus this shift's base-rate wages. The
+    /// gratuity line is non-tip income, but it is still money earned on this
+    /// shift and therefore belongs in the all-in total.
     private var shiftTotalCents: Int {
         WageEstimate.shiftTotalCents(cashCents: cashCents, creditCents: creditCents, tipOutCents: tipOutCents, wageCentsPerHour: preferencesStore.baseHourlyWageCents, hoursWorked: hoursWorked)
+            + (receiptMetrics?.separatedGratuityFeesCents ?? 0)
     }
 
     /// A server who's never once logged cash and has enough credit history
     /// to call it a pattern gets the credit field focused first instead of
     /// the usual cash-first default.
     private var prefersCreditFirst: Bool {
-        let hasCash = allEntries.contains { $0.kind == .cash }
-        let creditCount = allEntries.filter { $0.kind == .credit }.count
-        return !hasCash && creditCount >= 3
+        if let prefersCreditFirstCache { return prefersCreditFirstCache }
+        return computePrefersCreditFirst()
+    }
+
+    private func computePrefersCreditFirst() -> Bool {
+        var creditCount = 0
+        for entry in allEntries {
+            if entry.kind == .cash { return false }
+            if entry.kind == .credit { creditCount += 1 }
+        }
+        return creditCount >= 3
     }
 
     /// Runs once at appearance, before seedShiftDetailDefaults — a resolved
@@ -300,7 +310,7 @@ struct LogTipSheet: View {
         clockIn = mode.clockIn
         clockOut = mode.clockOut
         hoursWorked = ShiftTimes.hours(clockIn: mode.clockIn, clockOut: mode.clockOut)
-        liveShiftStartedAt = mode.clockIn
+        inferShiftPeriod(from: mode.clockIn)
         isEndingLiveShift = true
     }
 
@@ -340,6 +350,7 @@ struct LogTipSheet: View {
     }
 
     private func handleSheetAppear() {
+        prefersCreditFirstCache = computePrefersCreditFirst()
         applyLiveShiftEndModeIfNeeded()
         seedShiftDetailDefaults()
     }
@@ -376,7 +387,7 @@ struct LogTipSheet: View {
             ScrollViewReader { proxy in
                 Group {
                     if let revealResult {
-                        RevealCardView(result: revealResult, period: shiftPeriod, includesWages: revealIncludesWages, breakdown: revealBreakdown, onDismiss: { dismiss() })
+                        RevealCardView(result: revealResult, period: shiftPeriod, includesNonTipIncome: revealIncludesNonTipIncome, onDismiss: { dismiss() })
                     } else {
                         // Scrollable rather than a fixed VStack: expanding the
                         // details group used to compress every row toward zero
@@ -413,8 +424,12 @@ struct LogTipSheet: View {
                         }
                         .scrollDismissesKeyboard(.interactively)
                         .onChange(of: receiptScanScrollRequest) { _, _ in
-                            withAnimation(PaydayAnimation.premiumSpring) {
+                            if reduceMotion {
                                 proxy.scrollTo("receipt-scan-slot", anchor: .center)
+                            } else {
+                                withAnimation(PaydayAnimation.premiumSpring) {
+                                    proxy.scrollTo("receipt-scan-slot", anchor: .center)
+                                }
                             }
                         }
                     }
@@ -508,6 +523,7 @@ struct LogTipSheet: View {
                 .onChange(of: salesCents) { _, _ in liveSaveEdit() }
                 .onChange(of: shiftPeriod) { _, _ in liveSaveEdit() }
                 .onChange(of: clockIn) { _, _ in
+                    inferShiftPeriod(from: clockIn)
                     if clockIn != nil, clockOut != nil { hoursWorked = ShiftTimes.hours(clockIn: clockIn, clockOut: clockOut) }
                     liveSaveEdit()
                 }
@@ -518,13 +534,20 @@ struct LogTipSheet: View {
                 .onChange(of: serverCount) { _, _ in liveSaveEdit() }
                 .onChange(of: focusedCurrencyField) { _, newField in
                     guard let newField else { return }
-                    withAnimation(PaydayAnimation.premiumSpring) {
+                    if reduceMotion {
                         proxy.scrollTo(newField, anchor: .center)
+                    } else {
+                        withAnimation(PaydayAnimation.premiumSpring) {
+                            proxy.scrollTo(newField, anchor: .center)
+                        }
                     }
                 }
                 .onAppear(perform: handleSheetAppear)
                 .onDisappear {
                     receiptScanResetTask?.cancel()
+                    receiptScanTask?.cancel()
+                    liveSaveTask?.cancel()
+                    commitLiveEdit()
                     receiptScanSnapshot = nil
                     isDeferringReceiptScanRowDeletion = false
                     pruneZeroedRows()
@@ -552,15 +575,14 @@ struct LogTipSheet: View {
             }
         } message: {
             if ReceiptAIParser.isConfigured {
-                Text("Payday will send the receipt photo through its secure service to OpenAI to read it and fill the shift fields for you.")
-            } else {
-                Text("Take a new receipt photo or choose one already in your library. Payday will read it and fill the shift fields.")
+                Text("Receipt photos are sent to OpenAI for scanning.")
             }
         }
         .photosPicker(isPresented: $showReceiptPhotoPicker, selection: $selectedReceiptPhotoItem, matching: .images)
         .sheet(item: $receiptPhotoSource) { source in
             PaydayCameraView(title: "Scan receipt") { image in
-                Task { await scanReceipt(image) }
+                receiptScanTask?.cancel()
+                receiptScanTask = Task { await scanReceipt(image) }
             }
             .ignoresSafeArea()
             .presentationDetents([.medium])
@@ -568,7 +590,8 @@ struct LogTipSheet: View {
         }
         .onChange(of: selectedReceiptPhotoItem) { _, item in
             guard let item else { return }
-            Task { await scanReceipt(photoItem: item) }
+            receiptScanTask?.cancel()
+            receiptScanTask = Task { await scanReceipt(photoItem: item) }
         }
         #if DEBUG
         .onAppear {
@@ -658,7 +681,8 @@ struct LogTipSheet: View {
     }
 
     /// While the details group is expanded (always true when editing), Next
-    /// cycles Cash -> Credit -> Tip-out -> Sales -> Servers, then through
+    /// cycles Cash -> Credit -> Tip-out -> Gratuity & fees -> Total amount ->
+    /// Gross sales -> Servers, then through
     /// receipt-only Guests/Tables when those rows are present.
     /// Collapsed, only Cash and Credit are on screen, so the chain shortens
     /// to Cash -> Credit -> nil (Save sits right beside Next at that point,
@@ -670,7 +694,11 @@ struct LogTipSheet: View {
         switch field {
         case .cash: return .credit
         case .credit: return .tipOut
-        case .tipOut: return .sales
+        case .tipOut:
+            if receiptMetrics?.gratuityFeesCents != nil { return .gratuityFees }
+            return receiptMetrics?.totalAmountCents == nil ? .sales : .receiptTotal
+        case .gratuityFees: return receiptMetrics?.totalAmountCents == nil ? .sales : .receiptTotal
+        case .receiptTotal: return .sales
         case .sales: return .servers
         case .servers: return receiptMetrics == nil ? .cash : .guests
         case .guests: return .tables
@@ -690,11 +718,6 @@ struct LogTipSheet: View {
         } else {
             VStack(alignment: .leading, spacing: 4) {
                 beliefRow
-                if isEndingLiveShift, let liveShiftStartedAt {
-                    Text("Ending the shift you started at \(liveShiftStartedAt.formatted(.dateTime.hour().minute())).")
-                        .font(PaydayFont.caption2)
-                        .foregroundStyle(PaydayColor.textTertiary)
-                }
             }
             .padding(.horizontal)
         }
@@ -762,7 +785,7 @@ struct LogTipSheet: View {
                 HStack {
                     Text("Shift")
                     Spacer()
-                    Picker("", selection: $shiftPeriod) {
+                    Picker("", selection: shiftPeriodBinding) {
                         Text("Lunch").tag(ShiftPeriod?.some(.lunch))
                         Text("Dinner").tag(ShiftPeriod?.some(.dinner))
                     }
@@ -795,23 +818,17 @@ struct LogTipSheet: View {
                     }
                 }
                 .padding(.vertical, 14)
-                if isEndingLiveShift, let liveShiftStartedAt {
-                    Text("Ending the shift you started at \(liveShiftStartedAt.formatted(.dateTime.hour().minute())).")
-                        .font(PaydayFont.caption2)
-                        .foregroundStyle(PaydayColor.textTertiary)
-                        .padding(.top, 4)
-                }
                 if let hoursWorked {
                     // Base rate only — overtime is a weekly calculation that
                     // can't be attributed to a single shift, so this caption
                     // never claims OT.
                     if let wageCents = WageEstimate.cents(wageCentsPerHour: preferencesStore.baseHourlyWageCents, hours: hoursWorked) {
-                        Text("That's \(WageEstimate.hoursLabel(hoursWorked)). \(Money.string(fromCents: wageCents)) in wages.")
+                        Text("\(WageEstimate.hoursLabel(hoursWorked)) · \(Money.string(fromCents: wageCents)) wages")
                             .font(PaydayFont.caption)
                             .foregroundStyle(PaydayColor.textSecondary)
                             .padding(.top, 8)
                     } else {
-                        Text("That's \(WageEstimate.hoursLabel(hoursWorked)).")
+                        Text(WageEstimate.hoursLabel(hoursWorked))
                             .font(PaydayFont.caption)
                             .foregroundStyle(PaydayColor.textSecondary)
                             .padding(.top, 8)
@@ -826,8 +843,33 @@ struct LogTipSheet: View {
                 .padding(.vertical, 14)
                 .id(CurrencyRowField.tipOut)
                 Divider()
+                if receiptMetrics?.gratuityFeesCents != nil {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Gratuity & fees")
+                            Text("Non-tip income")
+                                .font(PaydayFont.caption2)
+                                .foregroundStyle(PaydayColor.textSecondary)
+                        }
+                        Spacer()
+                        CompactCurrencyField(cents: gratuityFeesBinding, field: .gratuityFees, focusedField: $focusedCurrencyField)
+                    }
+                    .padding(.vertical, 14)
+                    .id(CurrencyRowField.gratuityFees)
+                    Divider()
+                }
+                if receiptMetrics?.totalAmountCents != nil {
+                    HStack {
+                        Text("Total amount")
+                        Spacer()
+                        CompactCurrencyField(cents: totalAmountBinding, field: .receiptTotal, focusedField: $focusedCurrencyField)
+                    }
+                    .padding(.vertical, 14)
+                    .id(CurrencyRowField.receiptTotal)
+                    Divider()
+                }
                 HStack {
-                    Text("Sales")
+                    Text(receiptMetrics?.totalAmountCents == nil ? "Sales" : "Gross sales")
                     Spacer()
                     CompactCurrencyField(cents: $salesCents, field: .sales, focusedField: $focusedCurrencyField)
                 }
@@ -935,6 +977,21 @@ struct LogTipSheet: View {
         Binding(get: { clockIn ?? defaultClockIn }, set: { clockIn = $0 })
     }
 
+    private var shiftPeriodBinding: Binding<ShiftPeriod?> {
+        Binding(
+            get: { shiftPeriod },
+            set: { newValue in
+                hasManuallySelectedShiftPeriod = true
+                shiftPeriod = newValue
+            }
+        )
+    }
+
+    private func inferShiftPeriod(from start: Date?) {
+        guard !hasManuallySelectedShiftPeriod, let start else { return }
+        shiftPeriod = ShiftTimes.period(for: start)
+    }
+
     private var clockOutBinding: Binding<Date> {
         Binding(get: { clockOut ?? defaultClockOut }, set: { clockOut = $0 })
     }
@@ -962,6 +1019,45 @@ struct LogTipSheet: View {
         )
     }
 
+    /// A receipt's report-wide total is not the same fact as the pre-tip
+    /// Gross sales amount used by tip-percentage analytics. Keep it editable
+    /// in the scanned details without overloading TipEntry.salesCents.
+    private var totalAmountBinding: Binding<Int> {
+        Binding(
+            get: { receiptMetrics?.totalAmountCents ?? 0 },
+            set: { newValue in
+                var metrics = receiptMetrics ?? ShiftReceiptMetrics()
+                metrics.totalAmountCents = newValue > 0 ? newValue : nil
+                receiptMetrics = metrics.isEmpty ? nil : metrics
+                liveSaveEdit()
+            }
+        )
+    }
+
+    /// Toast prints employee-paid mandatory gratuity separately from both
+    /// voluntary tips and sales. Keep that category visible and editable;
+    /// folding it into Credit would corrupt tip-percent and paycheck audits.
+    private var gratuityFeesBinding: Binding<Int> {
+        Binding(
+            get: { receiptMetrics?.gratuityFeesCents ?? 0 },
+            set: { newValue in
+                var metrics = receiptMetrics ?? ShiftReceiptMetrics()
+                if (metrics.earningsSchemaVersion ?? 1) < 2 {
+                    let foldedGratuity = metrics.employeeGratuityFeesCents
+                    if creditCents >= foldedGratuity {
+                        creditCents -= foldedGratuity
+                    } else {
+                        cashCents = max(0, cashCents - foldedGratuity)
+                    }
+                }
+                metrics.earningsSchemaVersion = 2
+                metrics.gratuityFeesCents = newValue > 0 ? newValue : nil
+                receiptMetrics = metrics.isEmpty ? nil : metrics
+                liveSaveEdit()
+            }
+        )
+    }
+
     private var tableCountBinding: Binding<Int> {
         Binding(
             get: { receiptMetrics?.tableCount ?? 0 },
@@ -982,10 +1078,7 @@ struct LogTipSheet: View {
         guard let metrics = receiptMetrics else { return nil }
         var parts: [String] = []
         if let average = metrics.averageSpendPerGuestCents {
-            parts.append("\(Money.string(fromCents: average)) average spend per guest")
-        }
-        if let count = metrics.categorySales?.count, count > 0 {
-            parts.append("\(count) sales \(count == 1 ? "category" : "categories") captured")
+            parts.append("\(Money.string(fromCents: average))/guest")
         }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
@@ -1058,7 +1151,7 @@ struct LogTipSheet: View {
             isDeferringReceiptScanRowDeletion = false
             receiptScanScrollRequest += 1
         }
-        withAnimation(.easeInOut(duration: 0.2)) {
+        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) {
             receiptScanSlotState = state
         }
 
@@ -1067,7 +1160,7 @@ struct LogTipSheet: View {
             try? await Task.sleep(for: .seconds(seconds))
             guard !Task.isCancelled else { return }
             let shouldReconcileDeferredRow = isDeferringReceiptScanRowDeletion
-            withAnimation(.easeInOut(duration: 0.2)) {
+            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) {
                 receiptScanSlotState = .rest
             }
             receiptScanSnapshot = nil
@@ -1126,6 +1219,7 @@ struct LogTipSheet: View {
 
         do {
             let parsed = try await ReceiptAIParser.parse(image: image)
+            try Task.checkCancellation()
             let snapshotCashCents = cashCents
             let snapshotCreditCents = creditCents
             let snapshotTipOutCents = tipOutCents
@@ -1229,6 +1323,8 @@ struct LogTipSheet: View {
             )
             liveSaveEdit()
             PaydayHaptics.success()
+        } catch is CancellationError {
+            return
         } catch {
             let errorType = String(describing: type(of: error))
             Self.receiptLogger.error(
@@ -1258,15 +1354,17 @@ struct LogTipSheet: View {
         }
         do {
             guard let data = try await photoItem.loadTransferable(type: Data.self),
-                  let image = UIImage(data: data)
-            else {
+                  let image = await PaydayImageDecoder.decode(data) else {
                 throw ReceiptAIParser.ParseError.imageUnavailable
             }
+            try Task.checkCancellation()
             let importMilliseconds = Int(Date().timeIntervalSince(importStartedAt) * 1_000)
             Self.receiptLogger.notice(
                 "Receipt photo-library import completed. bytes=\(data.count) elapsedMs=\(importMilliseconds)"
             )
             await scanReceipt(image)
+        } catch is CancellationError {
+            return
         } catch {
             let errorType = String(describing: type(of: error))
             Self.receiptLogger.error(
@@ -1313,12 +1411,13 @@ struct LogTipSheet: View {
         let normalizedDate = Calendar.current.startOfDay(for: min(date, .now))
         let trimmedNote = note.isEmpty ? nil : note
         let recordedAt = Date.now
-        let totalCents = cashCents + creditCents
+        let tipsCents = cashCents + creditCents
+        let gratuityFeesCents = receiptMetrics?.separatedGratuityFeesCents ?? 0
         let effectiveTipOutCents = tipOutCents > 0 ? tipOutCents : nil
         let effectiveSalesCents = salesCents > 0 ? salesCents : nil
-        let netTotalCents = totalCents - (effectiveTipOutCents ?? 0)
+        let netTotalCents = tipsCents + gratuityFeesCents - (effectiveTipOutCents ?? 0)
         // A shift speaks ONE number (Tyler's ruling, 2026-07-27): the
-        // reveal's total is net tips plus this shift's own wages, the same
+        // reveal's total is non-wage earnings plus this shift's own wages, the same
         // figure the Shifts row already shows — never a tips-only number
         // shown next to a wage-aware history.
         let wageCentsPerHour = preferencesStore.baseHourlyWageCents
@@ -1358,10 +1457,7 @@ struct LogTipSheet: View {
         )
 
         revealResult = reveal
-        revealIncludesWages = wageCents != nil
-        revealBreakdown = (effectiveTipOutCents != nil || wageCents != nil)
-            ? (grossCents: totalCents, tipOutCents: effectiveTipOutCents, wageCents: wageCents)
-            : nil
+        revealIncludesNonTipIncome = wageCents != nil || gratuityFeesCents > 0
         // Tonight is logged — cancel tonight's nudge and queue the next
         // usual night's instead. allEntries' @Query hasn't necessarily
         // refreshed within this same call, so the just-inserted entries
@@ -1389,6 +1485,18 @@ struct LogTipSheet: View {
     /// amount updated (or zeroed, or deleted if it's not the anchor), and a
     /// kind with no existing row yet gets a fresh one inserted.
     private func liveSaveEdit() {
+        guard isEditing else { return }
+        liveSaveTask?.cancel()
+        liveSaveTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(400))
+            guard !Task.isCancelled else { return }
+            commitLiveEdit()
+        }
+    }
+
+    /// Coalesce keypad and text-field edits into one SwiftData mutation and
+    /// one WidgetKit refresh after the user pauses, then flush on dismissal.
+    private func commitLiveEdit() {
         guard case .edit(let anchor) = target else { return }
         var rows = sameShiftEntries(around: anchor)
         guard rows.contains(where: { $0.id == anchor.id }) else { return }
@@ -1400,6 +1508,7 @@ struct LogTipSheet: View {
                 if cents > 0 || row.id == anchor.id || rows.count == 1 || isDeferringReceiptScanRowDeletion {
                     row.amountCents = cents          // never delete the anchor mid-edit
                 } else {
+                    PaydaySyncState.recordTipDeletions([row.id])
                     modelContext.delete(row)          // non-anchor row zeroed out
                     rows.removeAll { $0.id == row.id }
                 }
@@ -1467,14 +1576,18 @@ struct LogTipSheet: View {
         )
 
         let survivingIDs = Set(survivingRows.map(\.id))
-        for row in rows where !survivingIDs.contains(row.id) {
+        let deletedRows = rows.filter { !survivingIDs.contains($0.id) }
+        PaydaySyncState.recordTipDeletions(deletedRows.map(\.id))
+        for row in deletedRows {
             modelContext.delete(row)
         }
     }
 
     private func delete() {
         if case .edit(let entry) = target {
-            for row in sameShiftEntries(around: entry) {
+            let rows = sameShiftEntries(around: entry)
+            PaydaySyncState.recordTipDeletions(rows.map(\.id))
+            for row in rows {
                 modelContext.delete(row)
             }
         }
@@ -1640,34 +1753,17 @@ private struct RevealCardView: View {
     /// The shift's lunch/dinner, when captured — lets the comparison below
     /// name it instead of falling back to the generic "shift".
     let period: ShiftPeriod?
-    /// Whether result.cents already has this shift's wages folded in —
-    /// picks the headline's unit (Tyler's ruling, 2026-07-27).
-    let includesWages: Bool
-    /// Non-nil only when there's something to reconcile the headline back
-    /// to — a tip-out was logged, a wage got folded in, or both.
-    let breakdown: (grossCents: Int, tipOutCents: Int?, wageCents: Int?)?
+    /// Whether result.cents includes wages or mandatory gratuity — picks an
+    /// honest headline unit for the all-in shift amount.
+    let includesNonTipIncome: Bool
     let onDismiss: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isRevealed = false
 
-    /// Reconciles the headline back to its parts, in the same order the
-    /// total was built: gross, minus any tip-out, plus any wages.
-    private var decompositionText: String? {
-        guard let breakdown else { return nil }
-        var parts = ["\(Money.string(fromCents: breakdown.grossCents)) gross"]
-        if let tipOutCents = breakdown.tipOutCents {
-            parts.append("\(Money.string(fromCents: tipOutCents)) tipped out")
-        }
-        if let wageCents = breakdown.wageCents {
-            parts.append("\(Money.string(fromCents: wageCents)) wages")
-        }
-        return parts.joined(separator: ", ") + "."
-    }
-
     var body: some View {
         VStack(spacing: 12) {
-            Text(RevealCopy.headline(cents: result.cents, includesWages: includesWages))
+            Text(RevealCopy.headline(cents: result.cents, includesNonTipIncome: includesNonTipIncome))
                 .font(PaydayFont.displayXL)
                 .monospacedDigit()
                 .foregroundStyle(result.isRecord && isRevealed ? PaydayColor.primary : PaydayColor.textPrimary)
@@ -1676,27 +1772,13 @@ private struct RevealCardView: View {
                 .foregroundStyle(PaydayColor.textSecondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 40)
-            if let rateClause = result.rateClause {
-                Text(RevealCopy.rateClause(for: rateClause))
-                    .font(PaydayFont.footnote)
-                    .foregroundStyle(PaydayColor.textSecondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 40)
-            }
-            if let decompositionText {
-                Text(decompositionText)
-                    .font(PaydayFont.caption)
-                    .foregroundStyle(PaydayColor.textSecondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 40)
-            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .contentShape(Rectangle())
         .onTapGesture { onDismiss() }
         .onAppear {
             let comparison = RevealCopy.comparison(for: result.comparison, period: period)
-            UIAccessibility.post(notification: .announcement, argument: "\(RevealCopy.headline(cents: result.cents, includesWages: includesWages)) \(comparison)")
+            UIAccessibility.post(notification: .announcement, argument: "\(RevealCopy.headline(cents: result.cents, includesNonTipIncome: includesNonTipIncome)) \(comparison)")
         }
         .task {
             PaydayHaptics.success()

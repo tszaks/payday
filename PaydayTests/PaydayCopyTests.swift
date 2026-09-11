@@ -35,3 +35,20 @@ struct PaydayCopyTests {
         #expect(text == "Paid Jun 24")
     }
 }
+
+@Suite("Widget directional comparisons")
+struct WidgetDirectionalTests {
+    @Test("Losses use a down arrow; gains use an up arrow; zero stays neutral")
+    func signedAmounts() {
+        #expect(Money.directionalDeltaString(fromCents: -88593) == "↓ \(Money.string(fromCents: 88593))")
+        #expect(Money.directionalDeltaString(fromCents: 20000) == "↑ \(Money.string(fromCents: 20000))")
+        #expect(Money.directionalDeltaString(fromCents: -1) == "↓ \(Money.string(fromCents: 1))")
+        #expect(Money.directionalDeltaString(fromCents: 0) == Money.string(fromCents: 0))
+    }
+
+    @Test("Large comparisons keep their full magnitude without overflowing")
+    func largeAmounts() {
+        #expect(Money.directionalDeltaString(fromCents: -123456789) == "↓ \(Money.string(fromCents: 123456789))")
+        #expect(Money.directionalDeltaString(fromCents: Int.min).hasPrefix("↓ "))
+    }
+}

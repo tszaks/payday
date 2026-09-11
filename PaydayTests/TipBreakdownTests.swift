@@ -4,8 +4,15 @@ import Foundation
 
 @Suite("Tip breakdown split")
 struct TipBreakdownTests {
-    private func entry(_ cents: Int, _ kind: TipKind, tipOut: Int? = nil) -> TipEntry {
-        TipEntry(date: .now, amountCents: cents, kind: kind, tipOutCents: tipOut)
+    private func entry(_ cents: Int, _ kind: TipKind, tipOut: Int? = nil, gratuityFees: Int? = nil, shiftID: UUID? = nil) -> TipEntry {
+        TipEntry(
+            date: .now,
+            amountCents: cents,
+            kind: kind,
+            tipOutCents: tipOut,
+            shiftID: shiftID,
+            receiptMetrics: gratuityFees.map { ShiftReceiptMetrics(earningsSchemaVersion: 2, gratuityFeesCents: $0) }
+        )
     }
 
     @Test("empty set splits to zero")
@@ -62,13 +69,60 @@ struct TipBreakdownTests {
         #expect(breakdown.netTotalCents == 51688)
     }
 
-    @Test("tip-outs across multiple entries sum")
-    func tipOutsSum() {
+    @Test("tip-outs across separate shifts sum")
+    func tipOutsAcrossShiftsSum() {
         let breakdown = TipBreakdown.total(of: [
-            entry(5000, .cash, tipOut: 500),
-            entry(8000, .credit, tipOut: 800)
+            entry(5000, .cash, tipOut: 500, shiftID: UUID()),
+            entry(8000, .credit, tipOut: 800, shiftID: UUID())
         ])
         #expect(breakdown.tipOutCents == 1300)
         #expect(breakdown.netTotalCents == 11700)
+    }
+
+    @Test("duplicate shift-level tip-out resolves once from the canonical entry")
+    func duplicateTipOutWithinShiftResolvesOnce() {
+        let shiftID = UUID()
+        let breakdown = TipBreakdown.total(of: [
+            entry(5000, .cash, tipOut: 500, shiftID: shiftID),
+            entry(8000, .credit, tipOut: 800, shiftID: shiftID)
+        ])
+
+        #expect(breakdown.tipOutCents == 800)
+        #expect(breakdown.netTotalCents == 12200)
+    }
+
+    @Test("Toast gratuity is earnings but remains separate from voluntary tips")
+    func toastGratuityStaysSeparate() {
+        // IMG_0674: $121.36 Non-cash tips + $40.50 employee gratuity/fees
+        // - $22.43 tip sharing = $139.43 non-wage earnings.
+        let breakdown = TipBreakdown.total(of: [
+            entry(12_136, .credit, tipOut: 2_243, gratuityFees: 4_050)
+        ])
+
+        #expect(breakdown.creditCents == 12_136)
+        #expect(breakdown.gratuityFeesCents == 4_050)
+        #expect(breakdown.grossTotalCents == 12_136)
+        #expect(breakdown.earnedBeforeTipOutCents == 16_186)
+        #expect(breakdown.netTotalCents == 13_943)
+    }
+
+    @Test("legacy combined Toast amounts normalize without changing earnings")
+    func legacyCombinedAmountNormalizes() {
+        let legacy = TipEntry(
+            date: .now,
+            amountCents: 16_186,
+            kind: .credit,
+            tipOutCents: 2_243,
+            receiptMetrics: ShiftReceiptMetrics(
+                earningsSchemaVersion: nil,
+                gratuityFeesCents: 4_050
+            )
+        )
+
+        let breakdown = TipBreakdown.total(of: [legacy])
+
+        #expect(breakdown.creditCents == 12_136)
+        #expect(breakdown.gratuityFeesCents == 4_050)
+        #expect(breakdown.netTotalCents == 13_943)
     }
 }

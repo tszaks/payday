@@ -22,6 +22,7 @@ enum ReceiptAIParser {
         configuration.timeoutIntervalForResource = requestTimeout
         return URLSession(configuration: configuration)
     }()
+    private static let resultCache = ScanResultCache<ParsedReceipt>()
 
     struct ParsedValues: Decodable {
         struct CategoryValue: Decodable {
@@ -45,6 +46,7 @@ enum ReceiptAIParser {
         let creditTips: Double?
         let tipOut: Double?
         let sales: Double?
+        let totalAmount: Double?
         let serverCount: Int?
         let guestCount: Int?
         let creditCheckCount: Int?
@@ -66,6 +68,7 @@ enum ReceiptAIParser {
             case creditTips = "credit_tips"
             case tipOut = "tip_out"
             case sales
+            case totalAmount = "total_amount"
             case serverCount = "server_count"
             case guestCount = "guest_count"
             case creditCheckCount = "credit_check_count"
@@ -118,7 +121,10 @@ enum ReceiptAIParser {
         let cashTipsCents: Int?
         let creditTipsCents: Int?
         let tipOutCents: Int?
+        /// Post-tax sales before gratuity and tips; retained as the analytics
+        /// denominator even when the receipt also prints an all-in total.
         let salesCents: Int?
+        let totalAmountCents: Int?
         let serverCount: Int?
         let guestCount: Int?
         let creditCheckCount: Int?
@@ -152,6 +158,7 @@ enum ReceiptAIParser {
 
         var receiptMetrics: ShiftReceiptMetrics? {
             let metrics = ShiftReceiptMetrics(
+                earningsSchemaVersion: creditTipsCents != nil ? 2 : nil,
                 guestCount: guestCount,
                 creditCheckCount: creditCheckCount,
                 tableCount: tableCount,
@@ -162,6 +169,7 @@ enum ReceiptAIParser {
                 averageSpendPerGuestCents: averageSpendPerGuestCents,
                 cashSalesCents: cashSalesCents,
                 gratuityFeesCents: gratuityFeesCents,
+                totalAmountCents: totalAmountCents,
                 categorySales: categorySales.isEmpty ? nil : categorySales,
                 tipSharing: tipSharing.isEmpty ? nil : tipSharing
             )
@@ -171,7 +179,7 @@ enum ReceiptAIParser {
         /// Count only fields a person can review in the compact shift form.
         /// Rich category and tip-sharing rows are saved in the background.
         var filledFieldCount: Int {
-            let amountCount = [cashTipsCents, creditTipsCents, tipOutCents, salesCents, serverCount]
+            let amountCount = [cashTipsCents, creditTipsCents, tipOutCents, gratuityFeesCents, salesCents, totalAmountCents, serverCount]
                 .compactMap { $0 }.count
             let dateAndTimeCount = [shiftDate != nil, clockIn != nil, clockOut != nil]
                 .filter { $0 }.count
@@ -248,7 +256,12 @@ enum ReceiptAIParser {
             logger.error("Receipt analysis stopped before request: compressed image unavailable")
             throw ParseError.imageUnavailable
         }
+        if let cached = await resultCache.value(for: imageData) {
+            logger.notice("Receipt analysis reused a cached result; no network request needed")
+            return cached
+        }
 
+        return try await resultCache.value(for: imageData) {
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
         request.timeoutInterval = requestTimeout
@@ -272,6 +285,8 @@ enum ReceiptAIParser {
                 "Receipt network request timed out. elapsedMs=\(elapsedMilliseconds) code=\(error.code.rawValue)"
             )
             throw ParseError.timedOut
+        } catch let error as URLError where error.code == .cancelled {
+            throw CancellationError()
         } catch let error as URLError {
             let elapsedMilliseconds = Int(Date().timeIntervalSince(networkStartedAt) * 1_000)
             logger.error(
@@ -319,6 +334,7 @@ enum ReceiptAIParser {
             "Receipt analysis succeeded. filledFields=\(parsed.filledFieldCount) hasMetrics=\(parsed.receiptMetrics != nil) elapsedMs=\(totalMilliseconds)"
         )
         return parsed
+        }
     }
 
     /// Pure response decoding keeps the model contract testable without
@@ -337,6 +353,7 @@ enum ReceiptAIParser {
             creditTipsCents: cents(values.creditTips),
             tipOutCents: cents(values.tipOut),
             salesCents: cents(values.sales),
+            totalAmountCents: cents(values.totalAmount),
             serverCount: positiveCount(values.serverCount),
             guestCount: positiveCount(values.guestCount),
             creditCheckCount: positiveCount(values.creditCheckCount),
@@ -406,10 +423,20 @@ enum ReceiptAIParser {
     private static func shiftDate(_ value: String?) -> ParsedReceipt.ShiftDate? {
         guard let value else { return nil }
         let parts = value.split(separator: "-").compactMap { Int($0) }
+        let maximumYear = Calendar.current.component(.year, from: .now) + 1
         guard parts.count == 3,
+              (2000...maximumYear).contains(parts[0]),
               (1...12).contains(parts[1]),
               (1...31).contains(parts[2])
         else { return nil }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        let components = DateComponents(year: parts[0], month: parts[1], day: parts[2])
+        guard let date = calendar.date(from: components) else { return nil }
+        let resolved = calendar.dateComponents([.year, .month, .day], from: date)
+        guard resolved.year == parts[0], resolved.month == parts[1], resolved.day == parts[2] else {
+            return nil
+        }
         return ParsedReceipt.ShiftDate(year: parts[0], month: parts[1], day: parts[2])
     }
 
@@ -473,7 +500,8 @@ enum ReceiptAIParser {
             throw ParseError.imageUnavailable
         }
 
-        return try await Task.detached(priority: .userInitiated) {
+        let worker = Task.detached(priority: .userInitiated) {
+            try Task.checkCancellation()
             guard let localImage = UIImage(data: imageData),
                   let cgImage = localImage.cgImage
             else {
@@ -494,7 +522,9 @@ enum ReceiptAIParser {
                 orientation: localImage.receiptOCROrientation,
                 options: [:]
             )
+            try Task.checkCancellation()
             try handler.perform([request])
+            try Task.checkCancellation()
 
             let fragments = (request.results ?? []).compactMap { observation -> OCRFragment? in
                 guard let text = observation.topCandidates(1).first?.string else { return nil }
@@ -506,22 +536,25 @@ enum ReceiptAIParser {
             }
             guard !fragments.isEmpty else { throw ParseError.noTextFound }
             return transcript(fragments: fragments)
-        }.value
+        }
+
+        return try await withTaskCancellationHandler {
+            try await worker.value
+        } onCancel: {
+            worker.cancel()
+        }
     }
 
     /// Apple Vision keeps the request fast and gives the model explicit row
     /// order. The compact image is sent alongside it so a missed OCR label or
     /// detached amount cannot silently turn an obvious printed fact into nil.
     static func jpegData(for image: UIImage, maxDimension: CGFloat = 1_800) -> Data? {
-        let longestSide = max(image.size.width, image.size.height)
-        let scale = min(1, maxDimension / max(longestSide, 1))
-        let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
-        let format = UIGraphicsImageRendererFormat()
-        format.scale = 1
-        let renderer = UIGraphicsImageRenderer(size: size, format: format)
-        return renderer.jpegData(withCompressionQuality: 0.80) { _ in
-            image.draw(in: CGRect(origin: .zero, size: size))
-        }
+        ScanImageEncoder.jpegData(
+            for: image,
+            maxDimension: maxDimension,
+            maxBytes: 1_250_000,
+            initialQuality: 0.80
+        )
     }
 
 }

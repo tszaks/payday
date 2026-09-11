@@ -36,14 +36,16 @@ enum PaydayColor {
 
     // MARK: - Brand (one green, the only action color)
 
-    /// Payday/Vero green — the single brand and action color (#00B83F).
-    static let primary = Color(hex: "00B83F")
+    /// Payday/Vero green — one adaptive action color. The deeper light-mode
+    /// value preserves the same hue while clearing contrast on alabaster and
+    /// white; dark mode keeps the original bright brand green.
+    static let primary = Color(lightHex: "00852F", darkHex: "00B83F")
     /// Foreground for text/icons placed directly on the green.
-    static let onPrimary = Color(hex: "FFFFFF")
+    static let onPrimary = Color(lightHex: "FFFFFF", darkHex: "000000")
     /// Foreground for text/icons placed directly on caution surfaces.
     static let onCaution = Color(lightHex: "FFFFFF", darkHex: "000000")
     /// Foreground for text/icons placed directly on error/red surfaces.
-    static let onError = Color(hex: "FFFFFF")
+    static let onError = Color(lightHex: "FFFFFF", darkHex: "000000")
 
     // MARK: - Semantic Colors
 
@@ -51,10 +53,10 @@ enum PaydayColor {
     static let success = primary
 
     /// Caution — the only other warning accent, foreground-safe in both modes.
-    static let caution = Color(lightHex: "E8590C", darkHex: "FF9F0A")
+    static let caution = Color(lightHex: "B44400", darkHex: "FF9F0A")
 
     /// Error red (both modes). In Payday: a paycheck that shorted you.
-    static let error = Color(hex: "FF3B30")
+    static let error = Color(lightHex: "C81D18", darkHex: "FF453A")
 
     // MARK: - Text Colors (Adaptive)
 
@@ -62,10 +64,22 @@ enum PaydayColor {
     static let textPrimary = Color(lightHex: "000000", darkHex: "FFFFFF")
 
     /// Secondary text. Light: Medium Gray. Dark: iOS System Gray.
-    static let textSecondary = Color(lightHex: "6B6B6B", darkHex: "8E8E93")
+    static let textSecondary = Color(lightHex: "5F5F5F", darkHex: "A1A1A6")
 
     /// Tertiary/disabled text.
-    static let textTertiary = Color(lightHex: "AEAEAE", darkHex: "48484A")
+    static let textTertiary = Color(lightHex: "6B6B6B", darkHex: "8E8E93")
+}
+
+/// WidgetKit archives colors for a host whose appearance can differ from
+/// the app process. Resolve these from SwiftUI's host scheme explicitly.
+struct PaydayWidgetColors {
+    let scheme: ColorScheme
+    var textPrimary: Color { scheme == .dark ? .white : .black }
+    var textSecondary: Color { Color(hex: scheme == .dark ? "A1A1A6" : "5F5F5F") }
+    var primary: Color { Color(hex: scheme == .dark ? "00B83F" : "00852F") }
+    var onPrimary: Color { scheme == .dark ? .black : .white }
+    var background: Color { Color(hex: scheme == .dark ? "050505" : "FAFAFA") }
+    var error: Color { Color(hex: scheme == .dark ? "FF453A" : "C81D18") }
 }
 
 // MARK: - Corner Radius Scale

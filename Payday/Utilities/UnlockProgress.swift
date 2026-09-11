@@ -41,16 +41,16 @@ enum UnlockCopy {
         let shiftWord = remaining == 1 ? "shift" : "shifts"
         switch kind {
         case .insights:
-            return "\(remaining) more \(shiftWord) and Payday starts reading your patterns."
+            return "\(remaining) more \(shiftWord) for insights"
         case .weekday(let weekday):
             // Calendar.current, not the caller's calendar — matches how
             // StatsEngine's own Move copy names weekdays (see weekdaySwapMove).
             let name = Calendar.current.weekdaySymbols[weekday - 1]
-            return "\(remaining) more \(name) \(shiftWord) and \(name)s get their own read."
+            return "\(remaining) more \(name) \(shiftWord) for a \(name) average"
         case .hourlyRate:
-            return "\(remaining) more \(shiftWord) with times and your hourly rate unlocks."
+            return "\(remaining) more timed \(shiftWord) for hourly rate"
         case .tipPercent:
-            return "\(remaining) more \(shiftWord) with sales and your tip percent unlocks."
+            return "\(remaining) more \(shiftWord) with sales for tip percentage"
         }
     }
 }

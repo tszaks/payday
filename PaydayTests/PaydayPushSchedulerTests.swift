@@ -85,6 +85,28 @@ struct PaydayPushSchedulerTests {
         #expect(decision?.body == "Your check's tips line should read about $150.00.")
     }
 
+    @Test("body keeps Toast gratuity separate from the tips line")
+    func bodyNamesSeparateGratuity() {
+        let entry = TipEntry(
+            date: date(2026, 7, 15),
+            amountCents: 15_000,
+            kind: .credit,
+            receiptMetrics: ShiftReceiptMetrics(
+                earningsSchemaVersion: 2,
+                gratuityFeesCents: 4_050
+            )
+        )
+        let decision = PaydayPushScheduler.decision(
+            now: date(2026, 7, 19, hour: 20),
+            calculator: weeklyPaidFriday(),
+            allEntries: [entry],
+            paycheckRecords: [],
+            isReminderEnabled: true
+        )
+
+        #expect(decision?.body == "Your stub should show about $150.00 in tips and $40.50 in gratuity.")
+    }
+
     @Test("falls back to the plain body when no credit tips were logged")
     func fallbackBodyWithNoCreditTips() {
         let entries = [cashEntry(cents: 4000, on: date(2026, 7, 16))]

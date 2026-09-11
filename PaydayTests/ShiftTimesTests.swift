@@ -10,6 +10,13 @@ private func time(_ hour: Int, _ minute: Int) -> Date {
 
 @Suite("ShiftTimes hours")
 struct ShiftTimesTests {
+    @Test("shift period uses the canonical 4 PM boundary")
+    func inferredShiftPeriod() {
+        #expect(ShiftTimes.period(for: time(15, 59)) == .lunch)
+        #expect(ShiftTimes.period(for: time(16, 0)) == .dinner)
+        #expect(ShiftTimes.period(for: time(17, 6)) == .dinner)
+    }
+
     @Test("a normal same-day shift measures straightforwardly")
     func normalCase() {
         #expect(ShiftTimes.hours(clockIn: time(9, 30), clockOut: time(17, 0)) == 7.5)

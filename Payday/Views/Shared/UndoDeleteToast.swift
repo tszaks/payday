@@ -44,7 +44,9 @@ struct DeletedTipSnapshot {
     }
 
     func restored() -> TipEntry {
-        TipEntry(id: id, date: date, amountCents: amountCents, kind: kind, note: note, recordedAt: recordedAt, hoursWorked: hoursWorked, tipOutCents: tipOutCents, salesCents: salesCents, shiftPeriod: shiftPeriod, shiftID: shiftID, clockIn: clockIn, clockOut: clockOut, serverCount: serverCount, receiptMetrics: receiptMetrics)
+        let entry = TipEntry(id: id, date: date, amountCents: amountCents, kind: kind, note: note, recordedAt: recordedAt, hoursWorked: hoursWorked, tipOutCents: tipOutCents, salesCents: salesCents, shiftPeriod: shiftPeriod, shiftID: shiftID, clockIn: clockIn, clockOut: clockOut, serverCount: serverCount, receiptMetrics: receiptMetrics)
+        entry.modifiedAt = .now
+        return entry
     }
 }
 
@@ -65,6 +67,7 @@ final class UndoDeleteToastState {
         guard !entries.isEmpty else { return }
         dismissTask?.cancel()
         snapshots = entries.map(DeletedTipSnapshot.init)
+        PaydaySyncState.recordTipDeletions(entries.map(\.id))
         for entry in entries { context.delete(entry) }
         try? context.save()
         PaydayHaptics.medium()
@@ -79,6 +82,7 @@ final class UndoDeleteToastState {
     func undo(in context: ModelContext) {
         guard !snapshots.isEmpty else { return }
         dismissTask?.cancel()
+        PaydaySyncState.cancelTipDeletions(snapshots.map(\.id))
         for snapshot in snapshots { context.insert(snapshot.restored()) }
         try? context.save()
         snapshots = []
@@ -104,7 +108,7 @@ private struct UndoDeleteToastModifier: ViewModifier {
                     }
             }
         }
-        .animation(PaydayAnimation.premiumSpring, value: state.snapshot != nil)
+        .animation(reduceMotion ? nil : PaydayAnimation.premiumSpring, value: state.snapshot != nil)
     }
 
     private var toast: some View {

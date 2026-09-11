@@ -4,6 +4,14 @@ import Foundation
 /// "9:30, 10:30, 11:30…" — the app does the math. Pure and calendar-aware,
 /// testable without SwiftData.
 enum ShiftTimes {
+    /// Payday's canonical lunch/dinner boundary. This matches the analytics
+    /// fallback: a shift starting before 4 PM is lunch; 4 PM or later is
+    /// dinner. The form can still override the inferred value explicitly.
+    static func period(for start: Date, calendar: Calendar = .current) -> ShiftPeriod {
+        let hour = calendar.component(.hour, from: start)
+        return hour < 16 ? .lunch : .dinner
+    }
+
     /// Hours between two times-of-day, wrap-aware: an overnight closeout
     /// (in 5 PM, out 1:30 AM) measures forward across midnight. Only the
     /// hour/minute components matter — the dates the pickers happen to
