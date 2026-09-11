@@ -2,17 +2,23 @@ import Foundation
 
 /// Tracks the first time each Move (keyed by its stable per-type id, e.g.
 /// "weekdaySwap") was ever shown to the user - the ledger StatsEngine's
-/// followUps(ledger:) reads to judge whether a recommendation was followed
-/// and whether it paid off, at least 28 days after the fact. One entry per
+/// followUps(ledger:) reads to measure whether that slice of shifts has
+/// since shifted, at least 28 days after the fact. It is a clock for
+/// change detection, not a record of advice given. One entry per
 /// move id, never overwritten once set - a move that stops and later
 /// re-fires doesn't reset its clock. Persistence mirrors InsightsStore.
 @Observable
 final class MoveLedgerStore {
     private static let key = "com.szakacsmedia.payday.moveLedger"
     private let defaults: UserDefaults
+    private(set) var revision = 0
 
     private(set) var firstShownAt: [String: Date] {
-        didSet { persist() }
+        didSet {
+            revision &+= 1
+            persist()
+            PaydaySettingsSyncClock.touch()
+        }
     }
 
     init(defaults: UserDefaults = .standard) {
@@ -37,6 +43,10 @@ final class MoveLedgerStore {
         }
         guard changed else { return }
         firstShownAt = updated
+    }
+
+    func replaceFromSupabase(_ value: [String: Date]) {
+        firstShownAt = value
     }
 
     private static func load(from defaults: UserDefaults) -> [String: Date] {

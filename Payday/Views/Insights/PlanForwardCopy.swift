@@ -23,12 +23,7 @@ enum PlanForwardCopy {
             return index == 0 ? "\(price) (\(night.nightCount) \(name)s)" : "\(price) (\(night.nightCount))"
         }
         let nightsWord = plan.nights.count == 1 ? "usual night" : "usual nights"
-        var sentence = "\(plan.nights.count) \(nightsWord) - \(nightPhrases.joined(separator: ", "))."
-
-        if let pickup = plan.pickup {
-            let name = weekdayName(pickup.weekday)
-            sentence += " A \(name) would add about \(Money.wholeDollarString(fromCents: pickup.averageNetCents)) (across \(pickup.nightCount) \(name)s)."
-        }
+        let sentence = "\(plan.nights.count) \(nightsWord) - \(nightPhrases.joined(separator: ", "))."
 
         return sentence
     }

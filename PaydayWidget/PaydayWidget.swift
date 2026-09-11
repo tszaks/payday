@@ -8,7 +8,11 @@ struct PaydayWidgetEntry: TimelineEntry {
     let hasSchedule: Bool
     let periodTotalCents: Int
     let paceDeltaCents: Int?
+    /// How many prior periods the pace delta is medianed over, so the
+    /// VoiceOver label can say "usual pace" or "last period" accurately.
+    let pacePeriodCount: Int
     let daysRemaining: Int
+    let appearance: AppAppearance
     var relevance: TimelineEntryRelevance?
 }
 
@@ -17,39 +21,49 @@ struct PaydayWidgetEntry: TimelineEntry {
 /// worse than no widget at all.
 struct PaydayWidgetProvider: TimelineProvider {
     func placeholder(in context: Context) -> PaydayWidgetEntry {
-        PaydayWidgetEntry(date: .now, hasSchedule: true, periodTotalCents: 8600, paceDeltaCents: 1200, daysRemaining: 3, relevance: nil)
+        PaydayWidgetEntry(date: .now, hasSchedule: true, periodTotalCents: 8600, paceDeltaCents: 1200, pacePeriodCount: 6, daysRemaining: 3, appearance: AppGroup.appearance, relevance: nil)
     }
 
     func getSnapshot(in context: Context, completion: @escaping (PaydayWidgetEntry) -> Void) {
-        completion(buildEntry(at: .now))
+        completion(buildEntries(at: [.now])[0])
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<PaydayWidgetEntry>) -> Void) {
         let now = Date.now
         let calendar = Calendar.current
-        var entries = [buildEntry(at: now)]
+        var dates = [now]
         // A second, higher-relevance entry queued for tonight's shift window
         // so Smart Stack can surface Payday once logging is actually likely.
         if let evening = calendar.date(bySettingHour: 17, minute: 0, second: 0, of: now), evening > now {
-            entries.append(buildEntry(at: evening))
+            dates.append(evening)
         }
+        let entries = buildEntries(at: dates)
         let nextMidnight = calendar.nextDate(after: now, matching: DateComponents(hour: 0, minute: 0), matchingPolicy: .nextTime)
             ?? now.addingTimeInterval(6 * 3600)
         completion(Timeline(entries: entries, policy: .after(nextMidnight)))
     }
 
-    private func buildEntry(at date: Date) -> PaydayWidgetEntry {
+    private func buildEntries(at dates: [Date]) -> [PaydayWidgetEntry] {
         guard let schedule = PayScheduleStore().schedule else {
-            return PaydayWidgetEntry(date: date, hasSchedule: false, periodTotalCents: 0, paceDeltaCents: nil, daysRemaining: 0, relevance: nil)
+            return dates.map {
+                PaydayWidgetEntry(date: $0, hasSchedule: false, periodTotalCents: 0, paceDeltaCents: nil, pacePeriodCount: 0, daysRemaining: 0, appearance: AppGroup.appearance, relevance: nil)
+            }
         }
-        let calendar = Calendar.current
-        let calculator = PayPeriodCalculator(schedule: schedule)
-        let period = calculator.period(containing: date)
-        // A fresh, non-main-actor ModelContext — widget timeline generation
-        // runs off the main actor, unlike the app's own SwiftUI-bound context.
+        // Fetch once per provider request. Multiple timeline dates reuse the
+        // same immutable snapshot instead of reopening and remapping the
+        // complete shared history for each entry.
         let context = ModelContext(SharedModelContainer.shared)
         let allEntries = (try? context.fetch(FetchDescriptor<TipEntry>())) ?? []
         let engine = StatsEngine(records: allEntries.map(TipRecord.init))
+        return dates.map {
+            buildEntry(at: $0, schedule: schedule, allEntries: allEntries, engine: engine)
+        }
+    }
+
+    private func buildEntry(at date: Date, schedule: PaySchedule, allEntries: [TipEntry], engine: StatsEngine) -> PaydayWidgetEntry {
+        let calendar = Calendar.current
+        let calculator = PayPeriodCalculator(schedule: schedule)
+        let period = calculator.period(containing: date)
         let tipsTotal = engine.periodToDateTotal(period: period, asOf: date)
 
         // Same wage-inclusive total the dashboard hero shows — a widget
@@ -58,10 +72,14 @@ struct PaydayWidgetProvider: TimelineProvider {
         let wages = PeriodIncome.wages(entries: periodEntries, wageCentsPerHour: AppGroup.baseHourlyWageCents, firstWeekday: schedule.firstWeekday)
         let total = tipsTotal + (wages?.totalCents ?? 0)
 
-        let previousDay = calendar.date(byAdding: .day, value: -1, to: period.start) ?? period.start
-        let priorPeriod = calculator.period(containing: previousDay)
-        let hasPriorHistory = allEntries.contains { $0.date >= priorPeriod.start && $0.date <= priorPeriod.end }
-        let paceDelta = hasPriorHistory ? engine.paceDelta(currentPeriod: period, priorPeriod: priorPeriod, asOf: date) : nil
+        // Same usual-pace baseline the Dashboard hero uses — the median of
+        // the last several periods at this same point, not a race against
+        // whichever single period came before.
+        let comparison = engine.paceComparison(
+            currentPeriod: period,
+            priorPeriods: calculator.priorPeriods(before: period, count: StatsEngine.paceLookbackPeriods),
+            asOf: date
+        )
 
         let daysRemaining = calculator.daysRemaining(from: date)
         let isPaydayMoment = daysRemaining == 0 && total > 0
@@ -72,8 +90,10 @@ struct PaydayWidgetProvider: TimelineProvider {
             date: date,
             hasSchedule: true,
             periodTotalCents: total,
-            paceDeltaCents: paceDelta,
+            paceDeltaCents: comparison?.deltaCents,
+            pacePeriodCount: comparison?.periodCount ?? 0,
             daysRemaining: daysRemaining,
+            appearance: AppGroup.appearance,
             relevance: TimelineEntryRelevance(score: score)
         )
     }
@@ -83,6 +103,20 @@ struct PaydayWidgetEntryView: View {
     @Environment(\.widgetFamily) private var family
     let entry: PaydayWidgetEntry
 
+    // WidgetKit owns the appearance independently of the app's saved theme.
+    // Resolve colors from this host environment, including archived widgets.
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var colors: PaydayWidgetColors { PaydayWidgetColors(scheme: colorScheme) }
+
+    func comparisonColor(for cents: Int) -> Color {
+        guard renderingMode == .fullColor else { return colors.textPrimary }
+        if cents > 0 { return colors.primary }
+        if cents < 0 { return colors.error }
+        return colors.textSecondary
+    }
+
+    @ViewBuilder
     var body: some View {
         switch family {
         case .accessoryCircular:
@@ -105,7 +139,7 @@ struct PaydayWidgetEntryView: View {
             HStack {
                 Text("This period")
                     .font(PaydayFont.caption)
-                    .foregroundStyle(PaydayColor.textSecondary)
+                    .foregroundStyle(colors.textSecondary)
                 Spacer()
                 Button(intent: OpenLogSheetIntent()) {
                     // In iOS 26's clear and tinted modes the system re-renders
@@ -117,19 +151,20 @@ struct PaydayWidgetEntryView: View {
                         .font(PaydayFont.iconSmall.weight(.bold))
                         .foregroundStyle(
                             renderingMode == .fullColor
-                                ? PaydayColor.onPrimary
-                                : PaydayColor.textPrimary
+                                ? colors.onPrimary
+                                : colors.textPrimary
                         )
                         .frame(width: 26, height: 26)
                         .background {
                             if renderingMode == .fullColor {
-                                Circle().fill(PaydayColor.primary)
+                                Circle().fill(colors.primary)
                             } else {
-                                Circle().strokeBorder(PaydayColor.textPrimary.opacity(0.35), lineWidth: 1)
+                                Circle().strokeBorder(colors.textPrimary.opacity(0.35), lineWidth: 1)
                             }
                         }
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Log shift")
             }
 
             Spacer(minLength: 0)
@@ -138,28 +173,31 @@ struct PaydayWidgetEntryView: View {
                 Text(Money.string(fromCents: entry.periodTotalCents))
                     .font(PaydayFont.displayCompact)
                     .monospacedDigit()
-                    .foregroundStyle(PaydayColor.textPrimary)
+                    .foregroundStyle(colors.textPrimary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.6)
 
                 if let paceDeltaCents = entry.paceDeltaCents {
-                    Text(RevealCopy.compactPaceLine(deltaCents: paceDeltaCents))
+                    Text(Money.directionalDeltaString(fromCents: paceDeltaCents))
                         .font(PaydayFont.caption2)
-                        .foregroundStyle(PaydayColor.textSecondary)
+                        .foregroundStyle(comparisonColor(for: paceDeltaCents))
+                        .monospacedDigit()
                         .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                        .accessibilityLabel(RevealCopy.paceLine(deltaCents: paceDeltaCents, periodCount: entry.pacePeriodCount))
                 } else {
                     Text(daysRemainingText)
                         .font(PaydayFont.caption2)
-                        .foregroundStyle(PaydayColor.textSecondary)
+                        .foregroundStyle(colors.textSecondary)
                 }
             } else {
                 Text("Open Payday to set up your schedule")
                     .font(PaydayFont.caption2)
-                    .foregroundStyle(PaydayColor.textSecondary)
+                    .foregroundStyle(colors.textSecondary)
             }
         }
         .padding(PaydaySpacing.xs)
-        .containerBackground(PaydayColor.background, for: .widget)
+        .containerBackground(colors.background, for: .widget)
     }
 }
 

@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 import SwiftData
 
@@ -6,13 +7,110 @@ private struct DaySelection: Identifiable {
     var id: Date { date }
 }
 
+/// One immutable render pass for Calendar. SwiftUI may ask a computed
+/// property again for every grid cell; collecting the month once avoids
+/// repeatedly filtering and grouping the full history during scrolling.
+struct CalendarMonthFacts {
+    let dailyTotals: [Date: Int]
+    let monthDailyTotals: [(day: Date, cents: Int)]
+    let monthTotalCents: Int
+    let displayedMonthMaxCents: Int
+    let daysWorkedCount: Int
+    let monthLoggedHours: Double
+    let gridDays: [Date]
+
+    init(
+        allEntries: [TipEntry],
+        displayedMonth: Date,
+        calendar: Calendar,
+        wageCentsPerHour: Int?,
+        firstWeekday: Int?
+    ) {
+        let monthEntries = allEntries.filter {
+            calendar.isDate($0.date, equalTo: displayedMonth, toGranularity: .month)
+        }
+        let tipsByDay = Dictionary(grouping: monthEntries) {
+            calendar.startOfDay(for: $0.date)
+        }.mapValues { entries in
+            entries.reduce(0) { $0 + $1.netCents }
+        }
+        let monthShiftGroups = ShiftDays.groupedByShift(
+            monthEntries,
+            shiftID: \.shiftID,
+            date: \.date,
+            period: \.shiftPeriod,
+            calendar: calendar
+        )
+
+        if let wageCentsPerHour {
+            let shiftsByDay = Dictionary(grouping: monthShiftGroups, by: \.day)
+            let wagesByDay = shiftsByDay.mapValues {
+                WageEstimate.centsSummedPerShift(
+                    shiftGroups: $0.map(\.items),
+                    wageCentsPerHour: wageCentsPerHour
+                )
+            }
+            dailyTotals = tipsByDay.merging(wagesByDay, uniquingKeysWith: +)
+        } else {
+            dailyTotals = tipsByDay
+        }
+
+        monthDailyTotals = dailyTotals.map { (day: $0.key, cents: $0.value) }
+        displayedMonthMaxCents = monthDailyTotals.map(\.cents).max() ?? 0
+        daysWorkedCount = monthDailyTotals.count
+        monthLoggedHours = WageEstimate.loggedHours(shiftGroups: monthShiftGroups.map(\.items))
+
+        let tipsCents = monthEntries.reduce(0) { $0 + $1.netCents }
+        let wages = PeriodIncome.wages(
+            entries: monthEntries,
+            wageCentsPerHour: wageCentsPerHour,
+            firstWeekday: firstWeekday
+        )
+        monthTotalCents = tipsCents + (wages?.totalCents ?? 0)
+
+        guard let monthInterval = calendar.dateInterval(of: .month, for: displayedMonth) else {
+            gridDays = []
+            return
+        }
+        let weekday = calendar.component(.weekday, from: monthInterval.start)
+        let leading = (weekday - calendar.firstWeekday + 7) % 7
+        guard let gridStart = calendar.date(byAdding: .day, value: -leading, to: monthInterval.start),
+              let daysInMonth = calendar.range(of: .day, in: .month, for: displayedMonth)?.count
+        else {
+            gridDays = []
+            return
+        }
+        let totalCells = leading + daysInMonth
+        let totalDays = totalCells + (7 - totalCells % 7) % 7
+        gridDays = (0..<totalDays).compactMap {
+            calendar.date(byAdding: .day, value: $0, to: gridStart)
+        }
+    }
+}
+
+private struct CalendarMonthFactsKey: Equatable {
+    let entriesRevision: Int
+    let displayedMonth: Date
+    let wageCentsPerHour: Int?
+    let firstWeekday: Int
+    let timeZoneIdentifier: String
+}
+
+private struct CalendarMonthFactsCache {
+    let key: CalendarMonthFactsKey
+    let facts: CalendarMonthFacts
+}
+
 struct CalendarView: View {
     @Environment(PayScheduleStore.self) private var scheduleStore
     @Environment(UserPreferencesStore.self) private var preferencesStore
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Query private var allEntries: [TipEntry]
 
     @State private var displayedMonth: Date = Calendar.current.startOfDay(for: .now)
     @State private var daySelection: DaySelection?
+    @State private var factsCache: CalendarMonthFactsCache?
+    @State private var dataRevision = 0
 
     /// Honors the user's chosen week-start; the grid layout and weekday header
     /// both key off calendar.firstWeekday, so setting it here is enough.
@@ -22,100 +120,22 @@ struct CalendarView: View {
         return c
     }
 
-    // Net everywhere — every income number in the app is net of any logged
-    // tip-out (see PRODUCT.md), and this grid used to be the one place still
-    // summing gross amountCents, silently disagreeing with the Dashboard and
-    // Period detail totals for the same days. Wages (base rate x each
-    // shift's canonical hours, never OT — that's a weekly figure) are added
-    // per day so the tiles and the heat normalization below both agree with
-    // the row/sheet totals for the same day.
-    private var dailyTotals: [Date: Int] {
-        let tipsByDay = Dictionary(grouping: allEntries, by: { calendar.startOfDay(for: $0.date) })
-            .mapValues { entries in entries.reduce(0) { $0 + $1.netCents } }
-        guard let wageCentsPerHour = preferencesStore.baseHourlyWageCents else { return tipsByDay }
-        let shifts = ShiftDays.groupedByShift(allEntries, shiftID: \.shiftID, date: \.date, period: \.shiftPeriod, calendar: calendar)
-        let shiftsByDay = Dictionary(grouping: shifts, by: \.day)
-        let wagesByDay = shiftsByDay.mapValues { WageEstimate.centsSummedPerShift(shiftGroups: $0.map(\.items), wageCentsPerHour: wageCentsPerHour) }
-        return tipsByDay.merging(wagesByDay, uniquingKeysWith: +)
-    }
-
-    // Wage-inclusive, matching the Dashboard/Period-detail/Periods-list
-    // totals: net tips + base wage + overtime. Overtime is computed per
-    // calendar workweek (see PeriodIncome), so a week straddling this
-    // month's boundary attributes its whole overtime to whichever month
-    // the filter below happens to include — an acceptable imprecision,
-    // not worth splitting a week's OT across two months for.
-    private var monthTotalCents: Int {
-        let monthEntries = allEntries.filter { calendar.isDate($0.date, equalTo: displayedMonth, toGranularity: .month) }
-        let tipsCents = monthEntries.reduce(0) { $0 + $1.netCents }
-        let wages = PeriodIncome.wages(entries: monthEntries, wageCentsPerHour: preferencesStore.baseHourlyWageCents, firstWeekday: scheduleStore.schedule?.firstWeekday)
-        return tipsCents + (wages?.totalCents ?? 0)
-    }
-
-    /// The displayed month's best day — the heatmap's full-intensity anchor,
-    /// so every month self-normalizes and always shows its own hottest day
-    /// at full heat.
-    private var displayedMonthMaxCents: Int {
-        monthDailyTotals.map(\.cents).max() ?? 0
-    }
-
-    /// This month's per-day all-in totals — the same figures the grid tiles
-    /// show — feeding both the heat normalization and the summary block
-    /// below, so "Best day" always agrees with the hottest tile on screen.
-    private var monthDailyTotals: [(day: Date, cents: Int)] {
-        dailyTotals
-            .filter { calendar.isDate($0.key, equalTo: displayedMonth, toGranularity: .month) }
-            .map { (day: $0.key, cents: $0.value) }
-    }
-
-    private var monthShiftGroups: [(day: Date, shiftID: UUID, items: [TipEntry])] {
-        let monthEntries = allEntries.filter { calendar.isDate($0.date, equalTo: displayedMonth, toGranularity: .month) }
-        return ShiftDays.groupedByShift(monthEntries, shiftID: \.shiftID, date: \.date, period: \.shiftPeriod, calendar: calendar)
-    }
-
-    private var daysWorkedCount: Int { monthDailyTotals.count }
-
-    /// Exact punch hours (never rounded to the quarter) for every shift this
-    /// month, via the same canonical-hours rule WageEstimate reads for the
-    /// wage figures folded into monthDailyTotals.
-    private var monthLoggedHours: Double {
-        WageEstimate.loggedHours(shiftGroups: monthShiftGroups.map(\.items))
-    }
-
-    private var bestDay: (day: Date, cents: Int)? {
-        monthDailyTotals.max { $0.cents < $1.cents }
-    }
-
-    /// Cents summed by weekday across every week in the displayed month —
-    /// the mini bar row's data, aligned to orderedWeekdaySymbols below via
-    /// the same firstWeekday rotation.
-    private var weekdayTotals: [Int: Int] {
-        var totals: [Int: Int] = [:]
-        for entry in monthDailyTotals {
-            let weekday = calendar.component(.weekday, from: entry.day)
-            totals[weekday, default: 0] += entry.cents
-        }
-        return totals
-    }
-
-    private var gridDays: [Date] {
-        guard let monthInterval = calendar.dateInterval(of: .month, for: displayedMonth) else { return [] }
-        let firstWeekday = calendar.component(.weekday, from: monthInterval.start)
-        let leading = (firstWeekday - calendar.firstWeekday + 7) % 7
-        guard let gridStart = calendar.date(byAdding: .day, value: -leading, to: monthInterval.start),
-              let daysInMonth = calendar.range(of: .day, in: .month, for: displayedMonth)?.count
-        else { return [] }
-        let totalCells = leading + daysInMonth
-        let trailing = (7 - totalCells % 7) % 7
-        let totalDays = totalCells + trailing
-        return (0..<totalDays).compactMap { calendar.date(byAdding: .day, value: $0, to: gridStart) }
-    }
-
     private var monthTitle: String {
         displayedMonth.formatted(.dateTime.month(.wide).year())
     }
 
     var body: some View {
+        let resolvedCalendar = calendar
+        let key = CalendarMonthFactsKey(
+            entriesRevision: dataRevision,
+            displayedMonth: displayedMonth,
+            wageCentsPerHour: preferencesStore.baseHourlyWageCents,
+            firstWeekday: resolvedCalendar.firstWeekday,
+            timeZoneIdentifier: resolvedCalendar.timeZone.identifier
+        )
+        let facts = factsCache?.key == key
+            ? factsCache!.facts
+            : makeFacts(calendar: resolvedCalendar)
         ScrollView {
             VStack(spacing: PaydaySpacing.p16) {
                 monthNavRow
@@ -127,14 +147,14 @@ struct CalendarView: View {
                 weekdayHeader
 
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 7), spacing: 6) {
-                    ForEach(gridDays, id: \.self) { day in
+                    ForEach(facts.gridDays, id: \.self) { day in
                         Button {
                             daySelection = DaySelection(date: day)
                         } label: {
                             DayCell(
                                 day: day,
-                                totalCents: dailyTotals[day],
-                                monthMaxCents: displayedMonthMaxCents,
+                                totalCents: facts.dailyTotals[day],
+                                monthMaxCents: facts.displayedMonthMaxCents,
                                 isCurrentMonth: calendar.isDate(day, equalTo: displayedMonth, toGranularity: .month),
                                 isToday: calendar.isDateInToday(day)
                             )
@@ -146,7 +166,7 @@ struct CalendarView: View {
                 .transition(.opacity)
                 .gesture(monthSwipeGesture)
 
-                monthSummarySection
+                monthSummarySection(facts)
             }
             .padding(.horizontal, PaydaySpacing.p16)
             .padding(.top, PaydaySpacing.p8)
@@ -154,7 +174,14 @@ struct CalendarView: View {
         .contentMargins(.bottom, 88, for: .scrollContent)
         .background(PaydayColor.background)
         .sheet(item: $daySelection) { selection in
-            DayDetailSheet(date: selection.date)
+            DayDetailSheet(date: selection.date).paydayAppearance()
+        }
+        .task(id: key) {
+            guard factsCache?.key != key else { return }
+            factsCache = CalendarMonthFactsCache(key: key, facts: facts)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: ModelContext.didSave)) { _ in
+            dataRevision &+= 1
         }
         #if DEBUG
         .onAppear {
@@ -163,6 +190,16 @@ struct CalendarView: View {
             }
         }
         #endif
+    }
+
+    private func makeFacts(calendar: Calendar) -> CalendarMonthFacts {
+        CalendarMonthFacts(
+            allEntries: allEntries,
+            displayedMonth: displayedMonth,
+            calendar: calendar,
+            wageCentsPerHour: preferencesStore.baseHourlyWageCents,
+            firstWeekday: scheduleStore.schedule?.firstWeekday
+        )
     }
 
     /// Horizontal drag on the grid pages the month, same as the chevrons —
@@ -174,7 +211,7 @@ struct CalendarView: View {
                 let horizontal = value.translation.width
                 let vertical = value.translation.height
                 guard abs(horizontal) > abs(vertical), abs(horizontal) > 50 else { return }
-                withAnimation(.easeOut(duration: PaydayAnimation.standardDuration)) {
+                withAnimation(reduceMotion ? nil : .easeOut(duration: PaydayAnimation.standardDuration)) {
                     shiftMonth(by: horizontal < 0 ? 1 : -1)
                 }
             }
@@ -200,7 +237,7 @@ struct CalendarView: View {
 
     private var weekdayHeader: some View {
         HStack {
-            ForEach(orderedWeekdaySymbols, id: \.self) { symbol in
+            ForEach(Array(orderedWeekdaySymbols.enumerated()), id: \.offset) { _, symbol in
                 Text(symbol)
                     .font(PaydayFont.caption)
                     .foregroundStyle(PaydayColor.textSecondary)
@@ -224,9 +261,9 @@ struct CalendarView: View {
     /// line when nothing's logged yet so an empty month never shows
     /// zeroed-out stats.
     @ViewBuilder
-    private var monthSummarySection: some View {
-        if monthDailyTotals.isEmpty {
-            Text("Nothing logged this month yet.")
+    private func monthSummarySection(_ facts: CalendarMonthFacts) -> some View {
+        if facts.monthDailyTotals.isEmpty {
+            Text("Nothing logged this month.")
                 .font(PaydayFont.footnote)
                 .foregroundStyle(PaydayColor.textSecondary)
                 .frame(maxWidth: .infinity, alignment: .center)
@@ -236,28 +273,25 @@ struct CalendarView: View {
                 Divider()
 
                 VStack(spacing: 2) {
-                    Text(Money.string(fromCents: monthTotalCents))
+                    Text(Money.string(fromCents: facts.monthTotalCents))
                         .font(PaydayFont.displayMedium)
                         .monospacedDigit()
                         .foregroundStyle(PaydayColor.textPrimary)
                         .contentTransition(.numericText())
-                        .animation(PaydayAnimation.premiumSpring, value: monthTotalCents)
+                        .animation(
+                            reduceMotion ? nil : PaydayAnimation.premiumSpring,
+                            value: facts.monthTotalCents
+                        )
                     Text("this month")
                         .font(PaydayFont.caption)
                         .foregroundStyle(PaydayColor.textSecondary)
                 }
 
                 VStack(spacing: 4) {
-                    Text("\(daysWorkedCount) day\(daysWorkedCount == 1 ? "" : "s") worked · \(WageEstimate.hoursLabel(monthLoggedHours))")
+                    Text("\(facts.daysWorkedCount) day\(facts.daysWorkedCount == 1 ? "" : "s") worked · \(WageEstimate.hoursLabel(facts.monthLoggedHours))")
                         .font(PaydayFont.subheadline)
                         .foregroundStyle(PaydayColor.textPrimary)
                         .monospacedDigit()
-                    if let bestDay {
-                        Text("Best day: \(bestDay.day.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day())) · \(Money.string(fromCents: bestDay.cents))")
-                            .font(PaydayFont.footnote)
-                            .foregroundStyle(PaydayColor.textSecondary)
-                            .monospacedDigit()
-                    }
                 }
 
                 // Weekday mini-bars deleted (Tyler, 2026-07-20): the heatmap
@@ -291,7 +325,7 @@ private struct DayCell: View {
     }
 
     private var hasTips: Bool {
-        (totalCents ?? 0) > 0
+        isCurrentMonth && (totalCents ?? 0) > 0
     }
 
     private var heatFraction: Double {
@@ -308,7 +342,6 @@ private struct DayCell: View {
                     .fontWeight(.medium)
                     .monospacedDigit()
                     .foregroundStyle(Self.heatTextColor(fraction: heatFraction, colorScheme: colorScheme))
-                    .opacity(0.85)
                     .lineLimit(1)
                     .minimumScaleFactor(0.6)
             }
@@ -327,7 +360,6 @@ private struct DayCell: View {
                     .strokeBorder(PaydayColor.primary, lineWidth: 2)
             }
         }
-        .opacity(isCurrentMonth ? 1 : 0.3)
         .contentShape(Rectangle())
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityLabel)
@@ -337,7 +369,11 @@ private struct DayCell: View {
         Text("\(dayNumber)")
             .font(.system(.callout, design: .rounded))
             .fontWeight(hasTips || isToday ? .bold : .regular)
-            .foregroundStyle(hasTips ? Self.heatTextColor(fraction: heatFraction, colorScheme: colorScheme) : PaydayColor.textSecondary)
+            .foregroundStyle(
+                hasTips
+                    ? Self.heatTextColor(fraction: heatFraction, colorScheme: colorScheme)
+                    : (isCurrentMonth ? PaydayColor.textSecondary : PaydayColor.textTertiary)
+            )
     }
 
     private var accessibilityLabel: String {
@@ -379,20 +415,27 @@ private struct DayCell: View {
 
     /// Contrast is computed against the fill as it actually composites —
     /// PaydayColor.primary at `fillOpacity`, blended over this mode's page
-    /// background (PaydayColor.background) — rather than assumed, since the
-    /// same opacity reads very differently over alabaster than over
-    /// obsidian. Same relative-luminance approximation (ITU-R BT.601
-    /// weights) the calendar has used since the temperature-walk days.
+    /// background (PaydayColor.background) — rather than assumed. Choose the
+    /// higher-contrast black/white foreground using WCAG's gamma-correct
+    /// relative luminance, so every point in the heat ramp stays legible.
     private static func heatTextColor(fraction: Double, colorScheme: ColorScheme) -> Color {
         let alpha = fillOpacity(fraction: fraction)
         let bg = backgroundComponents(for: colorScheme)
         let fgR = 0.0
-        let fgG = 0.7216 // 184/255
-        let fgB = 0.2471 // 63/255
+        let fgG = colorScheme == .dark ? 0.7216 : 0.5216 // #00B83F / #00852F
+        let fgB = colorScheme == .dark ? 0.2471 : 0.1843
         let r = fgR * alpha + bg.r * (1 - alpha)
         let g = fgG * alpha + bg.g * (1 - alpha)
         let b = fgB * alpha + bg.b * (1 - alpha)
-        let luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b
-        return luminance > 0.55 ? PaydayColor.textPrimary : .white
+        let luminance = 0.2126 * linearized(r) + 0.7152 * linearized(g) + 0.0722 * linearized(b)
+        let blackContrast = (luminance + 0.05) / 0.05
+        let whiteContrast = 1.05 / (luminance + 0.05)
+        return blackContrast >= whiteContrast ? .black : .white
+    }
+
+    private static func linearized(_ component: Double) -> Double {
+        component <= 0.04045
+            ? component / 12.92
+            : pow((component + 0.055) / 1.055, 2.4)
     }
 }

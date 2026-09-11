@@ -30,6 +30,7 @@ extension PaydayWidgetEntryView {
                     Text(Money.wholeDollarString(fromCents: entry.periodTotalCents))
                         .font(.system(size: 15, weight: .bold, design: .rounded))
                         .minimumScaleFactor(0.7)
+                        .lineLimit(1)
                 }
             } else {
                 Image(systemName: "banknote")
@@ -46,9 +47,14 @@ extension PaydayWidgetEntryView {
             if entry.hasSchedule {
                 Text(Money.string(fromCents: entry.periodTotalCents))
                     .font(.system(size: 16, weight: .bold, design: .rounded))
-                Text(entry.paceDeltaCents.map(RevealCopy.paceLine) ?? daysRemainingText)
-                    .font(.system(size: 11))
                     .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                Text(entry.paceDeltaCents.map { Money.directionalDeltaString(fromCents: $0) } ?? daysRemainingText)
+                    .font(.system(size: 11))
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                    .accessibilityLabel(entry.paceDeltaCents.map { RevealCopy.paceLine(deltaCents: $0, periodCount: entry.pacePeriodCount) } ?? daysRemainingText)
             } else {
                 Text("Set up Payday to see your total")
                     .font(.system(size: 11))

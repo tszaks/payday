@@ -59,13 +59,18 @@ struct TipRecord: Sendable, Hashable {
     /// pattern into it. Never used for arithmetic.
     let note: String?
 
-    /// Gross minus any tip-out — "what you walked with." Every analytical
-    /// sum in this engine (nightly totals, pace, insights totals) uses
-    /// this, never amountCents directly, so a logged tip-out always nets
-    /// out automatically wherever money gets added up. Tip percent is the
-    /// one deliberate exception — it's measured against gross, matching
-    /// how tip percent is measured everywhere in the industry.
-    var netCents: Int { amountCents - (tipOutCents ?? 0) }
+    var voluntaryTipCents: Int {
+        receiptMetrics?.voluntaryTipsCents(fromStoredAmount: amountCents) ?? amountCents
+    }
+
+    /// This record's normalized voluntary tips plus employee gratuity/fees,
+    /// minus canonical tip-out. Legacy receipt amounts are normalized before
+    /// the categories are recombined, so their total stays unchanged.
+    var netCents: Int {
+        voluntaryTipCents
+            + (receiptMetrics?.employeeGratuityFeesCents ?? 0)
+            - (tipOutCents ?? 0)
+    }
 
     init(date: Date, amountCents: Int, kind: TipKind, isDouble: Bool, recordedAt: Date? = nil, hoursWorked: Double? = nil, tipOutCents: Int? = nil, salesCents: Int? = nil, shiftPeriod: ShiftPeriod? = nil, shiftID: UUID? = nil, clockIn: Date? = nil, clockOut: Date? = nil, serverCount: Int? = nil, receiptMetrics: ShiftReceiptMetrics? = nil, note: String? = nil) {
         self.date = date
@@ -158,9 +163,22 @@ private struct ShiftFacts {
     let serverCount: Int?
     let receiptMetrics: ShiftReceiptMetrics?
 
-    /// Gross minus the one canonical tip-out for the shift — see the type
-    /// doc above for why this is never a per-record sum.
-    var netCents: Int { grossCents - (tipOutCents ?? 0) }
+    /// Toast mandatory gratuity/fees paid to the employee, separate from
+    /// voluntary tips and resolved from the one canonical receipt payload.
+    var gratuityFeesCents: Int { receiptMetrics?.employeeGratuityFeesCents ?? 0 }
+
+    /// Voluntary tips after the one canonical tip-out. Kept separate for
+    /// Toast payroll reconciliation; operational tip analytics use netCents.
+    var netVoluntaryTipCents: Int { grossCents - (tipOutCents ?? 0) }
+
+    /// What the guest effectively tipped before tip-out: optional extra tips
+    /// plus mandatory gratuity. Auto-grat is kept out of sales but included
+    /// here because it usually replaces the guest's voluntary tip.
+    var grossTipEarningsCents: Int { grossCents + gratuityFeesCents }
+
+    /// Total non-wage shift earnings: voluntary tips + mandatory gratuity and
+    /// employee fees - tip-out. Pace, totals, and recommendations use this.
+    var netCents: Int { netVoluntaryTipCents + gratuityFeesCents }
 }
 
 /// A small pure module computing pace, records, baselines, and the post-log
@@ -172,11 +190,12 @@ struct StatsEngine {
     /// The reveal pipeline's ONLY wage-aware surface (Tyler's ruling,
     /// 2026-07-27): "for a shift, we don't differentiate [tips vs wages] —
     /// it's 1 amount." When set, revealComparison's own record/average/
-    /// slowest checks price each shift at net tips + that shift's wages
-    /// instead of net tips alone. Nil (the default) reproduces every
-    /// existing behavior exactly — pace, charts, projections, Insights,
-    /// Moves, $/hr, and tip percent never read this and stay tips-only
-    /// regardless of what's passed here.
+    /// slowest checks price each shift at non-wage earnings + that shift's
+    /// wages instead of non-wage earnings alone. Pace, charts, projections,
+    /// Insights, and Moves never read this property; gratuity inclusion is
+    /// handled independently in ShiftFacts. Payroll categories remain
+    /// separate even though operational tip analytics combine voluntary tips
+    /// and auto-grat.
     private let wageCentsPerHour: Int?
 
     init(records: [TipRecord], calendar: Calendar = .current, wageCentsPerHour: Int? = nil) {
@@ -205,8 +224,8 @@ struct StatsEngine {
                 return ShiftFacts(
                     shiftID: shiftID,
                     date: calendar.startOfDay(for: shiftRecords.map(\.date).min() ?? .now),
-                    grossCents: shiftRecords.reduce(0) { $0 + $1.amountCents },
-                    cashCents: shiftRecords.filter { $0.kind == .cash }.reduce(0) { $0 + $1.amountCents },
+                    grossCents: shiftRecords.reduce(0) { $0 + $1.voluntaryTipCents },
+                    cashCents: shiftRecords.filter { $0.kind == .cash }.reduce(0) { $0 + $1.voluntaryTipCents },
                     tipOutCents: credit?.tipOutCents ?? cash?.tipOutCents,
                     hoursWorked: credit?.hoursWorked ?? cash?.hoursWorked,
                     salesCents: credit?.salesCents ?? cash?.salesCents,
@@ -347,15 +366,15 @@ struct StatsEngine {
     // MARK: Tip percent
 
     /// Every night with BOTH a logged total and logged sales — deliberately
-    /// GROSS (nightFacts.grossCents, not netCents), matching how tip
-    /// percent is always measured: against what the customer actually
-    /// tipped, not what a server walked out with after tipping out. Sales
+    /// GROSS effective tip earnings, matching how tip percent is measured:
+    /// voluntary tips plus any auto-grat the guest paid, not what a server
+    /// walked out with after tipping out. Sales
     /// resolve through nightFacts (credit-preferred, never summed).
     private func nightlySalesRates(excluding excludedDate: Date? = nil) -> [(date: Date, grossCents: Int, salesCents: Int)] {
         shiftFacts(from: records).compactMap { shift in
             if let excludedDate, calendar.isDate(shift.date, inSameDayAs: excludedDate) { return nil }
             guard let sales = shift.salesCents, sales > 0 else { return nil }
-            return (date: shift.date, grossCents: shift.grossCents, salesCents: sales)
+            return (date: shift.date, grossCents: shift.grossTipEarningsCents, salesCents: sales)
         }
     }
 
@@ -449,11 +468,11 @@ struct StatsEngine {
 
     // MARK: Reveal
 
-    /// A shift's reveal-basis cents: net tips, plus that shift's wages when
+    /// A shift's reveal-basis cents: non-wage earnings, plus that shift's wages when
     /// BOTH this engine's wageCentsPerHour and the shift's own hoursWorked
     /// are known. Falls back to plain netCents whenever either is missing —
     /// which is also every value this returns when wageCentsPerHour is nil,
-    /// so the fork below is byte-identical to the tips-only path by
+    /// so the fork below is byte-identical to the wage-exclusive path by
     /// default. Used ONLY by revealComparison's own helpers; every other
     /// caller in this file reads shiftFacts/netCents directly and never
     /// sees a wage.
@@ -522,9 +541,9 @@ struct StatsEngine {
     /// notably slow night, then the everyday weekday-average comparison.
     /// Stacks an independent $/hr clause underneath when hours were logged.
     /// `cents` must be the SAME basis this engine's history is compared
-    /// on: pass the shift's displayed total — net tips, plus wages when a
+    /// on: pass the shift's displayed total — non-wage earnings, plus wages when a
     /// wage is set on this engine (Tyler's ruling, 2026-07-27) — never a
-    /// tips-only figure alongside a wage-aware engine or vice versa.
+    /// wage-exclusive figure alongside a wage-aware engine or vice versa.
     func reveal(forNightAt date: Date, cents: Int, period: PayPeriod, hoursWorked: Double? = nil, shiftID: UUID? = nil) -> RevealResult {
         let (comparison, isRecord) = revealComparison(forNightAt: date, cents: cents, period: period, shiftID: shiftID)
         return RevealResult(
@@ -594,11 +613,106 @@ struct StatsEngine {
 
     /// "$120 ahead of last period at this point" — nil when there's no
     /// prior period yet to compare against (a brand-new schedule).
+    ///
+    /// Superseded by `paceComparison`, which medians several periods instead
+    /// of racing exactly one. Kept because it is the honest single-period
+    /// answer and `paceComparison` still falls back to this shape when only
+    /// one prior period has data.
     func paceDelta(currentPeriod: PayPeriod, priorPeriod: PayPeriod?, asOf date: Date) -> Int? {
         guard let priorPeriod else { return nil }
         let currentTotal = periodToDateTotal(period: currentPeriod, asOf: date)
         let priorComparable = priorPeriodComparableTotal(currentPeriod: currentPeriod, priorPeriod: priorPeriod, asOf: date)
         return currentTotal - priorComparable
+    }
+
+    /// How many completed periods the "usual pace" baseline looks back over.
+    /// Six biweekly periods is about three months: long enough that one
+    /// monster Saturday or one week off stops moving the number, short
+    /// enough that summer patio money isn't the baseline for February.
+    static let paceLookbackPeriods = 6
+
+    /// Below this many periods the copy self-discloses how thin the baseline
+    /// still is, same honesty rule the weekday average follows.
+    static let minimumPeriodsForCleanPace = 4
+
+    /// Where this period stands against the usual, not against whichever
+    /// single period happened to come before it.
+    struct PaceComparison: Equatable, Sendable {
+        /// Current period-to-date minus the baseline. Positive is ahead.
+        let deltaCents: Int
+        /// The median itself, kept so callers can show the baseline.
+        let baselineCents: Int
+        /// How many prior periods actually contributed. 1 means this is
+        /// still a single-period comparison and the copy must say so.
+        let periodCount: Int
+    }
+
+    /// The median of what this person had earned at this same point in each
+    /// of the last `paceLookbackPeriods` completed periods.
+    ///
+    /// Three deliberate choices:
+    ///
+    /// - **Median, not mean.** Tip income is right-skewed. One New Year's Eve
+    ///   would sit in a mean for three months, and one week of vacation would
+    ///   drag it the other way. The median shrugs off both.
+    /// - **Indexed by fraction of the period elapsed**, not by absolute day
+    ///   number. Twice-monthly and monthly periods genuinely differ in length,
+    ///   and comparing day 15 against a 13-day period's grand total would
+    ///   quietly inflate the baseline.
+    /// - **Periods with nothing logged are skipped, not counted as $0.** An
+    ///   empty period is almost always "wasn't using the app yet," and
+    ///   treating that as a zero-earning period would make everyone look
+    ///   permanently ahead.
+    ///
+    /// Nil when no prior period has a single record — a brand-new user has
+    /// nothing honest to be measured against.
+    func usualPaceBaseline(currentPeriod: PayPeriod, priorPeriods: [PayPeriod], asOf date: Date) -> (cents: Int, periodCount: Int)? {
+        let elapsed = calendar.dateComponents([.day], from: currentPeriod.start, to: calendar.startOfDay(for: date)).day ?? 0
+        let currentLength = (calendar.dateComponents([.day], from: currentPeriod.start, to: currentPeriod.end).day ?? 0) + 1
+        guard currentLength > 0 else { return nil }
+        // Day 1 maps to 0.0 and the final day to 1.0, so a same-length prior
+        // period resolves to exactly the same day index the old
+        // single-period comparison used. A one-day period is all of itself.
+        let span = max(currentLength - 1, 1)
+        let fraction = min(max(Double(elapsed) / Double(span), 0), 1)
+
+        var samples: [Int] = []
+        for period in priorPeriods {
+            let periodRecords = records.filter { $0.date >= period.start && $0.date <= period.end }
+            // Nothing logged at all: not a $0 period, just a period this
+            // person wasn't tracking. Skipping keeps the baseline honest.
+            guard !periodRecords.isEmpty else { continue }
+            let length = (calendar.dateComponents([.day], from: period.start, to: period.end).day ?? 0) + 1
+            let index = Int((fraction * Double(max(length - 1, 0))).rounded())
+            guard let cutoff = calendar.date(byAdding: .day, value: index, to: period.start) else { continue }
+            let cappedCutoff = min(cutoff, period.end)
+            samples.append(periodRecords.filter { $0.date <= cappedCutoff }.reduce(0) { $0 + $1.netCents })
+        }
+
+        guard !samples.isEmpty else { return nil }
+        return (Self.median(samples), samples.count)
+    }
+
+    /// Current period-to-date against the usual-pace baseline. The number the
+    /// Dashboard hero and the widget both render.
+    func paceComparison(currentPeriod: PayPeriod, priorPeriods: [PayPeriod], asOf date: Date) -> PaceComparison? {
+        guard let baseline = usualPaceBaseline(currentPeriod: currentPeriod, priorPeriods: priorPeriods, asOf: date) else { return nil }
+        let currentTotal = periodToDateTotal(period: currentPeriod, asOf: date)
+        return PaceComparison(
+            deltaCents: currentTotal - baseline.cents,
+            baselineCents: baseline.cents,
+            periodCount: baseline.periodCount
+        )
+    }
+
+    /// Even counts average the middle two, so a four-period baseline doesn't
+    /// arbitrarily prefer the lower of them.
+    static func median(_ values: [Int]) -> Int {
+        precondition(!values.isEmpty)
+        let sorted = values.sorted()
+        let mid = sorted.count / 2
+        if sorted.count % 2 == 1 { return sorted[mid] }
+        return Int((Double(sorted[mid - 1]) + Double(sorted[mid])) / 2)
     }
 
     // MARK: Work rhythm
@@ -859,7 +973,7 @@ struct StatsEngine {
 
         let totalGuests = guestShifts.reduce(0) { $0 + ($1.receiptMetrics?.guestCount ?? 0) }
         let guestNetSales = guestShifts.reduce(0) { $0 + ($1.receiptMetrics?.netSalesCents ?? 0) }
-        let guestGrossTips = guestShifts.reduce(0) { $0 + $1.grossCents }
+        let guestGrossTips = guestShifts.reduce(0) { $0 + $1.grossTipEarningsCents }
         let guestNetTips = guestShifts.reduce(0) { $0 + $1.netCents }
 
         let totalTables = tableShifts.reduce(0) { $0 + ($1.receiptMetrics?.tableCount ?? 0) }
@@ -897,11 +1011,11 @@ struct StatsEngine {
             : nil
 
         let tipOutCandidates = shifts.filter {
-            $0.receiptMetrics != nil && $0.tipOutCents != nil && $0.grossCents > 0
+            $0.receiptMetrics != nil && $0.tipOutCents != nil && $0.grossTipEarningsCents > 0
         }
         let tipOutPercent: Double? = tipOutCandidates.count >= Self.minimumShiftsForReceiptPerformance
             ? Double(tipOutCandidates.reduce(0) { $0 + ($1.tipOutCents ?? 0) })
-                / Double(tipOutCandidates.reduce(0) { $0 + $1.grossCents }) * 100
+                / Double(tipOutCandidates.reduce(0) { $0 + $1.grossTipEarningsCents }) * 100
             : nil
 
         let categoryShifts = shifts.filter {
@@ -1009,12 +1123,12 @@ struct StatsEngine {
     }
 
     /// Same recent window as the rest of insightsFacts, reading sales
-    /// through nightFacts — deliberately GROSS (grossCents, not netCents),
+    /// through nightFacts — deliberately gross effective tip earnings,
     /// same rule as tipPercent() above.
     private func salesFacts(from shifts: [ShiftFacts]) -> SalesFacts? {
         let salesNights = shifts.compactMap { shift -> (date: Date, grossCents: Int, salesCents: Int)? in
             guard let sales = shift.salesCents, sales > 0 else { return nil }
-            return (date: shift.date, grossCents: shift.grossCents, salesCents: sales)
+            return (date: shift.date, grossCents: shift.grossTipEarningsCents, salesCents: sales)
         }
         guard salesNights.count >= Self.minimumNightsForSales, let overall = blendedTipPercent(salesNights) else { return nil }
 
@@ -1148,9 +1262,17 @@ struct StatsEngine {
     // MARK: Moves
 
     private enum MoveThresholds {
-        /// Below this, silence beats weak advice — the whole point of the
-        /// materiality gate.
-        static let minimumAnnualImpactCents = 10000
+        /// A pattern has to separate its two sides by at least this many
+        /// pooled standard deviations to be worth stating at all. Same
+        /// 0.6 calibration the per-move variance guards already used
+        /// (see varianceGuardFactor) — this just applies it to every move
+        /// uniformly, and it is now the ONLY materiality gate.
+        ///
+        /// It replaced a minimum-annual-dollars gate, which suppressed
+        /// well-evidenced patterns purely for not being lucrative. A page
+        /// that reports what the data shows has no business hiding a
+        /// reliable finding because acting on it wouldn't pay much.
+        static let minimumEffectSize = 0.6
         static let minimumWeekdayDeltaCents = 1000
         /// Raised from the old flat $10 floor: weekdaySwapMove's variance
         /// guard uses this as the absolute minimum regardless of spread.
@@ -1165,11 +1287,6 @@ struct StatsEngine {
         /// night count against this floor before firing.
         static let minimumWeekdayNightsForCitedMove = 2
         static let lapsedWindowDays = 21
-        /// Every weekday-keyed move (swap, lapsed winner, rate leader)
-        /// already requires >= 3 nights of history for that weekday before
-        /// firing — treating that as "roughly weekly" is a fair, stated
-        /// extrapolation, not a wild guess.
-        static let assumedWeeksPerYear = 52.0
         /// Deliberate calibration, not derived from anything: a delta has
         /// to clear roughly 0.6x the pooled per-night spread (loosely,
         /// "more than half a standard deviation apart") before a weekday
@@ -1177,13 +1294,13 @@ struct StatsEngine {
         /// Moves feels too eager or too quiet in practice.
         static let varianceGuardFactor = 0.6
         /// A Move's comparison can be real (the 3-night floor above lets it
-        /// through) while a year-long dollar projection off it still
-        /// overclaims - 23 Saturdays against 3 Tuesdays is a fair thing to
-        /// notice, not a fair thing to annualize into a five-figure number.
-        /// Both sides of a Move's comparison need this many qualifying
-        /// shifts before it states its annualized figure; thinner than
-        /// this on either side and it hedges instead (see annualizedClause).
-        static let minimumShiftsForAnnualizedImpact = 8
+        /// through) while still resting on too little history to describe
+        /// as settled - 23 Saturdays against 3 Tuesdays is a fair thing to
+        /// notice, not a fair thing to call a established pattern. Both
+        /// sides need this many qualifying shifts before the move states
+        /// its consistency clause; thinner than this on either side and it
+        /// names the thin side instead (see consistencyClause).
+        static let minimumShiftsForConfidentPattern = 8
     }
 
     /// One side of an annualized Move's comparison - how many qualifying
@@ -1195,36 +1312,96 @@ struct StatsEngine {
         let plural: String
     }
 
-    /// Every annualizing Move's closing clause routes through here. States
-    /// the confident sentence only when BOTH sides of the comparison clear
-    /// MoveThresholds.minimumShiftsForAnnualizedImpact; otherwise returns a
-    /// plain hedge naming whichever side is thinner, with no dollar figure
-    /// anywhere in it - the comparison itself may still be real (that's
-    /// what each move's own 2-3 night gate already established), but a
-    /// year-long projection off a handful of shifts is not.
-    private func annualizedClause(_ sentence: @autoclosure () -> String, _ sideA: MoveComparisonSide, _ sideB: MoveComparisonSide) -> String {
-        guard sideA.count >= MoveThresholds.minimumShiftsForAnnualizedImpact,
-              sideB.count >= MoveThresholds.minimumShiftsForAnnualizedImpact
+    /// Every Move's closing clause routes through here: how much history
+    /// the observation rests on, and nothing else.
+    ///
+    /// This replaced an annualized-dollars clause ("over a year, that gap
+    /// is worth about $4,300"). That sentence was a counterfactual, and a
+    /// counterfactual exists only to argue for changing behavior — it was
+    /// the single most prescriptive thing on the page, and also its most
+    /// falsifiable claim, since it assumed 52 identical weeks, no
+    /// seasonality, and a causal rather than compositional gap.
+    ///
+    /// Consistency is the useful neutral fact in its place: it answers
+    /// "is this real or is it noise," which is the question an analysis
+    /// should answer, where the dollar projection answered "what should I
+    /// do," which is the reader's call and not this page's.
+    private func consistencyClause(_ sideA: MoveComparisonSide, _ sideB: MoveComparisonSide) -> String {
+        func phrase(_ side: MoveComparisonSide) -> String {
+            NumberWords.phrase(side.count, singular: side.singular, plural: side.plural)
+        }
+        guard sideA.count >= MoveThresholds.minimumShiftsForConfidentPattern,
+              sideB.count >= MoveThresholds.minimumShiftsForConfidentPattern
         else {
             let thin = sideA.count <= sideB.count ? sideA : sideB
             // Spelled, not "Only 5 5PM starts" — the thin side's noun is often a
             // clock time, so a digit count here butts straight against it.
-            return "Only \(NumberWords.phrase(thin.count, singular: thin.singular, plural: thin.plural)) to compare against so far."
+            return "Only \(phrase(thin)) to compare against so far."
         }
-        return sentence()
+        return "That's held across \(phrase(sideA)) and \(phrase(sideB))."
     }
 
-    /// Up to 3 dollar-quantified, ranked observations - deterministic and
-    /// pure like the rest of this file, no model, no network. Silence over
-    /// weak advice: an empty array is a valid, honest answer when nothing
-    /// clears the materiality bar.
+    /// |delta| expressed in pooled standard deviations — every Move's
+    /// ranking key and its one materiality gate.
     ///
-    /// Ranks by annualImpactCents first, THEN de-duplicates by weekday
-    /// subject (see MoveCandidate) so the same weekday can't show up
-    /// twice wearing two different Moves - "Saturday Beats Tuesday" and
-    /// "Saturday Pays Best Per Hour" stacked is the same finding said
-    /// twice, not two findings. The higher-ranked Move for a subject wins;
-    /// the cap of 3 is applied last, after dedup.
+    /// A pooled SD of zero has two completely different causes and they must
+    /// not be collapsed:
+    ///
+    /// - No degrees of freedom (one observation per side). There is no
+    ///   evidence of strength either way, so this returns 0 and the move
+    ///   gets dropped rather than letting an undefined ratio rank first.
+    /// - Both groups are internally identical but differ from each other.
+    ///   That is PERFECT separation — the strongest evidence possible, not
+    ///   the weakest. Someone who logs the same round number every Friday
+    ///   and a different round number every Monday produces exactly this,
+    ///   and dropping their move would be backwards.
+    private func effectSize(delta: Double, pooledStandardDeviation: Double, countA: Int, countB: Int) -> Double {
+        // Mirrors pooledStandardDeviation*'s own degrees-of-freedom guard,
+        // which is what makes it return 0 in the first case.
+        guard countA + countB > 2 else { return 0 }
+        guard delta != 0 else { return 0 }
+        guard pooledStandardDeviation > 0 else { return Self.perfectSeparationEffectSize }
+        return abs(delta) / pooledStandardDeviation
+    }
+
+    /// Stand-in effect size for two groups with zero internal spread that
+    /// still differ — the ratio is unbounded, so it needs a finite value to
+    /// sort with. Far above minimumEffectSize, so these always qualify;
+    /// ties between two perfectly separated moves fall through to
+    /// supportingShiftCount, which is the right tiebreak anyway.
+    private static let perfectSeparationEffectSize = 10.0
+
+    /// Pooled SD over a plain list of Doubles — the percent-valued twin of
+    /// pooledStandardDeviationCents, used by tipPercentSignalMove where the
+    /// unit is percentage points rather than cents.
+    private func pooledStandardDeviation(_ groupA: [Double], _ groupB: [Double]) -> Double {
+        func sumSquaredDeviations(_ values: [Double]) -> Double {
+            guard !values.isEmpty else { return 0 }
+            let mean = values.reduce(0, +) / Double(values.count)
+            return values.reduce(0.0) { $0 + ($1 - mean) * ($1 - mean) }
+        }
+        let degreesOfFreedom = groupA.count + groupB.count - 2
+        guard degreesOfFreedom > 0 else { return 0 }
+        return ((sumSquaredDeviations(groupA) + sumSquaredDeviations(groupB)) / Double(degreesOfFreedom)).squareRoot()
+    }
+
+    /// Up to 3 quantified OBSERVATIONS - deterministic and pure like the
+    /// rest of this file, no model, no network. Silence over weak claims:
+    /// an empty array is a valid, honest answer when nothing clears the
+    /// evidence bar.
+    ///
+    /// These describe what the data shows. They do not recommend, rank by
+    /// what is worth acting on, or tell the reader what to change - see
+    /// consistencyClause for why the annualized-dollars framing was
+    /// removed, and Move.effectSize for why ranking no longer reads
+    /// dollar upside.
+    ///
+    /// Ranks by effectSize first, THEN de-duplicates by weekday subject
+    /// (see MoveCandidate) so the same weekday can't show up twice wearing
+    /// two different Moves - "Saturdays Outearn Tuesdays" and "Saturdays
+    /// Lead Per Hour" stacked is the same finding said twice, not two
+    /// findings. The stronger Move for a subject wins; the cap of 3 is
+    /// applied last, after dedup.
     func moves(referenceDate: Date = .now) -> [Move] {
         let candidates = [
             weekdaySwapMove(),
@@ -1235,8 +1412,13 @@ struct StatsEngine {
             startTimeLeaderMove()
         ].compactMap { $0 }
         let ranked = candidates
-            .filter { $0.move.annualImpactCents >= MoveThresholds.minimumAnnualImpactCents }
-            .sorted { $0.move.annualImpactCents > $1.move.annualImpactCents }
+            .filter { $0.move.effectSize >= MoveThresholds.minimumEffectSize }
+            .sorted {
+                guard $0.move.effectSize != $1.move.effectSize else {
+                    return $0.move.supportingShiftCount > $1.move.supportingShiftCount
+                }
+                return $0.move.effectSize > $1.move.effectSize
+            }
 
         var seenSubjects = Set<Int>()
         var deduped: [Move] = []
@@ -1283,17 +1465,16 @@ struct StatsEngine {
 
         let bestName = Calendar.current.weekdaySymbols[best.weekday - 1]
         let worstName = Calendar.current.weekdaySymbols[worst.weekday - 1]
-        let annualImpact = Int(Double(deltaCents) * MoveThresholds.assumedWeeksPerYear)
-        let closingClause = annualizedClause(
-            "Over a year of regular shifts, that gap is worth about \(Money.wholeDollarString(fromCents: annualImpact)).",
+        let closingClause = consistencyClause(
             MoveComparisonSide(count: best.count, singular: bestName, plural: "\(bestName)s"),
             MoveComparisonSide(count: worst.count, singular: worstName, plural: "\(worstName)s")
         )
         let move = Move(
             id: "weekdaySwap",
-            title: "\(bestName) Beats \(worstName)",
+            title: "\(bestName)s Outearn \(worstName)s",
             body: "\(bestName)s average \(Money.string(fromCents: Int(best.avg.rounded()))) across \(NumberWords.spell(best.count)) \(bestName)s, against \(Money.string(fromCents: Int(worst.avg.rounded()))) across \(NumberWords.spell(worst.count)) \(worstName)s. \(closingClause)",
-            annualImpactCents: annualImpact
+            effectSize: effectSize(delta: Double(deltaCents), pooledStandardDeviation: pooledSD, countA: best.count, countB: worst.count),
+            supportingShiftCount: min(best.count, worst.count)
         )
         return MoveCandidate(move: move, weekdaySubject: best.weekday)
     }
@@ -1327,18 +1508,27 @@ struct StatsEngine {
         let deltaCents = Int((best.avg - overallAvg).rounded())
         guard deltaCents >= MoveThresholds.minimumWeekdayDeltaCents else { return nil }
 
+        // Compare against the OTHER weekdays' shifts, not against all shifts
+        // including this weekday's own — pooling a group against a superset
+        // containing it understates the spread between them.
+        let otherNightCents = allNights
+            .filter { calendar.component(.weekday, from: $0.date) != best.weekday }
+            .map(\.cents)
+        guard !otherNightCents.isEmpty else { return nil }
+        let otherAvg = Double(otherNightCents.reduce(0, +)) / Double(otherNightCents.count)
+        let pooledSD = pooledStandardDeviationCents(best.nightCents, otherNightCents)
+
         let weekdayName = Calendar.current.weekdaySymbols[best.weekday - 1]
-        let annualImpact = Int(Double(deltaCents) * MoveThresholds.assumedWeeksPerYear)
-        let closingClause = annualizedClause(
-            "Getting back to a regular \(weekdayName) is worth about \(Money.wholeDollarString(fromCents: annualImpact)) a year.",
+        let closingClause = consistencyClause(
             MoveComparisonSide(count: best.count, singular: weekdayName, plural: "\(weekdayName)s"),
-            MoveComparisonSide(count: allNights.count, singular: "night", plural: "nights")
+            MoveComparisonSide(count: otherNightCents.count, singular: "other shift", plural: "other shifts")
         )
         let move = Move(
             id: "lapsedWinner",
-            title: "\(weekdayName) Has Gone Quiet",
-            body: "You haven't worked a \(weekdayName) in a few weeks, but it's one of your best - averaging \(Money.string(fromCents: Int(best.avg.rounded()))) a day across \(NumberWords.spell(best.count)) \(weekdayName)s. \(closingClause)",
-            annualImpactCents: annualImpact
+            title: "Fewer \(weekdayName)s Lately",
+            body: "You haven't worked a \(weekdayName) in a few weeks. \(weekdayName)s average \(Money.string(fromCents: Int(best.avg.rounded()))) a day across \(NumberWords.spell(best.count)) \(weekdayName)s, against \(Money.string(fromCents: Int(otherAvg.rounded()))) on your other shifts. \(closingClause)",
+            effectSize: effectSize(delta: best.avg - otherAvg, pooledStandardDeviation: pooledSD, countA: best.count, countB: otherNightCents.count),
+            supportingShiftCount: min(best.count, otherNightCents.count)
         )
         return MoveCandidate(move: move, weekdaySubject: best.weekday)
     }
@@ -1356,29 +1546,27 @@ struct StatsEngine {
         let deltaPerHourCents = Int(((doubleRate - soloRate) * 100).rounded())
         guard abs(deltaPerHourCents) >= MoveThresholds.minimumRateDeltaCents else { return nil }
 
-        // A double is a calendar DAY with 2+ shifts, so count and project by
-        // double-days, not by the individual closeouts that make them up.
-        // Doubles don't land on a fixed weekly cadence, so extrapolate from
-        // how often they've actually happened over the tenure so far.
+        // A double is a calendar DAY with 2+ shifts, so count by double-days,
+        // not by the individual closeouts that make them up.
         let doubleDayCount = Set(doubleRates.map(\.date)).count
-        guard let earliestNight = nightlyTotals().first?.date, doubleDayCount > 0 else { return nil }
-        let tenureDays = max(1, calendar.dateComponents([.day], from: earliestNight, to: referenceDate).day ?? 1)
-        let doublesPerYear = Double(doubleDayCount) * 365.0 / Double(tenureDays)
-        // Hours per double DAY (both closeouts), not per closeout.
-        let avgDoubleHours = doubleRates.reduce(0.0) { $0 + $1.hours } / Double(doubleDayCount)
-        let annualImpact = Int(abs(doubleRate - soloRate) * avgDoubleHours * doublesPerYear * 100)
+        guard doubleDayCount > 0 else { return nil }
 
-        let doubleWins = doubleRate > soloRate
-        let closingClause = annualizedClause(
-            "At your current pace, that's worth about \(Money.wholeDollarString(fromCents: annualImpact)) a year.",
+        func centsPerHour(_ night: (date: Date, cents: Int, hours: Double)) -> Int {
+            Int((Double(night.cents) / night.hours).rounded())
+        }
+        let pooledSD = pooledStandardDeviationCents(doubleRates.map(centsPerHour), soloRates.map(centsPerHour))
+
+        let doublesRunHigher = doubleRate > soloRate
+        let closingClause = consistencyClause(
             MoveComparisonSide(count: doubleDayCount, singular: "double", plural: "doubles"),
             MoveComparisonSide(count: soloRates.count, singular: "solo shift", plural: "solo shifts")
         )
         let move = Move(
             id: "doublesVerdict",
-            title: doubleWins ? "Doubles Pay Off" : "Doubles Cost You",
-            body: "Doubles average \(Money.wholeDollarString(fromCents: Int((doubleRate * 100).rounded())))/hr across \(countPhrase(doubleDayCount, singular: "double", plural: "doubles")), against \(Money.wholeDollarString(fromCents: Int((soloRate * 100).rounded())))/hr solo across \(countPhrase(soloRates.count, singular: "solo shift", plural: "solo shifts")) - doubles \(doubleWins ? "pay better" : "pay worse") per hour, not just per shift. \(closingClause)",
-            annualImpactCents: annualImpact
+            title: "Doubles, Hour For Hour",
+            body: "Doubles average \(Money.wholeDollarString(fromCents: Int((doubleRate * 100).rounded())))/hr across \(countPhrase(doubleDayCount, singular: "double", plural: "doubles")), against \(Money.wholeDollarString(fromCents: Int((soloRate * 100).rounded())))/hr solo across \(countPhrase(soloRates.count, singular: "solo shift", plural: "solo shifts")) - doubles run \(doublesRunHigher ? "higher" : "lower") per hour, not just per shift. \(closingClause)",
+            effectSize: effectSize(delta: Double(deltaPerHourCents), pooledStandardDeviation: pooledSD, countA: doubleDayCount, countB: soloRates.count),
+            supportingShiftCount: min(doubleDayCount, soloRates.count)
         )
         return MoveCandidate(move: move, weekdaySubject: nil)
     }
@@ -1406,21 +1594,17 @@ struct StatsEngine {
         let requiredDelta = max(MoveThresholds.minimumRateDeltaCents, Int((MoveThresholds.varianceGuardFactor * pooledSD).rounded()))
         guard deltaPerHourCents >= requiredDelta else { return nil }
 
-        let avgHours = weekdayRates.reduce(0.0) { $0 + $1.hours } / Double(weekdayRates.count)
-        let annualImpact = Int((best.rate - overallRate) * avgHours * MoveThresholds.assumedWeeksPerYear * 100)
-        guard annualImpact >= MoveThresholds.minimumAnnualImpactCents else { return nil }
-
         let weekdayName = Calendar.current.weekdaySymbols[best.weekday - 1]
-        let closingClause = annualizedClause(
-            "Working \(weekdayName)s regularly is worth about \(Money.wholeDollarString(fromCents: annualImpact)) a year over your average rate.",
+        let closingClause = consistencyClause(
             MoveComparisonSide(count: weekdayRates.count, singular: weekdayName, plural: "\(weekdayName)s"),
-            MoveComparisonSide(count: otherRates.count, singular: "shift", plural: "shifts")
+            MoveComparisonSide(count: otherRates.count, singular: "other shift", plural: "other shifts")
         )
         let move = Move(
             id: "rateLeader",
-            title: "\(weekdayName) Pays Best Per Hour",
+            title: "\(weekdayName)s Lead Per Hour",
             body: "\(weekdayName)s average \(Money.wholeDollarString(fromCents: Int((best.rate * 100).rounded())))/hr across \(countPhrase(weekdayRates.count, singular: "shift", plural: "shifts")), against \(Money.wholeDollarString(fromCents: Int((overallRate * 100).rounded())))/hr overall. \(closingClause)",
-            annualImpactCents: annualImpact
+            effectSize: effectSize(delta: Double(deltaPerHourCents), pooledStandardDeviation: pooledSD, countA: weekdayRates.count, countB: otherRates.count),
+            supportingShiftCount: min(weekdayRates.count, otherRates.count)
         )
         return MoveCandidate(move: move, weekdaySubject: best.weekday)
     }
@@ -1452,25 +1636,18 @@ struct StatsEngine {
         let requiredDelta = max(MoveThresholds.minimumRateDeltaCents, Int((MoveThresholds.varianceGuardFactor * pooledSD).rounded()))
         guard deltaPerHourCents >= requiredDelta else { return nil }
 
-        let avgHours = bestGroup.reduce(0.0) { $0 + $1.hours } / Double(bestGroup.count)
-        let annualImpact = Int((facts.bestDollarsPerHour - facts.worstDollarsPerHour) * avgHours * MoveThresholds.assumedWeeksPerYear * 100)
-        guard annualImpact >= MoveThresholds.minimumAnnualImpactCents else { return nil }
-
-        // "later"/"earlier" is a real directional claim, not filler — get it
-        // right regardless of which bucket happens to be the best one.
-        let direction = facts.bestStartHour > facts.worstStartHour ? "later" : "earlier"
         let bestHourLabel = hourLabel(facts.bestStartHour)
         let worstHourLabel = hourLabel(facts.worstStartHour)
-        let closingClause = annualizedClause(
-            "The \(direction) start is worth about \(Money.wholeDollarString(fromCents: annualImpact)) a year at your usual hours.",
+        let closingClause = consistencyClause(
             MoveComparisonSide(count: facts.bestShiftCount, singular: "\(bestHourLabel) start", plural: "\(bestHourLabel) starts"),
             MoveComparisonSide(count: facts.worstShiftCount, singular: "\(worstHourLabel) start", plural: "\(worstHourLabel) starts")
         )
         let move = Move(
             id: "startTimeLeader",
-            title: "\(bestHourLabel) Starts Pay Best",
+            title: "\(bestHourLabel) Starts Lead Per Hour",
             body: "Shifts you start around \(bestHourLabel) average \(Money.wholeDollarString(fromCents: Int((facts.bestDollarsPerHour * 100).rounded())))/hr across \(countPhrase(facts.bestShiftCount, singular: "shift", plural: "shifts")), against \(Money.wholeDollarString(fromCents: Int((facts.worstDollarsPerHour * 100).rounded())))/hr around \(worstHourLabel). \(closingClause)",
-            annualImpactCents: annualImpact
+            effectSize: effectSize(delta: Double(deltaPerHourCents), pooledStandardDeviation: pooledSD, countA: facts.bestShiftCount, countB: facts.worstShiftCount),
+            supportingShiftCount: min(facts.bestShiftCount, facts.worstShiftCount)
         )
         return MoveCandidate(move: move, weekdaySubject: nil)
     }
@@ -1494,23 +1671,33 @@ struct StatsEngine {
         let deltaPercent = best.percent - overallPercent
         guard deltaPercent >= MoveThresholds.minimumTipPercentDelta else { return nil }
 
-        let weekdaySales = nightlySalesRates().filter { calendar.component(.weekday, from: $0.date) == best.weekday }
-        guard weekdaySales.count >= MoveThresholds.minimumWeekdayNightsForCitedMove else { return nil }
-        let avgSales = Double(weekdaySales.reduce(0) { $0 + $1.salesCents }) / Double(weekdaySales.count)
-        let annualImpact = Int((deltaPercent / 100) * avgSales * MoveThresholds.assumedWeeksPerYear)
-        guard annualImpact >= MoveThresholds.minimumAnnualImpactCents else { return nil }
+        let allSales = nightlySalesRates()
+        let weekdaySales = allSales.filter { calendar.component(.weekday, from: $0.date) == best.weekday }
+        let otherSales = allSales.filter { calendar.component(.weekday, from: $0.date) != best.weekday }
+        guard weekdaySales.count >= MoveThresholds.minimumWeekdayNightsForCitedMove, !otherSales.isEmpty else { return nil }
+
+        // Variance guard in percentage points, the unit this move compares
+        // in — the same 0.6-pooled-SD rule the cents-valued moves apply.
+        func shiftTipPercent(_ night: (date: Date, grossCents: Int, salesCents: Int)) -> Double? {
+            guard night.salesCents > 0 else { return nil }
+            return Double(night.grossCents) / Double(night.salesCents) * 100
+        }
+        let pooledSD = pooledStandardDeviation(
+            weekdaySales.compactMap(shiftTipPercent),
+            otherSales.compactMap(shiftTipPercent)
+        )
 
         let weekdayName = Calendar.current.weekdaySymbols[best.weekday - 1]
-        let closingClause = annualizedClause(
-            "At that rate on a typical \(weekdayName), the difference is worth about \(Money.wholeDollarString(fromCents: annualImpact)) a year.",
+        let closingClause = consistencyClause(
             MoveComparisonSide(count: weekdaySales.count, singular: weekdayName, plural: "\(weekdayName)s"),
-            MoveComparisonSide(count: nightlySalesRates().count, singular: "shift", plural: "shifts")
+            MoveComparisonSide(count: otherSales.count, singular: "other shift", plural: "other shifts")
         )
         let move = Move(
             id: "tipPercentSignal",
-            title: "\(weekdayName) Tips Best",
+            title: "\(weekdayName)s Tip Highest",
             body: "You're tipped \(String(format: "%.1f", best.percent))% of sales on \(weekdayName)s across \(countPhrase(weekdaySales.count, singular: "shift", plural: "shifts")), against \(String(format: "%.1f", overallPercent))% overall. \(closingClause)",
-            annualImpactCents: annualImpact
+            effectSize: effectSize(delta: deltaPercent, pooledStandardDeviation: pooledSD, countA: weekdaySales.count, countB: otherSales.count),
+            supportingShiftCount: min(weekdaySales.count, otherSales.count)
         )
         return MoveCandidate(move: move, weekdaySubject: nil)
     }
@@ -1588,13 +1775,15 @@ struct StatsEngine {
             .sorted { $0.date < $1.date }
     }
 
-    /// Checks every Move id in the ledger old enough to judge (>= 28 days
-    /// since MoveLedgerStore first recorded it as shown) and asks one
-    /// honest question: since then, did the recommended slice of nights
-    /// actually get worked more or less than the PRIOR pattern would have
-    /// predicted, and did that produce real dollars beyond what the old
-    /// pattern would have. Both gates have to clear inside behaviorFollowUp
-    /// - silence is the honest answer otherwise, same discipline as moves().
+    /// Checks every Move id in the ledger old enough to measure (>= 28
+    /// days since MoveLedgerStore first recorded it as shown) and asks one
+    /// neutral question: has this slice of shifts been worked more or less
+    /// often than the earlier pattern would have predicted, and did that
+    /// shift the money. Both gates have to clear inside behaviorFollowUp -
+    /// silence is the honest answer otherwise, same discipline as moves().
+    ///
+    /// Deliberately NOT framed as "did you take our advice." Insights
+    /// describes; it doesn't prescribe, so there is no advice to grade.
     func followUps(ledger: [String: Date], referenceDate: Date = .now) -> [FollowUp] {
         let minAge = TimeInterval(FollowUpThresholds.minimumAgeDays * 24 * 3600)
         return ledger
@@ -1610,7 +1799,7 @@ struct StatsEngine {
             let weekdayName = calendar.weekdaySymbols[weekday - 1]
             return behaviorFollowUp(
                 moveID: id,
-                title: "\(weekdayName) Update",
+                titlePlural: "\(weekdayName)s",
                 singular: weekdayName,
                 plural: "\(weekdayName)s",
                 matches: { calendar.component(.weekday, from: $0.date) == weekday },
@@ -1620,7 +1809,7 @@ struct StatsEngine {
         case "doublesVerdict":
             return behaviorFollowUp(
                 moveID: id,
-                title: "Doubles Update",
+                titlePlural: "Doubles",
                 singular: "double",
                 plural: "doubles",
                 matches: { $0.isDouble },
@@ -1673,7 +1862,7 @@ struct StatsEngine {
     /// dollars - between that projection and what actually happened.
     private func behaviorFollowUp(
         moveID: String,
-        title: String,
+        titlePlural: String,
         singular: String,
         plural: String,
         matches: ((date: Date, netCents: Int, isDouble: Bool)) -> Bool,
@@ -1707,11 +1896,17 @@ struct StatsEngine {
 
         let roundedDelta = Int(abs(deltaCount).rounded())
         let noun = roundedDelta == 1 ? singular : plural
-        let direction = deltaCount >= 0 ? "\(roundedDelta) more \(noun)" : "\(roundedDelta) fewer \(noun)"
-        let verdict = dollarEffectCents >= 0
-            ? "about \(Money.wholeDollarString(fromCents: dollarEffectCents)) more than your old pace would have"
-            : "about \(Money.wholeDollarString(fromCents: abs(dollarEffectCents))) less than your old pace would have"
-        let body = "Since we flagged this, you've worked \(direction) than before - bringing in \(verdict)."
+        let moreOfThem = deltaCount >= 0
+        let direction = "\(roundedDelta) \(moreOfThem ? "more" : "fewer") \(noun)"
+        let effect = dollarEffectCents >= 0
+            ? "about \(Money.wholeDollarString(fromCents: dollarEffectCents)) more than the earlier pace would have produced"
+            : "about \(Money.wholeDollarString(fromCents: abs(dollarEffectCents))) less than the earlier pace would have produced"
+        let weeks = max(1, Int(afterWeeks.rounded()))
+        // States the change and its size. No "since we flagged this" —
+        // that framing grades the reader against a recommendation this
+        // page never made.
+        let body = "Over the last \(NumberWords.spell(weeks)) weeks you've worked \(direction) than your earlier pace, bringing in \(effect)."
+        let title = "\(moreOfThem ? "More" : "Fewer") \(titlePlural) Lately"
 
         return FollowUp(id: moveID, title: title, body: body, dollarEffectCents: dollarEffectCents)
     }
@@ -1912,19 +2107,35 @@ struct Move: Equatable, Codable, Sendable, Identifiable {
     let id: String
     let title: String
     let body: String
-    let annualImpactCents: Int
+    /// How many pooled standard deviations separate the two sides of this
+    /// observation — the ranking key.
+    ///
+    /// This replaced an `annualImpactCents` projection. Ranking by modeled
+    /// dollar upside made this an advice engine: it led with whatever was
+    /// most lucrative to act on, and it hid solid patterns that weren't
+    /// worth enough money to nag about. Insights reports what the data
+    /// shows, so the best-evidenced pattern leads instead.
+    let effectSize: Double
+    /// The thinner of the two sides' shift counts. Breaks ties between
+    /// equally strong effects in favor of the one with more history.
+    let supportingShiftCount: Int
 }
 
-/// A "since we told you..." check-in on a previously shown Move - see
-/// StatsEngine.followUps(ledger:referenceDate:). id matches the originating
-/// Move's id; a given Move id produces at most one FollowUp, only once
-/// MoveLedgerStore has recorded it as shown for at least 28 days.
+/// A change detector on a slice of shifts Insights has previously
+/// described - see StatsEngine.followUps(ledger:referenceDate:). id matches
+/// the originating Move's id; a given Move id produces at most one
+/// FollowUp, only once MoveLedgerStore has recorded it as shown for at
+/// least 28 days.
+///
+/// This reports that something moved, not that a recommendation worked.
+/// Insights doesn't recommend, so there is nothing here to have taken.
 struct FollowUp: Equatable, Codable, Sendable, Identifiable {
     let id: String
     let title: String
     let body: String
-    /// Signed: positive means the recommended behavior change paid off,
-    /// negative means it cost real money versus the prior pattern.
+    /// Signed difference between what actually came in and what the
+    /// earlier pattern alone would have produced. Positive means more.
+    /// Carries no judgment about whether the change was a good idea.
     let dollarEffectCents: Int
 }
 
@@ -1953,12 +2164,12 @@ enum RevealCopy {
     // look like the all-in "Today" total shown elsewhere on the Dashboard.
     // Tyler's ruling (2026-07-27): a shift speaks ONE number, the same
     // wage-inclusive total its Shifts row already shows — so `cents` is
-    // that one figure, and `includesWages` just picks the honest unit for
+    // that one figure, and `includesNonTipIncome` picks the honest unit for
     // it. "in tips" only when the amount actually IS tips (no wage set);
     // otherwise it's income, so the headline drops the word "tips"
     // entirely rather than call a wage-inclusive number "tips."
-    static func headline(cents: Int, includesWages: Bool) -> String {
-        includesWages
+    static func headline(cents: Int, includesNonTipIncome: Bool) -> String {
+        includesNonTipIncome
             ? "\(Money.string(fromCents: cents)) this shift."
             : "\(Money.string(fromCents: cents)) in tips this shift."
     }
@@ -2016,6 +2227,23 @@ enum RevealCopy {
         if deltaCents == 0 { return "Even with last period at this point." }
         let direction = deltaCents > 0 ? "ahead of" : "behind"
         return "\(Money.string(fromCents: abs(deltaCents))) \(direction) last period at this point."
+    }
+
+    /// The pace line against the usual-pace baseline.
+    ///
+    /// With exactly one prior period there is no "usual" yet, so it says
+    /// "last period" — which is precisely what it is measuring. From two
+    /// periods up it says "usual pace," and below
+    /// `StatsEngine.minimumPeriodsForCleanPace` it names the sample size
+    /// out loud rather than letting "usual" imply more history than exists.
+    static func paceLine(deltaCents: Int, periodCount: Int) -> String {
+        guard periodCount > 1 else { return paceLine(deltaCents: deltaCents) }
+        let disclosure = periodCount < StatsEngine.minimumPeriodsForCleanPace
+            ? " (across \(NumberWords.spell(periodCount)) periods)"
+            : ""
+        if deltaCents == 0 { return "Right on your usual pace\(disclosure)." }
+        let direction = deltaCents > 0 ? "ahead of" : "behind"
+        return "\(Money.string(fromCents: abs(deltaCents))) \(direction) your usual pace\(disclosure)."
     }
 
     static func projectionLine(cents: Int) -> String {
