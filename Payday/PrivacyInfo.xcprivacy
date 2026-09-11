@@ -79,6 +79,31 @@
 				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
 			</array>
 		</dict>
+		<dict>
+			<!--
+			  Receipt and pay-stub scanning, and only when the person picks
+			  or takes a photo. Payday reads the image on device with Vision
+			  first, then sends a compressed copy through our server to
+			  OpenAI to pull out the shift fields. Our server stores neither
+			  the image nor the text, but OpenAI retains API inputs for a
+			  period for abuse monitoring, which is longer than servicing
+			  the request in real time, so this counts as collection.
+
+			  Key spelling is Apple's: PhotosorVideos, lowercase "or",
+			  unlike its sibling EmailsOrTextMessages. App Store Connect
+			  rejects manifests with unexpected keys.
+			-->
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypePhotosorVideos</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<true/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+			</array>
+		</dict>
 	</array>
 
 	<key>NSPrivacyAccessedAPITypes</key>
