@@ -12,3 +12,4 @@ payday_api_key.txt
 .env.*
 !.env.example
 .pallium/
+screenshots/
