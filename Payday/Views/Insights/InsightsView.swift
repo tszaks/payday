@@ -314,14 +314,21 @@ struct InsightsView: View {
     private func reliabilitySection(_ reliability: StatsEngine.ReliabilityFacts) -> some View {
         VStack(alignment: .leading, spacing: PaydaySpacing.p12) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("WHAT YOU CAN COUNT ON")
+                // NOT "what you can count on", which is what this said
+                // first and which the statistic does not support. A
+                // middle-50% range is not a floor — a quarter of shifts
+                // come in under the low number. You can count on a floor;
+                // you cannot count on a middle. This header describes the
+                // range rather than promising something about it.
+                Text("WHAT A SHIFT USUALLY PAYS")
                     .font(PaydayFont.caption2)
                     .tracking(0.8)
                     .foregroundStyle(PaydayColor.primary)
-                // Said once, here, instead of five times below. "Half" is
-                // load-bearing — the other quarter is under the low end and
-                // the last quarter is over the high end.
-                Text("Half your shifts land in these ranges.")
+                // Said once here instead of five times below. The second
+                // sentence exists because the first one raises the obvious
+                // question and leaving it unanswered invites reading the
+                // low number as a guarantee.
+                Text("Half your shifts land in these ranges. A quarter come in under the low end.")
                     .font(PaydayFont.subheadline)
                     .foregroundStyle(PaydayColor.textSecondary)
             }
