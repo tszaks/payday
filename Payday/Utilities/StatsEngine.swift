@@ -1286,6 +1286,19 @@ struct StatsEngine {
         /// recommendation, it's noise). Both gate their cited weekday's own
         /// night count against this floor before firing.
         static let minimumWeekdayNightsForCitedMove = 2
+        /// How many expected-rank positions a weekday has to jump before
+        /// beating another weekday counts as news. Two keeps neighbours
+        /// quiet (a Friday edging a Thursday surprises nobody) while
+        /// letting a genuine upset through. See expectedWeekdayRank.
+        static let minimumExpectedRankInversion = 2
+        /// A weekday leading on $/hr is only worth stating when it ISN'T
+        /// one of the days everyone already expects to lead. Ranks at or
+        /// below this are the predictable winners and stay silent.
+        static let obviousLeaderRankCeiling = 2
+        /// Shifts starting at or after this hour are dinner service.
+        /// "Dinner pays better than lunch" is universal knowledge, so a
+        /// start-time finding that only says that gets suppressed.
+        static let dinnerServiceStartHour = 15
         static let lapsedWindowDays = 21
         /// Deliberate calibration, not derived from anything: a delta has
         /// to clear roughly 0.6x the pooled per-night spread (loosely,
@@ -1449,34 +1462,95 @@ struct StatsEngine {
     /// needing >= 3 nights of their own history to qualify, and gated by
     /// a variance guard so three lucky Fridays against three slow Mondays
     /// can't recommend a schedule change off pure noise.
+    /// THE OBVIOUSNESS LAW, engine edition. The narration prompt has
+    /// carried this rule for a long time ("never state anything that would
+    /// be true for every server everywhere"); this engine did not, and it
+    /// showed. The old weekdaySwapMove compared the best weekday against
+    /// the worst, which for essentially every restaurant server alive
+    /// resolves to a weekend day against a Monday or Tuesday. "Fridays
+    /// outearn Mondays" is true before you open the app, so it carries no
+    /// information no matter how many decimal places back it.
+    ///
+    /// Lower rank = expected to earn more. Not derived from anything in
+    /// this codebase; it is the shared prior a reader already has, written
+    /// down so the engine can REFUSE to restate it. Sunday sits mid-pack
+    /// because brunch houses and dinner houses genuinely disagree.
+    ///
+    /// Tune here if the suppression feels wrong for a given venue.
+    private static let expectedWeekdayRank: [Int: Int] = [
+        7: 1, // Saturday
+        6: 2, // Friday
+        1: 3, // Sunday
+        5: 4, // Thursday
+        4: 5, // Wednesday
+        3: 6, // Tuesday
+        2: 7  // Monday
+    ]
+
+    private static func expectedRank(_ weekday: Int) -> Int {
+        expectedWeekdayRank[weekday] ?? 4
+    }
+
+    /// A weekday comparison worth stating is one that CONTRADICTS the
+    /// expected order — a day that outearns a day it "should" lose to.
+    ///
+    /// Agreement with the prior is silence: if someone's Saturdays beat
+    /// their Mondays, the data has told the reader nothing they did not
+    /// already know. An inversion is the opposite: Tuesdays outearning
+    /// Saturdays is a fact about THIS person's restaurant and nobody
+    /// else's, which is exactly the bar the obviousness law sets.
+    ///
+    /// Scored by how large the inversion is in expected-rank positions, so
+    /// the most surprising pair wins rather than merely the widest dollar
+    /// gap. Returning nil is a correct and common answer.
     private func weekdaySwapMove() -> MoveCandidate? {
         let allNights = nightlyTotals()
         let weekdayAverages = weekdayNightAverages(allNights)
-        guard weekdayAverages.count >= 2,
-              let best = weekdayAverages.max(by: { $0.avg < $1.avg }),
-              let worst = weekdayAverages.min(by: { $0.avg < $1.avg }),
-              best.weekday != worst.weekday
-        else { return nil }
-        let deltaCents = Int((best.avg - worst.avg).rounded())
+        guard weekdayAverages.count >= 2 else { return nil }
 
-        let pooledSD = pooledStandardDeviationCents(best.nightCents, worst.nightCents)
+        struct Inversion {
+            let over: (weekday: Int, avg: Double, count: Int, nightCents: [Int])
+            let under: (weekday: Int, avg: Double, count: Int, nightCents: [Int])
+            let rankGap: Int
+            let deltaCents: Int
+        }
+
+        var candidates: [Inversion] = []
+        for over in weekdayAverages {
+            for under in weekdayAverages where over.weekday != under.weekday {
+                // `over` must actually earn more while being expected to
+                // earn less - that mismatch is the entire finding.
+                let rankGap = Self.expectedRank(over.weekday) - Self.expectedRank(under.weekday)
+                guard rankGap >= MoveThresholds.minimumExpectedRankInversion else { continue }
+                let deltaCents = Int((over.avg - under.avg).rounded())
+                guard deltaCents > 0 else { continue }
+                candidates.append(Inversion(over: over, under: under, rankGap: rankGap, deltaCents: deltaCents))
+            }
+        }
+
+        // Most surprising first; a wider dollar gap only breaks ties.
+        guard let pick = candidates.max(by: {
+            $0.rankGap != $1.rankGap ? $0.rankGap < $1.rankGap : $0.deltaCents < $1.deltaCents
+        }) else { return nil }
+
+        let pooledSD = pooledStandardDeviationCents(pick.over.nightCents, pick.under.nightCents)
         let requiredDelta = max(MoveThresholds.minimumWeekdaySwapDeltaCents, Int((MoveThresholds.varianceGuardFactor * pooledSD).rounded()))
-        guard deltaCents >= requiredDelta else { return nil }
+        guard pick.deltaCents >= requiredDelta else { return nil }
 
-        let bestName = Calendar.current.weekdaySymbols[best.weekday - 1]
-        let worstName = Calendar.current.weekdaySymbols[worst.weekday - 1]
+        let overName = Calendar.current.weekdaySymbols[pick.over.weekday - 1]
+        let underName = Calendar.current.weekdaySymbols[pick.under.weekday - 1]
         let closingClause = consistencyClause(
-            MoveComparisonSide(count: best.count, singular: bestName, plural: "\(bestName)s"),
-            MoveComparisonSide(count: worst.count, singular: worstName, plural: "\(worstName)s")
+            MoveComparisonSide(count: pick.over.count, singular: overName, plural: "\(overName)s"),
+            MoveComparisonSide(count: pick.under.count, singular: underName, plural: "\(underName)s")
         )
         let move = Move(
             id: "weekdaySwap",
-            title: "\(bestName)s Outearn \(worstName)s",
-            body: "\(bestName)s average \(Money.string(fromCents: Int(best.avg.rounded()))) across \(NumberWords.spell(best.count)) \(bestName)s, against \(Money.string(fromCents: Int(worst.avg.rounded()))) across \(NumberWords.spell(worst.count)) \(worstName)s. \(closingClause)",
-            effectSize: effectSize(delta: Double(deltaCents), pooledStandardDeviation: pooledSD, countA: best.count, countB: worst.count),
-            supportingShiftCount: min(best.count, worst.count)
+            title: "\(overName)s Outearn Your \(underName)s",
+            body: "\(overName)s average \(Money.string(fromCents: Int(pick.over.avg.rounded()))) across \(NumberWords.spell(pick.over.count)) \(overName)s, against \(Money.string(fromCents: Int(pick.under.avg.rounded()))) across \(NumberWords.spell(pick.under.count)) \(underName)s. \(closingClause)",
+            effectSize: effectSize(delta: Double(pick.deltaCents), pooledStandardDeviation: pooledSD, countA: pick.over.count, countB: pick.under.count),
+            supportingShiftCount: min(pick.over.count, pick.under.count)
         )
-        return MoveCandidate(move: move, weekdaySubject: best.weekday)
+        return MoveCandidate(move: move, weekdaySubject: pick.over.weekday)
     }
 
     /// Pooled per-night standard deviation across two independent samples —
@@ -1594,6 +1668,11 @@ struct StatsEngine {
         let requiredDelta = max(MoveThresholds.minimumRateDeltaCents, Int((MoveThresholds.varianceGuardFactor * pooledSD).rounded()))
         guard deltaPerHourCents >= requiredDelta else { return nil }
 
+        // Obviousness law: Saturday or Friday topping the hourly rate is
+        // the expected result, so saying it adds nothing. A midweek day
+        // leading on rate is a real fact about this person's floor.
+        guard Self.expectedRank(best.weekday) > MoveThresholds.obviousLeaderRankCeiling else { return nil }
+
         let weekdayName = Calendar.current.weekdaySymbols[best.weekday - 1]
         let closingClause = consistencyClause(
             MoveComparisonSide(count: weekdayRates.count, singular: weekdayName, plural: "\(weekdayName)s"),
@@ -1635,6 +1714,15 @@ struct StatsEngine {
         let pooledSD = pooledStandardDeviationCents(bestGroup.map(centsPerHour), worstGroup.map(centsPerHour))
         let requiredDelta = max(MoveThresholds.minimumRateDeltaCents, Int((MoveThresholds.varianceGuardFactor * pooledSD).rounded()))
         guard deltaPerHourCents >= requiredDelta else { return nil }
+
+        // Obviousness law: a later start out-earning an earlier one ACROSS
+        // the lunch/dinner line is just "dinner pays better than lunch,"
+        // which is true everywhere. Within one service period either
+        // direction is a real finding, and an earlier start winning is a
+        // real finding anywhere.
+        let bestIsDinner = facts.bestStartHour >= MoveThresholds.dinnerServiceStartHour
+        let worstIsDinner = facts.worstStartHour >= MoveThresholds.dinnerServiceStartHour
+        guard !(bestIsDinner && !worstIsDinner) else { return nil }
 
         let bestHourLabel = hourLabel(facts.bestStartHour)
         let worstHourLabel = hourLabel(facts.worstStartHour)
