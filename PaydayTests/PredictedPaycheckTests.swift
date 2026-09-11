@@ -9,8 +9,8 @@ import Foundation
 /// shortfall that never happened.
 @Suite("Predicted paycheck")
 struct PredictedPaycheckTests {
-    private func breakdown(cash: Int = 0, credit: Int = 0, tipOut: Int = 0) -> TipBreakdown {
-        TipBreakdown(cashCents: cash, creditCents: credit, tipOutCents: tipOut)
+    private func breakdown(cash: Int = 0, credit: Int = 0, tipOut: Int = 0, gratuity: Int = 0) -> TipBreakdown {
+        TipBreakdown(cashCents: cash, creditCents: credit, tipOutCents: tipOut, gratuityFeesCents: gratuity)
     }
 
     // MARK: The stub's tips line
@@ -61,6 +61,14 @@ struct PredictedPaycheckTests {
         #expect(PredictedPaycheck.cents(from: bd, wagesCents: 0) == PredictedPaycheck.tipsLineCents(from: bd))
     }
 
+    @Test("employee gratuity reaches the check without contaminating the tips line")
+    func checkAddsGratuitySeparately() {
+        let bd = breakdown(credit: 12_136, tipOut: 2_243, gratuity: 4_050)
+
+        #expect(PredictedPaycheck.tipsLineCents(from: bd) == 9_893)
+        #expect(PredictedPaycheck.cents(from: bd, wagesCents: 0) == 13_943)
+    }
+
     /// The bug this formula replaced: gross credit tips, tip-out silently left
     /// in, wages bolted on in a second sentence. On Tyler's period that read
     /// $2,960.28 "plus $206.21 in wages" — $473.65 above what payroll would
@@ -69,5 +77,11 @@ struct PredictedPaycheckTests {
     func regressionAgainstGrossCredit() {
         let bd = breakdown(cash: 42700, credit: 296028, tipOut: 47365)
         #expect(bd.creditCents - PredictedPaycheck.tipsLineCents(from: bd) == bd.tipOutCents)
+    }
+
+    @Test("separate gratuity is part of paid tip earnings")
+    func paidTipEarningsIncludeGratuity() {
+        #expect(PredictedPaycheck.paidTipEarningsCents(tipsCents: 191_120, gratuityCents: 17_695) == 208_815)
+        #expect(PredictedPaycheck.paidTipEarningsCents(tipsCents: 191_120, gratuityCents: nil) == 191_120)
     }
 }

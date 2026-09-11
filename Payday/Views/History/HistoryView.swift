@@ -26,14 +26,14 @@ enum HistoryLens: String, CaseIterable {
 /// real perf regression: the plain-URL version this replaced regenerated
 /// the whole export and rewrote the file on every single body render.
 private struct CSVExport: Transferable {
-    let entries: [TipEntry]
-    let paycheckRecords: [PaycheckRecord]
-    let calculator: PayPeriodCalculator
+    /// Transferable values may move between executors. SwiftData reads stay
+    /// on the main actor while the exported value remains safely Sendable.
+    let makeCSV: @MainActor @Sendable () -> String
 
     static var transferRepresentation: some TransferRepresentation {
         FileRepresentation(exportedContentType: .commaSeparatedText) { export in
             let url = FileManager.default.temporaryDirectory.appendingPathComponent("Payday-Export.csv")
-            let csv = CSVExporter.export(entries: export.entries, paycheckRecords: export.paycheckRecords, calculator: export.calculator)
+            let csv = await export.makeCSV()
             try csv.write(to: url, atomically: true, encoding: .utf8)
             return SentTransferredFile(url)
         }
@@ -75,7 +75,7 @@ struct HistoryView: View {
                             .transition(lensTransition(edge: .trailing))
                     }
                 }
-                .animation(reduceMotion ? .default : PaydayAnimation.paperSpring, value: lens)
+                .animation(reduceMotion ? nil : PaydayAnimation.paperSpring, value: lens)
             }
             .background(PaydayColor.background)
             .navigationTitle("History")
@@ -88,7 +88,13 @@ struct HistoryView: View {
                     // on both lenses: it exports the same periods data
                     // either way.
                     ShareLink(
-                        item: CSVExport(entries: allEntries, paycheckRecords: paycheckRecords, calculator: calculator),
+                        item: CSVExport {
+                            CSVExporter.export(
+                                entries: allEntries,
+                                paycheckRecords: paycheckRecords,
+                                calculator: calculator
+                            )
+                        },
                         preview: SharePreview("Payday-Export.csv")
                     ) {
                         Image(systemName: "square.and.arrow.up")

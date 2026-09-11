@@ -9,7 +9,7 @@ import SwiftUI
 /// (Tyler, 2026-08-03: "instead of going up, down, up, down, go up, up, up,
 /// down"). A reader can follow a column that only changes direction once.
 struct BreakdownRow: Identifiable {
-    let id = UUID()
+    var id: String { label }
     let label: String
     let cents: Int
     let emphasized: Bool

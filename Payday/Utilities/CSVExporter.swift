@@ -6,14 +6,14 @@ import Foundation
 /// double day produces two rows, one per closeout, distinguished by the
 /// Shift column and both flagged Double.
 ///
-/// Hours/Start/End/Tip-Out/Sales/Servers are shift-level facts, not
+/// Gratuity/Hours/Start/End/Tip-Out/Sales/Servers are shift-level facts, not
 /// per-entry ones: each column reflects ShiftDetails.resolve's single
 /// canonical value (credit entry preferred, else cash), never a sum across
 /// the shift's entries — a shift with a stray value on both entries (legacy
 /// data) still reports one number here, matching every other reader in the
 /// app, rather than double-counting it.
 enum CSVExporter {
-    static let header = "Date,Shift,Cash,Credit,Tip-Out,Net,Hours,Start,End,Sales,Servers,Double,Note,Period,Paycheck"
+    static let header = "Date,Shift,Cash,Credit,Gratuity-Fees,Tip-Out,Net,Hours,Start,End,Sales,Servers,Double,Note,Period,Paycheck"
 
     static func export(entries: [TipEntry], paycheckRecords: [PaycheckRecord], calculator: PayPeriodCalculator, calendar: Calendar = .current) -> String {
         let shifts = ShiftDays.groupedByShift(entries, shiftID: \.shiftID, date: \.date, period: \.shiftPeriod, calendar: calendar)
@@ -27,10 +27,12 @@ enum CSVExporter {
     }
 
     private static func row(for items: [TipEntry], day: Date, dayHasMultipleShifts: Bool, paycheckRecords: [PaycheckRecord], calculator: PayPeriodCalculator, calendar: Calendar) -> String {
-        let cashCents = items.filter { $0.kind == .cash }.reduce(0) { $0 + $1.amountCents }
-        let creditCents = items.filter { $0.kind == .credit }.reduce(0) { $0 + $1.amountCents }
+        let breakdown = TipBreakdown.total(of: items)
+        let cashCents = breakdown.cashCents
+        let creditCents = breakdown.creditCents
         let shiftDetails = ShiftDetails.resolve(from: items)
-        let netCents = cashCents + creditCents - (shiftDetails.tipOutCents ?? 0)
+        let gratuityFeesCents = breakdown.gratuityFeesCents
+        let netCents = breakdown.netTotalCents
         let shiftField = shiftDetails.shiftPeriod?.displayName ?? ""
         let note = items.compactMap(\.note).joined(separator: "; ")
 
@@ -54,6 +56,7 @@ enum CSVExporter {
             shiftField,
             dollars(cashCents),
             dollars(creditCents),
+            gratuityFeesCents > 0 ? dollars(gratuityFeesCents) : "",
             tipOutField,
             dollars(netCents),
             hoursField,

@@ -10,7 +10,10 @@ final class PayScheduleStore {
     private let defaults: UserDefaults
 
     var schedule: PaySchedule? {
-        didSet { persist() }
+        didSet {
+            persist()
+            PaydaySettingsSyncClock.touch()
+        }
     }
 
     init(defaults: UserDefaults = AppGroup.defaults) {

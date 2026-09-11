@@ -12,6 +12,7 @@ struct ShiftLiveActivity: Widget {
             lockScreenView(startedAt: context.state.startedAt)
                 .activityBackgroundTint(PaydayColor.background)
                 .widgetURL(URL(string: "payday://shift"))
+                .modifier(SharedAppearanceModifier())
         } dynamicIsland: { context in
             DynamicIsland {
                 // TWO COLUMNS, NO BOTTOM BAND. A top flanking row plus a
@@ -43,6 +44,10 @@ struct ShiftLiveActivity: Widget {
                             .minimumScaleFactor(0.5)
                     }
                     .padding(.leading, PaydaySpacing.p4)
+                    // Dynamic Island is always hosted on black. Pinning this
+                    // subtree to dark semantic colors avoids relying on an
+                    // implicit trait that could turn the timer black-on-black.
+                    .environment(\.colorScheme, .dark)
                 }
                 DynamicIslandExpandedRegion(.trailing) {
                     VStack(alignment: .trailing, spacing: PaydaySpacing.p4) {
@@ -61,6 +66,7 @@ struct ShiftLiveActivity: Widget {
                             .fixedSize()
                     }
                     .padding(.trailing, PaydaySpacing.p4)
+                    .environment(\.colorScheme, .dark)
                 }
             } compactLeading: {
                 // Apple's compact grammar (Timer: orange glyph + orange
@@ -73,6 +79,7 @@ struct ShiftLiveActivity: Widget {
                     .aspectRatio(contentMode: .fit)
                     .frame(height: 20)
                     .foregroundStyle(PaydayColor.primary)
+                    .environment(\.colorScheme, .dark)
             } compactTrailing: {
                 Text(timerInterval: timerRange(startedAt: context.state.startedAt), countsDown: false)
                     .font(PaydayFont.caption)
@@ -86,6 +93,7 @@ struct ShiftLiveActivity: Widget {
                     .frame(maxWidth: 52, alignment: .trailing)
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
+                    .environment(\.colorScheme, .dark)
             } minimal: {
                 Image("IslandMark")
                     .renderingMode(.template)
@@ -93,6 +101,7 @@ struct ShiftLiveActivity: Widget {
                     .aspectRatio(contentMode: .fit)
                     .frame(height: 18)
                     .foregroundStyle(PaydayColor.primary)
+                    .environment(\.colorScheme, .dark)
             }
         }
     }
@@ -118,6 +127,17 @@ struct ShiftLiveActivity: Widget {
     /// has no dead middle.
     private func lockScreenView(startedAt: Date) -> some View {
         ShiftLockScreenView(startedAt: startedAt, range: timerRange(startedAt: startedAt))
+    }
+}
+
+private struct SharedAppearanceModifier: ViewModifier {
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if let colorScheme = AppGroup.appearance.colorScheme {
+            content.environment(\.colorScheme, colorScheme)
+        } else {
+            content
+        }
     }
 }
 /// The lock screen face: header (dot + kicker, since-caption trailing) over

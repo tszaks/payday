@@ -1,9 +1,9 @@
 import Foundation
 
 /// Math for estimating a tipped employee's base wages — as opposed to tips —
-/// on a paycheck. This is an ESTIMATE shown alongside tip totals only; it is
-/// never folded into tip income, the hero take-home, charts, or $/hr
-/// insights, which all stay tips-only.
+/// on a paycheck. It is never classified as voluntary tips or employee
+/// gratuity; callers add it only on surfaces that intentionally show total
+/// shift or pay-period income.
 enum WageEstimate {
     /// Estimated pre-tax wages for a set of shifts: wage rate x the hours
     /// actually logged (ShiftDetails' one-canonical-value-per-shift rule).

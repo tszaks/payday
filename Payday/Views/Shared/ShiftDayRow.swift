@@ -3,11 +3,12 @@ import SwiftUI
 /// One shift (one closeout), however many rows it took to log it — a merged
 /// cash+credit shift reads as a single row: date/period label on the left,
 /// Total on the right, nothing else. Shared between Dashboard and Period
-/// detail so both screens describe a shift the same way. On a double day the
-/// two shifts each get their own row, distinguished by period ("Today ·
-/// Lunch" / "Today · Dinner"). No money caption underneath the label — cash
-/// and credit are a decomposition, and showing their gross figures next to
-/// this row's net Total would visibly fail to sum (Tyler's money-language
+/// detail so both screens describe a shift the same way. Every row uses the
+/// same "Tuesday, Aug 25 · Dinner" shape so recency and
+/// double-shift status never change what the label reveals. No money caption
+/// underneath the label — cash and credit are a decomposition, and showing
+/// their gross figures next to this row's net Total would visibly fail to sum
+/// (Tyler's money-language
 /// law, 2026-07-27: at most one money line per row, and it's the Total). The
 /// split is one tap away in the shift's own sheet, and the period-level
 /// drawer carries it too.

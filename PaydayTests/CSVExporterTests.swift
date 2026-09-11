@@ -22,7 +22,7 @@ private func makeContext() throws -> ModelContext {
 struct CSVExporterTests {
     @Test("header names every documented column, in order")
     func headerColumns() {
-        #expect(CSVExporter.header == "Date,Shift,Cash,Credit,Tip-Out,Net,Hours,Start,End,Sales,Servers,Double,Note,Period,Paycheck")
+        #expect(CSVExporter.header == "Date,Shift,Cash,Credit,Gratuity-Fees,Tip-Out,Net,Hours,Start,End,Sales,Servers,Double,Note,Period,Paycheck")
     }
 
     @Test("one row per shift, cash and credit merged, net already accounting for tip-out")
@@ -38,8 +38,9 @@ struct CSVExporterTests {
         let fields = rows[1].split(separator: ",", omittingEmptySubsequences: false).map(String.init)
         #expect(fields[2] == "32.00") // cash
         #expect(fields[3] == "86.00") // credit
-        #expect(fields[4] == "15.00") // tip-out
-        #expect(fields[5] == "103.00") // net: 8600 + 3200 - 1500
+        #expect(fields[4] == "") // gratuity/fees
+        #expect(fields[5] == "15.00") // tip-out
+        #expect(fields[6] == "103.00") // net: 8600 + 3200 - 1500
     }
 
     @Test("hours, start, end, sales, servers, and tip-out columns are blank when nothing was logged for them")
@@ -47,12 +48,35 @@ struct CSVExporterTests {
         let entries = [TipEntry(date: date(2026, 7, 8), amountCents: 5000, kind: .cash)]
         let csv = CSVExporter.export(entries: entries, paycheckRecords: [], calculator: calculator)
         let fields = csv.split(separator: "\n")[1].split(separator: ",", omittingEmptySubsequences: false).map(String.init)
-        #expect(fields[4] == "") // tip-out
-        #expect(fields[6] == "") // hours
-        #expect(fields[7] == "") // start
-        #expect(fields[8] == "") // end
-        #expect(fields[9] == "") // sales
-        #expect(fields[10] == "") // servers
+        #expect(fields[4] == "") // gratuity/fees
+        #expect(fields[5] == "") // tip-out
+        #expect(fields[7] == "") // hours
+        #expect(fields[8] == "") // start
+        #expect(fields[9] == "") // end
+        #expect(fields[10] == "") // sales
+        #expect(fields[11] == "") // servers
+    }
+
+    @Test("Toast employee gratuity exports separately and contributes to net earnings")
+    func gratuityColumnIsSeparate() {
+        let entry = TipEntry(
+            date: date(2026, 8, 23),
+            amountCents: 12_136,
+            kind: .credit,
+            tipOutCents: 2_243,
+            receiptMetrics: ShiftReceiptMetrics(
+                earningsSchemaVersion: 2,
+                gratuityFeesCents: 4_050
+            )
+        )
+
+        let csv = CSVExporter.export(entries: [entry], paycheckRecords: [], calculator: calculator)
+        let fields = csv.split(separator: "\n")[1].split(separator: ",", omittingEmptySubsequences: false).map(String.init)
+
+        #expect(fields[3] == "121.36")
+        #expect(fields[4] == "40.50")
+        #expect(fields[5] == "22.43")
+        #expect(fields[6] == "139.43")
     }
 
     @Test("servers column exports the canonical count when logged")
@@ -60,7 +84,7 @@ struct CSVExporterTests {
         let entries = [TipEntry(date: date(2026, 7, 8), amountCents: 5000, kind: .cash, serverCount: 3)]
         let csv = CSVExporter.export(entries: entries, paycheckRecords: [], calculator: calculator)
         let fields = csv.split(separator: "\n")[1].split(separator: ",", omittingEmptySubsequences: false).map(String.init)
-        #expect(fields[10] == "3")
+        #expect(fields[11] == "3")
     }
 
     @Test("clock times export as fixed 24-hour HH:mm, regardless of locale-facing am/pm copy elsewhere")
@@ -72,8 +96,8 @@ struct CSVExporterTests {
         let entries = [TipEntry(date: day, amountCents: 5000, kind: .cash, clockIn: clockIn, clockOut: clockOut)]
         let csv = CSVExporter.export(entries: entries, paycheckRecords: [], calculator: calculator)
         let fields = csv.split(separator: "\n")[1].split(separator: ",", omittingEmptySubsequences: false).map(String.init)
-        #expect(fields[7] == "17:30")
-        #expect(fields[8] == "22:00")
+        #expect(fields[8] == "17:30")
+        #expect(fields[9] == "22:00")
     }
 
     @Test("a shift on a double day is marked Y; a lone shift is marked N")
@@ -106,8 +130,8 @@ struct CSVExporterTests {
         let paycheck = PaycheckRecord(periodStart: period.start, periodEnd: period.end, paidTipsCents: 4800)
         let csv = CSVExporter.export(entries: entries, paycheckRecords: [paycheck], calculator: calculator)
         let fields = csv.split(separator: "\n")[1].split(separator: ",", omittingEmptySubsequences: false).map(String.init)
-        #expect(fields[14] == "48.00")
-        #expect(fields[13].contains("to"))
+        #expect(fields[15] == "48.00")
+        #expect(fields[14].contains("to"))
     }
 
     @Test("hours/tip-out/sales set on BOTH entries (corruption) resolve to one canonical value, never a sum")
@@ -119,10 +143,10 @@ struct CSVExporterTests {
         ]
         let csv = CSVExporter.export(entries: entries, paycheckRecords: [], calculator: calculator)
         let fields = csv.split(separator: "\n")[1].split(separator: ",", omittingEmptySubsequences: false).map(String.init)
-        #expect(fields[4] == "15.00") // tip-out: credit's value, not 15+10
-        #expect(fields[6] == "5") // hours: credit's value, not 5+5
-        #expect(fields[9] == "430.00") // sales: credit's value, not 430+100
-        #expect(fields[5] == "103.00") // net: 8600+3200-1500, not -2500
+        #expect(fields[5] == "15.00") // tip-out: credit's value, not 15+10
+        #expect(fields[7] == "5") // hours: credit's value, not 5+5
+        #expect(fields[10] == "430.00") // sales: credit's value, not 430+100
+        #expect(fields[6] == "103.00") // net: 8600+3200-1500, not -2500
     }
 
     @Test("rows are ordered chronologically, oldest first")

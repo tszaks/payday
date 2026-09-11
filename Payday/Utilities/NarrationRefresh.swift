@@ -4,7 +4,7 @@ import Foundation
 /// stateless so the rule that governs real money is testable without a view,
 /// a store, or "now" — same treatment as PaydayMoment and WorkScheduleNudge.
 ///
-/// The rule, in plain terms: narrate at most twice a week, only when the
+/// The rule, in plain terms: narrate at most once a day, only when the
 /// numbers actually moved, and give a genuinely transient failure one early
 /// retry per hour rather than one per visit to the tab.
 ///
@@ -18,8 +18,9 @@ import Foundation
 /// failures no longer set the flag at all (see InsightsError.isRetryable), and
 /// the ones that do are floored by a cooldown.
 enum NarrationRefresh {
-    /// Upper bound on cadence — "maybe weekly, twice a week at most."
-    static let minimumInterval: TimeInterval = 3.5 * 24 * 3600
+    /// A changed shift history should not leave Insights several days behind,
+    /// but opening the tab repeatedly must never spend repeated calls.
+    static let minimumInterval: TimeInterval = 24 * 3600
 
     /// How long a retryable failure waits before it may try again. An hour
     /// keeps a real hiccup feeling recoverable while bounding the worst case

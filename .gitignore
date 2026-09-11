@@ -8,4 +8,7 @@ xcuserdata/
 Generated/
 Secrets.local.xcconfig
 payday_api_key.txt
+.env
+.env.*
+!.env.example
 .pallium/

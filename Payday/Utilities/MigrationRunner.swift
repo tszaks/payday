@@ -1,11 +1,31 @@
 import Foundation
 import SwiftData
 
-/// One-time, idempotent data migrations that run at launch. Kept tiny and
-/// self-guarding: each pass fetches only the rows that still need work, so
-/// running it every launch is cheap and also heals rows that arrive late
-/// from another device via CloudKit sync.
+/// One-time, idempotent data migrations. A durable version prevents the
+/// exact-hours pass from scanning every punch-backed row on every launch.
 enum MigrationRunner {
+    private static let versionKey = "com.szakacsmedia.payday.localMigrationVersion"
+    private static let currentVersion = 2
+
+    static func runPending(in context: ModelContext, defaults: UserDefaults = AppGroup.defaults) {
+        let version = defaults.integer(forKey: versionKey)
+        var completedVersion = version
+        if version < 1 {
+            guard backfillShiftIDs(in: context) else { return }
+            completedVersion = 1
+        }
+        if version < 2 {
+            guard recomputeExactHours(in: context) else {
+                defaults.set(completedVersion, forKey: versionKey)
+                return
+            }
+            completedVersion = 2
+        }
+        if completedVersion > version {
+            defaults.set(completedVersion, forKey: versionKey)
+        }
+    }
+
     /// Backfills `shiftID` on legacy TipEntry rows created before shift
     /// grouping existed. Assigns exactly ONE shiftID per pre-existing
     /// calendar day, so old data (including old lumped "doubles", which were
@@ -15,17 +35,29 @@ enum MigrationRunner {
     /// devices backfilling the same legacy day independently must land on the
     /// same id so a CloudKit merge coalesces them into one shift instead of
     /// forking the day into two. New logs (LogTipSheet) mint random UUIDs.
-    static func backfillShiftIDs(in context: ModelContext, calendar: Calendar = .current) {
+    @discardableResult
+    static func backfillShiftIDs(in context: ModelContext, calendar: Calendar = .current) -> Bool {
         // Cheap short-circuit: nothing to do once every row has an id.
         let pendingDescriptor = FetchDescriptor<TipEntry>(
             predicate: #Predicate { $0.shiftID == nil }
         )
-        guard let pending = try? context.fetch(pendingDescriptor), !pending.isEmpty else { return }
+        let pending: [TipEntry]
+        do {
+            pending = try context.fetch(pendingDescriptor)
+        } catch {
+            return false
+        }
+        guard !pending.isEmpty else { return true }
 
         // Group ALL rows by day (not just the nil ones) so a day that already
         // has an id — from an earlier run or a synced device — coalesces its
         // nil siblings onto that same id rather than forking the day.
-        guard let all = try? context.fetch(FetchDescriptor<TipEntry>()) else { return }
+        let all: [TipEntry]
+        do {
+            all = try context.fetch(FetchDescriptor<TipEntry>())
+        } catch {
+            return false
+        }
         let byDay = Dictionary(grouping: all) { calendar.startOfDay(for: $0.date) }
         for (day, rows) in byDay {
             let nilRows = rows.filter { $0.shiftID == nil }
@@ -36,7 +68,12 @@ enum MigrationRunner {
                 row.shiftID = id
             }
         }
-        try? context.save()
+        do {
+            try context.save()
+            return true
+        } catch {
+            return false
+        }
     }
 
     /// Recomputes hoursWorked from clockIn/clockOut using ShiftTimes' exact,
@@ -49,17 +86,29 @@ enum MigrationRunner {
     /// Naturally idempotent: recomputing the same punches always yields the
     /// same answer, so this is safe to run on every launch with no separate
     /// "already migrated" flag.
-    static func recomputeExactHours(in context: ModelContext, calendar: Calendar = .current) {
+    @discardableResult
+    static func recomputeExactHours(in context: ModelContext, calendar: Calendar = .current) -> Bool {
         let descriptor = FetchDescriptor<TipEntry>(
             predicate: #Predicate { $0.clockIn != nil && $0.clockOut != nil }
         )
-        guard let punchBacked = try? context.fetch(descriptor), !punchBacked.isEmpty else { return }
+        let punchBacked: [TipEntry]
+        do {
+            punchBacked = try context.fetch(descriptor)
+        } catch {
+            return false
+        }
+        guard !punchBacked.isEmpty else { return true }
         for entry in punchBacked {
             guard let exact = ShiftTimes.hours(clockIn: entry.clockIn, clockOut: entry.clockOut, calendar: calendar) else { continue }
             if entry.hoursWorked != exact {
                 entry.hoursWorked = exact
             }
         }
-        try? context.save()
+        do {
+            try context.save()
+            return true
+        } catch {
+            return false
+        }
     }
 }

@@ -22,9 +22,6 @@ struct FirstRunSetupView: View {
                     Text("Welcome to Payday")
                         .font(PaydayFont.largeTitle)
                         .foregroundStyle(PaydayColor.textPrimary)
-                    Text("A few quick questions and you're set.")
-                        .font(PaydayFont.subheadline)
-                        .foregroundStyle(PaydayColor.textSecondary)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal)
@@ -32,14 +29,14 @@ struct FirstRunSetupView: View {
                 .padding(.bottom, 8)
 
                 Form {
-                    Section("What's your first name?") {
+                    Section("Name") {
                         TextField("First name", text: $firstName)
                             .textInputAutocapitalization(.words)
                             .autocorrectionDisabled()
                     }
                     .listRowBackground(PaydayColor.fieldBackground)
 
-                    Section("How often do you get paid?") {
+                    Section("Pay schedule") {
                         Picker("Pay frequency", selection: $frequency) {
                             ForEach(PayFrequency.allCases) { freq in
                                 Text(freq.displayName).tag(freq)
@@ -52,13 +49,11 @@ struct FirstRunSetupView: View {
 
                     Section {
                         HStack {
-                            Text("Most recent payday")
+                            Text("Payday")
                             Spacer()
                             DatePicker("", selection: $mostRecentPayday, in: ...Date.now, displayedComponents: .date)
                                 .labelsHidden()
                         }
-                    } footer: {
-                        Text("The day that paycheck actually landed in your account.")
                     }
                     .listRowBackground(PaydayColor.fieldBackground)
                     .onChange(of: mostRecentPayday) { _, newValue in
@@ -72,13 +67,11 @@ struct FirstRunSetupView: View {
                             DatePicker("", selection: $periodEndDate, in: ...mostRecentPayday, displayedComponents: .date)
                                 .labelsHidden()
                         }
-                    } footer: {
-                        Text("The last day of work that paycheck paid you for — if it landed a few days after your last shift, that's normal, this is how Payday learns the gap.")
                     }
                     .listRowBackground(PaydayColor.fieldBackground)
 
                     if frequency == .twiceMonthly {
-                        Text("Periods run the 1st–15th and 16th–end of every month.")
+                        Text("1st–15th and 16th–month end")
                             .font(PaydayFont.footnote)
                             .foregroundStyle(PaydayColor.textSecondary)
                             .listRowBackground(PaydayColor.fieldBackground)

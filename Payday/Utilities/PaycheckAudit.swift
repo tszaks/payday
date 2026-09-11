@@ -61,11 +61,18 @@ struct PaycheckAudit {
     /// the cent-level tolerance above allows for.
     private static let wagesTolerance = 100
 
-    static func run(stub: Stub, loggedCreditTipsCents: Int?, computedWages: PeriodIncome.Wages?, computedOvertimeHours: Double?) -> [Finding] {
+    static func run(
+        stub: Stub,
+        loggedCreditTipsCents: Int?,
+        loggedGratuityCents: Int?,
+        computedWages: PeriodIncome.Wages?,
+        computedOvertimeHours: Double?
+    ) -> [Finding] {
         [
             grossMathFinding(stub: stub),
             netMathFinding(stub: stub),
             tipsVsLoggedFinding(stub: stub, loggedCreditTipsCents: loggedCreditTipsCents),
+            gratuityVsLoggedFinding(stub: stub, loggedGratuityCents: loggedGratuityCents),
             wagesVsComputedFinding(stub: stub, computedWages: computedWages),
             overtimeMissingFinding(stub: stub, computedOvertimeHours: computedOvertimeHours),
         ].compactMap { $0 }
@@ -102,13 +109,35 @@ struct PaycheckAudit {
     private static func tipsVsLoggedFinding(stub: Stub, loggedCreditTipsCents: Int?) -> Finding? {
         guard let tipsCents = stub.tipsCents, let loggedCreditTipsCents else { return nil }
         guard abs(tipsCents - loggedCreditTipsCents) > centsTolerance else {
-            return Finding(id: "tips-vs-logged", severity: .reconciles, message: "The tips line matches what you logged.")
+            return Finding(id: "tips-vs-logged", severity: .reconciles, message: "Tips match what you logged.")
         }
         let logged = moneyString(loggedCreditTipsCents)
         let stubTips = moneyString(tipsCents)
         let difference = moneyString(abs(tipsCents - loggedCreditTipsCents))
         let direction = tipsCents < loggedCreditTipsCents ? "short" : "over"
-        return Finding(id: "tips-vs-logged", severity: .discrepancy, message: "You logged \(logged) in credit tips; the stub pays \(stubTips). \(difference) \(direction).")
+        return Finding(id: "tips-vs-logged", severity: .discrepancy, message: "You logged \(logged) in credit tips; the stub pays \(stubTips) in tips. \(difference) \(direction).")
+    }
+
+    /// Toast mandatory gratuity is its own payroll category. Comparing it
+    /// independently prevents an overage in one category from hiding a
+    /// shortage in the other.
+    private static func gratuityVsLoggedFinding(stub: Stub, loggedGratuityCents: Int?) -> Finding? {
+        guard let loggedGratuityCents else { return nil }
+        guard let gratuityCents = stub.gratuityCents else {
+            return Finding(
+                id: "gratuity-vs-logged",
+                severity: .note,
+                message: "You logged \(moneyString(loggedGratuityCents)) in gratuity and fees; no gratuity line was entered from the stub."
+            )
+        }
+        guard abs(gratuityCents - loggedGratuityCents) > centsTolerance else {
+            return Finding(id: "gratuity-vs-logged", severity: .reconciles, message: "Gratuity matches what you logged.")
+        }
+        let logged = moneyString(loggedGratuityCents)
+        let stubGratuity = moneyString(gratuityCents)
+        let difference = moneyString(abs(gratuityCents - loggedGratuityCents))
+        let direction = gratuityCents < loggedGratuityCents ? "short" : "over"
+        return Finding(id: "gratuity-vs-logged", severity: .discrepancy, message: "You logged \(logged) in gratuity and fees; the stub pays \(stubGratuity) in gratuity. \(difference) \(direction).")
     }
 
     private static func wagesVsComputedFinding(stub: Stub, computedWages: PeriodIncome.Wages?) -> Finding? {

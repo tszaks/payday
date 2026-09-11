@@ -17,6 +17,11 @@ settings:
     IPHONEOS_DEPLOYMENT_TARGET: "26.0"
     ENABLE_PREVIEWS: YES
 
+packages:
+  Supabase:
+    url: https://github.com/supabase/supabase-swift.git
+    exactVersion: 2.55.1
+
 targets:
   Payday:
     type: application
@@ -34,7 +39,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.szakacsmedia.payday
         TARGETED_DEVICE_FAMILY: "1"
         MARKETING_VERSION: "1.0"
-        CURRENT_PROJECT_VERSION: "81501"
+        CURRENT_PROJECT_VERSION: "982026"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         GENERATE_INFOPLIST_FILE: YES
@@ -43,15 +48,18 @@ targets:
         INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
         INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
         CODE_SIGN_ENTITLEMENTS: Payday/Payday.entitlements
+        SUPABASE_URL: https://bkkxunqqfkogxibyyjmc.supabase.co
+        SUPABASE_PUBLISHABLE_KEY: sb_publishable_LLozFUScbNbnXuGXVwSLSQ_Brbpy1RD
     info:
       path: Generated/Payday-Info.plist
       properties:
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         OPENAI_API_KEY: "$(OPENAI_API_KEY)"
+        SUPABASE_URL: "$(SUPABASE_URL)"
+        SUPABASE_PUBLISHABLE_KEY: "$(SUPABASE_PUBLISHABLE_KEY)"
         ITSAppUsesNonExemptEncryption: false
-        UIBackgroundModes:
-          - remote-notification
         NSFaceIDUsageDescription: Payday can lock itself with Face ID when you turn that on in Settings.
-        NSCalendarsFullAccessUsageDescription: Payday reads only the calendar you choose, to time the end-of-shift reminder. Your schedule never leaves your phone.
         NSCameraUsageDescription: Payday uses the camera to read pay stubs and shift receipts and fill out your entries.
         # Lock Screen / StandBy accessory widgets can't host an interactive
         # button (see PaydayWidgetAccessoryViews.swift) — widgetURL + this
@@ -86,6 +94,7 @@ targets:
     dependencies:
       - target: PaydayWidget
         embed: true
+      - package: Supabase
 
   PaydayWidget:
     type: app-extension
@@ -124,19 +133,19 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.szakacsmedia.payday.widget
         TARGETED_DEVICE_FAMILY: "1"
         MARKETING_VERSION: "1.0"
-        CURRENT_PROJECT_VERSION: "81501"
+        CURRENT_PROJECT_VERSION: "982026"
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_CFBundleDisplayName: Payday
         CODE_SIGN_ENTITLEMENTS: PaydayWidget/PaydayWidget.entitlements
-        # The widget reads the same App-Group-shared store the app keeps in
-        # sync with CloudKit — it must NOT also try to stand up its own
-        # CloudKit sync engine in the extension process. SharedModelContainer
-        # branches on this flag to pass cloudKitDatabase: .none there.
+        # The widget shares Payday's local cache but never links the Supabase
+        # client. The flag keeps extension-only compilation explicit.
         SWIFT_ACTIVE_COMPILATION_CONDITIONS: WIDGET_EXTENSION
     info:
       path: Generated/PaydayWidget-Info.plist
       properties:
         CFBundleDisplayName: Payday
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
 

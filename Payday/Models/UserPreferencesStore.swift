@@ -1,37 +1,14 @@
 import SwiftUI
 
-enum AppAppearance: String, CaseIterable, Identifiable {
-    case system, light, dark
-    var id: String { rawValue }
-
-    var displayName: String {
-        switch self {
-        case .system: "Automatic"
-        case .light: "Light"
-        case .dark: "Dark"
-        }
-    }
-
-    var colorScheme: ColorScheme? {
-        switch self {
-        case .system: nil
-        case .light: .light
-        case .dark: .dark
-        }
-    }
-}
-
 /// Small app-config preferences that aren't tied to the pay schedule.
 /// Same UserDefaults-backed pattern as PayScheduleStore: config, not a record.
 @Observable
 final class UserPreferencesStore {
     private static let nameKey = "com.szakacsmedia.payday.firstName"
-    private static let appearanceKey = "com.szakacsmedia.payday.appearance"
+    private static let appearanceKey = AppGroup.appearanceKey
     private static let faceIDLockKey = "com.szakacsmedia.payday.faceIDLock"
     private static let smartNudgeKey = "com.szakacsmedia.payday.smartNudge"
     private static let paydayReminderKey = "com.szakacsmedia.payday.paydayReminder"
-    private static let workCalendarIdentifierKey = "com.szakacsmedia.payday.workCalendarIdentifier"
-    private static let workCalendarKeywordKey = "com.szakacsmedia.payday.workCalendarKeyword"
     private static let baseHourlyWageCentsKey = AppGroup.baseHourlyWageCentsKey
     /// Set once migration to the app-group suite has run, so a wage the user
     /// later clears (removeObject on the suite key) is never mistaken for
@@ -39,12 +16,15 @@ final class UserPreferencesStore {
     private static let baseHourlyWageMigratedKey = "com.szakacsmedia.payday.baseHourlyWageMigratedToAppGroup"
     private let defaults: UserDefaults
     /// The widget can't reach `.standard` (a different process's container),
-    /// so the wage — the one preference it needs — lives in the app-group
-    /// suite instead. Everything else here stays on `.standard`.
+    /// so the wage and appearance — the preferences it renders — live in the
+    /// app-group suite. The remaining app-only settings stay on `.standard`.
     private let wageDefaults: UserDefaults
 
     var firstName: String? {
-        didSet { persistName() }
+        didSet {
+            persistName()
+            PaydaySettingsSyncClock.touch()
+        }
     }
 
     /// The tipped base wage, in cents — money is stored in cents everywhere
@@ -52,11 +32,24 @@ final class UserPreferencesStore {
     /// line on a paycheck expectation; nil means the feature is off, and
     /// this value is never counted as tip income anywhere.
     var baseHourlyWageCents: Int? {
-        didSet { persistBaseHourlyWageCents() }
+        didSet {
+            persistBaseHourlyWageCents()
+            PaydaySettingsSyncClock.touch()
+            #if !WIDGET_EXTENSION
+            PaydayWidgetRefresh.request()
+            #endif
+        }
     }
 
     var appearance: AppAppearance {
-        didSet { persistAppearance() }
+        didSet {
+            guard oldValue != appearance else { return }
+            persistAppearance()
+            PaydayWidgetRefresh.request()
+            Task { @MainActor in
+                await ShiftSessionManager.refreshAppearance()
+            }
+        }
     }
 
     /// Off by default, like Notes — a lock nobody asked for is a lockout
@@ -70,45 +63,31 @@ final class UserPreferencesStore {
     /// distinguish "never set" from "explicitly false," so a missing key
     /// reads as true rather than the usual Bool absence default of false.
     var isSmartNudgeEnabled: Bool {
-        didSet { defaults.set(isSmartNudgeEnabled, forKey: Self.smartNudgeKey) }
+        didSet {
+            defaults.set(isSmartNudgeEnabled, forKey: Self.smartNudgeKey)
+            PaydaySettingsSyncClock.touch()
+        }
     }
 
     /// On by default, same reasoning as isSmartNudgeEnabled — the payday
     /// reminder is built-in behavior with an off switch, not an opt-in.
     var isPaydayReminderEnabled: Bool {
-        didSet { defaults.set(isPaydayReminderEnabled, forKey: Self.paydayReminderKey) }
-    }
-
-    /// The one iCloud calendar the user has designated as their posted work
-    /// schedule — nil means the feature is off. Never inferred, never
-    /// guessed: set only by an explicit pick in Settings, cleared only by
-    /// an explicit Disconnect. Every event in this calendar counts as a
-    /// shift; no event anywhere else ever does.
-    var workCalendarIdentifier: String? {
-        didSet { persistWorkCalendarIdentifier() }
-    }
-
-    /// Optional user-stated filter for a MIXED calendar (Schedulefly's
-    /// Google-sync can drop shifts into a personal calendar next to
-    /// dentist appointments): only events whose title contains this count
-    /// as shifts. Still designation, never inference — the user states the
-    /// rule, the app applies it literally. nil/empty = every event counts.
-    var workCalendarKeyword: String? {
-        didSet { persistWorkCalendarKeyword() }
+        didSet {
+            defaults.set(isPaydayReminderEnabled, forKey: Self.paydayReminderKey)
+            PaydaySettingsSyncClock.touch()
+        }
     }
 
     init(defaults: UserDefaults = .standard, wageDefaults: UserDefaults = AppGroup.defaults) {
         self.defaults = defaults
         self.wageDefaults = wageDefaults
         self.firstName = defaults.string(forKey: Self.nameKey)
-        self.appearance = defaults.string(forKey: Self.appearanceKey)
+        Self.migrateAppearanceIfNeeded(from: defaults, to: wageDefaults)
+        self.appearance = wageDefaults.string(forKey: Self.appearanceKey)
             .flatMap(AppAppearance.init(rawValue:)) ?? .system
         self.isFaceIDLockEnabled = defaults.bool(forKey: Self.faceIDLockKey)
         self.isSmartNudgeEnabled = defaults.object(forKey: Self.smartNudgeKey) == nil ? true : defaults.bool(forKey: Self.smartNudgeKey)
         self.isPaydayReminderEnabled = defaults.object(forKey: Self.paydayReminderKey) == nil ? true : defaults.bool(forKey: Self.paydayReminderKey)
-        self.workCalendarIdentifier = defaults.string(forKey: Self.workCalendarIdentifierKey)
-        self.workCalendarKeyword = defaults.string(forKey: Self.workCalendarKeywordKey)
-
         Self.migrateBaseHourlyWageCentsIfNeeded(from: defaults, to: wageDefaults)
         self.baseHourlyWageCents = wageDefaults.object(forKey: Self.baseHourlyWageCentsKey) == nil ? nil : wageDefaults.integer(forKey: Self.baseHourlyWageCentsKey)
     }
@@ -135,6 +114,18 @@ final class UserPreferencesStore {
         suite.set(true, forKey: baseHourlyWageMigratedKey)
     }
 
+    /// Appearance used to live in the app process's defaults. Move an
+    /// existing explicit choice once so WidgetKit can render the same scheme.
+    private static func migrateAppearanceIfNeeded(from standard: UserDefaults, to suite: UserDefaults) {
+        guard standard !== suite,
+              suite.object(forKey: appearanceKey) == nil,
+              let legacyValue = standard.string(forKey: appearanceKey),
+              AppAppearance(rawValue: legacyValue) != nil
+        else { return }
+        suite.set(legacyValue, forKey: appearanceKey)
+        standard.removeObject(forKey: appearanceKey)
+    }
+
     private func persistName() {
         if let firstName, !firstName.isEmpty {
             defaults.set(firstName, forKey: Self.nameKey)
@@ -144,24 +135,7 @@ final class UserPreferencesStore {
     }
 
     private func persistAppearance() {
-        defaults.set(appearance.rawValue, forKey: Self.appearanceKey)
-    }
-
-    private func persistWorkCalendarIdentifier() {
-        if let workCalendarIdentifier {
-            defaults.set(workCalendarIdentifier, forKey: Self.workCalendarIdentifierKey)
-        } else {
-            defaults.removeObject(forKey: Self.workCalendarIdentifierKey)
-        }
-    }
-
-    private func persistWorkCalendarKeyword() {
-        let trimmed = workCalendarKeyword?.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let trimmed, !trimmed.isEmpty {
-            defaults.set(trimmed, forKey: Self.workCalendarKeywordKey)
-        } else {
-            defaults.removeObject(forKey: Self.workCalendarKeywordKey)
-        }
+        wageDefaults.set(appearance.rawValue, forKey: Self.appearanceKey)
     }
 
     private func persistBaseHourlyWageCents() {

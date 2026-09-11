@@ -7,6 +7,11 @@ import Vision
 /// matches those words to the fields Payday already captures. No image or
 /// recognized text leaves the phone when the AI parser is unavailable.
 enum PaycheckOCR {
+    struct RecognizedText: Equatable, Sendable {
+        let text: String
+        let boundingBox: CGRect
+    }
+
     struct ParsedPaycheck: Equatable, Sendable {
         var tipsCents: Int?
         var regularWagesCents: Int?
@@ -20,6 +25,29 @@ enum PaycheckOCR {
             [tipsCents, regularWagesCents, overtimeWagesCents, gratuityCents, grossPayCents, taxesCents, netPayCents]
                 .compactMap { $0 }
                 .count
+        }
+
+        /// Correct a small OCR error in the tips field when every printed
+        /// earnings component independently proves the intended value. Keep
+        /// larger differences untouched because they can represent a real,
+        /// uncaptured earnings row rather than a transposed digit.
+        func correctingSmallGrossMismatch() -> Self {
+            guard let tipsCents,
+                  let regularWagesCents,
+                  let overtimeWagesCents,
+                  let gratuityCents,
+                  let grossPayCents
+            else { return self }
+
+            var corrected = self
+            corrected.tipsCents = PaycheckRecord.reconciledTipsCents(
+                tipsCents: tipsCents,
+                regularWagesCents: regularWagesCents,
+                overtimeWagesCents: overtimeWagesCents,
+                gratuityCents: gratuityCents,
+                grossPayCents: grossPayCents
+            )
+            return corrected
         }
     }
 
@@ -116,14 +144,16 @@ enum PaycheckOCR {
     static func parse(image: UIImage) async throws -> ParsedPaycheck {
         if PaycheckAIParser.isConfigured {
             do {
-                return try await PaycheckAIParser.parse(image: image)
+                return try await PaycheckAIParser.parse(image: image).correctingSmallGrossMismatch()
+            } catch is CancellationError {
+                throw CancellationError()
             } catch {
                 // A temporary network or model failure should not make the
                 // photo feature unusable. Fall through to on-device Vision.
             }
         }
 
-        return try await parseWithVision(image: image)
+        return try await parseWithVision(image: image).correctingSmallGrossMismatch()
     }
 
     private static func parseWithVision(image: UIImage) async throws -> ParsedPaycheck {
@@ -131,21 +161,30 @@ enum PaycheckOCR {
             throw ScanError.imageUnavailable
         }
 
-        let parsed = try await Task.detached(priority: .userInitiated) {
+        let worker = Task.detached(priority: .userInitiated) {
+            try Task.checkCancellation()
             guard let image = UIImage(data: imageData), let cgImage = image.cgImage else {
                 throw ScanError.imageUnavailable
             }
 
+            try Task.checkCancellation()
             let lines = try recognizeLines(
                 in: cgImage,
                 orientation: image.ocrOrientation
             )
+            try Task.checkCancellation()
             let parsed = parse(lines: lines)
             guard parsed.filledFieldCount > 0 else {
                 throw ScanError.noPaycheckFieldsFound
             }
             return parsed
-        }.value
+        }
+
+        let parsed = try await withTaskCancellationHandler {
+            try await worker.value
+        } onCancel: {
+            worker.cancel()
+        }
 
         return parsed
     }
@@ -158,7 +197,13 @@ enum PaycheckOCR {
         request.recognitionLevel = .accurate
         request.usesLanguageCorrection = true
         request.recognitionLanguages = ["en-US"]
-        request.minimumTextHeight = 0.01
+        // Pay stubs commonly contain dense tables whose current-period values
+        // are much smaller than the check amount printed below them.
+        request.minimumTextHeight = 0.004
+        request.customWords = [
+            "REGULAR", "OVERTIME", "GRATUITY", "YTD", "WITHHOLDING",
+            "SUI", "FICA", "MEDICARE", "PAYCHECK"
+        ]
 
         let handler = VNImageRequestHandler(
             cgImage: image,
@@ -167,11 +212,60 @@ enum PaycheckOCR {
         )
         try handler.perform([request])
 
-        let lines = (request.results ?? []).compactMap { observation in
-            observation.topCandidates(1).first?.string
+        let observations = (request.results ?? []).compactMap { observation -> RecognizedText? in
+            guard let text = observation.topCandidates(1).first?.string else { return nil }
+            return RecognizedText(text: text, boundingBox: observation.boundingBox)
         }
+        let lines = visualLines(from: observations)
         guard !lines.isEmpty else { throw ScanError.noTextFound }
         return lines
+    }
+
+    /// Vision frequently returns a payroll table's label and amount columns as
+    /// separate observations. Rebuild visual rows before label matching so the
+    /// parser retains the table relationship instead of flattening it away.
+    static func visualLines(from observations: [RecognizedText]) -> [String] {
+        struct Row {
+            var items: [RecognizedText]
+            var centerY: CGFloat
+            var height: CGFloat
+        }
+
+        let ordered = observations.sorted {
+            if abs($0.boundingBox.midY - $1.boundingBox.midY) > 0.001 {
+                return $0.boundingBox.midY > $1.boundingBox.midY
+            }
+            return $0.boundingBox.minX < $1.boundingBox.minX
+        }
+        var rows: [Row] = []
+
+        for observation in ordered {
+            let centerY = observation.boundingBox.midY
+            let bestIndex = rows.indices
+                .filter { index in
+                    let tolerance = max(0.004, max(rows[index].height, observation.boundingBox.height) * 0.85)
+                    return abs(rows[index].centerY - centerY) <= tolerance
+                }
+                .min { abs(rows[$0].centerY - centerY) < abs(rows[$1].centerY - centerY) }
+
+            if let bestIndex {
+                rows[bestIndex].items.append(observation)
+                let count = CGFloat(rows[bestIndex].items.count)
+                rows[bestIndex].centerY = ((rows[bestIndex].centerY * (count - 1)) + centerY) / count
+                rows[bestIndex].height = max(rows[bestIndex].height, observation.boundingBox.height)
+            } else {
+                rows.append(Row(items: [observation], centerY: centerY, height: observation.boundingBox.height))
+            }
+        }
+
+        return rows
+            .sorted { $0.centerY > $1.centerY }
+            .map { row in
+                row.items
+                    .sorted { $0.boundingBox.minX < $1.boundingBox.minX }
+                    .map(\.text)
+                    .joined(separator: " ")
+            }
     }
 
     private static func normalize(_ line: String) -> String {
@@ -202,7 +296,17 @@ enum PaycheckOCR {
         let pattern = #"\(?\$?\s*[0-9][0-9,]*(?:\.[0-9]{1,2})?\)?"#
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
         let range = NSRange(line.startIndex..<line.endIndex, in: line)
-        guard let match = regex.firstMatch(in: line, range: range),
+        let matches = regex.matches(in: line, range: range)
+        // A merged row may contain hours, rate, current amount, and YTD.
+        // Prefer an explicitly printed currency cell. Without a currency
+        // marker, accept only an unambiguous single numeric value rather than
+        // silently treating hours or rate as wages.
+        let currencyMatch = matches.first { match in
+            guard let matchRange = Range(match.range, in: line) else { return false }
+            return line[matchRange].contains("$")
+        }
+        let match = currencyMatch ?? (matches.count == 1 ? matches[0] : nil)
+        guard let match,
               let matchRange = Range(match.range, in: line)
         else { return nil }
 

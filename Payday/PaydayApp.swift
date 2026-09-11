@@ -20,7 +20,13 @@ struct PaydayApp: App {
 
     var body: some Scene {
         WindowGroup {
-            RootView()
+            Group {
+                if SharedModelContainer.openingFailed {
+                    SharedStoreRecoveryView()
+                } else {
+                    RootView()
+                }
+            }
                 .environment(scheduleStore)
                 .environment(insightsStore)
                 .environment(preferencesStore)
@@ -48,20 +54,18 @@ struct PaydayApp: App {
                         break
                     }
                 }
-                .task {
-                    #if DEBUG
-                    DebugSeeder.seedIfRequested(scheduleStore: scheduleStore, insightsStore: insightsStore, moveLedgerStore: moveLedgerStore, preferencesStore: preferencesStore)
-                    #endif
-                    // Backfill shiftID on any legacy rows (cheap nil-predicate
-                    // fetch; no-ops once every row is migrated). Runs after the
-                    // debug seeder so seeded rows already carry their own ids.
-                    MigrationRunner.backfillShiftIDs(in: SharedModelContainer.shared.mainContext)
-                    // Recompute punch-backed hoursWorked with the exact
-                    // (never quarter-rounded) rule — heals shifts stored
-                    // before that rule existed. Idempotent, so this is safe
-                    // to run every launch alongside the backfill above.
-                    MigrationRunner.recomputeExactHours(in: SharedModelContainer.shared.mainContext)
-                }
         }
+    }
+}
+
+private struct SharedStoreRecoveryView: View {
+    var body: some View {
+        ContentUnavailableView {
+            Label("Payday Couldn't Open", systemImage: "exclamationmark.triangle")
+        } description: {
+            Text("Your synced data remains safe. Close and reopen Payday, then try again.")
+        }
+        .padding()
+        .background(PaydayColor.background)
     }
 }

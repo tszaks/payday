@@ -67,10 +67,11 @@ enum ShiftDays {
             }
     }
 
-    /// The label for one shift's row. A single-shift day reads exactly like
-    /// before ("Today") — no added noise. A day with more than one shift
-    /// distinguishes them by period ("Today · Lunch" / "Today · Dinner"),
-    /// falling back to an ordinal only when a period was never set.
+    /// The label for one shift's row. Shift labels stay structurally stable:
+    /// every row shows its exact date and, when known, its period. This avoids
+    /// making recent rows look like a different kind of record from older rows.
+    /// A multiple-shift day with no saved periods can still fall back to an
+    /// ordinal when its caller has one.
     static func shiftLabel(
         day: Date,
         period: ShiftPeriod?,
@@ -79,12 +80,11 @@ enum ShiftDays {
         relativeTo now: Date = .now,
         calendar: Calendar = .current
     ) -> String {
-        let base = humanLabel(for: day, relativeTo: now, calendar: calendar)
-        guard dayHasMultipleShifts else { return base }
+        let base = day.formatted(.dateTime.weekday(.wide).month(.abbreviated).day())
         if let period {
             return "\(base) · \(period.displayName)"
         }
-        if let ordinal {
+        if dayHasMultipleShifts, let ordinal {
             return "\(base) · \(ordinalWord(ordinal))"
         }
         return base
