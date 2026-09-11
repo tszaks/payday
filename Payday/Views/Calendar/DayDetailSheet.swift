@@ -104,6 +104,14 @@ struct DayDetailSheet: View {
     /// the sheet's background rather than inside its own card: this sheet
     /// has no second object competing for attention, so a shadow here would
     /// mark nothing.
+    /// A shift's note. Not a ShiftDetails field: `note` lives per-entry
+    /// rather than on the one canonical row, and LogTipSheet writes the
+    /// same text onto every row of a shift, so this takes the first
+    /// non-empty one rather than joining duplicates.
+    private static func shiftNote(from entries: [TipEntry]) -> String? {
+        entries.compactMap(\.note).first { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    }
+
     private func heroCard(totalCents: Int) -> some View {
         VStack(spacing: 6) {
             Text("Total")
@@ -130,7 +138,7 @@ struct DayDetailSheet: View {
             Button {
                 sheetTarget = .edit(anchor)
             } label: {
-                ShiftDayRow(day: group.day, period: period, dayHasMultipleShifts: shiftCount >= 2, entries: group.items, wageCentsPerHour: preferencesStore.baseHourlyWageCents)
+                ShiftDayRow(day: group.day, period: period, dayHasMultipleShifts: shiftCount >= 2, entries: group.items, wageCentsPerHour: preferencesStore.baseHourlyWageCents, note: Self.shiftNote(from: group.items))
             }
             .buttonStyle(.plain)
             .swipeActions(edge: .trailing) {

@@ -2,56 +2,30 @@ import Combine
 import SwiftUI
 import SwiftData
 
-/// The stats engine computes the facts; OpenAI's gpt-5.6-terra narrates
-/// them over the network. This is autonomous, not on-demand — there is
-/// deliberately no "Analyze Now" control anywhere. A refresh only happens
-/// when it's actually due (see minimumRefreshInterval below) and there's
-/// something new to say; visiting this tab can trigger that check, but
-/// never a person's tap. Each refresh amends the previous narration rather
-/// than rewriting it from scratch, so wording should settle down and
-/// change less over time as patterns stabilize, not reshuffle every visit.
-/// Between refreshes the last narration keeps showing (marked stale, never
-/// discarded) rather than dropping back to the plain facts — someone who
-/// logs nightly should see prose almost all the time, not robo-facts.
+/// Entirely deterministic. Every number and every sentence on this page is
+/// computed by StatsEngine from local records, so the page renders the same
+/// offline as on, instantly, with no spinner and no failure state.
+///
+/// It used to narrate through a model. That came off because the one job a
+/// model could do here that arithmetic cannot — reading a written shift
+/// note and tying it to a number — depends on shift notes, which are a
+/// rarely-used feature. What remained was a model forbidden from doing
+/// arithmetic, choosing among facts the engine already ranks, in exchange
+/// for latency, a network dependency, a failure mode, and wording that
+/// changed between visits.
+///
+/// InsightsService, InsightsStore, and NarrationRefresh are all still on
+/// disk and still tested, simply unreferenced here. Reversible if notes
+/// ever become real behavior.
 struct InsightsView: View {
     @Environment(\.scenePhase) private var scenePhase
-    @Environment(PayScheduleStore.self) private var scheduleStore
-    @Environment(InsightsStore.self) private var insightsStore
     @Environment(MoveLedgerStore.self) private var moveLedgerStore
     @Query(sort: \TipEntry.date, order: .reverse) private var allEntries: [TipEntry]
 
-    @State private var isLoading = false
-    @State private var errorMessage: String?
     @State private var isShowingBackfillSheet = false
     @State private var pageFactsCache: InsightsPageFactsCache?
     @State private var dataRevision = 0
     @State private var currentDay = Calendar.current.startOfDay(for: .now)
-
-    // Cadence and the failure cooldown both live in NarrationRefresh, which is
-    // pure and tested — this rule decides when real money gets spent.
-
-    private var isModelAvailable: Bool {
-        InsightsService.isConfigured
-    }
-
-    /// Due when enough real time has passed AND the facts actually changed
-    /// since the last refresh (nothing new logged means nothing new to
-    /// say) — OR when the last attempt failed, which bypasses the interval
-    /// gate entirely so a network hiccup gets one retry on the very next
-    /// visit instead of waiting out the full interval with no recourse.
-    private func isRefreshDue(facts: InsightsFacts) -> Bool {
-        let snapshot = insightsStore.snapshot
-        return NarrationRefresh.isDue(
-            now: .now,
-            snapshotGeneratedAt: snapshot?.generatedAt,
-            // flatMap, not `snapshot?.facts`, to keep this a single-level
-            // optional compare — snapshot is optional AND its facts are
-            // optional (a snapshot persisted before that field existed).
-            factsMatchSnapshot: snapshot.flatMap(\.facts) == facts,
-            lastAttemptFailed: insightsStore.lastAttemptFailed,
-            lastAttemptAt: insightsStore.lastAttemptAt
-        )
-    }
 
     var body: some View {
         let key = InsightsPageFactsKey(
@@ -65,7 +39,7 @@ struct InsightsView: View {
         NavigationStack {
             Group {
                 if let facts = pageFacts.facts {
-                    resultList(facts, moves: pageFacts.moves, followUps: pageFacts.followUps, recentNights: pageFacts.recentNights, plan: pageFacts.plan)
+                    resultList(facts, pageFacts: pageFacts)
                 } else {
                     ScrollView {
                         emptyState(unlocks: pageFacts.unlocks, shiftCount: pageFacts.shiftCount)
@@ -76,10 +50,6 @@ struct InsightsView: View {
             }
             .background(PaydayColor.background)
             .navigationTitle("Insights")
-            .task(id: pageFacts.facts) {
-                guard isModelAvailable, let facts = pageFacts.facts, isRefreshDue(facts: facts) else { return }
-                await refresh(facts: facts, topMove: pageFacts.moves.first, latestFollowUp: pageFacts.followUps.first)
-            }
             .task(id: pageFacts.moves.map(\.id)) {
                 moveLedgerStore.recordShown(pageFacts.moves)
             }
@@ -112,8 +82,12 @@ struct InsightsView: View {
         currentDay = Calendar.current.startOfDay(for: .now)
     }
 
-    private func resultList(_ facts: InsightsFacts, moves: [Move], followUps: [FollowUp], recentNights: [(date: Date, cents: Int)], plan: PlanForward?) -> some View {
-        ScrollViewReader { proxy in
+    private func resultList(_ facts: InsightsFacts, pageFacts: InsightsPageFacts) -> some View {
+        let moves = pageFacts.moves
+        let followUps = pageFacts.followUps
+        let recentNights = pageFacts.recentNights
+        let plan = pageFacts.plan
+        return ScrollViewReader { proxy in
         ScrollView {
             VStack(spacing: PaydaySpacing.p16) {
                 let shownFollowUps = Array(followUps.prefix(1))
@@ -122,7 +96,28 @@ struct InsightsView: View {
                 let excludedTileIDs = InsightsPresentation.redundantMetricIDs(for: moves)
                 let numberRows = InsightsNumbersGrid.rows(for: facts, excluding: excludedTileIDs)
 
-                // Change leads — something that MOVED outranks a standing
+                // Reliability leads the page. A server already knows the
+                // SHAPE of their week — that Friday is good and Monday is
+                // dead. What no amount of experience tells them is the
+                // SPREAD, which is the number anyone budgeting on variable
+                // income actually needs. It is also true from the first
+                // qualifying weekday and never false-alarms, which is why
+                // it holds the lead slot rather than the trend.
+                if let reliability = pageFacts.reliability, reliability.hasVisibleRanges {
+                    reliabilitySection(reliability)
+                    Divider()
+                }
+
+                // Level over time. Often correctly absent: it demands a
+                // fully-covered prior window, twelve shifts a side, a
+                // stable-enough schedule, and both a materiality and a
+                // precision gate. See StatsEngine.earningTrend.
+                if let trend = pageFacts.trend {
+                    trendSection(trend)
+                    Divider()
+                }
+
+                // Change — something that MOVED outranks a standing
                 // pattern, since a shift in the data is the newer fact. Only
                 // the largest change leads; the full ledger still informs
                 // future ranking without turning this into a feed.
@@ -237,6 +232,21 @@ struct InsightsView: View {
                         Text(PlanForwardCopy.headline(for: plan))
                             .font(PaydayFont.headline)
                             .foregroundStyle(PaydayColor.textPrimary)
+                        // The forecast's own track record, attached to the
+                        // forecast rather than given its own section: it is
+                        // a fact about the estimate, not about the reader.
+                        if let accuracy = pageFacts.forecastAccuracy {
+                            Text(RevealCopy.forecastAccuracyLine(accuracy))
+                                .font(PaydayFont.caption)
+                                .foregroundStyle(PaydayColor.textSecondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            if let biasLine = RevealCopy.forecastBiasLine(accuracy) {
+                                Text(biasLine)
+                                    .font(PaydayFont.caption)
+                                    .foregroundStyle(PaydayColor.textSecondary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                        }
                         VStack(spacing: PaydaySpacing.p12) {
                             ForEach(plan.nights, id: \.weekday) { night in
                                 planNightRow(night)
@@ -247,43 +257,11 @@ struct InsightsView: View {
                     Divider()
                 }
 
-                // Model narration is deliberately demoted to data-quality
-                // context. The observations already exist above; repeating
-                // them under "Worth Knowing" made the page longer without
-                // making it smarter.
-                ForEach(dataNoteSections) { section in
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("DATA NOTE")
-                            .font(PaydayFont.caption2)
-                            .tracking(0.8)
-                            .foregroundStyle(PaydayColor.primary)
-                        Text(section.title)
-                            .font(PaydayFont.headline)
-                            .foregroundStyle(PaydayColor.textPrimary)
-                        Text(section.body)
-                            .font(PaydayFont.bodyRegular)
-                            .foregroundStyle(PaydayColor.textPrimary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    Divider()
-                }
-
-                if isModelAvailable {
-                    if isLoading {
-                        HStack(spacing: 8) {
-                            ProgressView()
-                            Text("Updating…")
-                                .font(PaydayFont.subheadline)
-                                .foregroundStyle(PaydayColor.textSecondary)
-                        }
-                    } else if let errorMessage {
-                        Text(errorMessage)
-                            .font(PaydayFont.caption)
-                            .foregroundStyle(PaydayColor.error)
-                            .frame(maxWidth: .infinity, alignment: .center)
-                    }
-                }
+                // No DATA NOTE section, no spinner, no error caption: this
+                // page is now entirely deterministic and renders the same
+                // offline as on. The narration service is still on disk and
+                // still tested, just unreferenced — see the type comment on
+                // InsightsService for why it came off the page.
 
                 Color.clear.frame(height: PaydaySpacing.p8).id("insights-bottom")
             }
@@ -300,13 +278,6 @@ struct InsightsView: View {
             }
         }
         }
-    }
-
-    /// Narration no longer competes with deterministic recommendations. It
-    /// survives only when it explains an anomaly or warns that a figure is
-    /// estimated/incomplete, and at most two notes can reach the page.
-    private var dataNoteSections: [InsightSection] {
-        InsightsPresentation.dataNotes(from: insightsStore.snapshot?.sections ?? [])
     }
 
     /// One tile in THE NUMBERS grid: a green uppercase label, a big
@@ -330,6 +301,68 @@ struct InsightsView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .combine)
+    }
+
+    /// "Half your Fridays land between $110 and $180 (twelve Fridays)."
+    /// Weekday lines first, since "I'm on Friday, what should I expect" is
+    /// the question actually being asked; the overall line is a different
+    /// statistic and is labelled as one.
+    private func reliabilitySection(_ reliability: StatsEngine.ReliabilityFacts) -> some View {
+        VStack(alignment: .leading, spacing: PaydaySpacing.p12) {
+            Text("WHAT YOU CAN COUNT ON")
+                .font(PaydayFont.caption2)
+                .tracking(0.8)
+                .foregroundStyle(PaydayColor.primary)
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(reliability.byWeekday, id: \.self) { entry in
+                    Text(RevealCopy.typicalRangeLine(entry.range, subject: Self.rangeSubject(for: entry)))
+                        .font(PaydayFont.bodyRegular)
+                        .foregroundStyle(PaydayColor.textPrimary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                if let overall = reliability.overall {
+                    Text(RevealCopy.typicalRangeLine(overall, subject: "shifts"))
+                        .font(PaydayFont.subheadline)
+                        .foregroundStyle(PaydayColor.textSecondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// "Fridays", or "Friday lunches" / "Friday dinners" when the weekday
+    /// was split because each service clears the bar on its own.
+    private static func rangeSubject(for entry: StatsEngine.WeekdayTypicalRange) -> String {
+        let name = InsightsPresentation.weekdayName(entry.weekday)
+        switch entry.shiftPeriod {
+        case .lunch: return "\(name) lunches"
+        case .dinner: return "\(name) dinners"
+        case nil: return "\(name)s"
+        }
+    }
+
+    /// The level line and the schedule line stay separate on purpose:
+    /// working more is not earning more per shift, and running them
+    /// together is the exact conflation the stratification prevents.
+    private func trendSection(_ trend: StatsEngine.EarningTrend) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("HOW IT'S BEEN RUNNING")
+                .font(PaydayFont.caption2)
+                .tracking(0.8)
+                .foregroundStyle(PaydayColor.primary)
+            Text(RevealCopy.trendLine(trend))
+                .font(PaydayFont.bodyRegular)
+                .foregroundStyle(PaydayColor.textPrimary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if let scheduleLine = RevealCopy.trendScheduleLine(trend) {
+                Text(scheduleLine)
+                    .font(PaydayFont.subheadline)
+                    .foregroundStyle(PaydayColor.textSecondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func planNightRow(_ night: PlanForward.Night) -> some View {
@@ -381,33 +414,6 @@ struct InsightsView: View {
         .padding(.top, 40)
     }
 
-    private func refresh(facts: InsightsFacts, topMove: Move?, latestFollowUp: FollowUp?) async {
-        errorMessage = nil
-        isLoading = true
-        defer { isLoading = false }
-        let frequency = scheduleStore.schedule?.frequency ?? .biweekly
-        do {
-            let sections = try await InsightsService.narrate(
-                facts: facts,
-                scheduleFrequency: frequency,
-                previousSections: insightsStore.snapshot?.sections,
-                topMove: topMove,
-                latestFollowUp: latestFollowUp
-            )
-            insightsStore.snapshot = InsightsSnapshot(sections: sections, generatedAt: .now, facts: facts)
-            insightsStore.lastAttemptFailed = false
-            insightsStore.lastAttemptAt = .now
-        } catch {
-            errorMessage = error.localizedDescription
-            // Only a retryable failure earns the interval bypass. A 4xx or an
-            // unparseable answer will fail the same way on the same input, so
-            // it waits for the facts to change or the normal interval — the
-            // parse case has already been billed once and must not bill again
-            // on the next visit to this tab.
-            insightsStore.lastAttemptFailed = (error as? InsightsError)?.isRetryable ?? true
-            insightsStore.lastAttemptAt = .now
-        }
-    }
 }
 
 /// Every number Insights shows, computed once per render — see the
@@ -427,6 +433,14 @@ private struct InsightsPageFacts {
     let shiftCount: Int
     /// A deterministic look one week ahead — see StatsEngine.planForward.
     let plan: PlanForward?
+    /// What a shift typically pays — see StatsEngine.typicalRanges.
+    let reliability: StatsEngine.ReliabilityFacts?
+    /// Whether the earning LEVEL moved — see StatsEngine.earningTrend.
+    let trend: StatsEngine.EarningTrend?
+    /// How close `plan` has been — see StatsEngine.forecastAccuracy.
+    /// Twelve retrospective engines, so it belongs here in the cached
+    /// facts and never in a view body.
+    let forecastAccuracy: StatsEngine.ForecastAccuracy?
 
     init(allEntries: [TipEntry], ledger: [String: Date], now: Date = .now) {
         let records = allEntries.map(TipRecord.init)
@@ -442,6 +456,9 @@ private struct InsightsPageFacts {
         )
         shiftCount = UnlockProgress.shiftCount(records: records)
         plan = statsEngine.planForward(referenceDate: now)
+        reliability = statsEngine.typicalRanges(referenceDate: now)
+        trend = statsEngine.earningTrend(referenceDate: now)
+        forecastAccuracy = statsEngine.forecastAccuracy(referenceDate: now)
     }
 }
 

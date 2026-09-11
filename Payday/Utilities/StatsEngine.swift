@@ -407,9 +407,16 @@ struct StatsEngine {
     // MARK: Pace
 
     /// Sum of everything logged in `period`, through `date` (inclusive).
+    ///
+    /// Routed through shiftFacts, NOT raw records. TipRecord.netCents
+    /// subtracts tipOutCents per RECORD, while shiftFacts resolves tip-out
+    /// (and receiptMetrics) credit-preferred and never summed. A legacy
+    /// shift carrying tip-out on both its cash and credit rows therefore
+    /// double-subtracted here while the chart subtracted once — the exact
+    /// corruption shiftFacts' own doc comment says it exists to prevent.
     func periodToDateTotal(period: PayPeriod, asOf date: Date) -> Int {
         let cutoff = min(calendar.startOfDay(for: date), period.end)
-        return records
+        return shiftFacts(from: records)
             .filter { $0.date >= period.start && $0.date <= cutoff }
             .reduce(0) { $0 + $1.netCents }
     }
@@ -417,11 +424,13 @@ struct StatsEngine {
     /// The prior period's total through the same number of elapsed days —
     /// day 3 of this period vs. day 3 of last period, never vs. last
     /// period's grand total (that's not a fair pace comparison).
+    /// Same shiftFacts routing as periodToDateTotal, and for the same
+    /// double-subtraction reason.
     func priorPeriodComparableTotal(currentPeriod: PayPeriod, priorPeriod: PayPeriod, asOf date: Date) -> Int {
         let daysElapsed = calendar.dateComponents([.day], from: currentPeriod.start, to: calendar.startOfDay(for: date)).day ?? 0
         guard let comparableEnd = calendar.date(byAdding: .day, value: daysElapsed, to: priorPeriod.start) else { return 0 }
         let cappedEnd = min(comparableEnd, priorPeriod.end)
-        return records
+        return shiftFacts(from: records)
             .filter { $0.date >= priorPeriod.start && $0.date <= cappedEnd }
             .reduce(0) { $0 + $1.netCents }
     }
@@ -676,17 +685,22 @@ struct StatsEngine {
         let span = max(currentLength - 1, 1)
         let fraction = min(max(Double(elapsed) / Double(span), 0), 1)
 
+        // Resolved once outside the loop: shiftFacts regroups every record,
+        // so rebuilding it per period would be six passes over all history.
+        // Routed through it rather than raw records for the tip-out
+        // double-subtraction reason spelled out on periodToDateTotal.
+        let allShifts = shiftFacts(from: records)
         var samples: [Int] = []
         for period in priorPeriods {
-            let periodRecords = records.filter { $0.date >= period.start && $0.date <= period.end }
+            let periodShifts = allShifts.filter { $0.date >= period.start && $0.date <= period.end }
             // Nothing logged at all: not a $0 period, just a period this
             // person wasn't tracking. Skipping keeps the baseline honest.
-            guard !periodRecords.isEmpty else { continue }
+            guard !periodShifts.isEmpty else { continue }
             let length = (calendar.dateComponents([.day], from: period.start, to: period.end).day ?? 0) + 1
             let index = Int((fraction * Double(max(length - 1, 0))).rounded())
             guard let cutoff = calendar.date(byAdding: .day, value: index, to: period.start) else { continue }
             let cappedCutoff = min(cutoff, period.end)
-            samples.append(periodRecords.filter { $0.date <= cappedCutoff }.reduce(0) { $0 + $1.netCents })
+            samples.append(periodShifts.filter { $0.date <= cappedCutoff }.reduce(0) { $0 + $1.netCents })
         }
 
         guard !samples.isEmpty else { return nil }
@@ -713,6 +727,564 @@ struct StatsEngine {
         let mid = sorted.count / 2
         if sorted.count % 2 == 1 { return sorted[mid] }
         return Int((Double(sorted[mid - 1]) + Double(sorted[mid])) / 2)
+    }
+
+    // MARK: Reliability — what you can count on
+
+    private enum ReliabilityThresholds {
+        /// Below this a "range" is not a middle, it is the min and the max
+        /// wearing percentile labels: at n=8, p25 and p75 sit around the
+        /// 2nd-3rd and 6th-7th order statistics, so each endpoint still has
+        /// at least two observations outside it. Same bar the rest of the
+        /// file uses for "settled enough to describe as a pattern".
+        static let minimumShiftsForRange = MoveThresholds.minimumShiftsForConfidentPattern
+        /// An overall range across fewer than this many weekdays is one
+        /// weekday's range wearing a general label.
+        static let minimumWeekdaysForOverall = 2
+        /// Endpoints round OUTWARD to this, so the stated range is never
+        /// narrower than the data supports and the interpolation artifact
+        /// washes out.
+        static let roundingGranularityCents = 500
+        /// Two-clump detector. A median split separates BY CONSTRUCTION, so
+        /// this bar has to sit above what unimodal data scores on its own
+        /// test: for a normal sample the two half-medians sit about 0.798
+        /// SD apart while each half has SD about 0.603, which scores ~2.6.
+        /// 4.0 is only reachable when the halves genuinely sit apart with
+        /// little internal spread — a real two-clump sample.
+        static let bimodalEffectSizeCeiling = 4.0
+    }
+
+    /// Half of this person's shifts land between these two numbers.
+    struct TypicalRange: Hashable, Codable, Sendable {
+        /// p25, rounded outward. NOT a floor — a quarter of shifts are below it.
+        let lowCents: Int
+        /// p75, rounded outward.
+        let highCents: Int
+        let medianCents: Int
+        /// Every range carries its own sample size. House rule.
+        let shiftCount: Int
+    }
+
+    struct WeekdayTypicalRange: Hashable, Codable, Sendable {
+        let weekday: Int
+        /// Non-nil only when this weekday was SPLIT because lunch and dinner
+        /// each cleared the minimum on their own. Nil means the range covers
+        /// that weekday's shifts as a whole.
+        let shiftPeriod: ShiftPeriod?
+        let range: TypicalRange
+    }
+
+    struct ReliabilityFacts: Hashable, Codable, Sendable {
+        let overall: TypicalRange?
+        let byWeekday: [WeekdayTypicalRange]
+        /// Weekdays with enough shifts whose range was WITHHELD because the
+        /// sample is two clumps rather than one. Carried so copy can say
+        /// nothing rather than say something false.
+        let mixedShapeWeekdays: [Int]
+
+        /// Whether there is actually a range to render. A result can be
+        /// non-nil and still have nothing to show — every qualifying
+        /// weekday withheld as two-clump, with too few weekdays for an
+        /// overall range. Callers must check this rather than nil, or they
+        /// will draw a section header over an empty list.
+        var hasVisibleRanges: Bool {
+            overall != nil || !byWeekday.isEmpty
+        }
+    }
+
+    /// "Half your Fridays land between $110 and $180" — the number a person
+    /// living on variable income can actually budget against, and the one
+    /// thing on this page no amount of experience can tell them.
+    ///
+    /// Interquartile range, not mean ± standard deviation. SD is not merely
+    /// worse here, it is wrong: `mean ± 1 SD` only carries its ~68% meaning
+    /// under symmetry, and tip-per-shift is bounded near zero and unbounded
+    /// above, so the lower bound routinely falls below any shift the person
+    /// has ever actually worked. SD also has unbounded influence — at n=10
+    /// one night at 3x the median inflates it by about half, changing the
+    /// description of typical nights that did not themselves change. IQR is
+    /// distribution-free, bounded-influence, and checkable by hand against
+    /// the Shifts list, which is worth more than either.
+    ///
+    /// Per-SHIFT throughout (see nights(), which despite its name is
+    /// per-shift): a Friday double would otherwise enter as one enormous
+    /// Friday and inflate p75 with a scheduling fact.
+    func typicalRanges(referenceDate: Date = .now) -> ReliabilityFacts? {
+        let today = calendar.startOfDay(for: referenceDate)
+        let cutoff = calendar.date(byAdding: .day, value: -Self.insightsRecentWindowDays, to: today) ?? .distantPast
+        let shifts = shiftFacts(from: records)
+            // A shift logged mid-service is a partial number, and at these
+            // sample sizes one partial value visibly drags a quantile.
+            .filter { $0.date >= cutoff && $0.date < today }
+        guard !shifts.isEmpty else { return nil }
+
+        let periods = Dictionary(
+            uniqueKeysWithValues: classifyByShiftPeriod(shifts).map { ($0.shiftID, $0.period) }
+        )
+
+        var byWeekday: [WeekdayTypicalRange] = []
+        var mixedShapeWeekdays: [Int] = []
+
+        for weekday in 1...7 {
+            let dayShifts = shifts.filter { calendar.component(.weekday, from: $0.date) == weekday }
+            guard dayShifts.count >= ReliabilityThresholds.minimumShiftsForRange else { continue }
+
+            // Split first when the data supports it. A weekday holding six
+            // $60 lunches and six $200 dinners has a "typical range" that
+            // contains almost no actual shift, centred on a value that has
+            // never occurred once.
+            let lunch = dayShifts.filter { periods[$0.shiftID] == .lunch }.map(\.netCents)
+            let dinner = dayShifts.filter { periods[$0.shiftID] == .dinner }.map(\.netCents)
+            if lunch.count >= ReliabilityThresholds.minimumShiftsForRange,
+               dinner.count >= ReliabilityThresholds.minimumShiftsForRange {
+                byWeekday.append(WeekdayTypicalRange(weekday: weekday, shiftPeriod: .lunch, range: Self.typicalRange(lunch)))
+                byWeekday.append(WeekdayTypicalRange(weekday: weekday, shiftPeriod: .dinner, range: Self.typicalRange(dinner)))
+                continue
+            }
+
+            // Not splittable (legacy shifts carry no period, or one side is
+            // thin). Detect the same shape and withhold rather than lie.
+            let values = dayShifts.map(\.netCents)
+            if isTwoClump(values) {
+                mixedShapeWeekdays.append(weekday)
+                continue
+            }
+            byWeekday.append(WeekdayTypicalRange(weekday: weekday, shiftPeriod: nil, range: Self.typicalRange(values)))
+        }
+
+        // Overall is a DIFFERENT statistic, not a summary of the weekdays:
+        // its width is driven mostly by weekday mix rather than by
+        // night-to-night uncertainty. Only honest with several weekdays in it.
+        let distinctWeekdays = Set(shifts.map { calendar.component(.weekday, from: $0.date) })
+        let overall: TypicalRange? = (
+            shifts.count >= ReliabilityThresholds.minimumShiftsForRange
+            && distinctWeekdays.count >= ReliabilityThresholds.minimumWeekdaysForOverall
+        ) ? Self.typicalRange(shifts.map(\.netCents)) : nil
+
+        // Non-nil when anything is KNOWN, including a deliberate
+        // withholding — dropping that on the floor would lose the one
+        // signal mixedShapeWeekdays exists to carry. Rendering checks
+        // hasVisibleRanges, not nil.
+        guard overall != nil || !byWeekday.isEmpty || !mixedShapeWeekdays.isEmpty else { return nil }
+        return ReliabilityFacts(overall: overall, byWeekday: byWeekday, mixedShapeWeekdays: mixedShapeWeekdays.sorted())
+    }
+
+    /// Is this sample two clumps rather than one? Split at the median and
+    /// ask how far apart the halves sit in pooled standard deviations.
+    ///
+    /// The bar cannot be intuited, because a median split produces
+    /// separation by construction — perfectly unimodal normal data scores
+    /// about 2.6 on its own test. See bimodalEffectSizeCeiling.
+    ///
+    /// The 10.0 perfect-separation sentinel inside effectSize is
+    /// load-bearing and CORRECT here, unlike in earningTrend: two
+    /// internally-identical clumps are the most bimodal sample possible.
+    private func isTwoClump(_ values: [Int]) -> Bool {
+        guard values.count >= 4 else { return false }
+        let sorted = values.sorted()
+        let mid = sorted.count / 2
+        let low = Array(sorted[..<mid])
+        let high = Array(sorted[mid...])
+        let gap = Double(Self.median(high) - Self.median(low))
+        let pooled = pooledStandardDeviationCents(low, high)
+        let score = effectSize(delta: gap, pooledStandardDeviation: pooled, countA: low.count, countB: high.count)
+        return score >= ReliabilityThresholds.bimodalEffectSizeCeiling
+    }
+
+    /// p25/p75 by Type 7 linear interpolation (the R and numpy default),
+    /// pinned so tests are deterministic — at n=8-15 no estimator is
+    /// meaningfully better, what matters is that it does not drift.
+    /// Endpoints round OUTWARD so the stated range is never narrower than
+    /// the data supports.
+    static func typicalRange(_ values: [Int]) -> TypicalRange {
+        precondition(!values.isEmpty)
+        let sorted = values.sorted()
+        let low = quantile(sorted, 0.25)
+        let high = quantile(sorted, 0.75)
+        let granularity = ReliabilityThresholds.roundingGranularityCents
+        let roundedLow = Int((Double(low) / Double(granularity)).rounded(.down)) * granularity
+        let roundedHigh = Int((Double(high) / Double(granularity)).rounded(.up)) * granularity
+        return TypicalRange(
+            lowCents: roundedLow,
+            highCents: roundedHigh,
+            medianCents: median(sorted),
+            shiftCount: sorted.count
+        )
+    }
+
+    /// Type 7: h = (n-1)p, interpolating between adjacent order statistics.
+    static func quantile(_ sorted: [Int], _ p: Double) -> Int {
+        precondition(!sorted.isEmpty)
+        guard sorted.count > 1 else { return sorted[0] }
+        let h = Double(sorted.count - 1) * p
+        let lowerIndex = Int(h.rounded(.down))
+        let upperIndex = min(lowerIndex + 1, sorted.count - 1)
+        let weight = h - Double(lowerIndex)
+        return Int((Double(sorted[lowerIndex]) * (1 - weight) + Double(sorted[upperIndex]) * weight).rounded())
+    }
+
+    // MARK: Trend — how it has been running
+
+    private enum TrendThresholds {
+        /// 56 days, not a calendar month. A 56-day window contains EXACTLY
+        /// eight of each weekday by construction; a 31-day month has five
+        /// of three weekdays and four of the rest, so a month-over-month
+        /// comparison carries a built-in weekday-mix difference of up to a
+        /// whole Saturday. For someone whose Saturday is worth 2.5x their
+        /// Tuesday that alone swings a monthly total several percent with
+        /// nothing real behind it.
+        static let windowDays = 56
+        /// Both windows must clear this. At 12 shifts over 8 weeks a window
+        /// spans enough distinct weeks that one bad week is not the whole
+        /// story; below it you are comparing two handfuls.
+        static let minimumShiftsPerWindow = 12
+        /// A weekday must appear at least this often in BOTH windows to be
+        /// a usable stratum. Same floor as every other weekday claim here.
+        static let minimumShiftsPerStratum = minimumNightsForWeekdayBest
+        /// Qualifying weekdays must cover at least this share of each
+        /// window. Below it the two windows are mostly made of DIFFERENT
+        /// weekdays, and no adjustment rescues comparing Saturdays against
+        /// Tuesdays. That is a schedule change, not an earning change.
+        static let minimumSharedWeekdayShare = 0.6
+        /// Two-sided 95% t runs from 2.10 at df around 18 down to 1.96
+        /// asymptotically. Taking the conservative end means the gate never
+        /// claims more confidence than the smallest qualifying sample
+        /// earns, with no t table in the app.
+        static let confidenceMultiplier = 2.1
+        /// A median's standard error is about 1.25x a mean's for
+        /// normal-ish data (and smaller for heavy tails, so this errs
+        /// conservative). Strata are summarised by medians, so using the
+        /// mean's SE would claim precision the estimator does not have.
+        static let medianStandardErrorInflation = 1.25
+        /// 52 weeks. NEVER 365 — only a multiple of 7 preserves weekday
+        /// alignment, and misaligning weekdays is the exact confound the
+        /// stratification exists to remove.
+        static let seasonalEchoDays = 364
+        /// A seasonal echo suppresses only when it is at least half the
+        /// size of the delta it would explain.
+        static let seasonalEchoMinimumShare = 0.5
+        /// Never emit a zero-width interval.
+        static let minimumMarginCents = ReliabilityThresholds.roundingGranularityCents
+    }
+
+    struct EarningTrend: Equatable, Codable, Sendable {
+        enum Direction: String, Codable, Sendable { case higher, lower }
+        let direction: Direction
+        /// Mix-adjusted per-SHIFT delta. Positive means the recent window
+        /// is higher. Copy renders the INTERVAL, never this alone.
+        let deltaCents: Int
+        /// Half-width of the interval, already inflated for the median
+        /// estimator and floored so it is never zero.
+        let marginOfErrorCents: Int
+        let recentLevelCents: Int
+        let priorLevelCents: Int
+        let recentShiftCount: Int
+        let priorShiftCount: Int
+        /// The schedule fact, carried SEPARATELY so copy can decompose
+        /// rather than conflate. Never the headline.
+        let recentShiftsPerWeek: Double
+        let priorShiftsPerWeek: Double
+        /// The strata actually included, sorted.
+        let weekdays: [Int]
+    }
+
+    /// Has this person's earning LEVEL changed? Distinct from "did they
+    /// work more", which is the confound this whole function is built to
+    /// avoid — per-shift grain removes the volume effect, weekday
+    /// stratification removes the mix effect, and the schedule change is
+    /// reported separately as its own number rather than wearing a trend
+    /// headline.
+    ///
+    /// Nil is a common and correct answer.
+    func earningTrend(referenceDate: Date = .now) -> EarningTrend? {
+        trendEvaluation(referenceDate: referenceDate, allowSeasonalEcho: true)
+    }
+
+    private func trendEvaluation(referenceDate: Date, allowSeasonalEcho: Bool) -> EarningTrend? {
+        let today = calendar.startOfDay(for: referenceDate)
+        func day(_ offset: Int) -> Date? { calendar.date(byAdding: .day, value: offset, to: today) }
+        guard let recentStart = day(-TrendThresholds.windowDays),
+              let priorStart = day(-TrendThresholds.windowDays * 2)
+        else { return nil }
+
+        // Per-SHIFT. A per-day grain makes a double one double-sized
+        // observation, so a change in how often doubles are worked would
+        // masquerade as a change in earning level.
+        let allShifts = shiftFacts(from: records)
+        // The prior window must be FULLY covered by logging history, or
+        // adoption bias silently changes which weeks are represented.
+        guard let earliest = allShifts.first?.date, earliest <= priorStart else { return nil }
+
+        let recent = allShifts.filter { $0.date >= recentStart && $0.date < today }
+        let prior = allShifts.filter { $0.date >= priorStart && $0.date < recentStart }
+        guard recent.count >= TrendThresholds.minimumShiftsPerWindow,
+              prior.count >= TrendThresholds.minimumShiftsPerWindow
+        else { return nil }
+
+        func byWeekday(_ shifts: [ShiftFacts]) -> [Int: [Int]] {
+            Dictionary(grouping: shifts, by: { calendar.component(.weekday, from: $0.date) })
+                .mapValues { $0.map(\.netCents) }
+        }
+        let recentByWeekday = byWeekday(recent)
+        let priorByWeekday = byWeekday(prior)
+
+        let strata = (1...7).compactMap { weekday -> (weekday: Int, recent: [Int], prior: [Int])? in
+            guard let r = recentByWeekday[weekday], let p = priorByWeekday[weekday],
+                  r.count >= TrendThresholds.minimumShiftsPerStratum,
+                  p.count >= TrendThresholds.minimumShiftsPerStratum
+            else { return nil }
+            return (weekday, r, p)
+        }
+        guard !strata.isEmpty else { return nil }
+
+        let recentCovered = strata.reduce(0) { $0 + $1.recent.count }
+        let priorCovered = strata.reduce(0) { $0 + $1.prior.count }
+        guard Double(recentCovered) / Double(recent.count) >= TrendThresholds.minimumSharedWeekdayShare,
+              Double(priorCovered) / Double(prior.count) >= TrendThresholds.minimumSharedWeekdayShare
+        else { return nil }
+
+        // Direct standardization. Weights are POOLED across both windows so
+        // the comparison is symmetric — weighting by either window's own
+        // counts would let the schedule change back in through the weights.
+        let weights = strata.map { Double($0.recent.count + $0.prior.count) }
+        let totalWeight = weights.reduce(0, +)
+        guard totalWeight > 0 else { return nil }
+
+        // Median per stratum, for the same reason usualPaceBaseline uses
+        // one: a single New Year's Eve sits in a mean for two months.
+        let recentLevel = zip(strata, weights).reduce(0.0) { $0 + Double(Self.median($1.0.recent)) * $1.1 } / totalWeight
+        let priorLevel = zip(strata, weights).reduce(0.0) { $0 + Double(Self.median($1.0.prior)) * $1.1 } / totalWeight
+        let delta = recentLevel - priorLevel
+
+        // WITHIN-stratum pooled SD. Pooling across weekdays would fold
+        // between-weekday variance into the error term and make the gate
+        // arbitrarily conservative.
+        var weightedSumSquares = 0.0
+        var totalDegreesOfFreedom = 0.0
+        for stratum in strata {
+            let sd = pooledStandardDeviationCents(stratum.recent, stratum.prior)
+            let df = Double(stratum.recent.count + stratum.prior.count - 2)
+            guard df > 0 else { continue }
+            weightedSumSquares += sd * sd * df
+            totalDegreesOfFreedom += df
+        }
+        // Zero within-stratum spread would drive effectSize to its 10.0
+        // perfect-separation sentinel AND the standard error to zero, so
+        // both gates below would pass vacuously on a zero-width interval.
+        // Unlike the two-clump test, the sentinel is a hazard here.
+        guard totalDegreesOfFreedom > 0 else { return nil }
+        let sigma = (weightedSumSquares / totalDegreesOfFreedom).squareRoot()
+        guard sigma > 0 else { return nil }
+
+        // Gate A, materiality: the same bar every Move has to clear. A
+        // trend that cannot clear the Move bar has no business being louder
+        // than a Move.
+        let materiality = effectSize(
+            delta: delta,
+            pooledStandardDeviation: sigma,
+            countA: recentCovered,
+            countB: priorCovered
+        )
+        guard materiality >= MoveThresholds.minimumEffectSize else { return nil }
+
+        // Gate B, precision. Effect size alone is not a significance test
+        // (0.6 SD at n=10 a side is nowhere near significant); a t test
+        // alone is not a materiality test. These bind at opposite ends.
+        var variancePart = 0.0
+        for (stratum, weight) in zip(strata, weights) {
+            variancePart += weight * weight * (1.0 / Double(stratum.recent.count) + 1.0 / Double(stratum.prior.count))
+        }
+        let standardError = TrendThresholds.medianStandardErrorInflation * sigma / totalWeight * variancePart.squareRoot()
+        let margin = TrendThresholds.confidenceMultiplier * standardError
+        guard abs(delta) >= margin else { return nil }
+
+        // Seasonality. An 8-vs-8 comparison run in early January shows a
+        // decline for essentially every server in North America — both a
+        // confound and an obviousness-law violation. If the same move
+        // happened at the same time last year, it is the calendar.
+        //
+        // Suppressor ONLY, never a confirmer: one prior year can weakly
+        // show "this is seasonal" but cannot show "this is not".
+        if allowSeasonalEcho,
+           let echoReference = calendar.date(byAdding: .day, value: -TrendThresholds.seasonalEchoDays, to: today),
+           let echo = trendEvaluation(referenceDate: echoReference, allowSeasonalEcho: false),
+           (echo.deltaCents > 0) == (delta > 0),
+           Double(abs(echo.deltaCents)) >= TrendThresholds.seasonalEchoMinimumShare * abs(delta) {
+            return nil
+        }
+
+        let weeks = Double(TrendThresholds.windowDays) / 7.0
+        return EarningTrend(
+            direction: delta > 0 ? .higher : .lower,
+            deltaCents: Int(delta.rounded()),
+            marginOfErrorCents: max(Int(margin.rounded()), TrendThresholds.minimumMarginCents),
+            recentLevelCents: Int(recentLevel.rounded()),
+            priorLevelCents: Int(priorLevel.rounded()),
+            recentShiftCount: recentCovered,
+            priorShiftCount: priorCovered,
+            recentShiftsPerWeek: Double(recent.count) / weeks,
+            priorShiftsPerWeek: Double(prior.count) / weeks,
+            weekdays: strata.map(\.weekday).sorted()
+        )
+    }
+
+    // MARK: Forecast accuracy
+
+    private enum ForecastThresholds {
+        static let windowWeeks = 12
+        /// Below this the median absolute error is itself a weak claim.
+        static let minimumScoredWeeks = 8
+        /// Beyond this the history is too patchy to characterise. Skipping
+        /// is the optimistic choice, so it needs its own ceiling.
+        static let maximumSkippedWeekFraction = 1.0 / 3.0
+        /// A lean is claimed only on a real sign test: 12 weeks with at
+        /// most 2 against, two-sided binomial p is about 0.039. At 8 weeks
+        /// the same bar would need 8 of 8, which is why bias needs a full
+        /// twelve while the median needs only eight.
+        static let minimumWeeksForBias = 12
+        static let maximumMinoritySignWeeks = 2
+        /// Below this the dollar framing is trivial and a ratio framing
+        /// would be meaningless.
+        static let minimumMedianProjectedCents = 10_000
+    }
+
+    struct ForecastAccuracy: Equatable, Codable, Sendable {
+        struct Week: Equatable, Codable, Sendable {
+            let weekStart: Date
+            let projectedCents: Int
+            let actualCents: Int
+            /// Exact identity, by construction:
+            /// actualCents - projectedCents == priceDeltaCents + scheduleDeltaCents
+            let priceDeltaCents: Int
+            let scheduleDeltaCents: Int
+            let plannedDayCount: Int
+            let workedShiftCount: Int
+        }
+        enum Bias: String, Codable, Sendable { case runsHigh, runsLow }
+
+        /// Most recent SCORED week, which is not necessarily last week if
+        /// last week had nothing logged.
+        let lastWeek: Week
+        let scoredWeekCount: Int
+        let skippedWeekCount: Int
+        let medianAbsoluteErrorCents: Int
+        let medianProjectedCents: Int
+        /// Nil is the common answer. Only set when the sign test clears.
+        let bias: Bias?
+    }
+
+    /// How close "the week ahead" has been to the week that actually
+    /// happened. Grades planForward specifically — per-SHIFT pricing, one
+    /// shift per usual weekday — NOT projectedPeriodTotal, which prices a
+    /// day per-day and would score a different model.
+    ///
+    /// Recomputed retrospectively rather than persisted. The engine is
+    /// pure, and targetWeekday(forMoveID:shownAt:) already establishes this
+    /// pattern of rebuilding a sub-engine from what was knowable at the
+    /// time. Persisting forecasts instead would produce its first fact a
+    /// week after shipping and only for people who happened to open the app
+    /// on the right day, making coverage a function of app-opening
+    /// behaviour — a selection bias on the accuracy metric itself. It would
+    /// also grade whichever forecast method was live back then, when what a
+    /// reader wants to know is how much to trust the number in front of
+    /// them today.
+    func forecastAccuracy(referenceDate: Date = .now) -> ForecastAccuracy? {
+        let today = calendar.startOfDay(for: referenceDate)
+        // If the app cannot forecast now, grading past forecasts would
+        // build trust in something that is not on screen.
+        guard planForward(referenceDate: referenceDate) != nil else { return nil }
+
+        let allShifts = shiftFacts(from: records)
+        var weeks: [ForecastAccuracy.Week] = []
+        var skipped = 0
+
+        for weekIndex in 1...ForecastThresholds.windowWeeks {
+            guard let weekStart = calendar.date(byAdding: .day, value: -7 * weekIndex, to: today),
+                  let weekEnd = calendar.date(byAdding: .day, value: 6, to: weekStart),
+                  let asOfReference = calendar.date(byAdding: .day, value: -1, to: weekStart)
+            else { continue }
+
+            let worked = allShifts.filter { $0.date >= weekStart && $0.date <= weekEnd }
+            // A vacation week scores 0 against a full projection for a
+            // reason that is not the forecast's. Same rule and rationale as
+            // usualPaceBaseline's empty-period skip.
+            guard !worked.isEmpty else { skipped += 1; continue }
+
+            // Availability, not just shift date: a July 3 shift entered on
+            // July 20 was NOT available to a July 10 forecast. recordedAt
+            // is nil on legacy rows, where this falls back to assuming
+            // same-day logging.
+            let available = records.filter { ($0.recordedAt ?? $0.date) < weekStart && $0.date < weekStart }
+            // Built WITHOUT a wage, so grading a wage-inclusive actual
+            // against a wage-exclusive projection is structurally
+            // impossible rather than merely avoided.
+            let asOfEngine = StatsEngine(records: available, calendar: calendar)
+            guard let plan = asOfEngine.planForward(referenceDate: asOfReference) else { continue }
+
+            // planForward returns weekdays, not dates. The mapping is
+            // unambiguous only because the window is exactly seven days and
+            // therefore holds exactly one of each weekday.
+            var dateForWeekday: [Int: Date] = [:]
+            for offset in 0...6 {
+                guard let d = calendar.date(byAdding: .day, value: offset, to: weekStart) else { continue }
+                dateForWeekday[calendar.component(.weekday, from: d)] = d
+            }
+
+            let byDay = Dictionary(grouping: worked, by: { $0.date })
+            let actualCents = worked.reduce(0) { $0 + $1.netCents }
+
+            // Per-shift average for the day, never "the day's first shift":
+            // shiftFacts sorts by date only, so intra-day order is
+            // Dictionary order and is not stable across process runs.
+            var priceDelta = 0
+            for night in plan.nights {
+                guard let date = dateForWeekday[night.weekday], let dayShifts = byDay[date], !dayShifts.isEmpty else { continue }
+                let dayAverageShiftCents = dayShifts.reduce(0) { $0 + $1.netCents } / dayShifts.count
+                priceDelta += dayAverageShiftCents - night.averageNetCents
+            }
+            // Defined as the remainder so the identity holds EXACTLY
+            // despite integer division in the day average above.
+            let scheduleDelta = (actualCents - plan.projectedTotalCents) - priceDelta
+
+            weeks.append(ForecastAccuracy.Week(
+                weekStart: weekStart,
+                projectedCents: plan.projectedTotalCents,
+                actualCents: actualCents,
+                priceDeltaCents: priceDelta,
+                scheduleDeltaCents: scheduleDelta,
+                plannedDayCount: plan.nights.count,
+                workedShiftCount: worked.count
+            ))
+        }
+
+        guard weeks.count >= ForecastThresholds.minimumScoredWeeks,
+              let lastWeek = weeks.first
+        else { return nil }
+        guard Double(skipped) <= ForecastThresholds.maximumSkippedWeekFraction * Double(ForecastThresholds.windowWeeks) else { return nil }
+
+        let medianProjected = Self.median(weeks.map(\.projectedCents))
+        guard medianProjected >= ForecastThresholds.minimumMedianProjectedCents else { return nil }
+
+        let signedErrors = weeks.map { $0.actualCents - $0.projectedCents }
+        let high = signedErrors.filter { $0 < 0 }.count   // projection above actual
+        let low = signedErrors.filter { $0 > 0 }.count    // projection below actual
+        var bias: ForecastAccuracy.Bias?
+        if weeks.count >= ForecastThresholds.minimumWeeksForBias {
+            if low <= ForecastThresholds.maximumMinoritySignWeeks && high > low {
+                bias = .runsHigh
+            } else if high <= ForecastThresholds.maximumMinoritySignWeeks && low > high {
+                bias = .runsLow
+            }
+        }
+
+        return ForecastAccuracy(
+            lastWeek: lastWeek,
+            scoredWeekCount: weeks.count,
+            skippedWeekCount: skipped,
+            medianAbsoluteErrorCents: Self.median(signedErrors.map { abs($0) }),
+            medianProjectedCents: medianProjected,
+            bias: bias
+        )
     }
 
     // MARK: Work rhythm
@@ -2332,6 +2904,74 @@ enum RevealCopy {
         if deltaCents == 0 { return "Right on your usual pace\(disclosure)." }
         let direction = deltaCents > 0 ? "ahead of" : "behind"
         return "\(Money.string(fromCents: abs(deltaCents))) \(direction) your usual pace\(disclosure)."
+    }
+
+    /// "Half your Fridays land between $110 and $180 (twelve Fridays)."
+    ///
+    /// Three honesty devices in nine words: the FRACTION ("half", not
+    /// "your Fridays are", which would imply all), the BOUND TYPE
+    /// ("between"), and the sample size. Never "expect $145" — a point
+    /// estimate implies the precision an interquartile range deliberately
+    /// refuses. Never "you can count on at least $110" — p25 is not a
+    /// floor, a quarter of the sample sits below it.
+    static func typicalRangeLine(_ range: StatsEngine.TypicalRange, subject: String) -> String {
+        "Half your \(subject) land between \(Money.wholeDollarString(fromCents: range.lowCents)) and \(Money.wholeDollarString(fromCents: range.highCents)) (\(NumberWords.phrase(range.shiftCount, singular: subjectSingular(subject), plural: subject)))."
+    }
+
+    /// "Fridays" -> "Friday". Only ever fed the plural forms this file
+    /// builds, so a trailing-s strip is sufficient and predictable.
+    private static func subjectSingular(_ plural: String) -> String {
+        plural.hasSuffix("s") ? String(plural.dropLast()) : plural
+    }
+
+    /// Renders the INTERVAL, never the point estimate — a two-block
+    /// comparison knows the direction and a rough size, not an exact
+    /// amount. Deliberately avoids the word "trending": a before/after
+    /// comparison cannot distinguish a step from a drift and must not
+    /// imply the change continues.
+    static func trendLine(_ trend: StatsEngine.EarningTrend) -> String {
+        let low = max(0, abs(trend.deltaCents) - trend.marginOfErrorCents)
+        let high = abs(trend.deltaCents) + trend.marginOfErrorCents
+        let direction = trend.direction == .higher ? "higher" : "lower"
+        let counts = "\(NumberWords.spell(trend.recentShiftCount)) shifts against \(NumberWords.spell(trend.priorShiftCount))"
+        return "Your shifts have run somewhere between \(Money.wholeDollarString(fromCents: low)) and \(Money.wholeDollarString(fromCents: high)) \(direction) over the last eight weeks than the eight before (\(counts))."
+    }
+
+    /// The schedule fact, stated as its own sentence. Kept apart from the
+    /// trend line on purpose: working more is not earning more per shift,
+    /// and running them together is exactly the conflation the
+    /// stratification exists to prevent. Nil when the schedule held steady.
+    static func trendScheduleLine(_ trend: StatsEngine.EarningTrend) -> String? {
+        let delta = trend.recentShiftsPerWeek - trend.priorShiftsPerWeek
+        guard abs(delta) >= 0.5 else { return nil }
+        let rounded = abs(delta).rounded()
+        let count = max(1, Int(rounded))
+        let shiftWord = count == 1 ? "shift" : "shifts"
+        return "You also worked about \(NumberWords.spell(count)) \(delta > 0 ? "more" : "fewer") \(shiftWord) a week."
+    }
+
+    /// "Over the last eight weeks, this estimate has usually landed within
+    /// about $70 of the week you actually had."
+    ///
+    /// Framed as the estimate against the week that happened, never "the
+    /// app predicted" — that stays true even where the retrospective
+    /// rebuild is imperfect, and it matches this file's existing refusal to
+    /// grade the reader against anything.
+    static func forecastAccuracyLine(_ accuracy: StatsEngine.ForecastAccuracy) -> String {
+        let error = Money.wholeDollarString(fromCents: roundToNearest(accuracy.medianAbsoluteErrorCents, 1000))
+        return "Over the last \(NumberWords.spell(accuracy.scoredWeekCount)) weeks, this estimate has usually landed within about \(error) of the week you actually had."
+    }
+
+    /// Only when the sign test earned it, and stated as the raw count
+    /// rather than a percentage.
+    static func forecastBiasLine(_ accuracy: StatsEngine.ForecastAccuracy) -> String? {
+        guard let bias = accuracy.bias else { return nil }
+        let direction = bias == .runsLow ? "low" : "high"
+        return "It has run \(direction) in most of the last \(NumberWords.spell(accuracy.scoredWeekCount)) weeks."
+    }
+
+    private static func roundToNearest(_ cents: Int, _ granularity: Int) -> Int {
+        max(granularity, Int((Double(cents) / Double(granularity)).rounded()) * granularity)
     }
 
     static func projectionLine(cents: Int) -> String {

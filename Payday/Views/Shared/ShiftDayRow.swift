@@ -22,6 +22,19 @@ struct ShiftDayRow: View {
     /// amount. Nil means the wage feature is off; the row then reads exactly
     /// as it always has.
     var wageCentsPerHour: Int?
+    /// The shift's own note, shown as a quiet caption under the label.
+    ///
+    /// Opt-in and nil by default so Dashboard is unchanged. The
+    /// one-money-line law above bans a MONEY caption here, because cash and
+    /// credit are a decomposition that would visibly fail to sum against
+    /// the Total. A note is not money and does not have that problem.
+    ///
+    /// It exists because the note was otherwise undiscoverable: it has
+    /// always been editable inside the shift's own sheet, but nothing on a
+    /// list ever hinted one was there. It used to surface on Insights as a
+    /// DATA NOTE, which put a caveat about one August shift at the bottom
+    /// of a page about next week.
+    var note: String? = nil
 
     private var breakdown: TipBreakdown {
         TipBreakdown.total(of: entries)
@@ -40,12 +53,26 @@ struct ShiftDayRow: View {
         breakdown.netTotalCents + wageCents
     }
 
+    private var trimmedNote: String? {
+        guard let note else { return nil }
+        let trimmed = note.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
     var body: some View {
-        HStack {
-            Text(ShiftDays.shiftLabel(day: day, period: period, dayHasMultipleShifts: dayHasMultipleShifts))
-                .font(PaydayFont.body)
-                .foregroundStyle(PaydayColor.textPrimary)
-            Spacer()
+        HStack(alignment: .firstTextBaseline) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(ShiftDays.shiftLabel(day: day, period: period, dayHasMultipleShifts: dayHasMultipleShifts))
+                    .font(PaydayFont.body)
+                    .foregroundStyle(PaydayColor.textPrimary)
+                if let trimmedNote {
+                    Text(trimmedNote)
+                        .font(PaydayFont.caption)
+                        .foregroundStyle(PaydayColor.textSecondary)
+                        .lineLimit(2)
+                }
+            }
+            Spacer(minLength: PaydaySpacing.p12)
             Text(Money.string(fromCents: netCents))
                 .font(PaydayFont.displaySmall)
                 .monospacedDigit()
