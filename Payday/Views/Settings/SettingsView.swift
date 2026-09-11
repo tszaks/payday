@@ -31,6 +31,13 @@ struct SettingsView: View {
     private let weekdaySymbols = Calendar.current.weekdaySymbols // [Sunday…Saturday]
     private static let maxWageDigits = 4 // caps at $99.99/hr
 
+    /// Shown in About so a support email can say which build it came from.
+    private static var versionString: String {
+        let short = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0"
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "0"
+        return "\(short) (\(build))"
+    }
+
     init(schedule: PaySchedule) {
         _frequency = State(initialValue: schedule.frequency)
         _periodEndDate = State(initialValue: schedule.anchorPeriodEnd)
@@ -117,6 +124,24 @@ struct SettingsView: View {
                         ForEach(1...7, id: \.self) { day in
                             Text(weekdaySymbols[day - 1]).tag(day)
                         }
+                    }
+                }
+                .listRowBackground(PaydayColor.fieldBackground)
+
+                // Guideline 5.1.1(i) requires the privacy policy link to be
+                // reachable "within the app in an easily accessible manner",
+                // not only in the App Store Connect metadata field. Settings
+                // is where reviewers look for it, and where anyone wondering
+                // what happens to their earnings data looks too.
+                Section("About") {
+                    Link("Privacy Policy", destination: URL(string: "https://szakacsmedia.com/payday/privacy")!)
+                    Link("Support", destination: URL(string: "https://szakacsmedia.com/payday/support")!)
+                    HStack {
+                        Text("Version")
+                        Spacer()
+                        Text(Self.versionString)
+                            .foregroundStyle(PaydayColor.textSecondary)
+                            .monospacedDigit()
                     }
                 }
                 .listRowBackground(PaydayColor.fieldBackground)
