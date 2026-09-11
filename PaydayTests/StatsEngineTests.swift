@@ -639,16 +639,44 @@ struct MovesTests {
     @Test("weekday swap fires when one weekday clearly out-earns another, both with enough history")
     func weekdaySwapFires() {
         var records: [TipRecord] = []
-        // Fridays ($150 avg) vs Mondays ($50 avg), 3 nights each, 3 weeks apart.
+        // Tuesdays ($150 avg) beating Saturdays ($50 avg) INVERTS the
+        // expected order, which is the only shape this move now reports.
         for week in 0..<3 {
-            records.append(record(2026, 7, 3 + week * 7, cents: 15000)) // Friday
-            records.append(record(2026, 6, 29 + week * 7, cents: 5000)) // Monday
+            records.append(record(2026, 7, 7 + week * 7, cents: 15000)) // Tuesday
+            records.append(record(2026, 7, 4 + week * 7, cents: 5000))  // Saturday
         }
         let engine = StatsEngine(records: records)
         let moves = engine.moves(referenceDate: date(2026, 7, 24))
         let swap = moves.first { $0.id == "weekdaySwap" }
         #expect(swap != nil)
-        #expect(swap?.title.contains("Friday") == true)
+        #expect(swap?.title.contains("Tuesday") == true)
+    }
+
+    @Test("weekday swap stays SILENT when the data merely agrees with what anyone would guess")
+    func weekdaySwapSilentWhenObvious() {
+        var records: [TipRecord] = []
+        // The exact shape the old engine shipped as a finding: Fridays far
+        // ahead of Mondays. True for essentially every server alive, so it
+        // tells this reader nothing. See StatsEngine.expectedWeekdayRank.
+        for week in 0..<10 {
+            records.append(record(2026, 7, 3 + week * 7, cents: 36100)) // Friday
+            records.append(record(2026, 6, 29 + week * 7, cents: 199))  // Monday
+        }
+        let engine = StatsEngine(records: records)
+        #expect(engine.moves(referenceDate: date(2026, 9, 10)).first { $0.id == "weekdaySwap" } == nil)
+    }
+
+    @Test("weekday swap stays silent for neighbours in the expected order, however wide the gap")
+    func weekdaySwapSilentForAdjacentRanks() {
+        var records: [TipRecord] = []
+        // Saturday over Friday is a one-position inversion - nobody is
+        // surprised that one weekend night beats the other.
+        for week in 0..<10 {
+            records.append(record(2026, 7, 4 + week * 7, cents: 30000)) // Saturday
+            records.append(record(2026, 7, 3 + week * 7, cents: 5000))  // Friday
+        }
+        let engine = StatsEngine(records: records)
+        #expect(engine.moves(referenceDate: date(2026, 9, 10)).first { $0.id == "weekdaySwap" } == nil)
     }
 
     @Test("weekday swap stays silent without at least two qualifying weekdays")
@@ -709,13 +737,24 @@ struct MovesTests {
         // alone, since weekdaySwap and rateLeader now collapse to one Move
         // whenever they'd both point at the same weekday.
         for week in 0..<3 {
-            records.append(record(2026, 7, 3 + week * 7, cents: 10000, hoursWorked: 2)) // Friday, $50/hr
-            records.append(record(2026, 6, 29 + week * 7, cents: 9500, hoursWorked: 5)) // Monday, $19/hr
+            records.append(record(2026, 7, 7 + week * 7, cents: 10000, hoursWorked: 2)) // Tuesday, $50/hr
+            records.append(record(2026, 7, 4 + week * 7, cents: 9500, hoursWorked: 5))  // Saturday, $19/hr
         }
         let engine = StatsEngine(records: records)
         let leader = engine.moves(referenceDate: date(2026, 7, 24)).first { $0.id == "rateLeader" }
         #expect(leader != nil)
-        #expect(leader?.title.contains("Friday") == true)
+        #expect(leader?.title.contains("Tuesday") == true)
+    }
+
+    @Test("rate leader stays SILENT when a weekend day tops the hourly rate — the expected winner")
+    func rateLeaderSilentWhenObvious() {
+        var records: [TipRecord] = []
+        for week in 0..<3 {
+            records.append(record(2026, 7, 4 + week * 7, cents: 10000, hoursWorked: 2)) // Saturday, $50/hr
+            records.append(record(2026, 7, 7 + week * 7, cents: 9500, hoursWorked: 5))  // Tuesday, $19/hr
+        }
+        let engine = StatsEngine(records: records)
+        #expect(engine.moves(referenceDate: date(2026, 7, 24)).first { $0.id == "rateLeader" } == nil)
     }
 
     @Test("rate leader stays silent when the best weekday has only 1 night of rate history — a coincidence, not a pattern")
@@ -806,18 +845,18 @@ struct MovesTests {
     @Test("weekday swap still fires when a comparable delta sits inside consistent, low-variance history")
     func weekdaySwapFiresWithLowVariance() {
         let records = [
-            record(2026, 7, 3, cents: 4000),
-            record(2026, 7, 10, cents: 4200),
-            record(2026, 7, 17, cents: 3800),
-            record(2026, 6, 29, cents: 2000),
-            record(2026, 7, 6, cents: 2200),
-            record(2026, 7, 13, cents: 1800)
+            record(2026, 7, 7, cents: 4000),  // Tuesday
+            record(2026, 7, 14, cents: 4200),
+            record(2026, 7, 21, cents: 3800),
+            record(2026, 7, 4, cents: 2000),  // Saturday
+            record(2026, 7, 11, cents: 2200),
+            record(2026, 7, 18, cents: 1800)
         ]
         let engine = StatsEngine(records: records)
         let swap = engine.moves(referenceDate: date(2026, 7, 24)).first { $0.id == "weekdaySwap" }
         #expect(swap != nil)
-        #expect(swap?.body.contains("across three Fridays") == true)
-        #expect(swap?.body.contains("across three Mondays") == true)
+        #expect(swap?.body.contains("across three Tuesdays") == true)
+        #expect(swap?.body.contains("across three Saturdays") == true)
     }
 
     @Test("rate leader stays silent when a real-looking $/hr delta sits inside noisy history")
@@ -842,12 +881,12 @@ struct MovesTests {
         // while the $/hr gap stays wide - isolates this fixture to
         // rateLeader alone under the new one-Move-per-weekday rule.
         let records = [
-            record(2026, 7, 3, cents: 3000, hoursWorked: 2),
-            record(2026, 7, 10, cents: 3100, hoursWorked: 2),
-            record(2026, 7, 17, cents: 2900, hoursWorked: 2),
-            record(2026, 6, 29, cents: 2850, hoursWorked: 7.5),
-            record(2026, 7, 6, cents: 2950, hoursWorked: 7.5),
-            record(2026, 7, 13, cents: 2750, hoursWorked: 7.5)
+            record(2026, 7, 7, cents: 3000, hoursWorked: 2),  // Tuesday
+            record(2026, 7, 14, cents: 3100, hoursWorked: 2),
+            record(2026, 7, 21, cents: 2900, hoursWorked: 2),
+            record(2026, 7, 4, cents: 2850, hoursWorked: 7.5), // Saturday
+            record(2026, 7, 11, cents: 2950, hoursWorked: 7.5),
+            record(2026, 7, 18, cents: 2750, hoursWorked: 7.5)
         ]
         let engine = StatsEngine(records: records)
         #expect(engine.moves(referenceDate: date(2026, 7, 24)).first { $0.id == "rateLeader" } != nil)
@@ -855,13 +894,16 @@ struct MovesTests {
 
     @Test("start-time leader fires when one start-hour bucket clearly out-earns per hour")
     func startTimeLeaderFires() {
+        // Both buckets sit inside dinner service, so the finding is a real
+        // one about WHEN within dinner, not the universal "dinner beats
+        // lunch" - see MoveThresholds.dinnerServiceStartHour.
         let records = [
             record(2026, 7, 3, cents: 3000, hoursWorked: 2, clockInHour: 17),
             record(2026, 7, 10, cents: 3100, hoursWorked: 2, clockInHour: 17),
             record(2026, 7, 17, cents: 2900, hoursWorked: 2, clockInHour: 17),
-            record(2026, 6, 29, cents: 1200, hoursWorked: 2, clockInHour: 11),
-            record(2026, 7, 6, cents: 1300, hoursWorked: 2, clockInHour: 11),
-            record(2026, 7, 13, cents: 1100, hoursWorked: 2, clockInHour: 11)
+            record(2026, 6, 29, cents: 1200, hoursWorked: 2, clockInHour: 20),
+            record(2026, 7, 6, cents: 1300, hoursWorked: 2, clockInHour: 20),
+            record(2026, 7, 13, cents: 1100, hoursWorked: 2, clockInHour: 20)
         ]
         let engine = StatsEngine(records: records)
         let leader = engine.moves(referenceDate: date(2026, 7, 24)).first { $0.id == "startTimeLeader" }
@@ -874,18 +916,48 @@ struct MovesTests {
 
     @Test("start-time leader stays silent when a real-looking $/hr delta sits inside noisy history")
     func startTimeLeaderSilencedByHighVariance() {
+        // Both inside dinner service so this isolates the variance guard
+        // rather than also tripping the dinner-beats-lunch suppression.
         let records = [
             record(2026, 7, 3, cents: 2000, hoursWorked: 1, clockInHour: 17),
             record(2026, 7, 10, cents: 10000, hoursWorked: 1, clockInHour: 17),
             record(2026, 7, 17, cents: 2000, hoursWorked: 1, clockInHour: 17),
-            record(2026, 6, 29, cents: 500, hoursWorked: 1, clockInHour: 11),
-            record(2026, 7, 6, cents: 7000, hoursWorked: 1, clockInHour: 11),
-            record(2026, 7, 13, cents: 500, hoursWorked: 1, clockInHour: 11)
+            record(2026, 6, 29, cents: 500, hoursWorked: 1, clockInHour: 20),
+            record(2026, 7, 6, cents: 7000, hoursWorked: 1, clockInHour: 20),
+            record(2026, 7, 13, cents: 500, hoursWorked: 1, clockInHour: 20)
         ]
         let engine = StatsEngine(records: records)
         // Same $20/hr-ish delta as startTimeLeaderFires' spread, but wide
         // enough per-bucket variance that it shouldn't read as real signal.
         #expect(engine.moves(referenceDate: date(2026, 7, 24)).first { $0.id == "startTimeLeader" } == nil)
+    }
+
+    @Test("start-time leader stays SILENT when a dinner start beats a lunch start")
+    func startTimeLeaderSilentWhenObvious() {
+        let records = [
+            record(2026, 7, 3, cents: 3000, hoursWorked: 2, clockInHour: 17),
+            record(2026, 7, 10, cents: 3100, hoursWorked: 2, clockInHour: 17),
+            record(2026, 7, 17, cents: 2900, hoursWorked: 2, clockInHour: 17),
+            record(2026, 6, 29, cents: 1200, hoursWorked: 2, clockInHour: 11),
+            record(2026, 7, 6, cents: 1300, hoursWorked: 2, clockInHour: 11),
+            record(2026, 7, 13, cents: 1100, hoursWorked: 2, clockInHour: 11)
+        ]
+        let engine = StatsEngine(records: records)
+        #expect(engine.moves(referenceDate: date(2026, 7, 24)).first { $0.id == "startTimeLeader" } == nil)
+    }
+
+    @Test("start-time leader still fires when an EARLIER start beats a later one — that inverts the guess")
+    func startTimeLeaderFiresOnEarlierWinning() {
+        let records = [
+            record(2026, 7, 3, cents: 3000, hoursWorked: 2, clockInHour: 11),
+            record(2026, 7, 10, cents: 3100, hoursWorked: 2, clockInHour: 11),
+            record(2026, 7, 17, cents: 2900, hoursWorked: 2, clockInHour: 11),
+            record(2026, 6, 29, cents: 1200, hoursWorked: 2, clockInHour: 17),
+            record(2026, 7, 6, cents: 1300, hoursWorked: 2, clockInHour: 17),
+            record(2026, 7, 13, cents: 1100, hoursWorked: 2, clockInHour: 17)
+        ]
+        let engine = StatsEngine(records: records)
+        #expect(engine.moves(referenceDate: date(2026, 7, 24)).first { $0.id == "startTimeLeader" } != nil)
     }
 
     // MARK: Annualized-figure honesty gate
@@ -894,13 +966,13 @@ struct MovesTests {
     func weekdaySwapStatesConsistencyAtEightShifts() {
         var records: [TipRecord] = []
         for week in 0..<8 {
-            records.append(record(2026, 7, 3 + week * 7, cents: 4000))  // 8 Fridays
-            records.append(record(2026, 6, 29 + week * 7, cents: 2000)) // 8 Mondays
+            records.append(record(2026, 7, 7 + week * 7, cents: 4000)) // 8 Tuesdays
+            records.append(record(2026, 7, 4 + week * 7, cents: 2000)) // 8 Saturdays
         }
         let engine = StatsEngine(records: records)
         let swap = engine.moves(referenceDate: date(2026, 12, 1)).first { $0.id == "weekdaySwap" }
         #expect(swap != nil)
-        #expect(swap?.body.hasSuffix("That's held across eight Fridays and eight Mondays.") == true)
+        #expect(swap?.body.hasSuffix("That's held across eight Tuesdays and eight Saturdays.") == true)
         #expect(swap?.body.contains("Only") == false)
         // The annualized counterfactual is gone for good - it argued for a
         // behavior change, which this page does not do. See
@@ -913,19 +985,19 @@ struct MovesTests {
     func weekdaySwapHedgesUnderEightShifts() {
         var records: [TipRecord] = []
         for week in 0..<10 {
-            records.append(record(2026, 7, 3 + week * 7, cents: 4000)) // 10 Fridays
+            records.append(record(2026, 7, 7 + week * 7, cents: 4000)) // 10 Tuesdays
         }
         for week in 0..<3 {
-            records.append(record(2026, 6, 29 + week * 7, cents: 2000)) // only 3 Mondays
+            records.append(record(2026, 7, 4 + week * 7, cents: 2000)) // only 3 Saturdays
         }
         let engine = StatsEngine(records: records)
         let swap = engine.moves(referenceDate: date(2026, 12, 1)).first { $0.id == "weekdaySwap" }
         #expect(swap != nil)
         // The comparison itself (both per-side averages and counts) still
         // renders in full - only the claim that it has settled is withheld.
-        #expect(swap?.body.contains("across ten Fridays") == true)
-        #expect(swap?.body.contains("across three Mondays") == true)
-        #expect(swap?.body.hasSuffix("Only three Mondays to compare against so far.") == true)
+        #expect(swap?.body.contains("across ten Tuesdays") == true)
+        #expect(swap?.body.contains("across three Saturdays") == true)
+        #expect(swap?.body.hasSuffix("Only three Saturdays to compare against so far.") == true)
         #expect(swap?.body.contains("worth about") == false)
         #expect(swap?.body.contains("a year") == false)
     }
@@ -933,17 +1005,16 @@ struct MovesTests {
     @Test("a hedged move still outranks a non-hedged move when its effect is stronger — ranking reads effectSize, not whether the sample printed a hedge")
     func hedgeDoesNotAffectRankingOrder() {
         var records: [TipRecord] = []
-        // Friday - thin (3 nights), hedges. Its own $/night edge over
-        // Monday is what weekdaySwapMove is keyed on here.
+        // Tuesday - thin (3 nights), hedges. Its edge over Saturday is the
+        // rank inversion weekdaySwapMove is keyed on here.
         for week in 0..<3 {
-            records.append(record(2026, 7, 3 + week * 7, cents: 4100))
+            records.append(record(2026, 7, 7 + week * 7, cents: 4100))
         }
-        // Monday - deliberately low and given a big sample, so it's the
-        // clear floor across ALL weekdays (weekdaySwapMove picks its
-        // best/worst across every qualifying weekday, not just two named
-        // ones) without dragging the overall average up.
+        // Saturday - deliberately low and given a big sample, so the
+        // inversion against it is unmistakable without dragging the
+        // overall average up.
         for week in 0..<8 {
-            records.append(record(2026, 6, 29 + week * 7, cents: 50))
+            records.append(record(2026, 6, 27 + week * 7, cents: 50))
         }
         // Sunday - 8 nights, well outside the 21-day lapsed window, and
         // historically strong enough (comfortably above the blended
@@ -967,42 +1038,40 @@ struct MovesTests {
     func sameWeekdaySubjectCollapses() {
         var records: [TipRecord] = []
         for week in 0..<10 {
-            // Fridays: both the best $/night (vs. Monday) and the best $/hr
-            // (vs. everything else) - the exact "Saturday Beats Tuesday" /
-            // "Saturday Pays Best Per Hour" stacking this rule exists for.
-            records.append(record(2026, 7, 3 + week * 7, cents: 20000, hoursWorked: 4))  // Friday, $50/hr
-            records.append(record(2026, 6, 29 + week * 7, cents: 5000, hoursWorked: 5))  // Monday, $10/hr
+            // Tuesdays: both the best $/night (inverting Saturday) and the
+            // best $/hr - the exact stacking this dedupe rule exists for.
+            // Slight jitter so pooled variance is non-zero and the two
+            // candidates' effect sizes are genuinely distinguishable.
+            let jitter = (week % 3) * 100
+            records.append(record(2026, 7, 7 + week * 7, cents: 20000 + jitter, hoursWorked: 4)) // Tuesday, ~$50/hr
+            records.append(record(2026, 7, 4 + week * 7, cents: 5000 + jitter, hoursWorked: 5))  // Saturday, ~$10/hr
         }
         let engine = StatsEngine(records: records)
-        // Close enough to the last logged Friday/Monday that neither reads
-        // as "lapsed" - isolates this fixture to exactly the two candidates
-        // under test.
+        // Close enough to the last logged Tuesday/Saturday that neither
+        // reads as "lapsed" - isolates this fixture to exactly the two
+        // candidates under test.
         let moves = engine.moves(referenceDate: date(2026, 9, 10))
-        let fridayMoves = moves.filter { $0.title.contains("Friday") }
-        #expect(fridayMoves.count == 1)
-        // weekdaySwap's $/night impact (780,000, from a $150 gap projected
-        // over 52 weeks) outranks rateLeader's $/hr impact here (462,222,
-        // from the $/hr gap against the BLENDED overall rate, not just
-        // Monday's), so it's the one that should survive the collapse.
-        #expect(fridayMoves.first?.id == "weekdaySwap")
+        let tuesdayMoves = moves.filter { $0.title.contains("Tuesday") }
+        #expect(tuesdayMoves.count == 1)
     }
 
     @Test("non-weekday moves are unaffected by the weekday-subject dedupe, even alongside a weekday move")
     func nonWeekdayMovesUnaffectedByDedupe() {
         var records: [TipRecord] = []
         for week in 0..<8 {
-            records.append(record(2026, 7, 3 + week * 7, cents: 4000))  // 8 Fridays
-            records.append(record(2026, 6, 29 + week * 7, cents: 2000)) // 8 Mondays
+            records.append(record(2026, 7, 7 + week * 7, cents: 4000)) // 8 Tuesdays
+            records.append(record(2026, 7, 4 + week * 7, cents: 2000)) // 8 Saturdays
         }
         // Start-time buckets, all on Wednesdays so this can't accidentally
         // recruit rateLeaderMove too (that needs >= 2 distinct weekdays
         // with rate history) - a different axis entirely, no weekday
-        // subject either way.
+        // subject either way. Both buckets sit inside dinner service so
+        // the dinner-beats-lunch suppression doesn't swallow this either.
         for (m, d) in [(7, 1), (7, 8), (7, 15)] {
             records.append(record(2026, m, d, cents: 3000, hoursWorked: 2, clockInHour: 17))
         }
         for (m, d) in [(7, 22), (7, 29), (8, 5)] {
-            records.append(record(2026, m, d, cents: 1200, hoursWorked: 2, clockInHour: 11))
+            records.append(record(2026, m, d, cents: 1200, hoursWorked: 2, clockInHour: 20))
         }
         let engine = StatsEngine(records: records)
         let moves = engine.moves(referenceDate: date(2026, 8, 26))
