@@ -92,7 +92,7 @@ enum InsightsFactsCopy {
         var body = "You're averaging \(Money.wholeDollarString(fromCents: Int((facts.overallDollarsPerHour * 100).rounded())))/hr across \(facts.nightsWithHours) shifts with hours logged."
         if let bestWeekday = facts.bestWeekday, let bestRate = facts.bestWeekdayDollarsPerHour, let count = facts.bestWeekdayNightCount {
             let weekdayName = Calendar.current.weekdaySymbols[bestWeekday - 1]
-            body += " \(weekdayName) pays best at \(Money.wholeDollarString(fromCents: Int((bestRate * 100).rounded())))/hr across \(shiftsPhrase(count))."
+            body += " \(weekdayName) runs highest at \(Money.wholeDollarString(fromCents: Int((bestRate * 100).rounded())))/hr across \(shiftsPhrase(count))."
         }
         return InsightSection(title: "Your Hourly Rate", body: body)
     }
@@ -101,7 +101,7 @@ enum InsightsFactsCopy {
         var body = "You're averaging \(String(format: "%.1f", facts.overallTipPercent))% of sales across \(facts.nightsWithSales) shifts with sales logged."
         if let bestWeekday = facts.bestWeekday, let bestPercent = facts.bestWeekdayTipPercent, let count = facts.bestWeekdayNightCount {
             let weekdayName = Calendar.current.weekdaySymbols[bestWeekday - 1]
-            body += " \(weekdayName) tips best at \(String(format: "%.1f", bestPercent))% across \(shiftsPhrase(count))."
+            body += " \(weekdayName) tips highest at \(String(format: "%.1f", bestPercent))% across \(shiftsPhrase(count))."
         }
         return InsightSection(title: "Tip Percent", body: body)
     }

@@ -1,5 +1,157 @@
+import Combine
 import SwiftUI
 import SwiftData
+
+/// One immutable period-detail render. This view has several consumers of
+/// the same filtered entries; collecting them here prevents each section,
+/// label, and accessibility query from rebuilding the same history facts.
+struct PeriodDetailFacts {
+    let payDate: Date
+    let entries: [TipEntry]
+    let shiftDays: [(day: Date, shiftID: UUID, items: [TipEntry])]
+    let multiShiftDays: Set<Date>
+    let breakdown: TipBreakdown
+    let nightsInPeriod: [(date: Date, cents: Int)]
+    let wages: PeriodIncome.Wages?
+    let heroTotalCents: Int
+    let heroRateCaption: String?
+    let hasBreakdown: Bool
+    let tipOutCents: Int
+    let grossEarnedCents: Int
+    let breakdownRows: [BreakdownRow]
+    let noPaycheckCaption: String
+    let paycheck: PaycheckRecord?
+
+    init(
+        allEntries: [TipEntry],
+        paycheckRecords: [PaycheckRecord],
+        period: PayPeriod,
+        schedule: PaySchedule?,
+        wageCentsPerHour: Int?,
+        calendar: Calendar = .current
+    ) {
+        let calculator = PayPeriodCalculator(schedule: schedule ?? .fallback, calendar: calendar)
+        let resolvedPayDate = calculator.payDate(for: period)
+        let resolvedEntries = allEntries
+            .filter { $0.date >= period.start && $0.date <= period.end }
+            .sorted { $0.date > $1.date }
+        let resolvedShiftDays = ShiftDays.groupedByShift(
+            resolvedEntries,
+            shiftID: \.shiftID,
+            date: \.date,
+            period: \.shiftPeriod,
+            calendar: calendar
+        )
+
+        var shiftCounts: [Date: Int] = [:]
+        for shift in resolvedShiftDays { shiftCounts[shift.day, default: 0] += 1 }
+        let resolvedMultiShiftDays = Set(shiftCounts.filter { $0.value >= 2 }.keys)
+
+        let resolvedBreakdown = TipBreakdown.total(of: resolvedEntries)
+        let resolvedNights = StatsEngine(
+            records: resolvedEntries.map(TipRecord.init),
+            calendar: calendar
+        ).nightlyTotals()
+        let nonWageEarningsCents = resolvedNights.reduce(0) { $0 + $1.cents }
+        let resolvedWages = PeriodIncome.wages(
+            entries: resolvedEntries,
+            wageCentsPerHour: wageCentsPerHour,
+            firstWeekday: schedule?.firstWeekday,
+            calendar: calendar
+        )
+        let resolvedHeroTotalCents = nonWageEarningsCents + (resolvedWages?.totalCents ?? 0)
+
+        let loggedHours = WageEstimate.loggedHours(shiftGroups: resolvedShiftDays.map(\.items))
+        let resolvedHeroRateCaption: String?
+        if loggedHours > 0 {
+            let dollarsPerHour = Double(resolvedHeroTotalCents) / 100 / loggedHours
+            let rate = Money.wholeDollarString(fromCents: Int((dollarsPerHour * 100).rounded()))
+            resolvedHeroRateCaption = "Averaging \(rate)/hr"
+        } else {
+            resolvedHeroRateCaption = nil
+        }
+
+        let resolvedHasBreakdown = resolvedBreakdown.cashCents > 0
+            || resolvedBreakdown.creditCents > 0
+            || resolvedBreakdown.gratuityFeesCents > 0
+        let resolvedTipOutCents = max(
+            0,
+            resolvedBreakdown.cashCents
+                + resolvedBreakdown.creditCents
+                + resolvedBreakdown.gratuityFeesCents
+                - nonWageEarningsCents
+        )
+        let resolvedGrossEarnedCents = resolvedBreakdown.cashCents
+            + resolvedBreakdown.creditCents
+            + resolvedBreakdown.gratuityFeesCents
+            + (resolvedWages?.totalCents ?? 0)
+
+        var rows = [
+            BreakdownRow("Cash tips", cents: resolvedBreakdown.cashCents),
+            BreakdownRow("Credit tips", cents: resolvedBreakdown.creditCents),
+        ]
+        if resolvedBreakdown.gratuityFeesCents > 0 {
+            rows.append(BreakdownRow("Gratuity & fees", cents: resolvedBreakdown.gratuityFeesCents))
+        }
+        if let resolvedWages {
+            rows.append(BreakdownRow(
+                "Wages · \(WageEstimate.hoursLabel(resolvedWages.hours - resolvedWages.overtimeHours))",
+                cents: resolvedWages.regularCents
+            ))
+            if resolvedWages.overtimeCents > 0 {
+                rows.append(BreakdownRow(
+                    "Overtime · \(WageEstimate.hoursLabel(resolvedWages.overtimeHours))",
+                    cents: resolvedWages.overtimeCents
+                ))
+            }
+        }
+        if resolvedTipOutCents > 0 {
+            rows.append(BreakdownRow("Earned", cents: resolvedGrossEarnedCents, dividerAbove: true))
+            rows.append(BreakdownRow("Tipped out", cents: -resolvedTipOutCents))
+        }
+
+        let predictedPaycheckCents = PredictedPaycheck.cents(
+            from: resolvedBreakdown,
+            wagesCents: resolvedWages?.totalCents ?? 0
+        )
+        let resolvedNoPaycheckCaption = "Expected \(Money.string(fromCents: predictedPaycheckCents)) · \(resolvedPayDate.formatted(.dateTime.month(.abbreviated).day()))"
+        let resolvedPaycheck = paycheckRecords.first {
+            $0.periodEnd >= period.start && $0.periodEnd <= period.end
+        }
+
+        payDate = resolvedPayDate
+        entries = resolvedEntries
+        shiftDays = resolvedShiftDays
+        multiShiftDays = resolvedMultiShiftDays
+        breakdown = resolvedBreakdown
+        nightsInPeriod = resolvedNights
+        wages = resolvedWages
+        heroTotalCents = resolvedHeroTotalCents
+        heroRateCaption = resolvedHeroRateCaption
+        hasBreakdown = resolvedHasBreakdown
+        tipOutCents = resolvedTipOutCents
+        grossEarnedCents = resolvedGrossEarnedCents
+        breakdownRows = rows
+        noPaycheckCaption = resolvedNoPaycheckCaption
+        paycheck = resolvedPaycheck
+    }
+}
+
+private struct PeriodDetailFactsKey: Equatable {
+    let entriesRevision: Int
+    let paychecksRevision: Int
+    let period: PayPeriod
+    let frequency: PayFrequency?
+    let anchorPeriodEnd: Date?
+    let payDelayDays: Int?
+    let firstWeekday: Int?
+    let wageCentsPerHour: Int?
+}
+
+private struct PeriodDetailFactsCache {
+    let key: PeriodDetailFactsKey
+    let facts: PeriodDetailFacts
+}
 
 struct PeriodDetailView: View {
     @Environment(\.modelContext) private var modelContext
@@ -14,148 +166,25 @@ struct PeriodDetailView: View {
     @State private var undoState = UndoDeleteToastState()
     /// Whether the cash/credit breakdown drawer tucked under the hero is open.
     @State private var breakdownExpanded = false
+    @State private var factsCache: PeriodDetailFactsCache?
+    @State private var dataRevision = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    private var payDate: Date {
-        PayPeriodCalculator(schedule: scheduleStore.schedule ?? .fallback).payDate(for: period)
-    }
-
-    private var isPayDateUpcoming: Bool {
-        Calendar.current.startOfDay(for: payDate) >= Calendar.current.startOfDay(for: Date())
-    }
-
-    private var entries: [TipEntry] {
-        allEntries
-            .filter { $0.date >= period.start && $0.date <= period.end }
-            .sorted { $0.date > $1.date }
-    }
-
-    private var shiftDays: [(day: Date, shiftID: UUID, items: [TipEntry])] {
-        ShiftDays.groupedByShift(entries, shiftID: \.shiftID, date: \.date, period: \.shiftPeriod)
-    }
-
-    private var multiShiftDays: Set<Date> {
-        var counts: [Date: Int] = [:]
-        for shift in shiftDays { counts[shift.day, default: 0] += 1 }
-        return Set(counts.filter { $0.value >= 2 }.keys)
-    }
-
-    private var breakdown: TipBreakdown {
-        TipBreakdown.total(of: entries)
-    }
-
-    private var nightsInPeriod: [(date: Date, cents: Int)] {
-        StatsEngine(records: entries.map(TipRecord.init)).nightlyTotals()
-    }
-
-    /// Sum of this period's nights, which nightlyTotals() already nets
-    /// against any logged tip-out — tips-only, same figure every other
-    /// analytic on this screen (breakdown, nightsInPeriod) reads.
-    private var tipsNetCents: Int {
-        nightsInPeriod.reduce(0) { $0 + $1.cents }
-    }
-
-    /// Base wage + overtime for this period's shifts — folds into the hero
-    /// total and the true $/hr rate below, but StatsEngine/TipBreakdown/
-    /// nightsInPeriod above never see it.
-    private var wages: PeriodIncome.Wages? {
-        PeriodIncome.wages(entries: entries, wageCentsPerHour: preferencesStore.baseHourlyWageCents, firstWeekday: scheduleStore.schedule?.firstWeekday)
-    }
-
-    /// The hero figure: tips net plus wages, the same "period income"
-    /// definition the dashboard hero and periods list now share.
-    private var heroTotalCents: Int {
-        tipsNetCents + (wages?.totalCents ?? 0)
-    }
-
-    /// TRUE hourly — (net tips + wages) / logged hours — computed locally so
-    /// StatsEngine.averageDollarsPerHour (tips-only, used elsewhere) stays
-    /// untouched.
-    private var trueDollarsPerHour: Double? {
-        guard loggedHours > 0 else { return nil }
-        return Double(heroTotalCents) / 100 / loggedHours
-    }
-
-    /// The face's one quiet caption — the true $/hr rate, when there's
-    /// enough to compute one. Nothing when it's absent: no filler, and the
-    /// payday date now lives only in the paycheck section further down this
-    /// screen (see noPaycheckCaption / PaycheckComparisonView).
-    private var heroRateCaption: String? {
-        guard let trueDollarsPerHour else { return nil }
-        let rate = Money.wholeDollarString(fromCents: Int((trueDollarsPerHour * 100).rounded()))
-        return "Averaging \(rate)/hr"
-    }
-
-    /// Whether the hero has a cash/credit split worth tucking a drawer under.
-    private var hasBreakdown: Bool {
-        breakdown.cashCents > 0 || breakdown.creditCents > 0
-    }
-
-    /// The figure that makes the drawer's rows reconcile to Total, same
-    /// derivation as the Dashboard hero's drawer: gross cash + credit minus
-    /// the tips-only net (which nightlyTotals() already nets tip-out out of).
-    private var tipOutCents: Int {
-        max(0, breakdown.cashCents + breakdown.creditCents - tipsNetCents)
-    }
-
-    /// Everything that adds, then the subtotal, then everything that
-    /// subtracts, then what's left — the same one-direction-change ledger the
-    /// Dashboard hero uses, so the two screens read identically.
-    private var grossEarnedCents: Int {
-        breakdown.cashCents + breakdown.creditCents + (wages?.totalCents ?? 0)
-    }
-
-    private var breakdownRows: [BreakdownRow] {
-        var rows: [BreakdownRow] = [
-            BreakdownRow("Cash tips", cents: breakdown.cashCents),
-            BreakdownRow("Credit tips", cents: breakdown.creditCents),
-        ]
-        if let wages {
-            // Regular hours only, not wages.hours (the total) — see the
-            // Dashboard's identical row.
-            rows.append(BreakdownRow("Wages · \(WageEstimate.hoursLabel(wages.hours - wages.overtimeHours))", cents: wages.regularCents))
-            if wages.overtimeCents > 0 {
-                rows.append(BreakdownRow("Overtime · \(WageEstimate.hoursLabel(wages.overtimeHours))", cents: wages.overtimeCents))
-            }
-        }
-        if tipOutCents > 0 {
-            rows.append(BreakdownRow("Earned", cents: grossEarnedCents, dividerAbove: true))
-            rows.append(BreakdownRow("Tipped out", cents: -tipOutCents))
-        }
-        return rows
-    }
-
-    private var predictedPaycheckCents: Int {
-        PredictedPaycheck.cents(from: breakdown, wagesCents: wages?.totalCents ?? 0)
-    }
-
-    /// Logged hours for this period's shifts, for the wages estimate below —
-    /// tip analytics (breakdown, tipsNetCents) never touch this; it exists
-    /// only to feed WageEstimate/PeriodIncome.
-    private var loggedHours: Double {
-        WageEstimate.loggedHours(shiftGroups: shiftDays.map(\.items))
-    }
-
-    /// One number and one sentence. The old copy read "Payday expects $2,960.28
-    /// in card tips around Aug 7, plus $206.21 in wages for the 72h 52m you
-    /// logged (before taxes). Enter the tips line from your stub to check it."
-    /// That is two totals to add up, the hours the drawer already itemizes, and
-    /// an instruction the button immediately below it already gives.
-    private var noPaycheckCaption: String {
-        let predicted = Money.string(fromCents: predictedPaycheckCents)
-        let dateText = payDate.formatted(.dateTime.month(.abbreviated).day())
-        let verb = isPayDateUpcoming ? "should show" : "should have shown"
-        return "Your check \(verb) \(predicted) around \(dateText). Card tips minus tip-out, plus wages, before taxes."
-    }
-
-    private var paycheck: PaycheckRecord? {
-        // Match by the paycheck's end date landing inside this period rather
-        // than exact boundary equality, so paychecks re-home to the right
-        // period after a schedule change instead of silently orphaning.
-        paycheckRecords.first { $0.periodEnd >= period.start && $0.periodEnd <= period.end }
-    }
-
     var body: some View {
+        let schedule = scheduleStore.schedule
+        let key = PeriodDetailFactsKey(
+            entriesRevision: dataRevision,
+            paychecksRevision: dataRevision,
+            period: period,
+            frequency: schedule?.frequency,
+            anchorPeriodEnd: schedule?.anchorPeriodEnd,
+            payDelayDays: schedule?.payDelayDays,
+            firstWeekday: schedule?.firstWeekday,
+            wageCentsPerHour: preferencesStore.baseHourlyWageCents
+        )
+        let facts = factsCache?.key == key
+            ? factsCache!.facts
+            : makeFacts()
         // A ScrollView, deliberately NOT a List — same fix as the Dashboard
         // (2026-07-19): a List animates row resize on UIKit's own clock,
         // which fights the hero drawer's spring and makes everything below
@@ -166,28 +195,30 @@ struct PeriodDetailView: View {
                 HeroBreakdownDrawer(
                     // Must reconcile to the hero directly above it — gross
                     // cash + credit did not (see the Dashboard's lip).
-                    lipText: tipOutCents > 0
-                        ? "Earned \(Money.string(fromCents: grossEarnedCents)) · Tipped out \(Money.string(fromCents: tipOutCents))"
-                        : "Cash \(Money.string(fromCents: breakdown.cashCents)) · Credit \(Money.string(fromCents: breakdown.creditCents))",
-                    rows: breakdownRows,
-                    total: BreakdownRow(tipOutCents > 0 ? "You kept" : "Total", cents: heroTotalCents, emphasized: true),
-                    hasBreakdown: hasBreakdown,
+                    lipText: facts.tipOutCents > 0
+                        ? "Earned \(Money.string(fromCents: facts.grossEarnedCents)) · Tipped out \(Money.string(fromCents: facts.tipOutCents))"
+                        : facts.breakdown.gratuityFeesCents > 0
+                            ? "Tips \(Money.string(fromCents: facts.breakdown.grossTotalCents)) · Gratuity \(Money.string(fromCents: facts.breakdown.gratuityFeesCents))"
+                            : "Cash \(Money.string(fromCents: facts.breakdown.cashCents)) · Credit \(Money.string(fromCents: facts.breakdown.creditCents))",
+                    rows: facts.breakdownRows,
+                    total: BreakdownRow(facts.tipOutCents > 0 ? "You kept" : "Total", cents: facts.heroTotalCents, emphasized: true),
+                    hasBreakdown: facts.hasBreakdown,
                     isExpanded: $breakdownExpanded
                 ) {
-                    heroCard
+                    heroCard(facts)
                 }
 
-                // The chart keeps its own "Daily tips" label (it doubles as
+                // The chart keeps its own time-scaled earnings label (it doubles as
                 // the scrub readout), so no separate flat header goes above
                 // it — this is this screen's only other flat section without
                 // a kicker.
-                if !nightsInPeriod.isEmpty {
-                    NightlyEarningsChart(nights: nightsInPeriod, period: period)
+                if !facts.nightsInPeriod.isEmpty {
+                    NightlyEarningsChart(nights: facts.nightsInPeriod, period: period)
                 }
 
-                paycheckSection
+                paycheckSection(facts)
 
-                shiftsSection
+                shiftsSection(facts)
             }
             .padding(.horizontal, PaydaySpacing.p16)
             .padding(.top, PaydaySpacing.p8)
@@ -197,12 +228,19 @@ struct PeriodDetailView: View {
         .navigationTitle(periodTitle)
         .navigationBarTitleDisplayMode(.inline)
         .sheet(item: $sheetTarget) { target in
-            LogTipSheet(target: target)
+            LogTipSheet(target: target).paydayAppearance()
         }
         .sheet(isPresented: $showPaycheckSheet) {
-            PaycheckEntrySheet(period: period, existing: paycheck)
+            PaycheckEntrySheet(period: period, existing: facts.paycheck).paydayAppearance()
         }
         .undoDeleteToast(undoState, context: modelContext)
+        .task(id: key) {
+            guard factsCache?.key != key else { return }
+            factsCache = PeriodDetailFactsCache(key: key, facts: facts)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: ModelContext.didSave)) { _ in
+            dataRevision &+= 1
+        }
         #if DEBUG
         .onAppear {
             // Screenshot-only, same flag as the Dashboard hero: opens the
@@ -215,13 +253,23 @@ struct PeriodDetailView: View {
         #endif
     }
 
+    private func makeFacts() -> PeriodDetailFacts {
+        PeriodDetailFacts(
+            allEntries: allEntries,
+            paycheckRecords: paycheckRecords,
+            period: period,
+            schedule: scheduleStore.schedule,
+            wageCentsPerHour: preferencesStore.baseHourlyWageCents
+        )
+    }
+
     /// Flat, in the Insights section grammar: a tracked caption2 kicker,
     /// content beneath, no card. One raised object on this screen is the
     /// hero; the paycheck comparison sits on the surface like every other
     /// non-hero section.
     @ViewBuilder
-    private var paycheckSection: some View {
-        let paycheck = self.paycheck
+    private func paycheckSection(_ facts: PeriodDetailFacts) -> some View {
+        let paycheck = facts.paycheck
         VStack(alignment: .leading, spacing: 6) {
             Text("PAYCHECK")
                 .font(PaydayFont.caption2)
@@ -229,14 +277,14 @@ struct PeriodDetailView: View {
                 .foregroundStyle(PaydayColor.primary)
 
             if let paycheck {
-                PaycheckComparisonView(breakdown: breakdown, paycheck: paycheck)
+                PaycheckComparisonView(breakdown: facts.breakdown, paycheck: paycheck)
             } else {
-                Text(noPaycheckCaption)
+                Text(facts.noPaycheckCaption)
                     .font(PaydayFont.caption)
                     .foregroundStyle(PaydayColor.textSecondary)
             }
 
-            Button(paycheck == nil ? "Enter paycheck amount" : "Edit paycheck amount") {
+            Button(paycheck == nil ? "Add paycheck" : "Edit paycheck") {
                 showPaycheckSheet = true
             }
             .font(PaydayFont.subheadline)
@@ -248,8 +296,8 @@ struct PeriodDetailView: View {
     }
 
     @ViewBuilder
-    private var shiftsSection: some View {
-        if shiftDays.isEmpty {
+    private func shiftsSection(_ facts: PeriodDetailFacts) -> some View {
+        if facts.shiftDays.isEmpty {
             Text("No shifts in this period.")
                 .font(PaydayFont.bodyRegular)
                 .foregroundStyle(PaydayColor.textSecondary)
@@ -261,9 +309,9 @@ struct PeriodDetailView: View {
                     .foregroundStyle(PaydayColor.textSecondary)
                     .padding(.bottom, PaydaySpacing.p8)
 
-                ForEach(Array(shiftDays.enumerated()), id: \.element.shiftID) { index, group in
+                ForEach(Array(facts.shiftDays.enumerated()), id: \.element.shiftID) { index, group in
                     if index > 0 { Divider() }
-                    shiftRow(for: group)
+                    shiftRow(for: group, multiShiftDays: facts.multiShiftDays)
                 }
             }
         }
@@ -274,13 +322,13 @@ struct PeriodDetailView: View {
     /// and the payday date all moved to the tucked drawer / paycheck section
     /// below, rather than stacking four caption lines of differently-weighted
     /// information on the card face.
-    private var heroCard: some View {
+    private func heroCard(_ facts: PeriodDetailFacts) -> some View {
         VStack(spacing: 10) {
-            Text(Money.string(fromCents: heroTotalCents))
+            Text(Money.string(fromCents: facts.heroTotalCents))
                 .font(PaydayFont.displayXL)
                 .monospacedDigit()
                 .foregroundStyle(PaydayColor.textPrimary)
-            if let heroRateCaption {
+            if let heroRateCaption = facts.heroRateCaption {
                 Text(heroRateCaption)
                     .font(PaydayFont.caption)
                     .monospacedDigit()
@@ -289,17 +337,20 @@ struct PeriodDetailView: View {
         }
         .frame(maxWidth: .infinity)
         .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(hasBreakdown ? .isButton : [])
-        .accessibilityHint(hasBreakdown ? (breakdownExpanded ? "Hide breakdown" : "Show breakdown") : "")
+        .accessibilityAddTraits(facts.hasBreakdown ? .isButton : [])
+        .accessibilityHint(facts.hasBreakdown ? (breakdownExpanded ? "Hide breakdown" : "Show breakdown") : "")
         .accessibilityAction {
-            guard hasBreakdown else { return }
+            guard facts.hasBreakdown else { return }
             HeroBreakdownToggle.fire($breakdownExpanded, reduceMotion: reduceMotion)
         }
         .paydayCard(padding: PaydaySpacing.p24)
     }
 
     @ViewBuilder
-    private func shiftRow(for group: (day: Date, shiftID: UUID, items: [TipEntry])) -> some View {
+    private func shiftRow(
+        for group: (day: Date, shiftID: UUID, items: [TipEntry]),
+        multiShiftDays: Set<Date>
+    ) -> some View {
         let period = ShiftDetails.resolve(from: group.items).shiftPeriod
         let dayHasMultiple = multiShiftDays.contains(group.day)
         if let anchor = group.items.first {
@@ -346,9 +397,17 @@ struct PaycheckComparisonView: View {
     // formula (PredictedPaycheck). This used to compare against gross credit,
     // which made every period with a tip-out read as short by exactly the
     // tip-out, in red, accusing payroll of a shortfall that never happened.
-    private var comparedCents: Int { PredictedPaycheck.tipsLineCents(from: breakdown) }
+    private var comparedCents: Int {
+        PredictedPaycheck.tipsLineCents(from: breakdown) + breakdown.gratuityFeesCents
+    }
 
-    private var deltaCents: Int { paycheck.paidTipsCents - comparedCents }
+    private var paidTipEarningsCents: Int {
+        PredictedPaycheck.paidTipEarningsCents(
+            tipsCents: paycheck.reconciledPaidTipsCents,
+            gratuityCents: paycheck.gratuityCents
+        )
+    }
+    private var deltaCents: Int { paidTipEarningsCents - comparedCents }
     private var isShort: Bool { deltaCents < 0 }
 
     var body: some View {
@@ -427,9 +486,9 @@ struct PaycheckComparisonView: View {
 
     private var comparisonCaption: String {
         let logged = Money.string(fromCents: comparedCents)
-        let paid = Money.string(fromCents: paycheck.paidTipsCents)
+        let paid = Money.string(fromCents: paidTipEarningsCents)
         if usesCreditOnly {
-            return "Logged \(logged) in credit tips · check paid \(paid)"
+            return "Logged \(logged) in card tips and gratuity · check paid \(paid)"
         }
         return "Logged \(logged) · check paid \(paid)"
     }

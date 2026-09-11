@@ -82,6 +82,26 @@ struct PayPeriodCalculator {
         return PayPeriod(start: startOfDay(start), end: startOfDay(end))
     }
 
+    /// The `count` completed periods immediately before `period`, most
+    /// recent first. Walks the real boundary math rather than subtracting a
+    /// fixed day count, so twice-monthly and monthly schedules (whose
+    /// periods genuinely differ in length) come back correct.
+    func priorPeriods(before period: PayPeriod, count: Int) -> [PayPeriod] {
+        guard count > 0 else { return [] }
+        var result: [PayPeriod] = []
+        var cursor = period.start
+        for _ in 0..<count {
+            let previousDay = addDays(-1, to: startOfDay(cursor))
+            let previous = self.period(containing: previousDay)
+            // Defensive: a degenerate schedule that fails to step backwards
+            // would otherwise spin here returning the same period forever.
+            guard previous.start < cursor else { break }
+            result.append(previous)
+            cursor = previous.start
+        }
+        return result
+    }
+
     /// The next period-end boundary strictly after the given date.
     func nextPeriodEnd(after date: Date) -> Date {
         periodEnd(onOrAfter: addDays(1, to: startOfDay(date)))

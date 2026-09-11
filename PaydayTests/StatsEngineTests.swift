@@ -240,6 +240,128 @@ struct PaceTests {
     }
 }
 
+/// Fourteen-day periods ending the Sunday before each listed start, built
+/// back from a current period starting 2026-07-06 — the shape every
+/// usual-pace test below shares.
+private func biweeklyPeriods(count: Int, currentStart: Date) -> [PayPeriod] {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone.current
+    return (1...count).map { step in
+        let start = calendar.date(byAdding: .day, value: -14 * step, to: currentStart)!
+        let end = calendar.date(byAdding: .day, value: 13, to: start)!
+        return PayPeriod(start: start, end: end)
+    }
+}
+
+@Suite("Usual pace baseline (median of recent periods)")
+struct UsualPaceTests {
+    private let current = PayPeriod(start: date(2026, 7, 6), end: date(2026, 7, 19))
+
+    /// Day 2 of each of the five prior periods, so the "at this point"
+    /// cutoff lands on a day that actually has a record in every one.
+    private func recordsAcrossPriorPeriods(_ centsPerPeriod: [Int]) -> [TipRecord] {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone.current
+        let periods = biweeklyPeriods(count: centsPerPeriod.count, currentStart: date(2026, 7, 6))
+        return zip(periods, centsPerPeriod).map { period, cents in
+            let day = calendar.date(byAdding: .day, value: 1, to: period.start)!
+            let parts = calendar.dateComponents([.year, .month, .day], from: day)
+            return record(parts.year!, parts.month!, parts.day!, cents: cents)
+        }
+    }
+
+    @Test("baseline is the median of the prior periods at the same point, not the most recent one")
+    func baselineIsMedianNotLastPeriod() {
+        // Most recent period is a $900 outlier; the median of the five is $300.
+        let engine = StatsEngine(records: recordsAcrossPriorPeriods([90000, 30000, 20000, 30000, 40000]))
+        let priors = biweeklyPeriods(count: 5, currentStart: current.start)
+        let baseline = engine.usualPaceBaseline(currentPeriod: current, priorPeriods: priors, asOf: date(2026, 7, 8))
+        #expect(baseline?.cents == 30000)
+        #expect(baseline?.periodCount == 5)
+    }
+
+    @Test("one huge period cannot drag the baseline the way a mean would")
+    func outlierDoesNotMoveTheMedian() {
+        let priors = biweeklyPeriods(count: 5, currentStart: current.start)
+        let calm = StatsEngine(records: recordsAcrossPriorPeriods([40000, 30000, 20000, 30000, 40000]))
+        let spiked = StatsEngine(records: recordsAcrossPriorPeriods([500000, 30000, 20000, 30000, 40000]))
+        let calmBaseline = calm.usualPaceBaseline(currentPeriod: current, priorPeriods: priors, asOf: date(2026, 7, 8))
+        let spikedBaseline = spiked.usualPaceBaseline(currentPeriod: current, priorPeriods: priors, asOf: date(2026, 7, 8))
+        #expect(calmBaseline?.cents == spikedBaseline?.cents)
+    }
+
+    @Test("a period with nothing logged is skipped, never counted as a $0 period")
+    func emptyPeriodsAreSkippedNotZeroed() {
+        // Only three of the five prior periods hold anything.
+        let engine = StatsEngine(records: recordsAcrossPriorPeriods([30000, 20000, 40000]))
+        let priors = biweeklyPeriods(count: 5, currentStart: current.start)
+        let baseline = engine.usualPaceBaseline(currentPeriod: current, priorPeriods: priors, asOf: date(2026, 7, 8))
+        // Median of [200, 300, 400], NOT of [0, 0, 200, 300, 400].
+        #expect(baseline?.cents == 30000)
+        #expect(baseline?.periodCount == 3)
+    }
+
+    @Test("an even number of periods averages the middle two")
+    func evenCountAveragesMiddlePair() {
+        let engine = StatsEngine(records: recordsAcrossPriorPeriods([10000, 20000, 30000, 50000]))
+        let priors = biweeklyPeriods(count: 4, currentStart: current.start)
+        let baseline = engine.usualPaceBaseline(currentPeriod: current, priorPeriods: priors, asOf: date(2026, 7, 8))
+        #expect(baseline?.cents == 25000)
+    }
+
+    @Test("baseline is nil when no prior period holds a single record")
+    func nilWithoutAnyPriorHistory() {
+        let engine = StatsEngine(records: [record(2026, 7, 7, cents: 10000)])
+        let priors = biweeklyPeriods(count: 6, currentStart: current.start)
+        #expect(engine.usualPaceBaseline(currentPeriod: current, priorPeriods: priors, asOf: date(2026, 7, 8)) == nil)
+    }
+
+    @Test("with exactly one prior period the comparison matches the old single-period math")
+    func singlePriorPeriodMatchesLegacyPaceDelta() {
+        let prior = PayPeriod(start: date(2026, 6, 22), end: date(2026, 7, 5))
+        let records = [record(2026, 7, 6, cents: 10000), record(2026, 6, 22, cents: 4000)]
+        let engine = StatsEngine(records: records)
+        let comparison = engine.paceComparison(currentPeriod: current, priorPeriods: [prior], asOf: date(2026, 7, 6))
+        let legacy = engine.paceDelta(currentPeriod: current, priorPeriod: prior, asOf: date(2026, 7, 6))
+        #expect(comparison?.deltaCents == legacy)
+        #expect(comparison?.periodCount == 1)
+    }
+
+    @Test("the comparison subtracts the baseline from what's in the period so far")
+    func comparisonSubtractsBaseline() {
+        var records = recordsAcrossPriorPeriods([30000, 30000, 30000])
+        records.append(record(2026, 7, 7, cents: 12000))
+        let engine = StatsEngine(records: records)
+        let priors = biweeklyPeriods(count: 3, currentStart: current.start)
+        let comparison = engine.paceComparison(currentPeriod: current, priorPeriods: priors, asOf: date(2026, 7, 8))
+        #expect(comparison?.baselineCents == 30000)
+        #expect(comparison?.deltaCents == -18000)
+    }
+}
+
+@Suite("Pace copy")
+struct PaceCopyTests {
+    @Test("a single prior period still says 'last period' — there is no 'usual' yet")
+    func singlePeriodKeepsLastPeriodWording() {
+        #expect(RevealCopy.paceLine(deltaCents: -31240, periodCount: 1) == "$312.40 behind last period at this point.")
+    }
+
+    @Test("a thin multi-period baseline names its own sample size out loud")
+    func thinBaselineDisclosesSampleSize() {
+        #expect(RevealCopy.paceLine(deltaCents: -31240, periodCount: 3) == "$312.40 behind your usual pace (across three periods).")
+    }
+
+    @Test("a settled baseline drops the disclosure")
+    func settledBaselineOmitsDisclosure() {
+        #expect(RevealCopy.paceLine(deltaCents: 31240, periodCount: 6) == "$312.40 ahead of your usual pace.")
+    }
+
+    @Test("dead even reads as on pace, not as a $0.00 gap")
+    func evenReadsAsOnPace() {
+        #expect(RevealCopy.paceLine(deltaCents: 0, periodCount: 6) == "Right on your usual pace.")
+    }
+}
+
 @Suite("Rate ($/hr)")
 struct RateTests {
     @Test("dollars per hour for a specific night divides that night's total by its hours")
@@ -351,6 +473,110 @@ struct TipPercentTests {
         ])
         // 10000 gross / 50000 sales = 20%, ignoring the tip-out entirely.
         #expect(engine.tipPercent(forNightAt: date(2026, 7, 1)) == 20)
+    }
+
+    @Test("receipt total never replaces the pre-tip sales denominator")
+    func receiptTotalIsNotSalesBasis() {
+        let metrics = ShiftReceiptMetrics(totalAmountCents: 98_049)
+        let engine = StatsEngine(records: [
+            record(
+                2026,
+                8,
+                23,
+                cents: 12_136,
+                kind: .credit,
+                salesCents: 81_863,
+                receiptMetrics: metrics
+            )
+        ])
+
+        let percent = engine.tipPercent(forNightAt: date(2026, 8, 23))
+        #expect(percent != nil)
+        #expect(abs(percent! - (12_136.0 / 81_863.0 * 100)) < 0.001)
+        #expect(abs(percent! - (12_136.0 / 98_049.0 * 100)) > 1)
+    }
+
+    @Test("Toast auto-grat counts as effective tip earnings without becoming sales")
+    func gratuityCountsAsEffectiveTips() {
+        let metrics = ShiftReceiptMetrics(
+            earningsSchemaVersion: 2,
+            gratuityFeesCents: 4_050,
+            totalAmountCents: 98_049
+        )
+        let engine = StatsEngine(records: [
+            record(
+                2026,
+                8,
+                23,
+                cents: 12_136,
+                kind: .credit,
+                tipOutCents: 2_243,
+                salesCents: 81_863,
+                receiptMetrics: metrics
+            )
+        ])
+
+        #expect(engine.nightlyTotals().first?.cents == 13_943)
+        let percent = engine.tipPercent(forNightAt: date(2026, 8, 23))
+        #expect(percent != nil)
+        #expect(abs(percent! - ((12_136.0 + 4_050.0) / 81_863.0 * 100)) < 0.001)
+        #expect(abs(percent! - ((12_136.0 + 4_050.0) / 98_049.0 * 100)) > 1)
+    }
+
+    @Test("a discretionary 20% auto-grat and an optional extra tip combine")
+    func autoGratAndExtraTipCombine() {
+        let autoGratOnly = StatsEngine(records: [
+            record(
+                2026,
+                8,
+                23,
+                cents: 0,
+                kind: .credit,
+                salesCents: 40_000,
+                receiptMetrics: ShiftReceiptMetrics(
+                    earningsSchemaVersion: 2,
+                    gratuityFeesCents: 8_000
+                )
+            )
+        ])
+        #expect(autoGratOnly.tipPercent(forNightAt: date(2026, 8, 23)) == 20)
+
+        let withExtraTip = StatsEngine(records: [
+            record(
+                2026,
+                8,
+                24,
+                cents: 2_000,
+                kind: .credit,
+                salesCents: 40_000,
+                receiptMetrics: ShiftReceiptMetrics(
+                    earningsSchemaVersion: 2,
+                    gratuityFeesCents: 8_000
+                )
+            )
+        ])
+        #expect(withExtraTip.tipPercent(forNightAt: date(2026, 8, 24)) == 25)
+    }
+
+    @Test("legacy combined receipt amounts do not double-count captured gratuity")
+    func legacyGratuityRemainsNonAdditive() {
+        let legacyMetrics = ShiftReceiptMetrics(
+            earningsSchemaVersion: nil,
+            gratuityFeesCents: 4_050
+        )
+        let engine = StatsEngine(records: [
+            record(
+                2026,
+                8,
+                23,
+                cents: 16_186,
+                kind: .credit,
+                tipOutCents: 2_243,
+                receiptMetrics: legacyMetrics
+            )
+        ])
+
+        #expect(engine.nightlyTotals().first?.cents == 13_943)
     }
 
     @Test("tip percent is nil for a night with no sales logged")
@@ -466,7 +692,12 @@ struct MovesTests {
         let engine = StatsEngine(records: records)
         let verdict = engine.moves(referenceDate: date(2026, 7, 24)).first { $0.id == "doublesVerdict" }
         #expect(verdict != nil)
-        #expect(verdict?.title == "Doubles Cost You")
+        // The title states the topic, not a verdict on it. Which way the
+        // comparison actually points is a fact, so it stays - in the body,
+        // next to the two numbers that establish it.
+        #expect(verdict?.title == "Doubles, Hour For Hour")
+        #expect(verdict?.body.contains("doubles run lower per hour") == true)
+        #expect(verdict?.title.contains("Cost") == false)
     }
 
     @Test("rate leader fires when one weekday clearly out-earns per hour")
@@ -539,7 +770,12 @@ struct MovesTests {
         let engine = StatsEngine(records: records)
         let moves = engine.moves(referenceDate: date(2026, 7, 24))
         #expect(moves.count <= 3)
-        #expect(moves == moves.sorted { $0.annualImpactCents > $1.annualImpactCents })
+        #expect(moves == moves.sorted {
+            guard $0.effectSize != $1.effectSize else {
+                return $0.supportingShiftCount > $1.supportingShiftCount
+            }
+            return $0.effectSize > $1.effectSize
+        })
     }
 
     @Test("moves is empty with no history at all — silence, not weak advice")
@@ -654,8 +890,8 @@ struct MovesTests {
 
     // MARK: Annualized-figure honesty gate
 
-    @Test("weekday swap states its annualized dollar figure once both weekdays clear 8 shifts")
-    func weekdaySwapAnnualizesAtEightShifts() {
+    @Test("weekday swap states how much history backs it once both weekdays clear 8 shifts, and never a dollar projection")
+    func weekdaySwapStatesConsistencyAtEightShifts() {
         var records: [TipRecord] = []
         for week in 0..<8 {
             records.append(record(2026, 7, 3 + week * 7, cents: 4000))  // 8 Fridays
@@ -664,11 +900,16 @@ struct MovesTests {
         let engine = StatsEngine(records: records)
         let swap = engine.moves(referenceDate: date(2026, 12, 1)).first { $0.id == "weekdaySwap" }
         #expect(swap != nil)
-        #expect(swap?.body.contains("worth about") == true)
+        #expect(swap?.body.hasSuffix("That's held across eight Fridays and eight Mondays.") == true)
         #expect(swap?.body.contains("Only") == false)
+        // The annualized counterfactual is gone for good - it argued for a
+        // behavior change, which this page does not do. See
+        // StatsEngine.consistencyClause.
+        #expect(swap?.body.contains("worth about") == false)
+        #expect(swap?.body.contains("a year") == false)
     }
 
-    @Test("weekday swap hedges instead of annualizing when one side is thin, naming that side exactly and printing no dollar projection")
+    @Test("weekday swap names the thin side exactly instead of claiming a settled pattern")
     func weekdaySwapHedgesUnderEightShifts() {
         var records: [TipRecord] = []
         for week in 0..<10 {
@@ -681,7 +922,7 @@ struct MovesTests {
         let swap = engine.moves(referenceDate: date(2026, 12, 1)).first { $0.id == "weekdaySwap" }
         #expect(swap != nil)
         // The comparison itself (both per-side averages and counts) still
-        // renders in full - only the year-long projection is withheld.
+        // renders in full - only the claim that it has settled is withheld.
         #expect(swap?.body.contains("across ten Fridays") == true)
         #expect(swap?.body.contains("across three Mondays") == true)
         #expect(swap?.body.hasSuffix("Only three Mondays to compare against so far.") == true)
@@ -689,7 +930,7 @@ struct MovesTests {
         #expect(swap?.body.contains("a year") == false)
     }
 
-    @Test("a hedged move still outranks a non-hedged move when its computed impact is larger — ranking reads annualImpactCents, not whether the dollar figure printed")
+    @Test("a hedged move still outranks a non-hedged move when its effect is stronger — ranking reads effectSize, not whether the sample printed a hedge")
     func hedgeDoesNotAffectRankingOrder() {
         var records: [TipRecord] = []
         // Friday - thin (3 nights), hedges. Its own $/night edge over
@@ -716,8 +957,8 @@ struct MovesTests {
         let moves = engine.moves(referenceDate: date(2026, 7, 24))
         #expect(moves.map(\.id) == ["weekdaySwap", "lapsedWinner"])
         #expect(moves[0].body.contains("Only") == true)
-        #expect(moves[1].body.contains("worth about") == true)
-        #expect(moves[0].annualImpactCents > moves[1].annualImpactCents)
+        #expect(moves[1].body.contains("That's held across") == true)
+        #expect(moves[0].effectSize > moves[1].effectSize)
     }
 
     // MARK: One Move per weekday subject
@@ -1218,7 +1459,6 @@ struct RevealWageBasisTests {
     @Test("the weekday-average delta flips sign once a wage lifts a prior Monday's income above tonight")
     func weekdayAverageDeltaFlipsWithWage() {
         let period = PayPeriod(start: date(2026, 6, 1), end: date(2026, 7, 31))
-        let monday = Calendar.current.component(.weekday, from: date(2026, 7, 6))
         let records = [
             record(2026, 7, 3, cents: 50000),                    // dominant all-time best (a Friday)
             record(2026, 6, 22, cents: 6000),                     // Monday, no hours
@@ -1310,12 +1550,12 @@ struct RevealWageBasisTests {
 struct RevealCopyTests {
     @Test("headline formats the shift total, naming tips rather than the day")
     func headlineFormat() {
-        #expect(RevealCopy.headline(cents: 18600, includesWages: false) == "$186.00 in tips this shift.")
+        #expect(RevealCopy.headline(cents: 18600, includesNonTipIncome: false) == "$186.00 in tips this shift.")
     }
 
     @Test("headline drops 'tips' when the total already includes wages — it's income, not tips")
     func headlineFormatWithWages() {
-        #expect(RevealCopy.headline(cents: 20132, includesWages: true) == "$201.32 this shift.")
+        #expect(RevealCopy.headline(cents: 20132, includesNonTipIncome: true) == "$201.32 this shift.")
     }
 
     @Test("all-time record copy names the previous best, falling back to 'shift' when the period is unknown")

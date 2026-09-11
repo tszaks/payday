@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 
 /// One labeled block in the Insights screen, e.g. "Top Earning Days" + body.
 struct InsightSection: Codable, Identifiable, Equatable, Sendable {
@@ -73,6 +74,11 @@ enum InsightsError: LocalizedError {
 /// nothing worth flagging, InsightsView renders no WORTH KNOWING section —
 /// the grid "must stand alone anyway."
 enum InsightsService {
+    private static let logger = Logger(
+        subsystem: "com.szakacsmedia.payday",
+        category: "InsightsNarration"
+    )
+
     /// Set once the payday-website Vercel deployment's production domain
     /// is confirmed — the proxy route already exists
     /// (app/api/insights-narrate/route.ts) but hasn't been deployed with a
@@ -101,14 +107,40 @@ enum InsightsService {
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let requestID = UUID().uuidString
+        request.setValue(requestID, forHTTPHeaderField: "X-Request-ID")
         request.httpBody = try JSONSerialization.data(withJSONObject: [
             "input": promptDescription(for: facts, scheduleFrequency: scheduleFrequency, previousSections: previousSections, topMove: topMove, latestFollowUp: latestFollowUp)
         ])
 
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse else {
+        let startedAt = Date()
+        let requestBytes = request.httpBody?.count ?? 0
+        logger.notice(
+            "Narration request started. requestID=\(requestID, privacy: .public) bytes=\(requestBytes)"
+        )
+
+        let result: (Data, URLResponse)
+        do {
+            result = try await URLSession.shared.data(for: request)
+        } catch {
+            let elapsedMilliseconds = Int(Date().timeIntervalSince(startedAt) * 1_000)
+            let errorType = String(describing: type(of: error))
+            logger.error(
+                "Narration request failed. requestID=\(requestID, privacy: .public) elapsedMs=\(elapsedMilliseconds) type=\(errorType, privacy: .public)"
+            )
             throw InsightsError.generationFailed("Couldn't reach narration right now.")
         }
+        let (data, response) = result
+        let elapsedMilliseconds = Int(Date().timeIntervalSince(startedAt) * 1_000)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            logger.error(
+                "Narration response was not HTTP. requestID=\(requestID, privacy: .public) elapsedMs=\(elapsedMilliseconds) bytes=\(data.count)"
+            )
+            throw InsightsError.generationFailed("Couldn't reach narration right now.")
+        }
+        logger.notice(
+            "Narration response received. requestID=\(requestID, privacy: .public) status=\(httpResponse.statusCode) elapsedMs=\(elapsedMilliseconds) bytes=\(data.count)"
+        )
         guard (200..<300).contains(httpResponse.statusCode) else {
             // A 4xx means narration WAS reached and turned the request down —
             // our bug (an oversized prompt is the one that actually happened),
@@ -223,15 +255,17 @@ enum InsightsService {
 
         lines.append("THE OBVIOUSNESS LAW, absolute: never state anything that would be true for every server everywhere - if a sentence doesn't depend on THIS person's numbers, it is not an insight and must not be written. Banned by this law: how tipping works (cash goes home nightly, credit arrives on the paycheck), what any term means, that weekends or dinners are generally busier, that more hours mean more pay. The cash-versus-credit mix in general is banned under this law too - the ONLY cash fact you may ever mention is the CASH WEEKDAY line above, when present, and only in that specific framing. The test for every sentence you write: could it only be said about this person's data? If not, delete it.")
 
+        lines.append("THE NEUTRALITY LAW, absolute: this page reports what the data shows. It never tells the reader what to do, what is better, or what they would have earned had they chosen differently. Write in the indicative mood, never the imperative and never the conditional. Specifically banned: advice, suggestions, encouragement, any sentence containing 'you should', 'try', 'consider', 'worth it', or 'if you', and any counterfactual or projection of what a different choice would have paid. Neutral does NOT mean vague - name the exact number and the exact shift. 'Saturdays run double Mondays' is correct; 'Saturday beats Monday, so pick up Saturdays' is not. The reader decides what to do with a fact; your job ends at stating it.")
+
         if let topMove {
-            lines.append("TOP MOVE (already shown to the reader as its own card, above everything you write - never repeat it as an item): \(topMove.title) - \(topMove.body)")
+            lines.append("TOP OBSERVATION (already shown to the reader as its own card, above everything you write - never repeat it as an item): \(topMove.title) - \(topMove.body)")
         }
 
         if let latestFollowUp {
-            lines.append("SINCE THEN (a follow-up on a past Move, already shown to the reader as its own card, above everything you write, including TOP MOVE - never repeat it as an item): \(latestFollowUp.title) - \(latestFollowUp.body)")
+            lines.append("WHAT CHANGED (a shift in one pattern since it was first shown, already displayed to the reader as its own card, above everything you write, including TOP OBSERVATION - never repeat it as an item): \(latestFollowUp.title) - \(latestFollowUp.body)")
         }
 
-        lines.append("THE READER ALREADY SEES ALL OF THE ABOVE AS NUMBERS ON SCREEN, in a stat grid directly below TOP MOVE/SINCE THEN: hourly rate, tip percent, spend per guest, tips per table, lunch vs dinner per shift, doubles vs solo per shift, cash weekday (when one qualifies), and start times, each already hedged there when the sample is thin. Your job is NOT to restate any of those figures and NOT to write one item per fact / narrate section-by-section - the grid already does that job better than prose can. Return 1 to 3 items in the sections array, and only when something is actually worth flagging beyond the numbers themselves: (a) an explanation for an anomaly or unusual number - especially one grounded in a SHIFT NOTE above - (b) a caveat about how to read the data (e.g. why a figure is thin or noisy) that the grid's own hedge doesn't already cover, or (c) one synthesis connecting two or more of the facts above into a takeaway the grid doesn't spell out on its own. Each item's title must be 4 words or fewer; each item's body must be 1-2 sentences, never more. If nothing above actually clears that bar, return an empty sections array rather than padding it with a restated number or a generic remark.")
+        lines.append("THE READER ALREADY SEES ALL OF THE ABOVE AS NUMBERS AND RANKED OBSERVATIONS ON SCREEN: hourly rate, tip percent, spend per guest, tips per table, lunch vs dinner per shift, doubles vs solo per shift, cash weekday (when one qualifies), start times, and up to three quantified observations, each already hedged when its sample is thin. Your only remaining job is DATA QUALITY CONTEXT. Return 0 to 2 items in the sections array, and only when one of these applies: (a) a SHIFT NOTE above directly explains an anomaly or unusual number, or (b) a specific caveat materially changes how the reader should interpret a figure (estimated, incomplete, noisy, or otherwise limited) and the grid's own hedge does not already disclose it. Do NOT synthesize a recommendation, rank a shift, repeat an observation, restate a metric, or add a generic observation. Each title must be 4 words or fewer; each body must be 1-2 sentences, never more. If nothing clears that bar, return an empty sections array.")
 
         var promptSections = ["NEW FACTS TO REFLECT:", lines.joined(separator: "\n")]
         if let previousSections, !previousSections.isEmpty {

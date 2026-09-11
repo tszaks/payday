@@ -2,6 +2,51 @@ import Testing
 import Foundation
 @testable import Payday
 
+@Suite("Earnings chart adaptive axis")
+struct EarningsChartAdaptiveAxisTests {
+    private let calendar = Calendar(identifier: .gregorian)
+    private let start = Date(timeIntervalSince1970: 1_700_000_000)
+
+    private func domain(days: Int) -> ClosedRange<Date> {
+        start...(calendar.date(byAdding: .day, value: days, to: start) ?? start)
+    }
+
+    @Test("weekday initials remain for short pay-period charts")
+    func dayScale() {
+        #expect(EarningsChartAxisGranularity.forDomain(domain(days: 14), calendar: calendar) == .day)
+        #expect(EarningsChartAxisGranularity.forDomain(domain(days: 21), calendar: calendar) == .day)
+    }
+
+    @Test("longer histories step through weeks, months, then years")
+    func longerScales() {
+        #expect(EarningsChartAxisGranularity.forDomain(domain(days: 22), calendar: calendar) == .week)
+        #expect(EarningsChartAxisGranularity.forDomain(domain(days: 120), calendar: calendar) == .week)
+        #expect(EarningsChartAxisGranularity.forDomain(domain(days: 121), calendar: calendar) == .month)
+        #expect(EarningsChartAxisGranularity.forDomain(domain(days: 730), calendar: calendar) == .month)
+        #expect(EarningsChartAxisGranularity.forDomain(domain(days: 731), calendar: calendar) == .year)
+    }
+
+    @Test("weekly and monthly bars combine their daily values")
+    func combinesBars() {
+        let monday = calendar.date(from: DateComponents(year: 2026, month: 8, day: 3))!
+        let tuesday = calendar.date(byAdding: .day, value: 1, to: monday)!
+        let nextMonday = calendar.date(byAdding: .day, value: 7, to: monday)!
+        let september = calendar.date(from: DateComponents(year: 2026, month: 9, day: 1))!
+        let nights = [
+            (date: monday, cents: 10_000),
+            (date: tuesday, cents: 20_000),
+            (date: nextMonday, cents: 40_000),
+            (date: september, cents: 80_000)
+        ]
+
+        let weeks = EarningsChartAxisGranularity.week.aggregate(nights, calendar: calendar)
+        #expect(weeks.map(\.cents) == [30_000, 40_000, 80_000])
+
+        let months = EarningsChartAxisGranularity.month.aggregate(nights, calendar: calendar)
+        #expect(months.map(\.cents) == [70_000, 80_000])
+    }
+}
+
 /// Insights' page-level replacement for the old content-dump prose — a
 /// deterministic stat grid built straight off InsightsFacts. These tests
 /// cover formatting, the sample-size hedge, and (most importantly) that
@@ -151,7 +196,7 @@ struct InsightsNumbersGridTests {
         #expect(row[1].context == "")
     }
 
-    @Test("doubles and solo always land in the same row, and solo reads ONE SHIFT")
+    @Test("doubles and solo always land in the same row")
     func doublesSoloRow() {
         let facts = baseFacts(doublesSolo: DoublesSoloFacts(doubleAverageCents: 51_800, doubleCount: 2, soloAverageCents: 23_800, soloCount: 3, doublePerShiftCents: 25_900))
 
@@ -161,7 +206,7 @@ struct InsightsNumbersGridTests {
         #expect(row.map(\.id) == ["doubles", "solo"])
         #expect(row[0].value == "$259/shift")
         #expect(row[0].context == "2 double days · early read")
-        #expect(row[1].label == "ONE SHIFT")
+        #expect(row[1].label == "SOLO")
         #expect(row[1].value == "$238/shift")
         #expect(row[1].context == "3 days")
     }
@@ -223,6 +268,17 @@ struct InsightsNumbersGridTests {
         #expect(tile.context == "vs $14/hr at \(worstHourLabel)")
     }
 
+    @Test("a metric already explained by a recommendation can be excluded without disturbing the remaining rows")
+    func excludesRedundantMetric() {
+        var facts = baseFacts()
+        facts.rate = RateFacts(overallDollarsPerHour: 42, nightsWithHours: 12, bestWeekday: nil, bestWeekdayDollarsPerHour: nil, bestWeekdayNightCount: nil, lunchDollarsPerHour: nil, dinnerDollarsPerHour: nil, doubleDollarsPerHour: nil, soloDollarsPerHour: nil)
+        facts.startTime = StartTimeFacts(bestStartHour: 16, bestDollarsPerHour: 48, bestShiftCount: 17, worstStartHour: 10, worstDollarsPerHour: 22, worstShiftCount: 6)
+
+        let rows = InsightsNumbersGrid.rows(for: facts, excluding: ["startTimes"])
+
+        #expect(rows.map { $0.map(\.id) } == [["hourly"]])
+    }
+
     @Test("every populated fact produces its own row, in a stable order")
     func fullGridOrder() {
         var facts = baseFacts(
@@ -244,5 +300,51 @@ struct InsightsNumbersGridTests {
             ["cashNights"],
             ["startTimes"],
         ])
+    }
+}
+
+@Suite("Insights presentation")
+struct InsightsPresentationTests {
+    @Test("supporting observations keep the comparison but omit the consistency clause")
+    func compactSupportingMove() {
+        let move = Move(
+            id: "doublesVerdict",
+            title: "Doubles, Hour For Hour",
+            body: "Doubles average $38/hr against $42/hr solo across twenty solo shifts. That's held across eleven doubles and twenty solo shifts.",
+            effectSize: 1.4,
+            supportingShiftCount: 11
+        )
+
+        #expect(InsightsPresentation.compactBody(for: move) == "Doubles average $38/hr against $42/hr solo across twenty solo shifts.")
+    }
+
+    @Test("supporting observations preserve a thin-sample warning")
+    func compactSupportingMoveKeepsHedge() {
+        let move = Move(
+            id: "startTimeLeader",
+            title: "4 PM Starts Lead Per Hour",
+            body: "Shifts starting around 4 PM average $48/hr against $22/hr around 10 AM. Only six 10 AM starts to compare against so far.",
+            effectSize: 0.9,
+            supportingShiftCount: 6
+        )
+
+        #expect(InsightsPresentation.compactBody(for: move).contains("Only six 10 AM starts"))
+    }
+
+    @Test("narration keeps data caveats and drops anything that reads as advice")
+    func dataNoteFilter() {
+        let sections = [
+            InsightSection(title: "Shift Selection", body: "Prioritize shifts starting around 4 PM."),
+            InsightSection(title: "Aug 23 Estimate", body: "Cash was not confirmed, so treat this shift as approximate."),
+            InsightSection(title: "POS Outage", body: "Your own note says the outage interrupted the closeout.")
+        ]
+
+        #expect(InsightsPresentation.dataNotes(from: sections).map(\.title) == ["Aug 23 Estimate", "POS Outage"])
+    }
+
+    @Test("a start-time observation suppresses the duplicate start-time tile")
+    func redundantMetricMapping() {
+        let moves = [Move(id: "startTimeLeader", title: "", body: "", effectSize: 0, supportingShiftCount: 0)]
+        #expect(InsightsPresentation.redundantMetricIDs(for: moves) == ["startTimes"])
     }
 }

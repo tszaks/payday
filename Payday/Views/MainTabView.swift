@@ -22,7 +22,7 @@ final class TabRouter {
 }
 
 struct MainTabView: View {
-    #if DEBUG
+    #if DEBUG || targetEnvironment(simulator)
     @Environment(\.modelContext) private var modelContext
     #endif
     @Environment(\.scenePhase) private var scenePhase
@@ -67,7 +67,7 @@ struct MainTabView: View {
         // Shell-level so logging works from any tab; each screen keeps its own
         // sheet only for editing an existing entry.
         .sheet(item: $deepLink.pendingLogTarget) { target in
-            LogTipSheet(target: target)
+            LogTipSheet(target: target).paydayAppearance()
         }
         .onChange(of: deepLink.pendingDashboardSelection) { _, shouldSelect in
             guard shouldSelect else { return }
@@ -94,7 +94,7 @@ struct MainTabView: View {
             guard newPhase == .active else { return }
             presentPendingShiftEndIfNeeded()
         }
-        #if DEBUG
+        #if DEBUG || targetEnvironment(simulator)
         .onAppear {
             let args = ProcessInfo.processInfo.arguments
             // "periods"/"calendar" are legacy tab names from before the

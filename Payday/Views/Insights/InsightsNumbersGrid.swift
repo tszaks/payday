@@ -33,7 +33,10 @@ enum InsightsNumbersGrid {
     /// applied here to captions instead of Moves' dollar projections.
     private static let minimumShiftsForFullSample = 8
 
-    static func rows(for facts: InsightsFacts) -> [[InsightsNumberTile]] {
+    static func rows(
+        for facts: InsightsFacts,
+        excluding excludedTileIDs: Set<String> = []
+    ) -> [[InsightsNumberTile]] {
         var rows: [[InsightsNumberTile]] = []
 
         var rateRow: [InsightsNumberTile] = []
@@ -72,7 +75,14 @@ enum InsightsNumbersGrid {
             rows.append([startTimesTile(startTime)])
         }
 
+        // An observation may already explain one of these exact facts in
+        // prose (start time is the common case). Keep the underlying fact in
+        // InsightsFacts, but don't make the reader process it twice on the
+        // same screen. Filtering after explicit row construction preserves
+        // the paired-row guarantees above for every tile that remains.
         return rows
+            .map { row in row.filter { !excludedTileIDs.contains($0.id) } }
+            .filter { !$0.isEmpty }
     }
 
     private static func hourlyTile(_ rate: RateFacts) -> InsightsNumberTile {
@@ -155,7 +165,7 @@ enum InsightsNumbersGrid {
     private static func soloTile(_ facts: DoublesSoloFacts) -> InsightsNumberTile {
         InsightsNumberTile(
             id: "solo",
-            label: "ONE SHIFT",
+            label: "SOLO",
             value: "\(Money.wholeDollarString(fromCents: facts.soloAverageCents))/shift",
             context: hedged("", count: facts.soloCount, countPhrase: daysPhrase(facts.soloCount))
         )

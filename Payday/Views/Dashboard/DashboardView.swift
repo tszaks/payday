@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 import SwiftData
 import TipKit
@@ -29,10 +30,12 @@ private struct DashboardFacts {
     let heroPeriod: PayPeriod
     let heroLabel: String
     let heroTotalCents: Int
-    /// Gross cash/credit for the hero period, for the one-glance split under
-    /// the total. Tip-out is deliberately not shown here.
+    /// Gross voluntary cash/credit tips plus employee-paid Toast gratuity for
+    /// the hero period, for the one-glance split under the total. Tip-out is
+    /// deliberately not shown here.
     let heroCashCents: Int
     let heroCreditCents: Int
+    let heroGratuityFeesCents: Int
     let heroPayDate: Date
     let heroIsCurrent: Bool
     /// Base wage + overtime for the hero period, folded into heroTotalCents
@@ -52,7 +55,10 @@ private struct DashboardFacts {
     /// itself "Today · Lunch" / "Today · Dinner" only when it needs to.
     let multiShiftDays: Set<Date>
     let paceDeltaCents: Int?
-    let projectedTotalCents: Int?
+    /// How many prior periods back the pace line. 1 means it's still a
+    /// single-period comparison and the copy says "last period" instead of
+    /// "your usual pace."
+    let pacePeriodCount: Int
     let isPaydayMoment: Bool
     let isBestPeriodEver: Bool
     /// The whole pre-tax check for the payday-moment period: the stub's tips
@@ -73,9 +79,6 @@ private struct DashboardFacts {
         calculator = PayPeriodCalculator(schedule: schedule ?? .fallback)
         let period = calculator.period(containing: now)
         currentPeriod = period
-        let previousDay = calendar.date(byAdding: .day, value: -1, to: period.start) ?? period.start
-        let priorPeriod = calculator.period(containing: previousDay)
-
         periodEntries = allEntries.filter { $0.date >= period.start && $0.date <= period.end }
         breakdown = TipBreakdown.total(of: periodEntries)
         daysRemaining = calculator.daysRemaining(from: now)
@@ -92,15 +95,19 @@ private struct DashboardFacts {
         // breakdown above stays gross, purely for the cash/credit subtitle.
         totalCents = statsEngine.periodToDateTotal(period: period, asOf: now)
 
-        // Hidden until there's real history to compare against — a
-        // brand-new user's first period has no "last period" to be ahead of.
-        if allEntries.contains(where: { $0.date >= priorPeriod.start && $0.date <= priorPeriod.end }) {
-            paceDeltaCents = statsEngine.paceDelta(currentPeriod: period, priorPeriod: priorPeriod, asOf: now)
-        } else {
-            paceDeltaCents = nil
-        }
-        projectedTotalCents = statsEngine.projectedPeriodTotal(period: period, asOf: now, rhythm: statsEngine.workRhythm(referenceDate: now))
-
+        // Measured against the MEDIAN of the last several periods at this
+        // same point, not against whichever single period happened to come
+        // before this one — one period is a sample size of one, and a single
+        // big Saturday in it would read as a real trend. Hidden entirely
+        // until some prior period has a record; a brand-new user has no
+        // "usual" to be ahead of. See StatsEngine.usualPaceBaseline.
+        let comparison = statsEngine.paceComparison(
+            currentPeriod: period,
+            priorPeriods: calculator.priorPeriods(before: period, count: StatsEngine.paceLookbackPeriods),
+            asOf: now
+        )
+        paceDeltaCents = comparison?.deltaCents
+        pacePeriodCount = comparison?.periodCount ?? 0
         // The payday card belongs to a FINISHED period, and shows twice: the
         // day or two after its last shift, then again the day the check lands
         // (see PaydayMoment). Never on a day still workable.
@@ -168,6 +175,7 @@ private struct DashboardFacts {
                 heroTipsNetCents = payNetCents
                 heroCashCents = payBreakdown.cashCents
                 heroCreditCents = payBreakdown.creditCents
+                heroGratuityFeesCents = payBreakdown.gratuityFeesCents
                 heroPayDate = predictedPayDate
                 heroIsCurrent = false
             } else {
@@ -176,6 +184,7 @@ private struct DashboardFacts {
                 heroTipsNetCents = totalCents
                 heroCashCents = breakdown.cashCents
                 heroCreditCents = breakdown.creditCents
+                heroGratuityFeesCents = breakdown.gratuityFeesCents
                 heroPayDate = calculator.payDate(for: period)
                 heroIsCurrent = true
             }
@@ -190,13 +199,15 @@ private struct DashboardFacts {
             heroTipsNetCents = totalCents
             heroCashCents = breakdown.cashCents
             heroCreditCents = breakdown.creditCents
+            heroGratuityFeesCents = breakdown.gratuityFeesCents
             heroPayDate = calculator.payDate(for: period)
             heroIsCurrent = true
         }
 
         // Wages fold into the hero total (and get broken back out for the
-        // drawer) but never touch totalCents/breakdown/statsEngine above —
-        // those stay the tips-only figures every other analytic reads.
+        // drawer) but never touch totalCents/breakdown/statsEngine above.
+        // totalCents already includes employee gratuity because it is earned
+        // compensation; tip-specific analytics use StatsEngine's gross tips.
         // heroPeriod's bounds are captured into locals first — referencing a
         // stored property from inside a closure here, before every stored
         // property is initialized, is a definite-initialization error.
@@ -221,20 +232,38 @@ private struct DashboardFacts {
             // The same wage math the shift's own row uses — the echo and
             // the row must reconcile on sight. A shift speaks ONE number
             // (Tyler's ruling, 2026-07-27): the reveal pipeline moves to
-            // that same wage-inclusive basis via its own StatsEngine,
-            // while `statsEngine` above stays tips-only for pace/charts/
-            // projections, per the boundary that doesn't move.
+            // that same wage-inclusive basis via its own StatsEngine. The
+            // main engine remains wage-exclusive; its earnings totals already
+            // include any employee gratuity captured for the shift.
             let shiftWageCents = details.hoursWorked.flatMap { WageEstimate.cents(wageCentsPerHour: wageCentsPerHour, hours: $0) }
             let revealCents = netCents + (shiftWageCents ?? 0)
             let revealEngine = StatsEngine(records: tipRecords, wageCentsPerHour: wageCentsPerHour)
             let result = revealEngine.reveal(forNightAt: today, cents: revealCents, period: period, shiftID: latest.shiftID)
-            tonightRevealText = "\(RevealCopy.headline(cents: revealCents, includesWages: shiftWageCents != nil)) \(RevealCopy.comparison(for: result.comparison, period: details.shiftPeriod))"
+            tonightRevealText = "\(RevealCopy.headline(cents: revealCents, includesNonTipIncome: shiftWageCents != nil || TipBreakdown.total(of: latest.items).gratuityFeesCents > 0)) \(RevealCopy.comparison(for: result.comparison, period: details.shiftPeriod))"
         }
         tonightLine = TonightLine.compose(
             tonightRevealText: tonightRevealText,
             isPaydayMoment: isPaydayMoment
         )
     }
+}
+
+private struct DashboardFactsKey: Hashable {
+    let entriesRevision: Int
+    let frequency: PayFrequency?
+    let anchorPeriodEnd: Date?
+    let payDelayDays: Int?
+    let firstWeekday: Int?
+    let day: Date
+    let forcedPhase: String?
+    let dismissedClosedEndRaw: Double
+    let dismissedCheckEndRaw: Double
+    let wageCentsPerHour: Int?
+}
+
+private struct DashboardFactsCache {
+    let key: DashboardFactsKey
+    let facts: DashboardFacts
 }
 
 struct DashboardView: View {
@@ -256,6 +285,8 @@ struct DashboardView: View {
     private var shiftSession = ShiftSessionState.shared
     /// Whether the cash/credit breakdown drawer tucked under the hero is open.
     @State private var breakdownExpanded = false
+    @State private var factsCache: DashboardFactsCache?
+    @State private var dataRevision = 0
     /// The `end` (as a reference-date interval) of the period whose completion
     /// card the person dismissed; 0 means none. Kept so the card stays gone
     /// once closed, without reappearing on the next launch.
@@ -282,7 +313,7 @@ struct DashboardView: View {
     /// payroll calendar. `-DebugForcePaydayMoment` is the close summary,
     /// `-DebugForceCheckDay` the payday appearance.
     private var forcedPaydayPhase: PaydayMoment.Phase? {
-        #if DEBUG
+        #if DEBUG || targetEnvironment(simulator)
         let arguments = ProcessInfo.processInfo.arguments
         if arguments.contains("-DebugForceCheckDay") { return .checkDay }
         if arguments.contains("-DebugForcePaydayMoment") { return .periodClosed }
@@ -295,9 +326,32 @@ struct DashboardView: View {
     private let paydayVerificationTip = PaydayVerificationTip()
 
     var body: some View {
+        let now = Date.now
         let dismissedClosedEnd = dismissedClosedEndRaw == 0 ? nil : Date(timeIntervalSinceReferenceDate: dismissedClosedEndRaw)
         let dismissedCheckEnd = dismissedCheckEndRaw == 0 ? nil : Date(timeIntervalSinceReferenceDate: dismissedCheckEndRaw)
-        let facts = DashboardFacts(allEntries: allEntries, schedule: scheduleStore.schedule, now: .now, forcedPaydayPhase: forcedPaydayPhase, dismissedClosedEnd: dismissedClosedEnd, dismissedCheckEnd: dismissedCheckEnd, wageCentsPerHour: preferencesStore.baseHourlyWageCents)
+        let key = DashboardFactsKey(
+            entriesRevision: dataRevision,
+            frequency: scheduleStore.schedule?.frequency,
+            anchorPeriodEnd: scheduleStore.schedule?.anchorPeriodEnd,
+            payDelayDays: scheduleStore.schedule?.payDelayDays,
+            firstWeekday: scheduleStore.schedule?.firstWeekday,
+            day: Calendar.current.startOfDay(for: now),
+            forcedPhase: forcedPaydayPhase?.rawValue,
+            dismissedClosedEndRaw: dismissedClosedEndRaw,
+            dismissedCheckEndRaw: dismissedCheckEndRaw,
+            wageCentsPerHour: preferencesStore.baseHourlyWageCents
+        )
+        let facts = factsCache?.key == key
+            ? factsCache!.facts
+            : DashboardFacts(
+                allEntries: allEntries,
+                schedule: scheduleStore.schedule,
+                now: now,
+                forcedPaydayPhase: forcedPaydayPhase,
+                dismissedClosedEnd: dismissedClosedEnd,
+                dismissedCheckEnd: dismissedCheckEnd,
+                wageCentsPerHour: preferencesStore.baseHourlyWageCents
+            )
         NavigationStack {
             // A ScrollView, deliberately NOT a List: the hero's drawer changes
             // height when it opens, and a List (UIKit-backed) animates the row
@@ -335,9 +389,9 @@ struct DashboardView: View {
                 }
             }
             .sheet(item: $sheetTarget) { target in
-                LogTipSheet(target: target)
+                LogTipSheet(target: target).paydayAppearance()
             }
-            #if DEBUG
+            #if DEBUG || targetEnvironment(simulator)
             .onAppear {
                 // Screenshot/QA hook only — opens the most recent period
                 // entry, no kind argument. Named distinctly from
@@ -366,7 +420,7 @@ struct DashboardView: View {
             }
             #endif
             .sheet(isPresented: $showSettings) {
-                SettingsView(schedule: scheduleStore.schedule ?? .fallback)
+                SettingsView(schedule: scheduleStore.schedule ?? .fallback).paydayAppearance()
             }
         }
         .undoDeleteToast(undoState, context: modelContext)
@@ -374,6 +428,12 @@ struct DashboardView: View {
         .onChange(of: scenePhase) { _, newPhase in
             guard newPhase == .active else { return }
             shiftSession.sync()
+        }
+        .task(id: key) {
+            factsCache = DashboardFactsCache(key: key, facts: facts)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: ModelContext.didSave)) { _ in
+            dataRevision &+= 1
         }
     }
 
@@ -401,19 +461,19 @@ struct DashboardView: View {
     /// The hero card with a cash/credit drawer tucked behind it, via the
     /// shared HeroBreakdownDrawer (same peek + slide treatment as Vero's
     /// coverage drawer, now also used by PeriodDetailView's hero). The
-    /// drawer's collapsed lip shows the cash/credit split at rest; tapping
-    /// the hero slides it open to the full reconciliation (cash + credit −
-    /// tip-out = take-home), which is where the tip-out lives now instead of
-    /// cluttering the card face.
+    /// drawer's collapsed lip shows the earnings split at rest; tapping the
+    /// hero slides it open to the full reconciliation (cash tips + credit
+    /// tips + employee gratuity − tip-out = take-home), which is where the
+    /// tip-out lives now instead of cluttering the card face.
     private func heroWithDrawer(_ facts: DashboardFacts) -> some View {
-        let hasBreakdown = facts.heroCashCents > 0 || facts.heroCreditCents > 0
+        let hasBreakdown = facts.heroCashCents > 0 || facts.heroCreditCents > 0 || facts.heroGratuityFeesCents > 0
         // The figure that makes the split reconcile to Total, derived so it
         // always adds up regardless of how tip-out was logged across a
-        // shift. Wages sit outside cash/credit entirely, so tip-out is
-        // measured against the tips-only net, not the combined Total.
+        // shift. Wages sit outside cash/credit/gratuity entirely, so tip-out
+        // is measured against non-wage earnings, not the combined Total.
         let wagesTotalCents = facts.heroWages?.totalCents ?? 0
-        let tipsNetCents = facts.heroTotalCents - wagesTotalCents
-        let tipOutCents = max(0, facts.heroCashCents + facts.heroCreditCents - tipsNetCents)
+        let nonWageNetCents = facts.heroTotalCents - wagesTotalCents
+        let tipOutCents = max(0, facts.heroCashCents + facts.heroCreditCents + facts.heroGratuityFeesCents - nonWageNetCents)
         // Everything that ADDS, then the subtotal, then everything that
         // SUBTRACTS, then what's left. The old order ran cash, credit, tipped
         // out, wages, overtime — plus, plus, minus, plus, plus — so the eye had
@@ -422,6 +482,9 @@ struct DashboardView: View {
             BreakdownRow("Cash tips", cents: facts.heroCashCents),
             BreakdownRow("Credit tips", cents: facts.heroCreditCents),
         ]
+        if facts.heroGratuityFeesCents > 0 {
+            rows.append(BreakdownRow("Gratuity & fees", cents: facts.heroGratuityFeesCents))
+        }
         if let wages = facts.heroWages {
             // Regular hours only — `wages.hours` is the TOTAL, so labeling this
             // row with it claims the base-rate line covers hours that are
@@ -436,7 +499,7 @@ struct DashboardView: View {
         // it; with no tip-out logged, "Earned" and "You kept" would be the same
         // number printed twice.
         if tipOutCents > 0 {
-            rows.append(BreakdownRow("Earned", cents: facts.heroCashCents + facts.heroCreditCents + wagesTotalCents, dividerAbove: true))
+            rows.append(BreakdownRow("Earned", cents: facts.heroCashCents + facts.heroCreditCents + facts.heroGratuityFeesCents + wagesTotalCents, dividerAbove: true))
             rows.append(BreakdownRow("Tipped out", cents: -tipOutCents))
         }
 
@@ -446,8 +509,10 @@ struct DashboardView: View {
             // (tip-out is already out of the hero, wages are already in), so
             // the closed card presented two figures that could not be squared.
             lipText: tipOutCents > 0
-                ? "Earned \(Money.string(fromCents: facts.heroCashCents + facts.heroCreditCents + wagesTotalCents)) · Tipped out \(Money.string(fromCents: tipOutCents))"
-                : "Cash \(Money.string(fromCents: facts.heroCashCents)) · Credit \(Money.string(fromCents: facts.heroCreditCents))",
+                ? "Earned \(Money.string(fromCents: facts.heroCashCents + facts.heroCreditCents + facts.heroGratuityFeesCents + wagesTotalCents)) · Tipped out \(Money.string(fromCents: tipOutCents))"
+                : facts.heroGratuityFeesCents > 0
+                    ? "Tips \(Money.string(fromCents: facts.heroCashCents + facts.heroCreditCents)) · Gratuity \(Money.string(fromCents: facts.heroGratuityFeesCents))"
+                    : "Cash \(Money.string(fromCents: facts.heroCashCents)) · Credit \(Money.string(fromCents: facts.heroCreditCents))",
             rows: rows,
             total: BreakdownRow(tipOutCents > 0 ? "You kept" : "Total", cents: facts.heroTotalCents, emphasized: true),
             hasBreakdown: hasBreakdown,
@@ -496,8 +561,8 @@ struct DashboardView: View {
                 HStack(spacing: PaydaySpacing.p8) {
                     HStack(spacing: PaydaySpacing.p8) {
                         LiveShiftDot()
-                        (Text("On shift").foregroundStyle(PaydayColor.textSecondary)
-                         + Text(" · ").foregroundStyle(PaydayColor.textSecondary))
+                        Text("On shift · ")
+                            .foregroundStyle(PaydayColor.textSecondary)
                             .font(PaydayFont.subheadline)
                         LiveShiftClock(startedAt: activeStart)
                     }
@@ -533,7 +598,7 @@ struct DashboardView: View {
                 .transition(.opacity)
             }
         }
-        .animation(reduceMotion ? .easeOut(duration: 0.15) : PaydayAnimation.drawerSpring, value: shiftSession.activeStart != nil)
+        .animation(reduceMotion ? nil : PaydayAnimation.drawerSpring, value: shiftSession.activeStart != nil)
     }
 
     /// "On shift, 47 minutes" — a spoken fact, not the literal ticking
@@ -552,7 +617,7 @@ struct DashboardView: View {
     /// outside this combined region so its own Dismiss button and TipKit
     /// popover keep their individual accessibility.
     private func heroSummary(_ facts: DashboardFacts) -> some View {
-        let hasBreakdown = facts.heroCashCents > 0 || facts.heroCreditCents > 0
+        let hasBreakdown = facts.heroCashCents > 0 || facts.heroCreditCents > 0 || facts.heroGratuityFeesCents > 0
         return VStack(spacing: PaydaySpacing.p20) {
             VStack(spacing: 6) {
                 Text(facts.heroLabel)
@@ -563,7 +628,7 @@ struct DashboardView: View {
                     .monospacedDigit()
                     .foregroundStyle(PaydayColor.textPrimary)
                     .contentTransition(.numericText())
-                    .animation(PaydayAnimation.premiumSpring, value: facts.heroTotalCents)
+                    .animation(reduceMotion ? nil : PaydayAnimation.premiumSpring, value: facts.heroTotalCents)
                     .lineLimit(1)
                     .minimumScaleFactor(0.5)
                 // Pace only makes sense for the period still in progress —
@@ -572,11 +637,11 @@ struct DashboardView: View {
                     // The screen's one color moment: ahead is green because
                     // being ahead is the act. Behind stays quiet gray — red
                     // is reserved for a shorted paycheck, never for pace.
-                    Text(RevealCopy.paceLine(deltaCents: paceDeltaCents))
+                    Text(RevealCopy.paceLine(deltaCents: paceDeltaCents, periodCount: facts.pacePeriodCount))
                         .font(PaydayFont.subheadline)
                         .foregroundStyle(paceDeltaCents > 0 ? PaydayColor.primary : PaydayColor.textSecondary)
                         .monospacedDigit()
-                        .animation(PaydayAnimation.premiumSpring, value: paceDeltaCents > 0)
+                        .animation(reduceMotion ? nil : PaydayAnimation.premiumSpring, value: paceDeltaCents > 0)
                 }
                 // Projection line removed: it overlapped the pace line above
                 // (two framings of the same trajectory). Pace stays — it's
@@ -661,20 +726,6 @@ struct DashboardView: View {
             // Best day is gone entirely — nobody opens the app for it, and it
             // was the one figure on this card measured tips-only, so it never
             // matched the wage-inclusive shift rows below it anyway.
-            if !isCheckDay, facts.heroIsCurrent {
-                Text("Period complete")
-                    .font(PaydayFont.subheadline)
-                    .foregroundStyle(PaydayColor.textSecondary)
-                    .accessibilityAddTraits(.isHeader)
-            }
-            // Not on payday: this was already said when the period closed, and
-            // payday's job is verifying the check, not re-running the applause.
-            if facts.isBestPeriodEver && !isCheckDay {
-                Text("Your best period yet")
-                    .font(PaydayFont.subheadline)
-                    .foregroundStyle(PaydayColor.primary)
-            }
-
             VStack(spacing: 4) {
                 Text(isCheckDay ? "Today's check should show" : "Your check should show")
                     .font(PaydayFont.caption)
@@ -689,7 +740,7 @@ struct DashboardView: View {
                 // a card ends up with two totals nobody can reconcile. The
                 // payday date is NOT repeated here — the progress bar above
                 // already labels where the period ends.
-                Text("Card tips minus tip-out, plus wages, before taxes.")
+                Text("Card tips + gratuity + wages − tip-out · before tax")
                     .font(PaydayFont.caption2)
                     .foregroundStyle(PaydayColor.textSecondary)
                     .multilineTextAlignment(.center)
@@ -702,7 +753,7 @@ struct DashboardView: View {
                 // Not a repeat under rule 11: it does arithmetic for the reader
                 // rather than restating something already on screen.
                 if facts.paydayCashCents > 0 {
-                    Text("Your \(Money.string(fromCents: facts.paydayCashCents)) in cash already came home with you.")
+                    Text("Cash already paid · \(Money.string(fromCents: facts.paydayCashCents))")
                         .font(PaydayFont.caption2)
                         .foregroundStyle(PaydayColor.textSecondary)
                         .multilineTextAlignment(.center)
@@ -819,7 +870,7 @@ struct DashboardView: View {
     /// period" directly under a completed period's total reads like a
     /// contradiction rather than a new start.
     private func emptyState(_ facts: DashboardFacts) -> some View {
-        Text(facts.heroIsCurrent ? "Nothing logged yet this period" : "New period. Nothing logged yet.")
+        Text("No shifts this period.")
             .font(PaydayFont.subheadline)
             .foregroundStyle(PaydayColor.textSecondary)
             .frame(maxWidth: .infinity, alignment: .center)
@@ -835,7 +886,7 @@ private struct PaydayVerificationTip: Tip {
     }
 
     var message: Text? {
-        Text("When your check lands, enter the tips line from your stub and Payday will check it against this.")
+        Text("Compare this with the tips line on your stub.")
     }
 
     var image: Image? {
@@ -884,7 +935,7 @@ private struct LiveShiftClock: View {
                 .foregroundStyle(PaydayColor.textPrimary)
                 .monospacedDigit()
                 .contentTransition(reduceMotion ? .identity : .numericText(countsDown: false))
-                .animation(.snappy(duration: 0.25), value: label)
+                .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: label)
         }
     }
 }

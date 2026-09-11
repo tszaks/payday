@@ -1,4 +1,4 @@
-#if DEBUG
+#if DEBUG || targetEnvironment(simulator)
 import Foundation
 import SwiftData
 
@@ -8,16 +8,22 @@ import SwiftData
 enum DebugSeeder {
     @MainActor
     static func seedIfRequested(scheduleStore: PayScheduleStore, insightsStore: InsightsStore, moveLedgerStore: MoveLedgerStore, preferencesStore: UserPreferencesStore) {
-        if ProcessInfo.processInfo.arguments.contains("-SeedSampleData") {
+        let arguments = ProcessInfo.processInfo.arguments
+        if let index = arguments.firstIndex(of: "-Appearance"),
+           arguments.count > index + 1,
+           let appearance = AppAppearance(rawValue: arguments[index + 1]) {
+            preferencesStore.appearance = appearance
+        }
+        if arguments.contains("-SeedSampleData") {
             seedSampleData(scheduleStore: scheduleStore, insightsStore: insightsStore)
         }
-        if ProcessInfo.processInfo.arguments.contains("-SeedFollowUpDemo") {
+        if arguments.contains("-SeedFollowUpDemo") {
             seedFollowUpDemoData(insightsStore: insightsStore, moveLedgerStore: moveLedgerStore)
         }
-        if ProcessInfo.processInfo.arguments.contains("-SeedColdStart") {
+        if arguments.contains("-SeedColdStart") {
             seedColdStartData(scheduleStore: scheduleStore, insightsStore: insightsStore)
         }
-        if ProcessInfo.processInfo.arguments.contains("-SeedShowcase") {
+        if arguments.contains("-SeedShowcase") {
             seedShowcaseData(scheduleStore: scheduleStore, insightsStore: insightsStore, preferencesStore: preferencesStore)
         }
     }
@@ -306,7 +312,7 @@ enum DebugSeeder {
 
         let shownAt = calendar.date(byAdding: .day, value: -35, to: today) ?? today
         moveLedgerStore.reset()
-        moveLedgerStore.recordShown([Move(id: "weekdaySwap", title: "", body: "", annualImpactCents: 0)], now: shownAt)
+        moveLedgerStore.recordShown([Move(id: "weekdaySwap", title: "", body: "", effectSize: 0, supportingShiftCount: 0)], now: shownAt)
 
         PaydayWidgetRefresh.request()
     }
@@ -381,7 +387,20 @@ enum DebugSeeder {
             }()
             let clockIn = sample.clockInHour.map { clockTime(hour: $0, minute: sample.clockInMinute, on: r.day) }
             let clockOut = sample.clockOutHour.map { clockTime(hour: $0, minute: sample.clockOutMinute, on: r.day) }
-            context.insert(TipEntry(date: r.day, amountCents: sample.cents, kind: sample.kind, note: sample.note, recordedAt: r.at, hoursWorked: sample.hoursWorked, tipOutCents: sample.tipOutCents, salesCents: sample.salesCents, shiftPeriod: sample.shiftPeriod, shiftID: shiftID, clockIn: clockIn, clockOut: clockOut))
+            let receiptMetrics: ShiftReceiptMetrics? = sample.shift == 0 && sample.kind == .credit
+                ? ShiftReceiptMetrics(
+                    guestCount: 10,
+                    creditCheckCount: 5,
+                    tableCount: 5,
+                    tableCountSource: .printed,
+                    netSalesCents: 40_000,
+                    taxCents: 3_000,
+                    averageSpendPerGuestCents: 4_000,
+                    gratuityFeesCents: 0,
+                    totalAmountCents: 54_800
+                )
+                : nil
+            context.insert(TipEntry(date: r.day, amountCents: sample.cents, kind: sample.kind, note: sample.note, recordedAt: r.at, hoursWorked: sample.hoursWorked, tipOutCents: sample.tipOutCents, salesCents: sample.salesCents, shiftPeriod: sample.shiftPeriod, shiftID: shiftID, clockIn: clockIn, clockOut: clockOut, receiptMetrics: receiptMetrics))
         }
 
         if let priorPeriodEnd = calendar.date(byAdding: .day, value: -1, to: currentPeriod.start) {
