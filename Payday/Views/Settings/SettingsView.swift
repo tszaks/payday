@@ -9,6 +9,7 @@ struct SettingsView: View {
     @Environment(InsightsStore.self) private var insightsStore
     @Environment(UserPreferencesStore.self) private var preferencesStore
     @Environment(MoveLedgerStore.self) private var moveLedgerStore
+    @Environment(PaydayCloudState.self) private var cloudState
     @Environment(\.dismiss) private var dismiss
     @Query private var allEntries: [TipEntry]
     @Query private var paycheckRecords: [PaycheckRecord]
@@ -24,6 +25,8 @@ struct SettingsView: View {
     @State private var wageDigitsText: String = ""
     @FocusState private var isWageFieldFocused: Bool
     @State private var isShowingBackfillSheet = false
+    @State private var isConfirmingSignOut = false
+    @State private var isShowingDeleteAccount = false
 
     private let weekdaySymbols = Calendar.current.weekdaySymbols // [Sunday…Saturday]
     private static let maxWageDigits = 4 // caps at $99.99/hr
@@ -118,6 +121,15 @@ struct SettingsView: View {
                 }
                 .listRowBackground(PaydayColor.fieldBackground)
 
+                // Account sits last of the real sections: it is the one
+                // place with irreversible actions, so it should not be
+                // adjacent to the controls people tap routinely.
+                Section("Account") {
+                    Button("Sign Out") { isConfirmingSignOut = true }
+                    Button("Delete Account", role: .destructive) { isShowingDeleteAccount = true }
+                }
+                .listRowBackground(PaydayColor.fieldBackground)
+
                 #if DEBUG
                 Section("Developer") {
                     Button("Seed sample data") {
@@ -182,6 +194,34 @@ struct SettingsView: View {
             .sheet(isPresented: $isShowingBackfillSheet) {
                 BackfillSheet().paydayAppearance()
             }
+            // Sign-out is reversible, so a confirmation dialog is enough.
+            // Deletion is not, so it gets a whole sheet — see DeleteAccountSheet.
+            .confirmationDialog(
+                "Sign out of Payday?",
+                isPresented: $isConfirmingSignOut,
+                titleVisibility: .visible
+            ) {
+                Button("Sign Out") {
+                    Task { await cloudState.signOut() }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Your shifts stay on this phone and sync again when you sign back in.")
+            }
+            .sheet(isPresented: $isShowingDeleteAccount) {
+                DeleteAccountSheet().paydayAppearance()
+            }
+            #if DEBUG || targetEnvironment(simulator)
+            // QA-only, same launch-arg pattern as -OpenSettings: the Account
+            // section sits below the fold and simctl can screenshot but not
+            // scroll, so destructive UI needs to present itself to be
+            // reviewable on a render.
+            .onAppear {
+                if ProcessInfo.processInfo.arguments.contains("-OpenDeleteAccount") {
+                    isShowingDeleteAccount = true
+                }
+            }
+            #endif
         }
         .presentationBackground(PaydayColor.background)
     }

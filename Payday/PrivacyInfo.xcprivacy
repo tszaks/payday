@@ -2,6 +2,85 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!--
+	  Payday does not track. There are no advertising, attribution, or
+	  analytics SDKs in this target: the only package dependency is
+	  supabase-swift, used for the user's own account and sync.
+	-->
+	<key>NSPrivacyTracking</key>
+	<false/>
+	<key>NSPrivacyTrackingDomains</key>
+	<array/>
+
+	<!--
+	  Everything here is collected because the account and cross-device sync
+	  need it, it is all linked to the person's account, and none of it is
+	  used for tracking or sent to a third party for advertising.
+	-->
+	<key>NSPrivacyCollectedDataTypes</key>
+	<array>
+		<dict>
+			<!-- Sign in with Apple requests .email (may be a private relay). -->
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypeEmailAddress</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<true/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+			</array>
+		</dict>
+		<dict>
+			<!--
+			  Sign in with Apple requests .fullName, and the first name is
+			  stored in preferences and synced so the greeting matches on
+			  every device.
+			-->
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypeName</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<true/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+			</array>
+		</dict>
+		<dict>
+			<!-- The Supabase account identifier every synced row is keyed on. -->
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypeUserID</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<true/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+			</array>
+		</dict>
+		<dict>
+			<!--
+			  The point of the app: tips, tip-outs, hours, sales, and
+			  paychecks. This is the person's own earnings record, synced so
+			  it survives a lost phone.
+			-->
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypeOtherFinancialInfo</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<true/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+			</array>
+		</dict>
+	</array>
+
 	<key>NSPrivacyAccessedAPITypes</key>
 	<array>
 		<dict>
@@ -11,6 +90,42 @@
 			<array>
 				<string>CA92.1</string>
 				<string>1C8F.1</string>
+			</array>
+		</dict>
+		<dict>
+			<!--
+			  Declared at the app level because supabase-swift ships no
+			  PrivacyInfo.xcprivacy of its own, and Apple holds the app
+			  responsible for a bundled SDK's required-reason API usage when
+			  the SDK does not declare it. Payday's own code touches no file
+			  timestamps: there is no attributesOfItem, contentModificationDate,
+			  or resourceValues call anywhere in the target. The usage is the
+			  SDK reading files it keeps in the app container.
+
+			  C617.1: timestamps and metadata of files inside the app
+			  container, app group container, or CloudKit container.
+			-->
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryFileTimestamp</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>C617.1</string>
+			</array>
+		</dict>
+		<dict>
+			<!--
+			  Same reasoning as FileTimestamp above. Payday's own code calls
+			  neither systemUptime nor mach_absolute_time; the usage comes
+			  from supabase-swift timing its own requests and retries.
+
+			  35F9.1: measure elapsed time between events within the app, or
+			  perform calculations to enable timers.
+			-->
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategorySystemBootTime</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>35F9.1</string>
 			</array>
 		</dict>
 	</array>

@@ -25,7 +25,11 @@ enum HistoryLens: String, CaseIterable {
 /// never while ShareLink itself is just rendering in the toolbar. Fixes a
 /// real perf regression: the plain-URL version this replaced regenerated
 /// the whole export and rewrote the file on every single body render.
-private struct CSVExport: Transferable {
+/// Internal rather than private: DeleteAccountSheet offers the same export
+/// as the alternative to losing your records, and it should hand the share
+/// sheet the identical file this screen does rather than a second
+/// implementation that could drift.
+struct CSVExport: Transferable {
     /// Transferable values may move between executors. SwiftData reads stay
     /// on the main actor while the exported value remains safely Sendable.
     let makeCSV: @MainActor @Sendable () -> String
