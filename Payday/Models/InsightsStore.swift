@@ -36,7 +36,11 @@ final class InsightsStore {
     /// This is the general form of the one-off cash-vs-credit scrub below,
     /// which had to filter fossils by title because there was no version to
     /// key on.
-    private static let currentRuleVersion = 4
+    /// Bumped to 5 when Insights became fully deterministic and stopped
+    /// rendering narration at all. The bump is what drops any snapshot
+    /// still sitting in UserDefaults from the narrated era, rather than
+    /// leaving orphaned prose in storage.
+    private static let currentRuleVersion = 5
     private let defaults: UserDefaults
 
     var snapshot: InsightsSnapshot? {

@@ -339,6 +339,265 @@ struct UsualPaceTests {
     }
 }
 
+@Suite("Tip-out resolution in totals")
+struct TipOutResolutionTests {
+    /// The corruption shiftFacts exists to absorb: a shift whose tip-out
+    /// ended up on BOTH its cash and credit rows. Summing raw records
+    /// subtracts it twice; resolving through shiftFacts subtracts it once.
+    @Test("a shift with tip-out on both rows subtracts it once, not twice")
+    func tipOutOnBothRowsSubtractsOnce() {
+        let shift = UUID()
+        let records = [
+            record(2026, 7, 6, cents: 10000, kind: .cash, tipOutCents: 2000, shiftID: shift),
+            record(2026, 7, 6, cents: 10000, kind: .credit, tipOutCents: 2000, shiftID: shift)
+        ]
+        let engine = StatsEngine(records: records)
+        let period = PayPeriod(start: date(2026, 7, 6), end: date(2026, 7, 19))
+        // $200 gross minus ONE $20 tip-out.
+        #expect(engine.periodToDateTotal(period: period, asOf: date(2026, 7, 6)) == 18000)
+    }
+
+    @Test("the pace baseline resolves tip-out the same way the chart does")
+    func baselineMatchesChartBasis() {
+        let shift = UUID()
+        let records = [
+            record(2026, 6, 22, cents: 10000, kind: .cash, tipOutCents: 2000, shiftID: shift),
+            record(2026, 6, 22, cents: 10000, kind: .credit, tipOutCents: 2000, shiftID: shift)
+        ]
+        let engine = StatsEngine(records: records)
+        let current = PayPeriod(start: date(2026, 7, 6), end: date(2026, 7, 19))
+        let prior = PayPeriod(start: date(2026, 6, 22), end: date(2026, 7, 5))
+        let baseline = engine.usualPaceBaseline(currentPeriod: current, priorPeriods: [prior], asOf: date(2026, 7, 6))
+        let chartTotal = engine.nightlyTotals().first?.cents
+        #expect(baseline?.cents == 18000)
+        #expect(baseline?.cents == chartTotal)
+    }
+}
+
+@Suite("Typical range (what you can count on)")
+struct TypicalRangeTests {
+    /// Twelve Tuesdays at a known spread, all inside the 180-day window.
+    private func tuesdays(_ values: [Int]) -> [TipRecord] {
+        values.enumerated().map { index, cents in
+            record(2026, 7, 7 + index * 7, cents: cents)
+        }
+    }
+
+    @Test("p25 and p75 round outward, and the range carries its own sample size")
+    func rangeRoundsOutward() {
+        let values = [10000, 11000, 12000, 13000, 14000, 15000, 16000, 17000]
+        let range = StatsEngine.typicalRange(values)
+        #expect(range.shiftCount == 8)
+        #expect(range.lowCents <= 11750)
+        #expect(range.highCents >= 15250)
+        #expect(range.lowCents % 500 == 0)
+        #expect(range.highCents % 500 == 0)
+    }
+
+    @Test("one monster night cannot widen the range — the whole point of using quartiles")
+    func outlierDoesNotWidenTheRange() {
+        let calm = [10000, 11000, 12000, 13000, 14000, 15000, 16000, 17000]
+        let spiked = [10000, 11000, 12000, 13000, 14000, 15000, 16000, 90000]
+        #expect(StatsEngine.typicalRange(calm).lowCents == StatsEngine.typicalRange(spiked).lowCents)
+    }
+
+    @Test("a weekday under eight shifts gets no range at all — a range has no honest thin form")
+    func thinWeekdayIsAbsent() {
+        let engine = StatsEngine(records: tuesdays([10000, 12000, 14000, 16000, 18000]))
+        let facts = engine.typicalRanges(referenceDate: date(2026, 9, 10))
+        #expect(facts?.byWeekday.contains { $0.weekday == 3 } != true)
+    }
+
+    @Test("a weekday with enough consistent shifts reports a range")
+    func steadyWeekdayReportsRange() {
+        let engine = StatsEngine(records: tuesdays([10000, 11000, 12000, 13000, 14000, 15000, 16000, 17000, 12500, 13500]))
+        let facts = engine.typicalRanges(referenceDate: date(2026, 10, 1))
+        let tuesday = facts?.byWeekday.first { $0.weekday == 3 }
+        #expect(tuesday != nil)
+        #expect(tuesday?.range.shiftCount == 10)
+    }
+
+    @Test("a two-clump weekday is WITHHELD, never averaged into a range containing no real shift")
+    func bimodalWeekdayIsWithheld() {
+        // Six ~$60 lunches and six ~$200 dinners, no shiftPeriod logged so
+        // it cannot be split — the median sits where nothing ever landed.
+        let engine = StatsEngine(records: tuesdays([6000, 6100, 5900, 6050, 5950, 6000, 20000, 20100, 19900, 20050, 19950, 20000]))
+        let facts = engine.typicalRanges(referenceDate: date(2026, 11, 1))
+        #expect(facts?.mixedShapeWeekdays.contains(3) == true)
+        #expect(facts?.byWeekday.contains { $0.weekday == 3 } != true)
+        // Non-nil so the withholding survives, but nothing to draw.
+        #expect(facts?.hasVisibleRanges == false)
+    }
+
+    @Test("a weekday that splits cleanly into lunch and dinner reports TWO ranges, never one")
+    func splittableWeekdayReportsBothServices() {
+        var records: [TipRecord] = []
+        for index in 0..<8 {
+            records.append(record(2026, 7, 7 + index * 7, cents: 6000 + index * 100, shiftPeriod: .lunch, shiftID: UUID()))
+            records.append(record(2026, 7, 7 + index * 7, cents: 20000 + index * 100, shiftPeriod: .dinner, shiftID: UUID()))
+        }
+        let engine = StatsEngine(records: records)
+        let facts = engine.typicalRanges(referenceDate: date(2026, 10, 1))
+        let tuesdayEntries = facts?.byWeekday.filter { $0.weekday == 3 } ?? []
+        #expect(tuesdayEntries.count == 2)
+        #expect(tuesdayEntries.contains { $0.shiftPeriod == .lunch })
+        #expect(tuesdayEntries.contains { $0.shiftPeriod == .dinner })
+    }
+
+    @Test("the overall range needs at least two weekdays — otherwise it is one weekday wearing a general label")
+    func overallNeedsSeveralWeekdays() {
+        let engine = StatsEngine(records: tuesdays([10000, 11000, 12000, 13000, 14000, 15000, 16000, 17000]))
+        #expect(engine.typicalRanges(referenceDate: date(2026, 10, 1))?.overall == nil)
+    }
+
+    @Test("nil when nothing clears the bar")
+    func nilWithoutEnoughHistory() {
+        let engine = StatsEngine(records: [record(2026, 7, 7, cents: 10000)])
+        #expect(engine.typicalRanges(referenceDate: date(2026, 7, 20)) == nil)
+    }
+}
+
+@Suite("Earning trend")
+struct EarningTrendTests {
+    /// Builds `weeks` weeks of history ending the day before `reference`,
+    /// working the same three weekdays every week so the schedule is
+    /// stable and only the LEVEL differs between halves.
+    private func history(recentCents: Int, priorCents: Int, weeks: Int = 16, jitter: Int = 400) -> [TipRecord] {
+        var records: [TipRecord] = []
+        // Day 0 is 2026-07-07 (a Tuesday); +2 Thursday, +4 Saturday.
+        for week in 0..<weeks {
+            for offset in [0, 2, 4] {
+                let isRecentHalf = week >= weeks / 2
+                let base = isRecentHalf ? recentCents : priorCents
+                let wobble = ((week + offset) % 3 - 1) * jitter
+                records.append(record(2026, 7, 7 + week * 7 + offset, cents: base + wobble))
+            }
+        }
+        return records
+    }
+
+    /// Chosen so the engine's own 56-day boundary lands EXACTLY on the
+    /// fixture's half-way point: 2026-10-27 minus 56 days is 2026-09-01,
+    /// the start of week 8, and minus 112 days is 2026-07-07, the first
+    /// shift. Misaligning these by even a day leaks one recent-valued
+    /// shift into the prior window and quietly manufactures variance.
+    private var reference: Date { date(2026, 10, 27) }
+
+    @Test("a clear, well-sampled rise in level is reported")
+    func risingLevelReported() {
+        let engine = StatsEngine(records: history(recentCents: 22000, priorCents: 14000))
+        let trend = engine.earningTrend(referenceDate: reference)
+        #expect(trend?.direction == .higher)
+        #expect((trend?.deltaCents ?? 0) > 0)
+        #expect((trend?.marginOfErrorCents ?? 0) > 0)
+    }
+
+    @Test("a flat level is silence, not a manufactured trend")
+    func flatLevelIsSilent() {
+        let engine = StatsEngine(records: history(recentCents: 15000, priorCents: 15000))
+        #expect(engine.earningTrend(referenceDate: reference) == nil)
+    }
+
+    @Test("a tiny level change cannot clear the materiality gate")
+    func immaterialChangeIsSilent() {
+        let engine = StatsEngine(records: history(recentCents: 15050, priorCents: 15000))
+        #expect(engine.earningTrend(referenceDate: reference) == nil)
+    }
+
+    @Test("silence when the prior window is not fully covered by logging history")
+    func partialPriorWindowIsSilent() {
+        // Only the recent half exists — adoption bias would otherwise read
+        // as a rise from nothing.
+        var records = history(recentCents: 22000, priorCents: 14000)
+        let cutoff = date(2026, 9, 1)
+        records = records.filter { $0.date >= cutoff }
+        let engine = StatsEngine(records: records)
+        #expect(engine.earningTrend(referenceDate: reference) == nil)
+    }
+
+    @Test("silence when too few shifts sit in a window")
+    func thinWindowIsSilent() {
+        let engine = StatsEngine(records: history(recentCents: 22000, priorCents: 14000, weeks: 4))
+        #expect(engine.earningTrend(referenceDate: reference) == nil)
+    }
+
+    @Test("zero within-stratum spread does not produce a confident zero-width claim")
+    func zeroVarianceIsSilent() {
+        // Every shift in each half identical: the perfect-separation
+        // sentinel would pass materiality while the standard error is zero,
+        // so both gates would pass vacuously. Guarded explicitly.
+        let engine = StatsEngine(records: history(recentCents: 22000, priorCents: 14000, jitter: 0))
+        #expect(engine.earningTrend(referenceDate: reference) == nil)
+    }
+
+    @Test("the schedule is reported separately from the level, never folded into it")
+    func scheduleIsCarriedSeparately() {
+        let engine = StatsEngine(records: history(recentCents: 22000, priorCents: 14000))
+        let trend = engine.earningTrend(referenceDate: reference)
+        // Same three weekdays every week, so the schedule held steady and
+        // the per-shift level carries the entire finding.
+        #expect(trend != nil)
+        #expect(abs((trend?.recentShiftsPerWeek ?? 0) - (trend?.priorShiftsPerWeek ?? 0)) < 0.5)
+        #expect(RevealCopy.trendScheduleLine(trend!) == nil)
+    }
+
+    @Test("the copy states an interval and never the word trending")
+    func copyStatesAnInterval() {
+        let engine = StatsEngine(records: history(recentCents: 22000, priorCents: 14000))
+        let line = RevealCopy.trendLine(engine.earningTrend(referenceDate: reference)!)
+        #expect(line.contains("somewhere between"))
+        #expect(line.contains("higher"))
+        #expect(line.lowercased().contains("trending") == false)
+    }
+}
+
+@Suite("Forecast accuracy")
+struct ForecastAccuracyTests {
+    /// A steady three-shifts-a-week rhythm over `weeks` weeks, which is
+    /// what planForward needs before it will project anything at all.
+    private func steadyHistory(weeks: Int, cents: Int = 15000) -> [TipRecord] {
+        var records: [TipRecord] = []
+        for week in 0..<weeks {
+            for offset in [0, 2, 4] {
+                records.append(record(2026, 1, 6 + week * 7 + offset, cents: cents + (week % 3) * 200))
+            }
+        }
+        return records
+    }
+
+    @Test("accuracy needs a real run of scored weeks behind it")
+    func silentWithoutEnoughScoredWeeks() {
+        let engine = StatsEngine(records: steadyHistory(weeks: 4))
+        #expect(engine.forecastAccuracy(referenceDate: date(2026, 2, 3)) == nil)
+    }
+
+    @Test("a steady rhythm scores its weeks and reports a median error")
+    func steadyRhythmScores() {
+        let engine = StatsEngine(records: steadyHistory(weeks: 30))
+        let accuracy = engine.forecastAccuracy(referenceDate: date(2026, 8, 1))
+        #expect(accuracy != nil)
+        #expect((accuracy?.scoredWeekCount ?? 0) >= 8)
+        #expect((accuracy?.medianAbsoluteErrorCents ?? -1) >= 0)
+    }
+
+    @Test("price and schedule deltas sum EXACTLY to the total miss, despite integer division")
+    func decompositionIsAnExactIdentity() {
+        let engine = StatsEngine(records: steadyHistory(weeks: 30))
+        let accuracy = engine.forecastAccuracy(referenceDate: date(2026, 8, 1))
+        let week = accuracy?.lastWeek
+        #expect(week != nil)
+        #expect((week!.actualCents - week!.projectedCents) == week!.priceDeltaCents + week!.scheduleDeltaCents)
+    }
+
+    @Test("the copy frames the estimate against the week that happened, not a prediction")
+    func copyAvoidsPredictionFraming() {
+        let engine = StatsEngine(records: steadyHistory(weeks: 30))
+        let line = RevealCopy.forecastAccuracyLine(engine.forecastAccuracy(referenceDate: date(2026, 8, 1))!)
+        #expect(line.contains("the week you actually had"))
+        #expect(line.lowercased().contains("predict") == false)
+    }
+}
+
 @Suite("Pace copy")
 struct PaceCopyTests {
     @Test("a single prior period still says 'last period' — there is no 'usual' yet")

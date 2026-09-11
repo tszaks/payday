@@ -115,4 +115,38 @@ struct RenderFactsPerformanceTests {
         #expect(listElapsed < 0.5, "History list facts took \(listElapsed) seconds")
         #expect(detailElapsed < 0.5, "Period detail facts took \(detailElapsed) seconds")
     }
+
+    @Test("Insights facts, including twelve retrospective forecast engines, stay inside an interactive budget")
+    func insightsFactsStayFastForLargeHistory() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let historyStart = date(2020, 1, 1, calendar: calendar)
+        // Three shifts a week for five years — a heavy but real career.
+        var records: [TipRecord] = []
+        for week in 0..<260 {
+            for offset in [0, 2, 4] {
+                let day = calendar.date(byAdding: .day, value: week * 7 + offset, to: historyStart)!
+                records.append(TipRecord(
+                    date: day,
+                    amountCents: 15_000 + (week % 7) * 300,
+                    kind: .credit,
+                    isDouble: false,
+                    hoursWorked: 6,
+                    shiftID: UUID()
+                ))
+            }
+        }
+        let engine = StatsEngine(records: records, calendar: calendar)
+        let now = calendar.date(byAdding: .day, value: 260 * 7, to: historyStart)!
+
+        let startedAt = Date.timeIntervalSinceReferenceDate
+        // forecastAccuracy is the expensive one: twelve sub-engines, each
+        // rebuilding shiftFacts and walking workRhythm day by day.
+        _ = engine.forecastAccuracy(referenceDate: now)
+        _ = engine.typicalRanges(referenceDate: now)
+        _ = engine.earningTrend(referenceDate: now)
+        let elapsed = Date.timeIntervalSinceReferenceDate - startedAt
+
+        #expect(elapsed < 1.0, "Insights facts took \(elapsed) seconds over \(records.count) shifts")
+    }
 }
