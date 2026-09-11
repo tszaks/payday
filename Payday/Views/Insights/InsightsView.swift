@@ -303,32 +303,79 @@ struct InsightsView: View {
         .accessibilityElement(children: .combine)
     }
 
-    /// "Half your Fridays land between $110 and $180 (twelve Fridays)."
-    /// Weekday lines first, since "I'm on Friday, what should I expect" is
-    /// the question actually being asked; the overall line is a different
-    /// statistic and is labelled as one.
+    /// Ranges are a TABLE, not prose: weekday, range, sample size. Written
+    /// as sentences it came out as five near-identical lines all opening
+    /// with "Half your …", which read as a form letter and ate the whole
+    /// first screen. The qualifier belongs in the subhead, said once.
+    ///
+    /// Deliberately the same row shape as THE WEEK AHEAD below (see
+    /// planNightRow): label and sample on the left, the number on the
+    /// right, monospaced so the column lines up.
     private func reliabilitySection(_ reliability: StatsEngine.ReliabilityFacts) -> some View {
         VStack(alignment: .leading, spacing: PaydaySpacing.p12) {
-            Text("WHAT YOU CAN COUNT ON")
-                .font(PaydayFont.caption2)
-                .tracking(0.8)
-                .foregroundStyle(PaydayColor.primary)
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("WHAT YOU CAN COUNT ON")
+                    .font(PaydayFont.caption2)
+                    .tracking(0.8)
+                    .foregroundStyle(PaydayColor.primary)
+                // Said once, here, instead of five times below. "Half" is
+                // load-bearing — the other quarter is under the low end and
+                // the last quarter is over the high end.
+                Text("Half your shifts land in these ranges.")
+                    .font(PaydayFont.subheadline)
+                    .foregroundStyle(PaydayColor.textSecondary)
+            }
+            VStack(spacing: PaydaySpacing.p12) {
                 ForEach(reliability.byWeekday, id: \.self) { entry in
-                    Text(RevealCopy.typicalRangeLine(entry.range, subject: Self.rangeSubject(for: entry)))
-                        .font(PaydayFont.bodyRegular)
-                        .foregroundStyle(PaydayColor.textPrimary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    typicalRangeRow(
+                        label: Self.rangeSubject(for: entry),
+                        basis: Self.shiftCountBasis(entry.range.shiftCount),
+                        range: entry.range
+                    )
                 }
                 if let overall = reliability.overall {
-                    Text(RevealCopy.typicalRangeLine(overall, subject: "shifts"))
-                        .font(PaydayFont.subheadline)
-                        .foregroundStyle(PaydayColor.textSecondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    // A different statistic, not a summary of the rows: its
+                    // width is driven by weekday mix rather than by
+                    // night-to-night uncertainty. Separated and quieted.
+                    Divider()
+                    typicalRangeRow(
+                        label: "All shifts",
+                        basis: Self.shiftCountBasis(overall.shiftCount),
+                        range: overall,
+                        isMuted: true
+                    )
                 }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func typicalRangeRow(label: String, basis: String, range: StatsEngine.TypicalRange, isMuted: Bool = false) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: PaydaySpacing.p12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(label)
+                    .font(PaydayFont.subheadlineSemibold)
+                    .foregroundStyle(isMuted ? PaydayColor.textSecondary : PaydayColor.textPrimary)
+                Text(basis)
+                    .font(PaydayFont.caption2)
+                    .foregroundStyle(PaydayColor.textSecondary)
+            }
+            Spacer(minLength: PaydaySpacing.p12)
+            Text("\(Money.wholeDollarString(fromCents: range.lowCents))–\(Money.wholeDollarString(fromCents: range.highCents))")
+                .font(PaydayFont.subheadlineSemibold)
+                .monospacedDigit()
+                .foregroundStyle(isMuted ? PaydayColor.textSecondary : PaydayColor.textPrimary)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(label), half land between \(Money.wholeDollarString(fromCents: range.lowCents)) and \(Money.wholeDollarString(fromCents: range.highCents)). \(basis).")
+    }
+
+    /// Just the count. It used to read "Across 13 Sunday lunches" directly
+    /// under a row already titled "Sunday lunches", which put the same
+    /// words on two adjacent lines of every single row. The sample size is
+    /// an honesty device and stays; the noun was pure repetition.
+    private static func shiftCountBasis(_ count: Int) -> String {
+        count == 1 ? "1 shift" : "\(count) shifts"
     }
 
     /// "Fridays", or "Friday lunches" / "Friday dinners" when the weekday

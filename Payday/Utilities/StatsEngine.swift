@@ -2557,7 +2557,11 @@ struct StatsEngine {
         let roundedDelta = Int(abs(deltaCount).rounded())
         let noun = roundedDelta == 1 ? singular : plural
         let moreOfThem = deltaCount >= 0
-        let direction = "\(roundedDelta) \(moreOfThem ? "more" : "fewer") \(noun)"
+        // Spelled, not "3 fewer Fridays": counts are spelled everywhere in
+        // this file and digits belong to money and clock times. The mixed
+        // form read badly against the spelled week count in the same
+        // sentence.
+        let direction = "\(NumberWords.spell(roundedDelta)) \(moreOfThem ? "more" : "fewer") \(noun)"
         let effect = dollarEffectCents >= 0
             ? "about \(Money.wholeDollarString(fromCents: dollarEffectCents)) more than the earlier pace would have produced"
             : "about \(Money.wholeDollarString(fromCents: abs(dollarEffectCents))) less than the earlier pace would have produced"
@@ -2904,24 +2908,6 @@ enum RevealCopy {
         if deltaCents == 0 { return "Right on your usual pace\(disclosure)." }
         let direction = deltaCents > 0 ? "ahead of" : "behind"
         return "\(Money.string(fromCents: abs(deltaCents))) \(direction) your usual pace\(disclosure)."
-    }
-
-    /// "Half your Fridays land between $110 and $180 (twelve Fridays)."
-    ///
-    /// Three honesty devices in nine words: the FRACTION ("half", not
-    /// "your Fridays are", which would imply all), the BOUND TYPE
-    /// ("between"), and the sample size. Never "expect $145" — a point
-    /// estimate implies the precision an interquartile range deliberately
-    /// refuses. Never "you can count on at least $110" — p25 is not a
-    /// floor, a quarter of the sample sits below it.
-    static func typicalRangeLine(_ range: StatsEngine.TypicalRange, subject: String) -> String {
-        "Half your \(subject) land between \(Money.wholeDollarString(fromCents: range.lowCents)) and \(Money.wholeDollarString(fromCents: range.highCents)) (\(NumberWords.phrase(range.shiftCount, singular: subjectSingular(subject), plural: subject)))."
-    }
-
-    /// "Fridays" -> "Friday". Only ever fed the plural forms this file
-    /// builds, so a trailing-s strip is sufficient and predictable.
-    private static func subjectSingular(_ plural: String) -> String {
-        plural.hasSuffix("s") ? String(plural.dropLast()) : plural
     }
 
     /// Renders the INTERVAL, never the point estimate — a two-block
