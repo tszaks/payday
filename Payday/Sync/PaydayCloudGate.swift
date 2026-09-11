@@ -210,6 +210,65 @@ final class PaydayCloudState {
         )
     }
 
+    /// Signs out and returns to the gate, leaving local data alone.
+    ///
+    /// Deliberately non-destructive: signing out is not deleting. The shifts
+    /// stay on the device and sync back up on the next sign-in, which is
+    /// what someone switching Apple IDs or handing over a demo device
+    /// expects. See deleteAccount for the destructive path.
+    func signOut() async {
+        do {
+            try await client.auth.signOut()
+        } catch {
+            // A failed network sign-out still cleared the local session in
+            // every case that matters; stranding the person on a screen they
+            // asked to leave would be worse than proceeding.
+            Self.logger.error("Sign out failed: \(String(describing: error), privacy: .public)")
+        }
+        phase = .signedOut
+    }
+
+    /// Deletes the account and everything in it, server and device.
+    ///
+    /// Required by App Review Guideline 5.1.1(v). The server side is one
+    /// RPC: delete_my_account() removes the auth.users row and every Payday
+    /// table cascades from it, so there is no per-table delete list here to
+    /// drift out of sync with the schema.
+    ///
+    /// Server first, on purpose. If the RPC fails we stop and report it with
+    /// the local data still intact, because the failure mode of the other
+    /// order is the worst one available: a wiped phone still attached to a
+    /// live account, with the person's records gone and nothing deleted
+    /// where it counts.
+    func deleteAccount(
+        context: ModelContext,
+        scheduleStore: PayScheduleStore,
+        insightsStore: InsightsStore,
+        preferencesStore: UserPreferencesStore,
+        moveLedgerStore: MoveLedgerStore
+    ) async -> String? {
+        do {
+            try await client.rpc("delete_my_account").execute()
+        } catch {
+            Self.logger.error("Account deletion failed: \(String(describing: error), privacy: .public)")
+            return Self.message(for: error)
+        }
+
+        PaydayAccountEraser.eraseLocalData(
+            context: context,
+            scheduleStore: scheduleStore,
+            insightsStore: insightsStore,
+            preferencesStore: preferencesStore,
+            moveLedgerStore: moveLedgerStore
+        )
+
+        // The account is already gone, so a failure here is cosmetic: there
+        // is no session left to revoke server-side.
+        try? await client.auth.signOut()
+        phase = .signedOut
+        return nil
+    }
+
     func showSignIn() {
         phase = .signedOut
     }
@@ -329,7 +388,11 @@ struct PaydayCloudGate<Content: View>: View {
             case .migrating:
                 CloudProgressView(title: "Syncing…")
             case .ready:
+                // Injected so Settings can offer Sign Out and Delete
+                // Account. The gate owns the session, so it is the only
+                // thing that can hand out the object that ends one.
                 content()
+                    .environment(cloudState)
             case .failed(let message):
                 CloudMigrationErrorView(
                     message: message,
