@@ -145,7 +145,9 @@ worth blocking on now; identical values in two files gets 100% of the look for
   Vero's onboarding shape (`Payday/Views/Onboarding/`): welcome, six
   single-question quiz screens with progress dots and a micro-insight per
   answer, a short "running your numbers" beat, a count-up reveal, then the
-  setup screen for the two dates and the name. The quiz screens and the setup
+  setup screen for the two pay-schedule dates. The name is not asked anywhere
+  in the flow — Sign in with Apple supplies it (`AppleIdentityProfile`), and
+  Settings is the place to change it. The quiz screens and the setup
   screen share one visual language — big left-aligned `displayMedium` title,
   `fieldBackground` rows at `PaydayRadius.lg`, one green prominent CTA pinned
   at the bottom — so a stranger cannot tell where the quiz ends.
