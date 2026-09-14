@@ -1,11 +1,17 @@
 import SwiftUI
 
-/// The last step of the intro: the two dates the app can't derive, plus a
-/// name. Restyled (2026-09-14) to continue the quiz's visual language rather
+/// The last step of the intro: the two dates the app can't derive. Restyled
+/// (2026-09-14) to continue the quiz's visual language rather
 /// than drop into a grouped `Form` — same big left-aligned title, same
 /// `fieldBackground` rows at `PaydayRadius.lg`, same green prominent CTA
 /// pinned above the safe area. A stranger should not be able to tell where the
 /// quiz ended and this began.
+///
+/// The name is deliberately NOT asked here. Sign in with Apple hands over
+/// `fullName` on first authorization and `AppleIdentityProfile.newFirstName`
+/// stores it (see PaydayCloudGate), and the gate runs before this screen — so
+/// a field here would ask for something the app already knows. Anyone Apple
+/// gave no name for (a reinstall returns nil `fullName`) sets it in Settings.
 ///
 /// Asks for two dates a person can read straight off a pay stub — no mental
 /// math. Most payroll pays a few days after a period actually ends, so asking
@@ -18,10 +24,8 @@ import SwiftUI
 /// skipped the intro. Everything is editable later from Settings.
 struct FirstRunSetupView: View {
     @Environment(PayScheduleStore.self) private var scheduleStore
-    @Environment(UserPreferencesStore.self) private var preferencesStore
     @Environment(OnboardingStateStore.self) private var onboardingStore
 
-    @State private var firstName: String = ""
     @State private var frequency: PayFrequency = .biweekly
     @State private var mostRecentPayday: Date = .now
     @State private var periodEndDate: Date = .now
@@ -34,20 +38,15 @@ struct FirstRunSetupView: View {
         VStack(spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: PaydaySpacing.lg) {
-                    Text("Last thing.")
+                    // One title, not a title plus a group header that
+                    // paraphrases it (DESIGN.md rule 11). With the name field
+                    // gone this screen asks exactly one thing.
+                    Text("Last thing — your pay schedule.")
                         .font(PaydayFont.displayMedium)
                         .foregroundStyle(PaydayColor.textPrimary)
                         .padding(.top, PaydaySpacing.xl)
 
-                    VStack(spacing: PaydaySpacing.xs) {
-                        nameRow
-                    }
-
                     VStack(alignment: .leading, spacing: PaydaySpacing.xs) {
-                        Text("Your pay schedule")
-                            .font(PaydayFont.headline)
-                            .foregroundStyle(PaydayColor.textPrimary)
-
                         if !frequencyIsKnown {
                             frequencyRows
                         }
@@ -117,18 +116,6 @@ struct FirstRunSetupView: View {
 
     // MARK: - Rows
 
-    private var nameRow: some View {
-        TextField("What should Payday call you?", text: $firstName)
-            .font(PaydayFont.body)
-            .foregroundStyle(PaydayColor.textPrimary)
-            .textInputAutocapitalization(.words)
-            .autocorrectionDisabled()
-            .submitLabel(.done)
-            .padding(PaydaySpacing.md)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(rowBackground)
-    }
-
     private var frequencyRows: some View {
         VStack(spacing: PaydaySpacing.xs) {
             ForEach(PayFrequency.allCases) { option in
@@ -195,9 +182,6 @@ struct FirstRunSetupView: View {
     // MARK: - Save
 
     private func save() {
-        let trimmedName = firstName.trimmingCharacters(in: .whitespaces)
-        preferencesStore.firstName = trimmedName.isEmpty ? nil : trimmedName
-
         let calendar = Calendar.current
         let normalizedPayday = calendar.startOfDay(for: mostRecentPayday)
         let normalizedPeriodEnd = calendar.startOfDay(for: min(periodEndDate, mostRecentPayday))
