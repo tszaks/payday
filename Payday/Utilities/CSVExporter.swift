@@ -96,10 +96,37 @@ enum CSVExporter {
         return String(format: "%02d:%02d", components.hour ?? 0, components.minute ?? 0)
     }
 
+    /// Characters that make a spreadsheet treat a cell as a formula rather
+    /// than text. Tab and carriage return are included because Excel strips
+    /// leading whitespace before deciding.
+    private static let formulaTriggers: Set<Character> = ["=", "+", "-", "@", "\t", "\r"]
+
     /// Quotes and escapes a field only when it actually needs it — a plain
-    /// note with no comma, quote, or newline stays unquoted.
+    /// note with no comma, quote, or newline stays unquoted — and makes sure
+    /// the cell cannot be read as a formula.
+    ///
+    /// CSV quoting alone is not enough. Quoting protects the file's STRUCTURE;
+    /// it does nothing about a cell whose text begins with `=`, `+`, `-` or
+    /// `@`, which Excel, Numbers and Sheets evaluate on open. Notes are the
+    /// one free-text column here and the agent API accepts them from any
+    /// write-scoped key, so an exported CSV could carry a live formula into
+    /// whatever the person opens it with (CWE-1236, found by the 2026-09-14
+    /// security review).
     private static func escape(_ field: String) -> String {
-        guard field.contains(",") || field.contains("\"") || field.contains("\n") else { return field }
-        return "\"\(field.replacingOccurrences(of: "\"", with: "\"\""))\""
+        let neutralized = neutralizingFormula(field)
+        guard neutralized.contains(",") || neutralized.contains("\"") || neutralized.contains("\n") else {
+            return neutralized
+        }
+        return "\"\(neutralized.replacingOccurrences(of: "\"", with: "\"\""))\""
+    }
+
+    /// Prefixes a leading apostrophe, which every major spreadsheet reads as
+    /// "the rest of this cell is literal text". Applied after trimming the
+    /// leading whitespace those applications ignore, so " =1+1" is caught too.
+    private static func neutralizingFormula(_ field: String) -> String {
+        guard let first = field.drop(while: { $0 == " " }).first,
+              formulaTriggers.contains(first)
+        else { return field }
+        return "'" + field
     }
 }

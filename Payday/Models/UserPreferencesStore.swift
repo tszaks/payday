@@ -55,7 +55,14 @@ final class UserPreferencesStore {
     /// Off by default, like Notes — a lock nobody asked for is a lockout
     /// waiting to happen, not a feature.
     var isFaceIDLockEnabled: Bool {
-        didSet { defaults.set(isFaceIDLockEnabled, forKey: Self.faceIDLockKey) }
+        didSet {
+            defaults.set(isFaceIDLockEnabled, forKey: Self.faceIDLockKey)
+            // Mirrored into the app group because this preference lives in the
+            // app's own defaults, which the widget process cannot read. Turning
+            // the lock on means "my earnings need authentication", and a Lock
+            // Screen widget printing the period total would contradict that.
+            PaydayAuthorizationState.setAppLockEnabled(isFaceIDLockEnabled)
+        }
     }
 
     /// On by default (unlike the lock) — this is a built-in behavior with
@@ -90,6 +97,11 @@ final class UserPreferencesStore {
         self.isPaydayReminderEnabled = defaults.object(forKey: Self.paydayReminderKey) == nil ? true : defaults.bool(forKey: Self.paydayReminderKey)
         Self.migrateBaseHourlyWageCentsIfNeeded(from: defaults, to: wageDefaults)
         self.baseHourlyWageCents = wageDefaults.object(forKey: Self.baseHourlyWageCentsKey) == nil ? nil : wageDefaults.integer(forKey: Self.baseHourlyWageCentsKey)
+
+        // Last, once every stored property exists. Seeds the shared mirror for
+        // installs whose lock predates it, and re-asserts it after any
+        // out-of-band change to the app's own defaults.
+        PaydayAuthorizationState.setAppLockEnabled(isFaceIDLockEnabled)
     }
 
     /// One-time copy of the wage from `.standard` (where it used to live)
