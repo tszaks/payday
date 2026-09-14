@@ -141,7 +141,25 @@ worth blocking on now; identical values in two files gets 100% of the look for
 
 **Settings / First-run**
 - Form insets on `fieldBackground` over the page background.
-- First-run copy is already calm and two-question simple; keep.
+- First-run is no longer a single Form. As of 2026-09-14 it is a port of
+  Vero's onboarding shape (`Payday/Views/Onboarding/`): welcome, six
+  single-question quiz screens with progress dots and a micro-insight per
+  answer, a short "running your numbers" beat, a count-up reveal, then the
+  setup screen for the two dates and the name. The quiz screens and the setup
+  screen share one visual language — big left-aligned `displayMedium` title,
+  `fieldBackground` rows at `PaydayRadius.lg`, one green prominent CTA pinned
+  at the bottom — so a stranger cannot tell where the quiz ends.
+- The intro branch of `RootView` sits AHEAD of `PaydayCloudGate`, deliberately:
+  value first, Sign in with Apple second. `OnboardingStateStore` gates it, and
+  an install that already has a pay schedule never sees it.
+- Every figure on the reveal is arithmetic on the person's own answers
+  (`PaydayOnboardingDiagnosis`, unit-tested and deterministic). A dollar
+  figure must be originated by something they actually told us; when it isn't
+  substantiated the reveal stays qualitative rather than inventing one.
+- Prominent CTAs put `.frame(maxWidth: .infinity)` on the button's LABEL, not
+  on the Button. `.glassProminent` draws its capsule around the label, so an
+  outer frame only widens the hit area and leaves a content-hugging pill
+  floating mid-screen (this was wrong in `FirstRunSetupView` through 1.0).
 
 **App icon**
 - Same family: the Liquid Glass icon recolored to build from `#00B83F` on
