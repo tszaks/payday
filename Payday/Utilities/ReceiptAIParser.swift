@@ -194,6 +194,8 @@ enum ReceiptAIParser {
 
     enum ParseError: LocalizedError, Sendable {
         case notConfigured
+        case notSignedIn
+        case rateLimited
         case imageUnavailable
         case noTextFound
         case quotaExhausted
@@ -206,6 +208,10 @@ enum ReceiptAIParser {
             switch self {
             case .notConfigured:
                 "Receipt analysis is not configured for this build."
+            case .notSignedIn:
+                "Sign in to Payday to scan receipts."
+            case .rateLimited:
+                "You've scanned a lot of receipts today. Try again tomorrow."
             case .imageUnavailable:
                 "The receipt photo could not be prepared."
             case .noTextFound:
@@ -262,10 +268,28 @@ enum ReceiptAIParser {
         }
 
         return try await resultCache.value(for: imageData) {
+        // The proxy owns the OpenAI credential, so it authenticates callers by
+        // account rather than trusting the request shape. `auth.session`
+        // refreshes with a 30-second margin and coalesces concurrent refreshes,
+        // so this is a cached read in the normal case.
+        //
+        // Fetched inside the cache closure deliberately: the cache-hit return
+        // above must stay free of both a token fetch and a network call.
+        let accessToken: String
+        do {
+            accessToken = try await PaydaySupabase.client.auth.session.accessToken
+        } catch {
+            logger.error("Receipt analysis stopped before request: no signed-in session")
+            throw ParseError.notSignedIn
+        }
+
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
         request.timeoutInterval = requestTimeout
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        // A header, never the body — the request body is asserted credential-free
+        // by ReceiptAIParserTests.buildsHybridReceiptRequest.
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         request.httpBody = try JSONSerialization.data(
             withJSONObject: requestBody(transcript: transcript, imageData: imageData)
         )
@@ -387,6 +411,10 @@ enum ReceiptAIParser {
     /// Keeps billing failures actionable without exposing raw API responses
     /// or account details in the UI. Other HTTP failures retain the generic,
     /// retry-friendly message.
+    ///
+    /// 401/403 and 429 are mapped explicitly. Everything non-429 used to
+    /// collapse into `.requestFailed` — "temporarily unavailable" — which for
+    /// an auth refusal is actively misleading: waiting does not fix it.
     static func requestError(statusCode: Int, responseData: Data) -> ParseError {
         struct ErrorEnvelope: Decodable {
             struct APIError: Decodable {
@@ -397,10 +425,19 @@ enum ReceiptAIParser {
             let error: APIError
         }
 
-        if statusCode == 429,
-           let envelope = try? JSONDecoder().decode(ErrorEnvelope.self, from: responseData),
-           envelope.error.type == "insufficient_quota" || envelope.error.code == "credit_balance_exhausted" {
-            return .quotaExhausted
+        if statusCode == 401 || statusCode == 403 {
+            return .notSignedIn
+        }
+
+        if statusCode == 429 {
+            // The provider's own billing failure, passed through by the proxy.
+            if let envelope = try? JSONDecoder().decode(ErrorEnvelope.self, from: responseData),
+               envelope.error.type == "insufficient_quota" || envelope.error.code == "credit_balance_exhausted" {
+                return .quotaExhausted
+            }
+            // Otherwise it is this account's own daily allowance, or the
+            // whole feature's circuit breaker. Either way: come back later.
+            return .rateLimited
         }
         return .requestFailed
     }

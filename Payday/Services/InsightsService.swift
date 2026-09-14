@@ -104,9 +104,20 @@ enum InsightsService {
             throw InsightsError.generationFailed("Narration isn't set up yet.")
         }
 
+        // The narration proxy owns the OpenAI credential and now
+        // authenticates callers by account, so an unauthenticated replay of
+        // this request shape can no longer spend anything.
+        let accessToken: String
+        do {
+            accessToken = try await PaydaySupabase.client.auth.session.accessToken
+        } catch {
+            throw InsightsError.generationFailed("Sign in to Payday to refresh narration.")
+        }
+
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         let requestID = UUID().uuidString
         request.setValue(requestID, forHTTPHeaderField: "X-Request-ID")
         request.httpBody = try JSONSerialization.data(withJSONObject: [
@@ -147,6 +158,17 @@ enum InsightsService {
             // not a connectivity problem. Collapsing both into "couldn't reach"
             // pointed a ten-day outage at the network, the key, and the OpenAI
             // balance, none of which were involved.
+            // 401/403/429 are the exceptions to that rule, and they matter
+            // now that the proxy authenticates. `requestRejected` is
+            // permanently non-retryable (see isRetryable), so classifying an
+            // expired access token that way would stop narration forever on a
+            // condition that fixes itself on the next token refresh.
+            if httpResponse.statusCode == 401 || httpResponse.statusCode == 403 {
+                throw InsightsError.generationFailed("Narration needs you signed in; it will retry.")
+            }
+            if httpResponse.statusCode == 429 {
+                throw InsightsError.generationFailed("Narration hit its daily limit; it will retry later.")
+            }
             if (400..<500).contains(httpResponse.statusCode) {
                 throw InsightsError.requestRejected("Narration turned down this request (\(httpResponse.statusCode)).")
             }

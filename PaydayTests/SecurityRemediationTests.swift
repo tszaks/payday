@@ -197,3 +197,54 @@ struct CSVFormulaNeutralizationTests {
         #expect(noteCell("Table 12 tipped well") == "Table 12 tipped well")
     }
 }
+
+@Suite("AI proxy is bound to an account (finding 3)")
+struct ProxyAuthenticationTests {
+
+    @Test("an auth refusal says so, instead of 'temporarily unavailable'")
+    func authRefusalIsNotMistakenForAnOutage() {
+        // The proxy answers 401 for an absent, malformed or expired token.
+        // Everything non-429 used to collapse into .requestFailed, whose copy
+        // is "temporarily unavailable" — which tells someone to wait for a
+        // condition that waiting will never fix.
+        #expect(ReceiptAIParser.requestError(statusCode: 401, responseData: Data()) == .notSignedIn)
+        #expect(ReceiptAIParser.requestError(statusCode: 403, responseData: Data()) == .notSignedIn)
+    }
+
+    @Test("a quota refusal is distinguished from the provider running out of credit")
+    func quotaRefusalIsDistinctFromBillingFailure() {
+        // The provider's own billing failure, passed through by the proxy.
+        let billing = Data(#"{"error":{"type":"insufficient_quota","code":null}}"#.utf8)
+        #expect(ReceiptAIParser.requestError(statusCode: 429, responseData: billing) == .quotaExhausted)
+
+        // This account's daily allowance, or the global circuit breaker.
+        // Same status code, materially different thing to tell the user.
+        #expect(ReceiptAIParser.requestError(statusCode: 429, responseData: Data()) == .rateLimited)
+    }
+
+    @Test("other failures still read as retryable")
+    func otherFailuresUnchanged() {
+        #expect(ReceiptAIParser.requestError(statusCode: 500, responseData: Data()) == .requestFailed)
+        #expect(ReceiptAIParser.requestError(statusCode: 503, responseData: Data()) == .requestFailed)
+    }
+
+    @Test("both refusals carry copy a user can act on")
+    func refusalCopyIsActionable() {
+        #expect(ReceiptAIParser.ParseError.notSignedIn.errorDescription?.isEmpty == false)
+        #expect(ReceiptAIParser.ParseError.rateLimited.errorDescription?.isEmpty == false)
+    }
+
+    @Test("the access token never travels in the request body")
+    func credentialsStayOutOfTheBody() {
+        // The token goes in an Authorization header. If it ever migrated into
+        // the JSON payload it would be logged by the body-size line, cached by
+        // ScanResultCache, and retained by anything that stores the request.
+        let body = ReceiptAIParser.requestBody(
+            transcript: "[row] Gross sales | $985.04",
+            imageData: Data([0x01, 0x02, 0x03])
+        )
+        #expect(body.keys.sorted() == ["image_data_url", "transcript"])
+        #expect(body["Authorization"] == nil)
+        #expect(body["access_token"] == nil)
+    }
+}
