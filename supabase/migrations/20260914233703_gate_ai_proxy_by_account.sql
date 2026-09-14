@@ -32,14 +32,25 @@ create table if not exists public.payday_ai_quota_limits (
   updated_at timestamptz not null default now()
 );
 
--- Receipt scanning is occasional even for a heavy user: a shift ends once.
--- 40/day per account leaves generous room for retries and re-scans while
--- still bounding one account's spend. The global ceilings are the circuit
--- breaker — they exist to turn a runaway into a 429 instead of an invoice.
+-- Sized for a runaway to be a rounding error, not for projected demand.
+--
+-- Receipt scanning is occasional even for a heavy user: a shift ends once, a
+-- double ends twice. And ScanResultCache keys on the JPEG bytes, so
+-- re-submitting the same photo never re-consumes a unit — the per-account
+-- number needs no retry headroom.
+--
+-- The global ceilings are the only figures here that are genuinely a SPEND
+-- ceiling. Account binding shapes abuse but does not stop it: anyone can make
+-- a free account with an Apple ID, and a real user can read their own token
+-- out of their own keychain. So these are deliberately small. 2000 receipt
+-- scans a day of an image model with medium reasoning is four figures a month
+-- of authorised spend — a ceiling that high is an invoice, not a breaker.
+-- Raising them is one UPDATE with no redeploy, which is the entire reason
+-- they live in data.
 insert into public.payday_ai_quota_limits (kind, per_account_daily, global_daily)
 values
-  ('receipt', 40, 2000),
-  ('insights', 20, 1000)
+  ('receipt', 15, 60),
+  ('insights', 10, 30)
 on conflict (kind) do nothing;
 
 alter table public.payday_ai_quota_limits enable row level security;
