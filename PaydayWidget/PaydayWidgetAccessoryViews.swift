@@ -28,6 +28,7 @@ extension PaydayWidgetEntryView {
                     Text("TIPS")
                         .font(.system(size: 8, weight: .semibold))
                     Text(Money.wholeDollarString(fromCents: entry.periodTotalCents))
+                        .privacySensitive()
                         .font(.system(size: 15, weight: .bold, design: .rounded))
                         .minimumScaleFactor(0.7)
                         .lineLimit(1)
@@ -46,10 +47,12 @@ extension PaydayWidgetEntryView {
                 .font(.system(size: 12, weight: .semibold))
             if entry.hasSchedule {
                 Text(Money.string(fromCents: entry.periodTotalCents))
+                        .privacySensitive()
                     .font(.system(size: 16, weight: .bold, design: .rounded))
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
                 Text(entry.paceDeltaCents.map { Money.directionalDeltaString(fromCents: $0) } ?? daysRemainingText)
+                        .privacySensitive()
                     .font(.system(size: 11))
                     .monospacedDigit()
                     .lineLimit(1)
@@ -68,6 +71,7 @@ extension PaydayWidgetEntryView {
         Group {
             if entry.hasSchedule {
                 Text("Tips \(Money.wholeDollarString(fromCents: entry.periodTotalCents)) · \(daysRemainingText)")
+                        .privacySensitive()
             } else {
                 Text("Set up Payday")
             }

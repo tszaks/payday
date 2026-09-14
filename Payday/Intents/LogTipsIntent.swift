@@ -51,6 +51,12 @@ struct LogTipsIntent: AppIntent {
     static let description = IntentDescription("Log today's tips in Payday.")
     static var openAppWhenRun: Bool { false }
 
+    /// Requires an unlocked device. These intents can be dispatched from
+    /// Siri, Shortcuts, the Action Button and Control Center, none of which
+    /// traverse RootView — so without this the platform would happily run a
+    /// financial read or write against a locked phone.
+    static var authenticationPolicy: IntentAuthenticationPolicy { .requiresAuthentication }
+
     @Parameter(title: "Amount", requestValueDialog: IntentDialog("How much did you make?"))
     var amount: Double
 
@@ -95,6 +101,12 @@ struct LogTipsIntent: AppIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult & ProvidesDialog {
+        // Refuse rather than write. A mutation attributed to an account this
+        // device is no longer signed into would sync up to that account the
+        // moment someone signs back in.
+        guard PaydayAuthorizationState.allowsFinancialAccess else {
+            return .result(dialog: IntentDialog("Sign in to Payday first."))
+        }
         guard let cents = LogTipsAmountValidation.validatedCents(for: amount) else {
             throw $amount.needsValueError(IntentDialog("That doesn't sound right. How much did you actually make?"))
         }

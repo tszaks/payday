@@ -64,13 +64,24 @@ final class PaydayCloudState {
             return
         }
         #endif
+        // Checked before the session is even consulted. Sign-out is a
+        // decision, not a connectivity state: an interrupted remote sign-out
+        // can leave a usable local session behind, and the cached fallback
+        // below would then restore full access to the financial cache on the
+        // next cold launch. Cleared only by a fresh authentication.
+        if PaydayAuthorizationState.isExplicitlySignedOut {
+            phase = .signedOut
+            return
+        }
+
         let userID: UUID
         do {
             userID = try await client.auth.session.user.id
         } catch {
             // A verified account remains usable from its local cache even if
             // the JWT needs a network refresh. The periodic sync below will
-            // retry quietly when connectivity returns.
+            // retry quietly when connectivity returns. Reachable only when
+            // the person did NOT ask to sign out — see the guard above.
             if let cachedUserID = PaydaySyncState.registeredUserID,
                PaydaySyncState.migrationIsVerified(for: cachedUserID),
                let report = try? PaydaySyncService.cachedReport(context: context, userID: cachedUserID) {
@@ -122,6 +133,8 @@ final class PaydayCloudState {
             try await client.auth.signInWithIdToken(
                 credentials: .init(provider: .apple, idToken: idToken, nonce: nonce)
             )
+            // The one thing allowed to lift an explicit sign-out.
+            PaydayAuthorizationState.clearExplicitSignOut()
             if let firstName = AppleIdentityProfile.newFirstName(
                 from: fullName,
                 currentFirstName: preferencesStore.firstName
@@ -223,6 +236,13 @@ final class PaydayCloudState {
     /// what someone switching Apple IDs or handing over a demo device
     /// expects. See deleteAccount for the destructive path.
     func signOut() async {
+        // Recorded first, deliberately. If this call throws, or the process is
+        // killed mid-flight, the device must still come back signed out.
+        PaydayAuthorizationState.markExplicitlySignedOut()
+        // The widget renders from the shared store in its own process and
+        // would otherwise keep printing the last period total on the Lock
+        // Screen of a signed-out device.
+        PaydayWidgetRefresh.request()
         do {
             try await client.auth.signOut()
         } catch {
@@ -260,13 +280,31 @@ final class PaydayCloudState {
             return Self.message(for: error)
         }
 
-        PaydayAccountEraser.eraseLocalData(
-            context: context,
-            scheduleStore: scheduleStore,
-            insightsStore: insightsStore,
-            preferencesStore: preferencesStore,
-            moveLedgerStore: moveLedgerStore
-        )
+        // Captured before erasing, because the erase clears the registration
+        // needed to forget the right user's sync state.
+        let deletedUserID = PaydaySyncState.registeredUserID
+
+        do {
+            try PaydayAccountEraser.eraseLocalData(
+                context: context,
+                scheduleStore: scheduleStore,
+                insightsStore: insightsStore,
+                preferencesStore: preferencesStore,
+                moveLedgerStore: moveLedgerStore
+            )
+        } catch {
+            // The remote account is gone but this device still holds
+            // financial rows. Reporting success is the one outcome that is
+            // definitely wrong: it tells someone their data is destroyed
+            // while it is still sitting in the shared store.
+            Self.logger.error("Local erase after account deletion failed: \(String(describing: error), privacy: .public)")
+            return Self.localEraseFailureMessage
+        }
+
+        if let deletedUserID {
+            PaydaySyncState.forget(userID: deletedUserID)
+        }
+        PaydayAuthorizationState.reset()
 
         // The account is already gone, so a failure here is cosmetic: there
         // is no session left to revoke server-side.
@@ -274,6 +312,10 @@ final class PaydayCloudState {
         phase = .signedOut
         return nil
     }
+
+    /// Actionable rather than reassuring: the account really is deleted
+    /// server-side, so the only useful next step is clearing the device.
+    private static let localEraseFailureMessage = "Your account and its server data were deleted, but Payday could not finish clearing this device. Delete the app to remove the local copy."
 
     func showSignIn() {
         phase = .signedOut

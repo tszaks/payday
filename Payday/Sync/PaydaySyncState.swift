@@ -108,6 +108,24 @@ enum PaydaySyncState {
         "com.szakacsmedia.payday.supabasePendingDeletions.\(userID.uuidString.lowercased())"
     }
 
+    /// Forget an account entirely: its registration, its sync snapshot, and
+    /// any deletions still pending upload.
+    ///
+    /// Account deletion previously left all three behind. The leftover
+    /// registration was the worse half of that: `canRegister` only admits a
+    /// user when none is registered or the same one is, so a device whose
+    /// account had been deleted would refuse the NEXT Apple ID with
+    /// `accountMismatch` — a lockout, on a device with no account left to
+    /// mismatch against.
+    static func forget(userID: UUID) {
+        let defaults = AppGroup.defaults
+        defaults.removeObject(forKey: key(for: userID))
+        defaults.removeObject(forKey: deletionKey(for: userID))
+        if registeredUserID == userID {
+            defaults.removeObject(forKey: currentUserKey)
+        }
+    }
+
     /// The SwiftData cache is not partitioned by account. Refuse an account
     /// switch instead of ever relabeling cached financial rows for a different
     /// user. A future per-account store migration can deliberately relax this.

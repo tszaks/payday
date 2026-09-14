@@ -411,15 +411,52 @@ function optionalObject(
   return value;
 }
 
+/// Streams the body while counting bytes and aborts the moment the cap is
+/// exceeded.
+///
+/// `await req.text()` buffered the ENTIRE body into memory and only then
+/// measured it, so a request that omitted or understated Content-Length
+/// could make a worker allocate arbitrarily much before being rejected. The
+/// declared length is a hint from the caller; the byte count is the fact.
+async function readBoundedText(req: Request): Promise<string> {
+  if (!req.body) return "";
+  const reader = req.body.getReader();
+  const decoder = new TextDecoder();
+  const chunks: string[] = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > MAX_BODY_BYTES) {
+      await reader.cancel();
+      throw new ApiError(413, "body_too_large", "Request body is too large.");
+    }
+    chunks.push(decoder.decode(value, { stream: true }));
+  }
+  chunks.push(decoder.decode());
+  return chunks.join("");
+}
+
 async function readJSON(req: Request): Promise<unknown> {
-  const declaredLength = Number(req.headers.get("content-length") ?? "0");
-  if (declaredLength > MAX_BODY_BYTES) {
-    throw new ApiError(413, "body_too_large", "Request body is too large.");
+  const declared = req.headers.get("content-length");
+  if (declared !== null) {
+    const declaredLength = Number(declared);
+    // A malformed length is a malformed request. Previously `Number(...)`
+    // produced NaN for garbage and NaN > MAX is false, so the only early
+    // check silently passed anything non-numeric straight through.
+    if (!Number.isFinite(declaredLength) || declaredLength < 0) {
+      throw new ApiError(
+        400,
+        "invalid_content_length",
+        "Content-Length is invalid.",
+      );
+    }
+    if (declaredLength > MAX_BODY_BYTES) {
+      throw new ApiError(413, "body_too_large", "Request body is too large.");
+    }
   }
-  const text = await req.text();
-  if (new TextEncoder().encode(text).byteLength > MAX_BODY_BYTES) {
-    throw new ApiError(413, "body_too_large", "Request body is too large.");
-  }
+  const text = await readBoundedText(req);
   if (!text) return {};
   try {
     return JSON.parse(text);
@@ -3295,11 +3332,19 @@ async function auditRejectedRequest(
       origin_present: req.headers.has("origin"),
     },
   };
+  // Full per-request detail goes to the platform log, which is already
+  // bounded and rotated by the host. The database only receives a counter.
   console.warn("Payday unauthenticated request rejected.", event);
   try {
-    const { error: auditError } = await adminClient()
-      .from("payday_agent_rejected_requests")
-      .insert(event);
+    const { error: auditError } = await adminClient().rpc(
+      "record_payday_rejected_request",
+      {
+        p_route: classifyRoute(path),
+        p_error_code: error.code,
+        p_status_code: error.status,
+        p_authorization_present: req.headers.has("authorization"),
+      },
+    );
     if (auditError) {
       console.error("Payday rejected-request audit insertion failed.");
     }
@@ -3308,6 +3353,18 @@ async function auditRejectedRequest(
     // itself the failed dependency.
     console.error("Payday rejected-request audit was unavailable.");
   }
+}
+
+/// Collapses an attacker-controlled path into a closed set before it is ever
+/// used as a storage key. Authentication fails before any rate limiter on
+/// this route, so one durable row per distinct path would let anonymous
+/// traffic grow the table without bound — which is the whole finding.
+function classifyRoute(path: string): string {
+  if (path === "/mcp") return "mcp";
+  if (path === "/v1/health") return "health";
+  if (path === "/v1/openapi.json") return "openapi";
+  if (path.startsWith("/v1/")) return "rest_v1";
+  return "other";
 }
 
 export async function handleRequest(req: Request): Promise<Response> {

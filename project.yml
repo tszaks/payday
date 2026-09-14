@@ -119,6 +119,10 @@ targets:
       - path: Payday/Utilities/ShiftReceiptMetrics.swift
       - path: Payday/Utilities/PeriodIncome.swift
       - path: Payday/Utilities/AppGroup.swift
+      # The widget renders in its own process and never traverses RootView,
+      # so it has to consult the shared authorization policy itself before
+      # putting earnings on a Lock Screen.
+      - path: Payday/Sync/PaydayAuthorizationState.swift
       - path: Payday/Utilities/SharedModelContainer.swift
       - path: Payday/Utilities/DeepLinkCoordinator.swift
       - path: Payday/Design/DesignSystem.swift

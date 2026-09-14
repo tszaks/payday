@@ -44,6 +44,17 @@ struct PaydayWidgetProvider: TimelineProvider {
     }
 
     private func buildEntries(at dates: [Date]) -> [PaydayWidgetEntry] {
+        // The widget is an ambient surface in its own process: it never
+        // traverses RootView, so nothing here had ever consulted Payday's own
+        // authorization policy. A signed-out or app-locked device would keep
+        // rendering the last known period total, including on the Lock Screen.
+        // Redacting by reusing the no-schedule entry means the widget shows
+        // its ordinary setup state rather than advertising that data exists.
+        guard PaydayAuthorizationState.allowsAmbientDisclosure else {
+            return dates.map {
+                PaydayWidgetEntry(date: $0, hasSchedule: false, periodTotalCents: 0, paceDeltaCents: nil, pacePeriodCount: 0, daysRemaining: 0, appearance: AppGroup.appearance, relevance: nil)
+            }
+        }
         guard let schedule = PayScheduleStore().schedule else {
             return dates.map {
                 PaydayWidgetEntry(date: $0, hasSchedule: false, periodTotalCents: 0, paceDeltaCents: nil, pacePeriodCount: 0, daysRemaining: 0, appearance: AppGroup.appearance, relevance: nil)
@@ -170,12 +181,17 @@ struct PaydayWidgetEntryView: View {
             Spacer(minLength: 0)
 
             if entry.hasSchedule {
+                // WidgetKit's own redaction, on top of the provider-level gate
+                // above: this is what lets iOS blur the figure under the
+                // system's Lock Screen privacy setting without Payday having
+                // to predict that state itself.
                 Text(Money.string(fromCents: entry.periodTotalCents))
                     .font(PaydayFont.displayCompact)
                     .monospacedDigit()
                     .foregroundStyle(colors.textPrimary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.6)
+                    .privacySensitive()
 
                 if let paceDeltaCents = entry.paceDeltaCents {
                     Text(Money.directionalDeltaString(fromCents: paceDeltaCents))
@@ -184,6 +200,7 @@ struct PaydayWidgetEntryView: View {
                         .monospacedDigit()
                         .lineLimit(1)
                         .minimumScaleFactor(0.7)
+                        .privacySensitive()
                         .accessibilityLabel(RevealCopy.paceLine(deltaCents: paceDeltaCents, periodCount: entry.pacePeriodCount))
                 } else {
                     Text(daysRemainingText)

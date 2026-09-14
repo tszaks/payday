@@ -9,8 +9,21 @@ struct PeriodTotalIntent: AppIntent {
     static let description = IntentDescription("Hear your tip total for the current pay period.")
     static var openAppWhenRun: Bool { false }
 
+    /// Requires an unlocked device. These intents can be dispatched from
+    /// Siri, Shortcuts, the Action Button and Control Center, none of which
+    /// traverse RootView — so without this the platform would happily run a
+    /// financial read or write against a locked phone.
+    static var authenticationPolicy: IntentAuthenticationPolicy { .requiresAuthentication }
+
     @MainActor
     func perform() async throws -> some IntentResult & ProvidesDialog {
+        // Device authentication is the platform's half. This is Payday's:
+        // the shared store still holds the cached earnings of whoever was
+        // last signed in, and speaking that total to a signed-out device
+        // would bypass the gate the app itself enforces.
+        guard PaydayAuthorizationState.allowsFinancialAccess else {
+            return .result(dialog: IntentDialog("Sign in to Payday first."))
+        }
         guard let schedule = PayScheduleStore().schedule else {
             return .result(dialog: IntentDialog("Set up your pay schedule in Payday first."))
         }
