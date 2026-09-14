@@ -122,6 +122,12 @@ final class PaydayCloudState {
             try await client.auth.signInWithIdToken(
                 credentials: .init(provider: .apple, idToken: idToken, nonce: nonce)
             )
+            if let firstName = AppleIdentityProfile.newFirstName(
+                from: fullName,
+                currentFirstName: preferencesStore.firstName
+            ) {
+                preferencesStore.firstName = firstName
+            }
             if let fullName {
                 let formatter = PersonNameComponentsFormatter()
                 let renderedName = formatter.string(from: fullName)
@@ -529,6 +535,20 @@ private struct PaydaySignInView: View {
         }
         .padding(28)
         .background(PaydayColor.background.ignoresSafeArea())
+    }
+}
+
+enum AppleIdentityProfile {
+    static func newFirstName(
+        from fullName: PersonNameComponents?,
+        currentFirstName: String?
+    ) -> String? {
+        guard currentFirstName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true
+        else { return nil }
+        guard let firstName = fullName?.givenName?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !firstName.isEmpty
+        else { return nil }
+        return firstName
     }
 }
 
