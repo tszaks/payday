@@ -193,11 +193,49 @@ struct OnboardingStageTests {
     func doubleTapCannotSkipAQuestion() {
         let viewModel = PaydayOnboardingViewModel()
         viewModel.stage = .shifts
+        viewModel.shiftLoad = .threeFour
         viewModel.advanceStage(from: .shifts, reduceMotion: true)
         #expect(viewModel.stage == .tips)
         // The second tap of a double tap still reports the old stage.
         viewModel.advanceStage(from: .shifts, reduceMotion: true)
         #expect(viewModel.stage == .tips)
+    }
+
+    @MainActor
+    @Test("a question with no answer cannot be advanced past, whatever fires it")
+    func unansweredQuestionBlocksAdvance() {
+        // The Continue button is one long-lived view now, so it can be handed
+        // a refreshed closure carrying the CURRENT stage between two taps of a
+        // double tap. The stage check alone would let that through; the
+        // answered-question invariant is what actually holds the line.
+        let viewModel = PaydayOnboardingViewModel()
+        viewModel.stage = .tips
+        viewModel.advanceStage(from: .tips, reduceMotion: true)
+        #expect(viewModel.stage == .tips)
+
+        viewModel.tipsPerShift = .twoToThree
+        viewModel.advanceStage(from: .tips, reduceMotion: true)
+        #expect(viewModel.stage == .cash)
+    }
+
+    @MainActor
+    @Test("the non-question stages still advance without an answer")
+    func nonQuestionStagesAdvanceFreely() {
+        let viewModel = PaydayOnboardingViewModel()
+        #expect(viewModel.stage == .welcome)
+        viewModel.advanceStage(from: .welcome, reduceMotion: true)
+        #expect(viewModel.stage == .shifts)
+    }
+
+    @Test("exactly the six numbered stages report as questions")
+    func isQuestionMatchesTheNumberedStages() {
+        for stage in PaydayOnboardingStage.allCases {
+            #expect(stage.isQuestion == (stage.questionNumber != nil))
+        }
+        #expect(PaydayOnboardingStage.allCases.filter(\.isQuestion).count == 6)
+        #expect(PaydayOnboardingStage.welcome.isQuestion == false)
+        #expect(PaydayOnboardingStage.analyzing.isQuestion == false)
+        #expect(PaydayOnboardingStage.reveal.isQuestion == false)
     }
 
     @MainActor
