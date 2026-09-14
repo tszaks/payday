@@ -1,102 +1,198 @@
 import SwiftUI
 
-/// Asks for pay frequency plus two dates the user can read straight off a
-/// pay stub — no mental math required. Most payroll pays a few days after a
-/// period actually ends; asking for the payday and the period-end
-/// separately lets the app work out that lag itself instead of assuming
-/// zero (which silently misplaces every period boundary for anyone paid on
-/// a delay). Both dates and the frequency are editable later from Settings.
+/// The last step of the intro: the two dates the app can't derive, plus a
+/// name. Restyled (2026-09-14) to continue the quiz's visual language rather
+/// than drop into a grouped `Form` — same big left-aligned title, same
+/// `fieldBackground` rows at `PaydayRadius.lg`, same green prominent CTA
+/// pinned above the safe area. A stranger should not be able to tell where the
+/// quiz ended and this began.
+///
+/// Asks for two dates a person can read straight off a pay stub — no mental
+/// math. Most payroll pays a few days after a period actually ends, so asking
+/// for the payday and the period-end separately lets the app work out that lag
+/// itself instead of assuming zero (which silently misplaces every period
+/// boundary for anyone paid on a delay).
+///
+/// Pay frequency is NOT asked here when the intro quiz already collected it
+/// (DESIGN.md rule 11, "say it once"); the picker appears only for someone who
+/// skipped the intro. Everything is editable later from Settings.
 struct FirstRunSetupView: View {
     @Environment(PayScheduleStore.self) private var scheduleStore
     @Environment(UserPreferencesStore.self) private var preferencesStore
+    @Environment(OnboardingStateStore.self) private var onboardingStore
 
     @State private var firstName: String = ""
     @State private var frequency: PayFrequency = .biweekly
     @State private var mostRecentPayday: Date = .now
     @State private var periodEndDate: Date = .now
+    @State private var hasLoadedQuizFrequency = false
+
+    /// True when the quiz already answered this, so the picker stays hidden.
+    private var frequencyIsKnown: Bool { onboardingStore.quizPayFrequency != nil }
 
     var body: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Welcome to Payday")
-                        .font(PaydayFont.largeTitle)
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: PaydaySpacing.lg) {
+                    Text("Last thing.")
+                        .font(PaydayFont.displayMedium)
                         .foregroundStyle(PaydayColor.textPrimary)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal)
-                .padding(.top, 24)
-                .padding(.bottom, 8)
+                        .padding(.top, PaydaySpacing.xl)
 
-                Form {
-                    Section("Name") {
-                        TextField("First name", text: $firstName)
-                            .textInputAutocapitalization(.words)
-                            .autocorrectionDisabled()
+                    VStack(spacing: PaydaySpacing.xs) {
+                        nameRow
                     }
-                    .listRowBackground(PaydayColor.fieldBackground)
 
-                    Section("Pay schedule") {
-                        Picker("Pay frequency", selection: $frequency) {
-                            ForEach(PayFrequency.allCases) { freq in
-                                Text(freq.displayName).tag(freq)
+                    VStack(alignment: .leading, spacing: PaydaySpacing.xs) {
+                        Text("Your pay schedule")
+                            .font(PaydayFont.headline)
+                            .foregroundStyle(PaydayColor.textPrimary)
+
+                        if !frequencyIsKnown {
+                            frequencyRows
+                        }
+
+                        // Separated from the frequency options above: picking
+                        // one of four and setting two dates are different
+                        // asks, and at the same 8pt gap they read as one
+                        // undifferentiated stack of rows.
+                        VStack(spacing: PaydaySpacing.xs) {
+                            dateRow(
+                                label: "Last payday",
+                                selection: $mostRecentPayday,
+                                range: ...Date.now
+                            )
+                            .onChange(of: mostRecentPayday) { _, newValue in
+                                if periodEndDate > newValue { periodEndDate = newValue }
                             }
-                        }
-                        .pickerStyle(.inline)
-                        .labelsHidden()
-                    }
-                    .listRowBackground(PaydayColor.fieldBackground)
 
-                    Section {
-                        HStack {
-                            Text("Payday")
-                            Spacer()
-                            DatePicker("", selection: $mostRecentPayday, in: ...Date.now, displayedComponents: .date)
-                                .labelsHidden()
+                            dateRow(
+                                label: "Last day it covered",
+                                selection: $periodEndDate,
+                                range: ...mostRecentPayday
+                            )
                         }
-                    }
-                    .listRowBackground(PaydayColor.fieldBackground)
-                    .onChange(of: mostRecentPayday) { _, newValue in
-                        if periodEndDate > newValue { periodEndDate = newValue }
-                    }
+                        .padding(.top, frequencyIsKnown ? 0 : PaydaySpacing.xs)
 
-                    Section {
-                        HStack {
-                            Text("Last day it covered")
-                            Spacer()
-                            DatePicker("", selection: $periodEndDate, in: ...mostRecentPayday, displayedComponents: .date)
-                                .labelsHidden()
-                        }
-                    }
-                    .listRowBackground(PaydayColor.fieldBackground)
-
-                    if frequency == .twiceMonthly {
-                        Text("1st–15th and 16th–month end")
+                        Text("Both dates come straight off your last pay stub. Payday works out the lag between them on its own.")
                             .font(PaydayFont.footnote)
                             .foregroundStyle(PaydayColor.textSecondary)
-                            .listRowBackground(PaydayColor.fieldBackground)
+                            .padding(.top, PaydaySpacing.xxs)
                     }
                 }
-                .scrollContentBackground(.hidden)
-                .background(PaydayColor.background)
+                .padding(.horizontal, PaydaySpacing.md)
+                .padding(.bottom, PaydaySpacing.xl)
             }
-            .background(PaydayColor.background)
-            // A welcome screen's commit control needs one-thumb reach and to
-            // unmistakably read as "the next step," not as an edit screen's
-            // small top-right Done — full-width and pinned above the safe
-            // area, the app's standard prominent button style.
-            .safeAreaInset(edge: .bottom) {
-                Button("Get Started") { save() }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(PaydayColor.background)
+        // A welcome screen's commit control needs one-thumb reach and to
+        // unmistakably read as "the next step," not as an edit screen's small
+        // top-right Done — full-width and pinned above the safe area, the
+        // app's standard prominent button style.
+        .safeAreaInset(edge: .bottom) {
+            Button { save() } label: {
+                Text("Start tracking")
+                    .font(PaydayFont.headline)
                     .frame(maxWidth: .infinity)
-                    .buttonStyle(.glassProminent)
-                    .tint(PaydayColor.primary)
-                    .padding(.horizontal)
-                    .padding(.top, 12)
-                    .padding(.bottom, 8)
-                    .background(PaydayColor.background)
+                    .padding(.vertical, PaydaySpacing.xxs)
+            }
+            .buttonStyle(.glassProminent)
+            .tint(PaydayColor.primary)
+            .padding(.horizontal, PaydaySpacing.md)
+            .padding(.top, PaydaySpacing.sm)
+            .padding(.bottom, PaydaySpacing.xs)
+            .background(PaydayColor.background)
+        }
+        .task {
+            // Carry the quiz's answer forward exactly once, so a live edit to
+            // the picker below (skipped-intro case) is never overwritten.
+            guard !hasLoadedQuizFrequency else { return }
+            hasLoadedQuizFrequency = true
+            if let quizFrequency = onboardingStore.quizPayFrequency {
+                frequency = quizFrequency
             }
         }
     }
+
+    // MARK: - Rows
+
+    private var nameRow: some View {
+        TextField("What should Payday call you?", text: $firstName)
+            .font(PaydayFont.body)
+            .foregroundStyle(PaydayColor.textPrimary)
+            .textInputAutocapitalization(.words)
+            .autocorrectionDisabled()
+            .submitLabel(.done)
+            .padding(PaydaySpacing.md)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(rowBackground)
+    }
+
+    private var frequencyRows: some View {
+        VStack(spacing: PaydaySpacing.xs) {
+            ForEach(PayFrequency.allCases) { option in
+                Button {
+                    PaydayHaptics.selection()
+                    frequency = option
+                } label: {
+                    HStack(spacing: PaydaySpacing.md) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(option.displayName)
+                                .font(PaydayFont.body)
+                                .foregroundStyle(PaydayColor.textPrimary)
+                            Text(option.onboardingSubtitle)
+                                .font(PaydayFont.caption)
+                                .foregroundStyle(PaydayColor.textSecondary)
+                        }
+                        Spacer(minLength: PaydaySpacing.xs)
+                        Image(systemName: frequency == option ? "checkmark.circle.fill" : "circle")
+                            .font(PaydayFont.iconMedium)
+                            .foregroundStyle(frequency == option ? PaydayColor.primary : PaydayColor.textTertiary)
+                    }
+                    .padding(PaydaySpacing.md)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        RoundedRectangle(cornerRadius: PaydayRadius.lg, style: .continuous)
+                            .fill(PaydayColor.fieldBackground)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: PaydayRadius.lg, style: .continuous)
+                                    .stroke(frequency == option ? PaydayColor.primary : Color.clear, lineWidth: 2)
+                            )
+                    )
+                }
+                .buttonStyle(PressableButtonStyle())
+                .accessibilityAddTraits(frequency == option ? [.isSelected] : [])
+            }
+        }
+    }
+
+    private func dateRow(
+        label: String,
+        selection: Binding<Date>,
+        range: PartialRangeThrough<Date>
+    ) -> some View {
+        HStack {
+            Text(label)
+                .font(PaydayFont.body)
+                .foregroundStyle(PaydayColor.textPrimary)
+            Spacer(minLength: PaydaySpacing.xs)
+            DatePicker("", selection: selection, in: range, displayedComponents: .date)
+                .labelsHidden()
+                .tint(PaydayColor.primary)
+        }
+        .padding(PaydaySpacing.md)
+        .background(rowBackground)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(label)
+    }
+
+    private var rowBackground: some View {
+        RoundedRectangle(cornerRadius: PaydayRadius.lg, style: .continuous)
+            .fill(PaydayColor.fieldBackground)
+    }
+
+    // MARK: - Save
 
     private func save() {
         let trimmedName = firstName.trimmingCharacters(in: .whitespaces)
@@ -112,5 +208,9 @@ struct FirstRunSetupView: View {
             anchorPeriodEnd: normalizedPeriodEnd,
             payDelayDays: delayDays
         )
+        // The schedule is now the source of truth; drop the carried answer so
+        // a later Settings edit can never be shadowed by a stale quiz value.
+        onboardingStore.clearQuizPayFrequency()
+        PaydayHaptics.success()
     }
 }

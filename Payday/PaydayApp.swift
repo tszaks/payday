@@ -12,6 +12,7 @@ struct PaydayApp: App {
     @State private var insightsStore = InsightsStore()
     @State private var preferencesStore = UserPreferencesStore()
     @State private var moveLedgerStore = MoveLedgerStore()
+    @State private var onboardingStore = OnboardingStateStore()
 
     init() {
         try? Tips.configure([.displayFrequency(.immediate), .datastoreLocation(.applicationDefault)])
@@ -31,6 +32,7 @@ struct PaydayApp: App {
                 .environment(insightsStore)
                 .environment(preferencesStore)
                 .environment(moveLedgerStore)
+                .environment(onboardingStore)
                 .preferredColorScheme(preferencesStore.appearance.colorScheme)
                 .modelContainer(SharedModelContainer.shared)
                 // Lock Screen / StandBy accessory widgets can't host an
