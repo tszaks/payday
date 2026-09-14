@@ -129,10 +129,37 @@ this app will actually run on can't use it. Insights narration now calls
   Receipt scanning follows the same boundary through
   `app/api/receipt-analyze`: Apple Vision OCR runs on-device, then the compact
   receipt JPEG and transcript go to the narrow proxy. The server owns the
-  model, instructions, and schema, and a Vercel Firewall rule limits that
-  route to 20 requests per IP per hour. Release builds still contain no
-  provider key. The old local key remains development-only and must never be
-  copied into a Release configuration.
+  model, instructions, and schema. Release builds still contain no provider
+  key. The old local key remains development-only and must never be copied
+  into a Release configuration.
+- **Both AI routes are bound to an account (2026-09-14).** Holding no provider
+  secret in the app moved the problem rather than solving it: the proxy asked
+  callers for nothing, so anyone who copied one request's shape could replay it
+  and spend the key (security review finding 3). The app now sends its Supabase
+  access token, and each route calls `consume_payday_ai_quota` with that token
+  before reading the body — which both authenticates the caller and meters
+  them, in one round trip.
+  The function is granted only to `authenticated`, so an absent token arrives
+  as `anon` and is refused by Postgres itself (`42501`), and an invalid one is
+  refused by PostgREST (`PGRST301`). Both surface as `401`. **The proxy holds
+  no service-role key**; its only credentials are the project URL and the
+  publishable key that already ships inside the app binary.
+  Ceilings live in `payday_ai_quota_limits` — 40 receipt scans and 20
+  narrations per account per day, with global daily counters as a circuit
+  breaker — so they change with one `UPDATE` and no redeploy. The counters
+  record `(user_id, day, kind, count)` and nothing else, which keeps the
+  privacy policy's "we do not store receipt text or images" claim true.
+  `PAYDAY_PROXY_AUTH_MODE=observe` temporarily allows unauthenticated callers
+  so the proxy can ship before the client that authenticates to it; unset
+  means enforce, because the safe reading of a missing config value is the
+  strict one.
+  NOT a control, contrary to what this pillar claimed until now: a "Vercel
+  Firewall rule limiting the route to 20 requests per IP per hour." No such
+  rule exists anywhere in `payday-website` — no `vercel.json`, no
+  `middleware.ts`, and neither file has ever existed in that repo's history.
+  If it was ever created it lives only in the dashboard, unversioned and
+  invisible to review, and would be lost on a redeploy to a new project. Treat
+  per-IP limiting as absent until it is committed as configuration.
 
 ## Pillar 5: Woven into the OS (App Intents everywhere)
 
