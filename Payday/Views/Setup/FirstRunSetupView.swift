@@ -8,9 +8,7 @@ import SwiftUI
 /// a delay). Both dates and the frequency are editable later from Settings.
 struct FirstRunSetupView: View {
     @Environment(PayScheduleStore.self) private var scheduleStore
-    @Environment(UserPreferencesStore.self) private var preferencesStore
 
-    @State private var firstName: String = ""
     @State private var frequency: PayFrequency = .biweekly
     @State private var mostRecentPayday: Date = .now
     @State private var periodEndDate: Date = .now
@@ -29,13 +27,6 @@ struct FirstRunSetupView: View {
                 .padding(.bottom, 8)
 
                 Form {
-                    Section("Name") {
-                        TextField("First name", text: $firstName)
-                            .textInputAutocapitalization(.words)
-                            .autocorrectionDisabled()
-                    }
-                    .listRowBackground(PaydayColor.fieldBackground)
-
                     Section("Pay schedule") {
                         Picker("Pay frequency", selection: $frequency) {
                             ForEach(PayFrequency.allCases) { freq in
@@ -99,9 +90,6 @@ struct FirstRunSetupView: View {
     }
 
     private func save() {
-        let trimmedName = firstName.trimmingCharacters(in: .whitespaces)
-        preferencesStore.firstName = trimmedName.isEmpty ? nil : trimmedName
-
         let calendar = Calendar.current
         let normalizedPayday = calendar.startOfDay(for: mostRecentPayday)
         let normalizedPeriodEnd = calendar.startOfDay(for: min(periodEndDate, mostRecentPayday))
