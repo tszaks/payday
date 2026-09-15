@@ -300,21 +300,18 @@ struct OnboardingStateStoreTests {
         return (OnboardingStateStore(defaults: defaults), defaults)
     }
 
-    @Test("a fresh install has not finished the intro and carries no frequency")
+    @Test("a fresh install carries no frequency")
     func freshInstallDefaults() {
         let (store, _) = makeStore()
-        #expect(store.hasFinishedIntro == false)
         #expect(store.quizPayFrequency == nil)
     }
 
-    @Test("both values survive a relaunch")
+    @Test("the carried frequency survives a relaunch")
     func valuesPersist() {
         let (store, defaults) = makeStore()
-        store.hasFinishedIntro = true
         store.quizPayFrequency = .twiceMonthly
 
         let reloaded = OnboardingStateStore(defaults: defaults)
-        #expect(reloaded.hasFinishedIntro)
         #expect(reloaded.quizPayFrequency == .twiceMonthly)
     }
 

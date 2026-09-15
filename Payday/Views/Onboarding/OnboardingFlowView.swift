@@ -24,10 +24,6 @@ struct OnboardingFlowView: View {
     /// and @Observable already tracks the property reads in body.
     let viewModel: PaydayOnboardingViewModel
 
-    /// True once this device has been through the quiz before, so a returning
-    /// person is offered sign-in first instead of six questions again.
-    let hasCompletedQuizBefore: Bool
-
     /// Called when the quiz finishes, to hand the chosen pay frequency forward
     /// so the setup screen never asks for it twice.
     var onQuizCompleted: (PayFrequency?) -> Void
@@ -58,7 +54,6 @@ struct OnboardingFlowView: View {
             switch viewModel.stage {
             case .welcome:
                 OnboardingWelcomeView(
-                    hasCompletedQuizBefore: hasCompletedQuizBefore,
                     onStart: { viewModel.advanceStage(from: .welcome, reduceMotion: reduceMotion) },
                     // A returning install already has its answers in the
                     // cloud. Jump to sign-in rather than asking someone to

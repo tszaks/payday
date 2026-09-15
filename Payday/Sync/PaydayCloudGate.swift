@@ -440,10 +440,8 @@ struct PaydayCloudGate<Content: View>: View {
                 // one. The flow's own .account stage hosts the Apple button.
                 OnboardingFlowView(
                     viewModel: onboardingViewModel,
-                    hasCompletedQuizBefore: onboardingStore.hasFinishedIntro,
                     onQuizCompleted: { chosenFrequency in
                         onboardingStore.quizPayFrequency = chosenFrequency
-                        onboardingStore.hasFinishedIntro = true
                     },
                     onAuthorize: { result in
                         handleAppleAuthorization(result.authorization, nonce: result.nonce)

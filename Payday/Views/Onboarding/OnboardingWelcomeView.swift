@@ -29,9 +29,6 @@ import SwiftUI
 struct OnboardingWelcomeView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    /// Flips the emphasis: someone who has already answered the quiz should
-    /// be one tap from their data, not one tap from six questions again.
-    let hasCompletedQuizBefore: Bool
     var onStart: () -> Void
     var onReturning: () -> Void
 
@@ -150,8 +147,8 @@ struct OnboardingWelcomeView: View {
 
     private var callsToAction: some View {
         VStack(spacing: PaydaySpacing.xs) {
-            Button(action: hasCompletedQuizBefore ? onReturning : onStart) {
-                Text(hasCompletedQuizBefore ? "Sign In" : "Get Started")
+            Button(action: onStart) {
+                Text("Get Started")
                     .font(PaydayFont.headline)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, PaydaySpacing.xxs)
@@ -159,14 +156,24 @@ struct OnboardingWelcomeView: View {
             .buttonStyle(.glassProminent)
             .tint(PaydayColor.primary)
 
-            Button(
-                hasCompletedQuizBefore ? "Take the tour again" : "I've used Payday before",
-                action: hasCompletedQuizBefore ? onStart : onReturning
-            )
-            .font(PaydayFont.body)
-            .foregroundStyle(PaydayColor.textPrimary)
-            .buttonStyle(PressableButtonStyle())
-            .padding(.top, PaydaySpacing.xxs)
+            // A self-identification, not an action: you say who you are and
+            // the app decides what to do with that. It reads better than a
+            // mechanism ("Sign in", "Take the tour") and it is the pattern
+            // everyone already knows from every other app.
+            //
+            // This pair does NOT adapt to whether the quiz has been answered
+            // before. The first version did, swapping in "Sign In" over "Take
+            // the tour again", which was wrong twice over: a returning person
+            // has no reason to re-answer six questions whose only output is a
+            // projection built from guesses, when their real history is one
+            // sign-in away — and the flag it keyed on was set merely by
+            // tapping the secondary button, so one tap permanently rearranged
+            // the screen. One layout, always.
+            Button("I've used Payday before", action: onReturning)
+                .font(PaydayFont.body)
+                .foregroundStyle(PaydayColor.textPrimary)
+                .buttonStyle(PressableButtonStyle())
+                .padding(.top, PaydaySpacing.xxs)
         }
         .padding(.horizontal, PaydaySpacing.md)
         .padding(.bottom, PaydaySpacing.xs)
@@ -197,10 +204,6 @@ private struct Entrance: ViewModifier {
     }
 }
 
-#Preview("first launch") {
-    OnboardingWelcomeView(hasCompletedQuizBefore: false, onStart: {}, onReturning: {})
-}
-
-#Preview("signed out, returning") {
-    OnboardingWelcomeView(hasCompletedQuizBefore: true, onStart: {}, onReturning: {})
+#Preview {
+    OnboardingWelcomeView(onStart: {}, onReturning: {})
 }
