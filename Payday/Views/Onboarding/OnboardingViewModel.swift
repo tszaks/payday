@@ -102,7 +102,7 @@ final class PaydayOnboardingViewModel {
         let fillCount: Int
         switch requested {
         case .welcome: fillCount = 0
-        case .analyzing, .reveal: fillCount = questions.count
+        case .analyzing, .reveal, .account: fillCount = questions.count
         default: fillCount = questions.firstIndex(of: requested) ?? 0
         }
         for question in questions.prefix(fillCount) {
