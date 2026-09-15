@@ -29,6 +29,9 @@ import SwiftUI
 struct OnboardingWelcomeView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    /// Flips the emphasis: someone who has already answered the quiz should
+    /// be one tap from their data, not one tap from six questions again.
+    let hasCompletedQuizBefore: Bool
     var onStart: () -> Void
     var onReturning: () -> Void
 
@@ -147,8 +150,8 @@ struct OnboardingWelcomeView: View {
 
     private var callsToAction: some View {
         VStack(spacing: PaydaySpacing.xs) {
-            Button(action: onStart) {
-                Text("Get Started")
+            Button(action: hasCompletedQuizBefore ? onReturning : onStart) {
+                Text(hasCompletedQuizBefore ? "Sign In" : "Get Started")
                     .font(PaydayFont.headline)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, PaydaySpacing.xxs)
@@ -156,11 +159,14 @@ struct OnboardingWelcomeView: View {
             .buttonStyle(.glassProminent)
             .tint(PaydayColor.primary)
 
-            Button("I've used Payday before", action: onReturning)
-                .font(PaydayFont.body)
-                .foregroundStyle(PaydayColor.textPrimary)
-                .buttonStyle(PressableButtonStyle())
-                .padding(.top, PaydaySpacing.xxs)
+            Button(
+                hasCompletedQuizBefore ? "Take the tour again" : "I've used Payday before",
+                action: hasCompletedQuizBefore ? onStart : onReturning
+            )
+            .font(PaydayFont.body)
+            .foregroundStyle(PaydayColor.textPrimary)
+            .buttonStyle(PressableButtonStyle())
+            .padding(.top, PaydaySpacing.xxs)
         }
         .padding(.horizontal, PaydaySpacing.md)
         .padding(.bottom, PaydaySpacing.xs)
@@ -191,6 +197,10 @@ private struct Entrance: ViewModifier {
     }
 }
 
-#Preview {
-    OnboardingWelcomeView(onStart: {}, onReturning: {})
+#Preview("first launch") {
+    OnboardingWelcomeView(hasCompletedQuizBefore: false, onStart: {}, onReturning: {})
+}
+
+#Preview("signed out, returning") {
+    OnboardingWelcomeView(hasCompletedQuizBefore: true, onStart: {}, onReturning: {})
 }

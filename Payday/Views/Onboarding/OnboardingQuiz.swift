@@ -7,9 +7,11 @@ import Foundation
 /// reveal. Ported from Vero's `OnboardingStage` so the two apps' first runs
 /// share one shape (see docs/DESIGN.md, "The Family Contract").
 ///
-/// Lives entirely inside `OnboardingFlowView` under the pre-gate branch of
-/// `RootView`, which is evaluated BEFORE `PaydayCloudGate` — so the quiz is
-/// unreachable for anyone who already has a session, by construction.
+/// Rendered by `PaydayCloudGate`'s signed-out branch, which makes the welcome
+/// screen the app's ONE front door: if you are not signed in, this is what you
+/// see, whether it is your first launch or you just signed out. The flow ends
+/// at `.account`, which hosts the Sign in with Apple button itself — so there
+/// is no second, plainer sign-in screen to fall through to.
 enum PaydayOnboardingStage: String, CaseIterable {
     case welcome
     case shifts
@@ -20,6 +22,7 @@ enum PaydayOnboardingStage: String, CaseIterable {
     case frequency
     case analyzing
     case reveal
+    case account
 
     /// The six question stages, in display order. Drives the progress dots.
     static let questionStages: [PaydayOnboardingStage] = [
