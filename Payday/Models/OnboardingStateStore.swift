@@ -5,25 +5,21 @@ import Foundation
 /// pattern as `PayScheduleStore` and `UserPreferencesStore` — app
 /// configuration, never a SwiftData record.
 ///
-/// Deliberately narrow: the other quiz answers (shift load, tips per shift,
-/// cash share, tracking method, goal) are NOT stored. No shipped feature reads
+/// Deliberately narrow: the pay frequency is the ONLY thing kept. There was
+/// also a `hasFinishedIntro` flag; it died with the welcome screen's
+/// adapting buttons, which were its only reader. State that is written and
+/// never read is worse than no state at all.
+///
+/// The other quiz answers (shift load, tips per shift, cash share, tracking
+/// method, goal) are NOT stored either. No shipped feature reads
 /// them, and persisting answers nothing consumes is just dead data that goes
 /// stale. They exist for the length of the flow and are then dropped, the same
 /// way Vero's `OnboardingViewModel.reset()` clears its own.
 @Observable
 final class OnboardingStateStore {
-    private static let hasFinishedIntroKey = "com.szakacsmedia.payday.hasFinishedIntro"
     private static let quizPayFrequencyKey = "com.szakacsmedia.payday.quizPayFrequency"
 
     private let defaults: UserDefaults
-
-    /// True once the person has been through the intro, or explicitly skipped
-    /// it by saying they've used Payday before. Gates the pre-account branch of
-    /// `RootView`, which sits ahead of `PaydayCloudGate`, so a new install
-    /// sees the welcome before it is ever asked to sign in.
-    var hasFinishedIntro: Bool {
-        didSet { defaults.set(hasFinishedIntro, forKey: Self.hasFinishedIntroKey) }
-    }
 
     /// The frequency picked during the quiz, handed forward so the setup screen
     /// doesn't ask the same question a second time (DESIGN.md rule 11). Nil for
@@ -34,7 +30,6 @@ final class OnboardingStateStore {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        self.hasFinishedIntro = defaults.bool(forKey: Self.hasFinishedIntroKey)
         self.quizPayFrequency = defaults.string(forKey: Self.quizPayFrequencyKey)
             .flatMap(PayFrequency.init(rawValue:))
     }
