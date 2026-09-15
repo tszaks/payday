@@ -7,6 +7,12 @@ import SwiftUI
 ///
 /// Sits ahead of `PaydayCloudGate` in `RootView`, so a new install sees what
 /// the app does before it is ever asked to sign in.
+///
+/// The six questions share ONE `OnboardingQuizShell`. They are a single branch
+/// of the switch below, which is what keeps the shell's identity stable across
+/// them: the dots and the Continue button are the same views the whole way
+/// through, and only the slot's contents transition. Vero, which this was
+/// ported from, still rebuilds its chrome on every step.
 struct OnboardingFlowView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -48,61 +54,9 @@ struct OnboardingFlowView: View {
                 )
                 .transition(quizTransition)
 
-            case .shifts:
-                quizStep(
-                    stage: .shifts,
-                    title: "How many shifts do you work in a typical week?",
-                    choices: ShiftLoad.allCases.map { OnboardingQuizChoice(id: $0.rawValue, label: $0.displayName) },
-                    microInsight: viewModel.shiftLoad?.microInsight,
-                    onSelect: { viewModel.shiftLoad = ShiftLoad(rawValue: $0) }
-                )
-
-            case .tips:
-                quizStep(
-                    stage: .tips,
-                    title: "On a normal shift, what do you walk out with?",
-                    choices: TipsPerShift.allCases.map { OnboardingQuizChoice(id: $0.rawValue, label: $0.displayName) },
-                    microInsight: viewModel.tipsPerShift?.microInsight,
-                    onSelect: { viewModel.tipsPerShift = TipsPerShift(rawValue: $0) }
-                )
-
-            case .cash:
-                quizStep(
-                    stage: .cash,
-                    title: "How much of that is cash?",
-                    choices: CashShare.allCases.map { OnboardingQuizChoice(id: $0.rawValue, label: $0.displayName) },
-                    microInsight: viewModel.cashShare?.microInsight,
-                    onSelect: { viewModel.cashShare = CashShare(rawValue: $0) }
-                )
-
-            case .tracking:
-                quizStep(
-                    stage: .tracking,
-                    title: "How do you keep track of it now?",
-                    choices: TipTrackingMethod.allCases.map { OnboardingQuizChoice(id: $0.rawValue, label: $0.displayName) },
-                    microInsight: viewModel.trackingMethod?.microInsight,
-                    onSelect: { viewModel.trackingMethod = TipTrackingMethod(rawValue: $0) }
-                )
-
-            case .goal:
-                quizStep(
-                    stage: .goal,
-                    title: "What do you want Payday to tell you?",
-                    choices: PaydayGoal.allCases.map { OnboardingQuizChoice(id: $0.rawValue, label: $0.displayName) },
-                    microInsight: nil,
-                    onSelect: { viewModel.goal = PaydayGoal(rawValue: $0) }
-                )
-
-            case .frequency:
-                quizStep(
-                    stage: .frequency,
-                    title: "How often do you get paid?",
-                    choices: PayFrequency.allCases.map {
-                        OnboardingQuizChoice(id: $0.rawValue, label: $0.displayName, subtitle: $0.onboardingSubtitle)
-                    },
-                    microInsight: nil,
-                    onSelect: { viewModel.payFrequency = PayFrequency(rawValue: $0) }
-                )
+            case .shifts, .tips, .cash, .tracking, .goal, .frequency:
+                questionShell
+                    .transition(quizTransition)
 
             case .analyzing:
                 OnboardingAnalyzingView(
@@ -124,8 +78,11 @@ struct OnboardingFlowView: View {
                 .transition(.opacity)
             }
         }
-        .offset(x: edgeDragOffset)
-        .animation(reduceMotion ? nil : PaydayAnimation.paperSpring, value: viewModel.stage)
+        // On a question the shell handles the drag itself, moving only the
+        // slot so the chrome stays put. Everywhere else there is no chrome to
+        // hold still, so the whole screen tracks the finger as before.
+        .offset(x: viewModel.stage.isQuestion ? 0 : edgeDragOffset)
+        .animation(reduceMotion ? nil : PaydayAnimation.stepSlide, value: viewModel.stage)
         .simultaneousGesture(edgeSwipeBack)
         .onChange(of: viewModel.stage) { _, _ in
             // The direction flag only needs to hold for the transition it
@@ -137,26 +94,92 @@ struct OnboardingFlowView: View {
 #endif
     }
 
-    // MARK: - Question Stage
+    // MARK: - Questions
 
-    private func quizStep(
-        stage: PaydayOnboardingStage,
-        title: String,
-        choices: [OnboardingQuizChoice],
-        microInsight: String?,
-        onSelect: @escaping (String) -> Void
-    ) -> some View {
-        OnboardingQuizStepView(
+    /// One shell for all six questions. `stage` is captured here rather than
+    /// read inside the closure so the Continue action carries the stage as of
+    /// this render — which is what keeps the double-tap guard in
+    /// `advanceStage` meaningful now that the button is no longer rebuilt on
+    /// every step.
+    private var questionShell: some View {
+        let stage = viewModel.stage
+        return OnboardingQuizShell(
             stepNumber: stage.questionNumber ?? 1,
             totalSteps: totalSteps,
-            title: title,
-            choices: choices,
-            selectedID: viewModel.selectedID,
-            microInsight: microInsight,
-            onSelect: onSelect,
+            isContinueEnabled: viewModel.selectedID != nil,
+            contentOffset: edgeDragOffset,
             onContinue: { viewModel.advanceStage(from: stage, reduceMotion: reduceMotion) }
-        )
-        .transition(quizTransition)
+        ) {
+            questionContent
+                // The identity that makes the slot — and only the slot —
+                // transition when the stage changes.
+                .id(stage)
+                .transition(quizTransition)
+        }
+    }
+
+    @ViewBuilder
+    private var questionContent: some View {
+        switch viewModel.stage {
+        case .shifts:
+            OnboardingQuestionView(
+                title: "How many shifts do you work in a typical week?",
+                choices: ShiftLoad.allCases.map { OnboardingQuizChoice(id: $0.rawValue, label: $0.displayName) },
+                selectedID: viewModel.shiftLoad?.rawValue,
+                microInsight: viewModel.shiftLoad?.microInsight,
+                onSelect: { viewModel.shiftLoad = ShiftLoad(rawValue: $0) }
+            )
+
+        case .tips:
+            OnboardingQuestionView(
+                title: "On a normal shift, what do you walk out with?",
+                choices: TipsPerShift.allCases.map { OnboardingQuizChoice(id: $0.rawValue, label: $0.displayName) },
+                selectedID: viewModel.tipsPerShift?.rawValue,
+                microInsight: viewModel.tipsPerShift?.microInsight,
+                onSelect: { viewModel.tipsPerShift = TipsPerShift(rawValue: $0) }
+            )
+
+        case .cash:
+            OnboardingQuestionView(
+                title: "How much of that is cash?",
+                choices: CashShare.allCases.map { OnboardingQuizChoice(id: $0.rawValue, label: $0.displayName) },
+                selectedID: viewModel.cashShare?.rawValue,
+                microInsight: viewModel.cashShare?.microInsight,
+                onSelect: { viewModel.cashShare = CashShare(rawValue: $0) }
+            )
+
+        case .tracking:
+            OnboardingQuestionView(
+                title: "How do you keep track of it now?",
+                choices: TipTrackingMethod.allCases.map { OnboardingQuizChoice(id: $0.rawValue, label: $0.displayName) },
+                selectedID: viewModel.trackingMethod?.rawValue,
+                microInsight: viewModel.trackingMethod?.microInsight,
+                onSelect: { viewModel.trackingMethod = TipTrackingMethod(rawValue: $0) }
+            )
+
+        case .goal:
+            OnboardingQuestionView(
+                title: "What do you want Payday to tell you?",
+                choices: PaydayGoal.allCases.map { OnboardingQuizChoice(id: $0.rawValue, label: $0.displayName) },
+                selectedID: viewModel.goal?.rawValue,
+                microInsight: nil,
+                onSelect: { viewModel.goal = PaydayGoal(rawValue: $0) }
+            )
+
+        case .frequency:
+            OnboardingQuestionView(
+                title: "How often do you get paid?",
+                choices: PayFrequency.allCases.map {
+                    OnboardingQuizChoice(id: $0.rawValue, label: $0.displayName, subtitle: $0.onboardingSubtitle)
+                },
+                selectedID: viewModel.payFrequency?.rawValue,
+                microInsight: nil,
+                onSelect: { viewModel.payFrequency = PayFrequency(rawValue: $0) }
+            )
+
+        default:
+            EmptyView()
+        }
     }
 
     // MARK: - Edge Swipe Back
@@ -182,7 +205,11 @@ struct OnboardingFlowView: View {
                     return
                 }
                 let shouldGoBack = gesture.translation.width > 60 || gesture.velocity.width > 500
-                withAnimation(reduceMotion ? nil : PaydayAnimation.paperSpring) {
+                // Committing travels, so it uses the panel curve. A cancelled
+                // drag is the system answering the finger, and Emil's rule for
+                // that is simple: release is always snappy.
+                let release = shouldGoBack ? PaydayAnimation.stepSlide : PaydayAnimation.paperSpring
+                withAnimation(reduceMotion ? nil : release) {
                     edgeDragOffset = 0
                     if shouldGoBack {
                         isNavigatingBack = true
