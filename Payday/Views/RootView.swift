@@ -12,52 +12,29 @@ struct RootView: View {
     @Query private var allEntries: [TipEntry]
     @Query private var paycheckRecords: [PaycheckRecord]
 
-    /// The intro is a first-run experience, and "first run" has to mean more
-    /// than an unset flag. Anyone who already has a pay schedule on this
-    /// device is by definition not new — without that second condition, every
-    /// existing installation would be handed a welcome screen on the update
-    /// that introduces this flow.
-    private var shouldShowIntro: Bool {
-        guard !onboardingStore.hasFinishedIntro else { return false }
-        guard scheduleStore.schedule == nil else { return false }
-        #if DEBUG || targetEnvironment(simulator)
-        // The one -Debug flag that WANTS the intro: it opens a named stage of
-        // it (see PaydayOnboardingViewModel.applyDebugStageIfRequested).
-        if ProcessInfo.processInfo.arguments.contains("-DebugOnboardingStage") { return true }
-        // Screenshot and QA launches (-Seed*, -UITestOffline, -Debug*) all want
-        // the real app, and the seeders themselves run inside PaydayCloudGate
-        // — which now sits BEHIND this branch, so an intro here would stall
-        // them on the welcome screen forever.
-        if ProcessInfo.processInfo.arguments.contains(where: {
-            $0.hasPrefix("-Seed") || $0.hasPrefix("-Debug") || $0 == "-UITestOffline"
-        }) {
-            return false
-        }
-        #endif
-        return true
-    }
-
     var body: some View {
         Group {
             if !hasEvaluatedInitialLock {
                 PaydayColor.background.ignoresSafeArea()
-            } else if lockController.isLocked {
-                LockGateView(lockController: lockController)
-            } else if shouldShowIntro {
-                // Deliberately AHEAD of PaydayCloudGate: the gate's job is to
-                // demand a Sign in with Apple, and demanding one before a
-                // stranger has seen a single number is the worst possible
-                // first screen. Show what the app does, then ask.
-                OnboardingFlowView(viewModel: onboardingViewModel) { chosenFrequency in
-                    onboardingStore.quizPayFrequency = chosenFrequency
-                    onboardingStore.hasFinishedIntro = true
-                    // Answers are only needed to reach this point; drop them
-                    // so nothing leaks into a second run on the same device.
-                    onboardingViewModel.reset()
-                }
             } else {
-                PaydayCloudGate {
-                    if scheduleStore.schedule != nil {
+                // Two questions, in this order, and nothing else:
+                //
+                //   1. Signed in?  No  -> the welcome flow, ending at sign-in.
+                //   2. Unlocked?   No  -> the lock screen.
+                //   Otherwise -> the app (or the pay-schedule step, once).
+                //
+                // The lock check used to sit OUT here, ahead of the gate, which
+                // meant a signed-out device with the lock enabled asked for
+                // Face ID and then showed a welcome screen — authentication to
+                // reach a marketing page. It is inside the signed-in branch
+                // now, because that is the only place there is anything to
+                // protect: the welcome flow shows no earnings, and reaching
+                // real data from it still requires the account holder's Apple
+                // ID, which is a stronger gate than the local one.
+                PaydayCloudGate(onboardingViewModel: onboardingViewModel) {
+                    if lockController.isLocked {
+                        LockGateView(lockController: lockController)
+                    } else if scheduleStore.schedule != nil {
                         MainTabView()
                     } else {
                         FirstRunSetupView()

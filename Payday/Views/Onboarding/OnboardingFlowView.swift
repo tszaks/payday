@@ -1,3 +1,4 @@
+import AuthenticationServices
 import SwiftUI
 
 /// Hosts the whole pre-account intro: welcome, six questions, the beat, the
@@ -5,8 +6,11 @@ import SwiftUI
 /// edge-swipe-back gesture so the screen follows the finger instead of only
 /// reacting on release.
 ///
-/// Sits ahead of `PaydayCloudGate` in `RootView`, so a new install sees what
-/// the app does before it is ever asked to sign in.
+/// Rendered by `PaydayCloudGate`'s signed-out branch, which makes this the
+/// app's ONE front door: not signed in means you see the welcome screen,
+/// whether it is a first launch or you just signed out. The flow ends at
+/// `.account`, which hosts the Sign in with Apple button itself, so there is
+/// no plainer sign-in screen to fall through to.
 ///
 /// The six questions share ONE `OnboardingQuizShell`. They are a single branch
 /// of the switch below, which is what keeps the shell's identity stable across
@@ -20,9 +24,17 @@ struct OnboardingFlowView: View {
     /// and @Observable already tracks the property reads in body.
     let viewModel: PaydayOnboardingViewModel
 
-    /// Called when the intro is done (finished or skipped). Hands the chosen
-    /// pay frequency forward so the setup screen never asks it twice.
-    var onFinish: (PayFrequency?) -> Void
+    /// True once this device has been through the quiz before, so a returning
+    /// person is offered sign-in first instead of six questions again.
+    let hasCompletedQuizBefore: Bool
+
+    /// Called when the quiz finishes, to hand the chosen pay frequency forward
+    /// so the setup screen never asks for it twice.
+    var onQuizCompleted: (PayFrequency?) -> Void
+
+    /// The Apple authorization result, handed to the gate to exchange for a
+    /// session. The flow stays on `.account` until that succeeds.
+    var onAuthorize: ((authorization: Result<ASAuthorization, Error>, nonce: String)) -> Void
 
     /// Live-tracks the edge-swipe-back gesture.
     @State private var edgeDragOffset: CGFloat = 0
@@ -46,11 +58,12 @@ struct OnboardingFlowView: View {
             switch viewModel.stage {
             case .welcome:
                 OnboardingWelcomeView(
+                    hasCompletedQuizBefore: hasCompletedQuizBefore,
                     onStart: { viewModel.advanceStage(from: .welcome, reduceMotion: reduceMotion) },
-                    // A returning install already has its answers in the cloud.
-                    // Skip straight to the sign-in gate rather than asking
-                    // someone to re-describe shifts the app can just restore.
-                    onReturning: { onFinish(nil) }
+                    // A returning install already has its answers in the
+                    // cloud. Jump to sign-in rather than asking someone to
+                    // re-describe shifts the app is about to restore anyway.
+                    onReturning: { viewModel.goToStage(.account, reduceMotion: reduceMotion) }
                 )
                 .transition(quizTransition)
 
@@ -73,9 +86,22 @@ struct OnboardingFlowView: View {
             case .reveal:
                 OnboardingRevealView(
                     diagnosis: viewModel.diagnosis,
-                    onContinue: { onFinish(viewModel.payFrequency) }
+                    onContinue: {
+                        // Persist the one answer a shipped feature reads before
+                        // moving on, because the flow may end here for a while:
+                        // .account waits on the person, not on a timer.
+                        onQuizCompleted(viewModel.payFrequency)
+                        viewModel.advanceStage(from: .reveal, reduceMotion: reduceMotion)
+                    }
                 )
                 .transition(.opacity)
+
+            case .account:
+                OnboardingAccountView(
+                    didCompleteQuiz: viewModel.shiftLoad != nil,
+                    onAuthorize: onAuthorize
+                )
+                .transition(quizTransition)
             }
         }
         // On a question the shell handles the drag itself, moving only the

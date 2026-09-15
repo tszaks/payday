@@ -418,9 +418,13 @@ struct PaydayCloudGate<Content: View>: View {
     @Environment(InsightsStore.self) private var insightsStore
     @Environment(UserPreferencesStore.self) private var preferencesStore
     @Environment(MoveLedgerStore.self) private var moveLedgerStore
+    @Environment(OnboardingStateStore.self) private var onboardingStore
     @Environment(\.modelContext) private var modelContext
     @Environment(\.scenePhase) private var scenePhase
     @State private var cloudState = PaydayCloudState()
+
+    /// Owned by RootView so answers survive the whole signed-out flow.
+    let onboardingViewModel: PaydayOnboardingViewModel
     @State private var pendingLocalSync: Task<Void, Never>?
     @ViewBuilder let content: () -> Content
 
@@ -430,9 +434,21 @@ struct PaydayCloudGate<Content: View>: View {
             case .loading:
                 CloudProgressView(title: "Opening…")
             case .signedOut:
-                PaydaySignInView { result in
-                    handleAppleAuthorization(result.authorization, nonce: result.nonce)
-                }
+                // The welcome screen IS the signed-out state. There used to be
+                // a separate, plainer PaydaySignInView here, which meant the
+                // app had two front doors and signing out landed on the worse
+                // one. The flow's own .account stage hosts the Apple button.
+                OnboardingFlowView(
+                    viewModel: onboardingViewModel,
+                    hasCompletedQuizBefore: onboardingStore.hasFinishedIntro,
+                    onQuizCompleted: { chosenFrequency in
+                        onboardingStore.quizPayFrequency = chosenFrequency
+                        onboardingStore.hasFinishedIntro = true
+                    },
+                    onAuthorize: { result in
+                        handleAppleAuthorization(result.authorization, nonce: result.nonce)
+                    }
+                )
             case .migrating:
                 CloudProgressView(title: "Syncing…")
             case .ready:
@@ -474,6 +490,12 @@ struct PaydayCloudGate<Content: View>: View {
                 preferencesStore: preferencesStore,
                 moveLedgerStore: moveLedgerStore
             )
+        }
+        .onChange(of: cloudState.phase) { _, newPhase in
+            // The quiz answers exist only to reach a session. Once there is
+            // one, drop them, so signing out later reopens a clean welcome
+            // rather than one pre-filled from a previous attempt.
+            if case .ready = newPhase { onboardingViewModel.reset() }
         }
         .onChange(of: scenePhase) { _, newPhase in
             // Background launches are precious battery/network time. Local
@@ -542,43 +564,6 @@ struct PaydayCloudGate<Content: View>: View {
     }
 }
 
-private struct PaydaySignInView: View {
-    @Environment(\.colorScheme) private var colorScheme
-    @State private var nonce = PaydayAppleNonce.make()
-    let completion: ((authorization: Result<ASAuthorization, Error>, nonce: String)) -> Void
-
-    var body: some View {
-        VStack(spacing: 24) {
-            Spacer()
-            Image("BrandMark")
-                .resizable()
-                .scaledToFit()
-                .frame(width: 72, height: 72)
-                .accessibilityHidden(true)
-            VStack(spacing: 8) {
-                Text("Sign in to Payday")
-                    .font(PaydayFont.title)
-                    .foregroundStyle(PaydayColor.textPrimary)
-                Text("Sync across devices.")
-                    .font(PaydayFont.body)
-                    .foregroundStyle(PaydayColor.textSecondary)
-                    .multilineTextAlignment(.center)
-            }
-            SignInWithAppleButton(.continue) { request in
-                nonce = PaydayAppleNonce.make()
-                request.requestedScopes = [.email, .fullName]
-                request.nonce = PaydayAppleNonce.sha256(nonce)
-            } onCompletion: { result in
-                completion((result, nonce))
-            }
-            .signInWithAppleButtonStyle(colorScheme == .dark ? .white : .black)
-            .frame(height: 50)
-            Spacer()
-        }
-        .padding(28)
-        .background(PaydayColor.background.ignoresSafeArea())
-    }
-}
 
 enum AppleIdentityProfile {
     static func newFirstName(
@@ -594,7 +579,8 @@ enum AppleIdentityProfile {
     }
 }
 
-private enum PaydayAppleNonce {
+/// Shared with OnboardingAccountView, which now hosts the button.
+enum PaydayAppleNonce {
     private static let characters = Array("0123456789ABCDEFGHIJKLMNOPQRSTUVXYZabcdefghijklmnopqrstuvwxyz-._")
 
     static func make(length: Int = 32) -> String {

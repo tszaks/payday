@@ -174,9 +174,10 @@ struct OnboardingStageTests {
         #expect(PaydayOnboardingStage.welcome.questionNumber == nil)
         #expect(PaydayOnboardingStage.analyzing.questionNumber == nil)
         #expect(PaydayOnboardingStage.reveal.questionNumber == nil)
+        #expect(PaydayOnboardingStage.account.questionNumber == nil)
     }
 
-    @Test("the stages advance welcome through reveal and stop there")
+    @Test("the stages advance welcome through sign-in and stop there")
     func stagesAdvanceToTheEnd() {
         var stage = PaydayOnboardingStage.welcome
         var visited = [stage]
@@ -185,7 +186,9 @@ struct OnboardingStageTests {
             visited.append(stage)
         }
         #expect(visited == PaydayOnboardingStage.allCases)
-        #expect(stage == .reveal)
+        // .account is the terminus: the flow ends by signing in, rather than
+        // handing off to a separate sign-in screen.
+        #expect(stage == .account)
     }
 
     @MainActor
@@ -236,6 +239,7 @@ struct OnboardingStageTests {
         #expect(PaydayOnboardingStage.welcome.isQuestion == false)
         #expect(PaydayOnboardingStage.analyzing.isQuestion == false)
         #expect(PaydayOnboardingStage.reveal.isQuestion == false)
+        #expect(PaydayOnboardingStage.account.isQuestion == false)
     }
 
     @MainActor
