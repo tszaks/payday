@@ -44,7 +44,7 @@ struct OnboardingAccountView: View {
                 .renderingMode(.template)
                 .resizable()
                 .aspectRatio(contentMode: .fit)
-                .frame(width: 52, height: 52)
+                .frame(width: 68, height: 68)
                 .foregroundStyle(PaydayColor.primary)
                 .accessibilityHidden(true)
                 .padding(.bottom, PaydaySpacing.xl)
@@ -62,12 +62,6 @@ struct OnboardingAccountView: View {
             }
 
             Spacer(minLength: PaydaySpacing.md)
-
-            Text("Payday only ever asks Apple for your name. Nothing is posted anywhere.")
-                .font(PaydayFont.footnote)
-                .foregroundStyle(PaydayColor.textSecondary)
-                .multilineTextAlignment(.center)
-                .padding(.bottom, PaydaySpacing.md)
         }
         .padding(.horizontal, PaydaySpacing.md)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -85,8 +79,9 @@ struct OnboardingAccountView: View {
             }
             .signInWithAppleButtonStyle(colorScheme == .dark ? .white : .black)
             .frame(height: 50)
+            .clipShape(Capsule())
             .padding(.horizontal, PaydaySpacing.md)
-            .padding(.bottom, PaydaySpacing.xs)
+            .padding(.bottom, PaydaySpacing.p40)
             .opacity(reduceMotion || hasAppeared ? 1 : 0)
             .animation(reduceMotion ? nil : PaydayAnimation.entrance.delay(0.08), value: hasAppeared)
         }
