@@ -287,6 +287,26 @@ enum PaydayAnimation {
     /// playful bounce: livelier than snappy (bounce 0.15), shy of the
     /// full .bouncy preset (0.3) so it never reads as cartoonish.
     static let drawerSpring: Animation = .spring(duration: 0.5, bounce: 0.24)
+
+    // MARK: - Onboarding Motion
+    // The intro is seen once per install, which is the one place a little
+    // delight is affordable. These three are its interaction classes.
+
+    /// A question panel sliding sideways. Deliberately NOT a spring: a page
+    /// travelling horizontally should not overshoot and rebound at the edge,
+    /// which is what every spring preset does. This is the iOS drawer curve
+    /// (Ionic's, by way of Emil Kowalski's animation guide) — immediate
+    /// departure, long graceful settle, zero bounce.
+    static let stepSlide: Animation = .timingCurve(0.32, 0.72, 0, 1, duration: 0.34)
+
+    /// The progress indicator morphing in place. Small enough that a hint of
+    /// bounce reads as alive rather than sloppy, unlike the panel above.
+    static let progressMorph: Animation = .spring(duration: 0.35, bounce: 0.18)
+
+    /// Content entering in place — a welcome element arriving, supporting copy
+    /// appearing under a choice, a control changing state. Entering, so a
+    /// strong ease-out, and short enough to feel instant.
+    static let entrance: Animation = .timingCurve(0.23, 1, 0.32, 1, duration: 0.26)
 }
 
 // MARK: - Haptic Feedback

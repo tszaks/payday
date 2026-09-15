@@ -47,17 +47,24 @@ final class PaydayOnboardingViewModel {
     // MARK: - Stage Navigation
 
     func goToStage(_ newStage: PaydayOnboardingStage, reduceMotion: Bool) {
-        withAnimation(reduceMotion ? nil : PaydayAnimation.paperSpring) {
+        withAnimation(reduceMotion ? nil : PaydayAnimation.stepSlide) {
             stage = newStage
         }
     }
 
-    /// Advance one stage. `expectedStage` is the stage the tapped screen
-    /// belongs to: a fast double-tap fires this twice, and the first call
-    /// already moved `stage` forward, so the second is rejected here instead of
-    /// skipping the next, unanswered question.
+    /// Advance one stage. `expectedStage` is the stage the tapped control
+    /// belonged to when it was rendered, so a fast double-tap whose first call
+    /// already moved `stage` forward is rejected instead of skipping ahead.
+    ///
+    /// The Continue button is now a single long-lived view inside
+    /// `OnboardingQuizShell` rather than one button per step, so that check
+    /// alone is no longer airtight — SwiftUI may hand the button a refreshed
+    /// closure between the two taps. The invariant is therefore enforced here
+    /// where it actually belongs: never leave a question with no answer.
     func advanceStage(from expectedStage: PaydayOnboardingStage, reduceMotion: Bool) {
-        guard stage == expectedStage, let next = stage.next else { return }
+        guard stage == expectedStage else { return }
+        guard !stage.isQuestion || selectedID != nil else { return }
+        guard let next = stage.next else { return }
         goToStage(next, reduceMotion: reduceMotion)
     }
 
@@ -86,12 +93,29 @@ final class PaydayOnboardingViewModel {
               let requested = PaydayOnboardingStage(rawValue: arguments[index + 1])
         else { return }
 
-        shiftLoad = .fiveSix
-        tipsPerShift = .hundredToTwo
-        cashShare = .half
-        trackingMethod = .head
-        goal = .checkAccuracy
-        payFrequency = .biweekly
+        // Fill only the answers that PRECEDE the requested stage, so the flow
+        // opens in the state it would genuinely be in at that point. Filling
+        // all of them would leave the requested question already answered,
+        // hiding the disabled-to-enabled Continue state — the one thing you
+        // most want to see when reviewing the step transition.
+        let questions = PaydayOnboardingStage.questionStages
+        let fillCount: Int
+        switch requested {
+        case .welcome: fillCount = 0
+        case .analyzing, .reveal: fillCount = questions.count
+        default: fillCount = questions.firstIndex(of: requested) ?? 0
+        }
+        for question in questions.prefix(fillCount) {
+            switch question {
+            case .shifts: shiftLoad = .fiveSix
+            case .tips: tipsPerShift = .hundredToTwo
+            case .cash: cashShare = .half
+            case .tracking: trackingMethod = .head
+            case .goal: goal = .checkAccuracy
+            case .frequency: payFrequency = .biweekly
+            default: break
+            }
+        }
         stage = requested
     }
 #endif

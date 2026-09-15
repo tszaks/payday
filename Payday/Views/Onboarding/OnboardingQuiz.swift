@@ -31,6 +31,9 @@ enum PaydayOnboardingStage: String, CaseIterable {
         PaydayOnboardingStage.questionStages.firstIndex(of: self).map { $0 + 1 }
     }
 
+    /// True for the six stages that render inside `OnboardingQuizShell`.
+    var isQuestion: Bool { questionNumber != nil }
+
     var next: PaydayOnboardingStage? {
         let all = PaydayOnboardingStage.allCases
         guard let i = all.firstIndex(of: self), i + 1 < all.count else { return nil }
