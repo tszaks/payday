@@ -1,0 +1,90 @@
+{
+  "id": "E1",
+  "description": "A 6h 23m shift (383 minutes) exports its hours literally: decimal hours \"6.3833\" and clock hours \"6:23\", never the quarter-hour-rounded \"6.5\". The same 383 minutes feed the wage math unrounded (1806c at 283c/h), and the export row carries the engine's components (non-wage 11500c, regular 1806c, overtime 0c, earned income 13306c, completeness complete).",
+  "kind": "export",
+  "policies": {
+    "rate": [
+      {
+        "effectiveFrom": "2026-09-28",
+        "hourlyRateCents": 283,
+        "provenance": "confirmed"
+      }
+    ],
+    "calendar": [
+      {
+        "effectiveFrom": "2026-09-28",
+        "workweekStartWeekday": 2,
+        "overtimeThresholdMinutes": 2400,
+        "overtimeMultiplierHundredths": 150,
+        "payrollTimeZone": "America/New_York"
+      }
+    ]
+  },
+  "schedule": {
+    "frequency": "biweekly",
+    "anchorPeriodEnd": "2026-10-04",
+    "firstWeekday": 2
+  },
+  "shifts": [
+    {
+      "id": "00000000-0000-0000-0000-000000000001",
+      "workDay": "2026-09-28",
+      "period": "dinner",
+      "minutesWorked": 383,
+      "voluntaryCashCents": 4000,
+      "voluntaryCreditCents": 9000,
+      "gratuityFeesCents": 0,
+      "tipOutCents": 1500
+    }
+  ],
+  "legacyEntries": [],
+  "paychecks": [],
+  "asOf": "2026-10-02",
+  "expected": {
+    "shiftID": "00000000-0000-0000-0000-000000000001",
+    "adapterRoundTrip": {
+      "legacyHoursWorkedDouble": 6.383333333333334,
+      "minutesWorked": 383
+    },
+    "minutesWorked": 383,
+    "hours": {
+      "decimalFourPlaces": "6.3833",
+      "clock": "6:23"
+    },
+    "csvRow": {
+      "locateColumnsBy": "header name, never index",
+      "decimalHoursCell": "6.3833",
+      "clockHoursCell": "6:23",
+      "nonWageEarningsCents": 11500,
+      "regularWagesCents": 1806,
+      "overtimeWagesCents": 0,
+      "earnedIncomeCents": 13306,
+      "completeness": "complete",
+      "payPeriod": {
+        "start": "2026-09-21",
+        "end": "2026-10-04"
+      },
+      "paycheckCell": null
+    },
+    "regularMinutes": 383,
+    "overtimeMinutes": 0,
+    "regularWagesCents": 1806,
+    "overtimeWagesCents": 0,
+    "nonWageEarningsCents": 11500,
+    "earnedIncomeCents": 13306,
+    "completeness": {
+      "state": "complete",
+      "totalShifts": 1,
+      "shiftsWithHours": 1,
+      "shiftsWageValued": 1,
+      "shiftsWageAssumed": 0
+    },
+    "wrongAnswers": {
+      "hoursQuarterRounded": "6.5",
+      "hoursOneDecimal": "6.4",
+      "hoursTwoDecimal": "6.38",
+      "regularWagesFromQuarterRoundedHours": 1840
+    }
+  },
+  "notes": "Spec row E1 (.pr1-spec.md): hours 383/60 -> CSV hours \"6.3833\" and \"6:23\"; never \"6.5\". Plan PR 1: 'E1 6h23m exports as 6.3833'. Plan PR 6, the layout this fixture is a contract for: 'CSV from CSVRows: exact decimal hours plus h:mm, Non-wage earnings, Regular wages, Overtime wages, Earned income, Completeness; ... Money formatting', so in the contract CSV BOTH hour strings are cells of the same row: one exact-decimal-hours cell (\"6.3833\") and one h:mm cell (\"6:23\"). Both derive from ShiftRecord.minutesWorked = 383 through the shared HoursFormatting (plan tree: Copy/HoursFormatting.swift), never from a quarter-rounded Double. ARITHMETIC. Adapter (plan Design 1): the legacy TipEntry.hoursWorked Double for 383 minutes is 383/60 = 6.383333333333334; Int((6.383333333333334 * 60).rounded()) = Int(383.0) = 383, lossless. Decimal form: 383/60 = 6.38333... -> four decimals half-up = \"6.3833\" (fifth decimal is 3, rounds down). Clock form: 383 div 60 = 6, 383 mod 60 = 23 -> \"6:23\". Wages in units of 1/6000 cent: regular = 283 * 383 * 100 = 10,838,900; roundCents(x) = (2x + 6000) / 12000 integer division = (21,677,800 + 6,000) / 12,000 = 1806 (exact 1806.4833..., half-up 1806). Mon 2026-09-28 is a Monday, so with workweekStartWeekday 2 the shift opens its own workweek and both policies (effectiveFrom 2026-09-28) sit on a boundary and cover the shift; cumulative 0 + 383 < 2400, regularMinutes = clamp(2400 - 0, 0, 383) = 383, overtimeMinutes = 0, overtime 0c; one-shift cumulative allocation = 1806 - 0 = 1806. nonWageEarnings (metric registry) = cash + credit + gratuityFees - tipOut = 4000 + 9000 + 0 - 1500 = 11500. earnedIncome = 11500 + 1806 + 0 = 13306. Rate provenance confirmed and effective on the shift day -> .valued(assumed: false), completeness .complete (1 shift, 1 with hours, 1 wage-valued, 0 assumed). asOf 2026-10-02 is after the shift; nothing clamped. Schedule biweekly anchored Sun 2026-10-04 with firstWeekday 2 (same as W2/Z1/C1) puts the shift in pay period Mon 2026-09-21 .. Sun 2026-10-04; no paycheck is recorded, so the paycheck cell is empty (null here). The schedule is present because today's exporter and the PR 6 CSV both emit a Period column from PayPeriodCalculator, so no row is producible without one. WRONG ANSWERS. Today's CSVExporter.trimmedHours (Payday/Utilities/CSVExporter.swift:83-87, inventory row CE-06 in docs/METRICS.md) computes String(format: \"%.2f\", (hours * 4).rounded() / 4) = (25.5333.rounded() = 26) / 4 = 6.50 -> trailing zeros trimmed -> \"6.5\". Also rejected: \"6.4\" (one decimal) and \"6.38\" (two decimals); the contract is literal minutes, four decimals. If the quarter-rounded 6.5 h (390 min) fed the wage math: 283 * 390 * 100 = 11,037,000 -> (22,074,000 + 6,000) / 12,000 = 1840 (exact 1839.5), 34c high; asserted wrong. WHAT THIS FIXTURE DOES NOT PIN. The plan fixes no column order and no header text for the PR 6 CSVRows layout, so expected.csvRow names cells by metric, and the test must locate columns by header name, never by index. Dollar cells (Non-wage earnings, Regular wages, Overtime wages, Earned income) are asserted by the cents they parse back to, not by string, because the plan says only 'Money formatting' and today's Money.string(fromCents:) (Payday/Utilities/Money.swift:4-7) renders \"$18.06\" with a currency symbol while today's CSVExporter.dollars renders \"18.06\"; the fixture takes no side, so 1806 cents is the assertion. The Completeness cell is asserted as the state 'complete', not as a rendered string. The Period cell is asserted as the pay period 2026-09-21 .. 2026-10-04, not as a rendered string. TODAY'S LAYOUT, FOR ORIENTATION ONLY (not an assertion): CSVExporter.header is Date,Shift,Cash,Credit,Gratuity-Fees,Tip-Out,Net,Hours,Start,End,Sales,Servers,Double,Note,Period,Paycheck, so today Hours is 0-based column 7 (1-based column 8, the numbering docs/METRICS.md CE-06 uses), there is exactly one hours column and no h:mm column, the non-wage figure is labelled Net (CE-05, dollars(11500) = \"115.00\"), and no wage column exists. Against today's exporter this fixture fails on the hours cell (\"6.5\"), lacks the clock cell, and lacks every wage column; PR 6 makes it pass. REVIEW HISTORY (2026-09-17). Three reviewers refuted the previous revision. Accepted: (a) csvHoursColumnIndex 7 / csvHoursHeader 'Hours' / csvNetDollars pinned today's layout, which PR 6 replaces without fixing an order, so they are removed from expected and kept here as description; (b) schedule was null although the export row needs a Period, so the sibling biweekly schedule is added; (c) two csv-prefixed hour strings with one column index were readable two ways, so each string is now its own named cell. Rejected: reviewers 2 and 3 proposed that \"6:23\" is NOT a CSV cell and belongs only to a non-CSV formatter. That contradicts plan PR 6, which puts 'exact decimal hours plus h:mm' in the CSV itself; the clock form is a CSV cell in the contract layout, and only today's exporter lacks it. Also corrected: the trimmedHours citation is :83-87 (declaration through return), not a single line."
+}

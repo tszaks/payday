@@ -1,0 +1,88 @@
+{
+  "id": "H1",
+  "description": "Hourly rate excludes a shift with tips but no hours from BOTH sides of the division: shift A 10000c over 300 min plus shift B 10000c with nil hours, no rate policy, yields 2000c/h (not 4000) with coverage 1 of 2.",
+  "kind": "query",
+  "policies": {
+    "rate": [],
+    "calendar": [
+      {
+        "effectiveFrom": "2026-09-28",
+        "workweekStartWeekday": 2,
+        "overtimeThresholdMinutes": 2400,
+        "overtimeMultiplierHundredths": 150,
+        "payrollTimeZone": "America/New_York"
+      }
+    ]
+  },
+  "schedule": null,
+  "shifts": [
+    {
+      "id": "00000000-0000-0000-0000-000000000001",
+      "workDay": "2026-09-28",
+      "period": "dinner",
+      "minutesWorked": 300,
+      "voluntaryCashCents": 10000,
+      "voluntaryCreditCents": 0,
+      "gratuityFeesCents": 0,
+      "tipOutCents": 0
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000002",
+      "workDay": "2026-09-29",
+      "period": "dinner",
+      "minutesWorked": null,
+      "voluntaryCashCents": 10000,
+      "voluntaryCreditCents": 0,
+      "gratuityFeesCents": 0,
+      "tipOutCents": 0
+    }
+  ],
+  "legacyEntries": [],
+  "paychecks": [],
+  "asOf": "2026-10-02",
+  "expected": {
+    "metric": "hourlyRate",
+    "range": { "start": "2026-09-28", "end": "2026-10-02" },
+    "shiftValuations": {
+      "00000000-0000-0000-0000-000000000001": {
+        "minutesWorked": 300,
+        "workweekStart": "2026-09-28",
+        "wage": "unavailable.rateNotSet",
+        "components": { "cash": 10000, "credit": 0, "gratuityFees": 0, "tipOut": 0, "regularWages": 0, "overtimeWages": 0 },
+        "earnedIncomeCents": 10000
+      },
+      "00000000-0000-0000-0000-000000000002": {
+        "minutesWorked": null,
+        "workweekStart": "2026-09-28",
+        "wage": "unavailable",
+        "components": { "cash": 10000, "credit": 0, "gratuityFees": 0, "tipOut": 0, "regularWages": 0, "overtimeWages": 0 },
+        "earnedIncomeCents": 10000
+      }
+    },
+    "knownComponents": { "cash": 20000, "credit": 0, "gratuityFees": 0, "tipOut": 0, "regularWages": 0, "overtimeWages": 0 },
+    "knownEarnedIncomeCents": 20000,
+    "coveredComponents": { "cash": 10000, "credit": 0, "gratuityFees": 0, "tipOut": 0, "regularWages": 0, "overtimeWages": 0 },
+    "coveredEarnedIncomeCents": 10000,
+    "minutes": 300,
+    "regularMinutes": 300,
+    "overtimeMinutes": 0,
+    "hourlyRateCents": 2000,
+    "coveredShifts": 1,
+    "totalShifts": 2,
+    "coverageSuffix": "1 of 2 shifts",
+    "completeness": {
+      "totalShifts": 2,
+      "shiftsWithHours": 1,
+      "shiftsWageValued": 0,
+      "shiftsWageAssumed": 0
+    },
+    "shiftIDs": [
+      "00000000-0000-0000-0000-000000000001",
+      "00000000-0000-0000-0000-000000000002"
+    ],
+    "wrongAnswers": {
+      "allIncomeOverCoveredMinutes": 4000
+    }
+  },
+  "notes": "Plan 'Metric registry' row hourlyRate: sum(earnedIncome over COVERED shifts) / sum(hours over COVERED shifts); nil without coverage; carries N of M. Plan Design 2 Queries: hourlyRateCents = coveredComponents.earnedIncomeCents * 60 / minutes, half-up, nil when minutes == 0; coveredComponents = sum over shifts WITH hours, knownComponents = sum over ALL shifts. No wage policy means regularWages = overtimeWages = 0 on every shift, so earnedIncome per shift = cash 10000 + credit 0 + gratuity 0 - tipOut 0 + 0 + 0 = 10000. Both shifts fall in the Mon-start workweek beginning 2026-09-28 (2026-09-28 is a Monday, 2026-09-29 a Tuesday; workweekStartWeekday 2). Arithmetic: covered set = {A} (only A has minutes). coveredEarnedIncome = 10000. minutes = 300. cumulative 300 <= threshold 2400 so regularMinutes 300, overtimeMinutes 0. hourlyRateCents = 10000 * 60 / 300 = 600000 / 300 = 2000 exactly (half-up (2*600000 + 300) / 600 = 1200300 / 600 = 2000 in integer division). Known set = {A, B}: knownEarnedIncome = 10000 + 10000 = 20000. Wrong answer 4000 = knownEarnedIncome 20000 * 60 / 300 = 1200000 / 300, i.e. putting B's tips in the numerator while B contributes no minutes to the denominator; the plan's PR 1 list names H1 as 'shift with tips and no hours excluded from both sides of $/hr'. Coverage reads 1 of 2 (coveredShifts / totalShifts); coverageSuffix pins the registry's 'N of M shifts' clause verbatim. asOf 2026-10-02 (a Friday) is after both work days so nothing is clamped out. Shift A: rates is empty, so Design 1 step 1 gives .rateNotSet and its 300 minutes still count toward the threshold (step 4). Shift B: wage is .unavailable; B has BOTH no rate policy (step 1 -> .rateNotSet) and nil minutes (step 4 -> .hoursMissing), and the plan states no precedence between the two reasons, so this fixture asserts only that B is unvalued and uncovered (the bare 'unavailable' form N3 also uses). The .rateNotSet-vs-.hoursMissing precedence is pinned by the dedicated Design 1 tests ('nil rate -> .rateNotSet with minutes counted; missing hours -> .hoursMissing'), not here. Completeness: only the four counts are asserted (totalShifts 2, shiftsWithHours 1, shiftsWageValued 0, shiftsWageAssumed 0). completeness.state and wageFeatureEnabled are intentionally NOT asserted: the plan (Design 2) lists .off and .partial(missingHours:missingRate:) but never defines how wageFeatureEnabled is derived or whether a dataset with no rate policy is .off or .partial with missingRate > 0 (the .partial caption '(or no rate set when that is the cause)' supports the second reading), the spec's H1 row asks nothing about completeness, and sibling N1 (also rate: []) reads the same situation as .partial(missingHours: 1, missingRate: 0). C1 owns completeness state. Reviewer correction: two reviewers cited docs/METRICS.md as resolving this ('.off (wage feature disabled or no rate policy)' / 'wageFeatureEnabled = rates.isEmpty'); neither string appears in docs/METRICS.md in this worktree (grep for 'disabled', 'isEmpty', 'wageFeatureEnabled' returns nothing), so the derivation is undefined everywhere and the removal stands on the plan alone. The registry's 'Averaging $X/hr' dollar format is not asserted: the plan does not pin '$20.00' versus '$20' (the app's only $/hr renderer today is Money.wholeDollarString, Payday/Utilities/Money.swift:19, fractionLength(0), which yields '$20/hr'), so the label's money half is a presentation decision for the main session, and coveredShifts/totalShifts plus coverageSuffix already pin the coverage fact the spec requires. The registry's nil-without-coverage rule for minutes == 0 is a different input set (every shift without hours) and is not asserted by H1; wrongAnswers holds only values the engine must NOT produce."
+}
