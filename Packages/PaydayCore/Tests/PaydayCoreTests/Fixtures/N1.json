@@ -1,0 +1,120 @@
+{
+  "id": "N1",
+  "description": "Legacy TipEntry pair (cash 6000 + credit 4000) with tipOutCents 1000 duplicated on BOTH rows migrates to one ShiftRecord whose tipOut is 1000, so non-wage earnings are 9000, not 8000.",
+  "kind": "migration",
+  "policies": {
+    "rate": [
+      { "effectiveFrom": "2026-09-28", "hourlyRateCents": 283, "provenance": "confirmed" }
+    ],
+    "calendar": [
+      {
+        "effectiveFrom": "2026-09-28",
+        "workweekStartWeekday": 2,
+        "overtimeThresholdMinutes": 2400,
+        "overtimeMultiplierHundredths": 150,
+        "payrollTimeZone": "America/New_York"
+      }
+    ]
+  },
+  "schedule": null,
+  "shifts": [],
+  "legacyEntries": [
+    {
+      "id": "00000000-0000-0000-0000-000000000102",
+      "shiftID": "00000000-0000-0000-0000-000000000101",
+      "date": "2026-09-29T17:30:00-04:00",
+      "amountCents": 6000,
+      "kind": "cash",
+      "tipOutCents": 1000,
+      "hoursWorked": null,
+      "receiptMetricsJSON": null
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000103",
+      "shiftID": "00000000-0000-0000-0000-000000000101",
+      "date": "2026-09-29T17:30:00-04:00",
+      "amountCents": 4000,
+      "kind": "credit",
+      "tipOutCents": 1000,
+      "hoursWorked": null,
+      "receiptMetricsJSON": null
+    }
+  ],
+  "paychecks": [],
+  "asOf": "2026-10-02",
+  "deviceTimeZone": "America/New_York",
+  "expected": {
+    "shiftRecordCount": 1,
+    "shiftRecords": [
+      {
+        "id": "00000000-0000-0000-0000-000000000101",
+        "workDay": "2026-09-29",
+        "period": null,
+        "cashTipsCents": 6000,
+        "creditTipsCents": 4000,
+        "tipOutCents": 1000,
+        "gratuityFeesCents": 0,
+        "minutesWorked": null,
+        "legacyEntryIDs": [
+          "00000000-0000-0000-0000-000000000102",
+          "00000000-0000-0000-0000-000000000103"
+        ]
+      }
+    ],
+    "valuations": [
+      {
+        "shiftID": "00000000-0000-0000-0000-000000000101",
+        "workDay": "2026-09-29",
+        "workweekStart": "2026-09-28",
+        "minutesWorked": null,
+        "wage": "unavailable.hoursMissing",
+        "components": {
+          "cashCents": 6000,
+          "creditCents": 4000,
+          "gratuityFeesCents": 0,
+          "tipOutCents": 1000,
+          "regularWagesCents": 0,
+          "overtimeWagesCents": 0
+        }
+      }
+    ],
+    "voluntaryTipsCents": 10000,
+    "nonWageEarningsCents": 9000,
+    "wagesCents": 0,
+    "earnedIncomeCents": 9000,
+    "day": {
+      "2026-09-29": {
+        "voluntaryTipsCents": 10000,
+        "gratuityFeesCents": 0,
+        "tipOutCents": 1000,
+        "regularWagesCents": 0,
+        "overtimeWagesCents": 0,
+        "nonWageEarningsCents": 9000,
+        "earnedIncomeCents": 9000
+      }
+    },
+    "month": {
+      "2026-09": { "nonWageEarningsCents": 9000, "earnedIncomeCents": 9000 }
+    },
+    "completeness": {
+      "totalShifts": 1,
+      "shiftsWithHours": 0,
+      "shiftsWageValued": 0,
+      "shiftsWageAssumed": 0,
+      "wageFeatureEnabled": true,
+      "state": "partial",
+      "missingHours": 1,
+      "missingRate": 0
+    },
+    "idempotent": true,
+    "orderInvariant": true,
+    "wrongAnswers": {
+      "tipOutSubtractedPerRow_nonWageEarningsCents": 8000,
+      "tipOutSummedAcrossRows_tipOutCents": 2000,
+      "tipOutSummedAcrossRows_nonWageEarningsCents_collidesWithPerRow": 8000,
+      "tipOutIgnored_tipOutCents": 0,
+      "tipOutIgnored_nonWageEarningsCents": 10000
+    }
+  },
+  "notes": "Migration fixture for spec row N1 (.pr1-spec.md) and plan Design 0 'Migration (device, MigrationRunner version 3)': group TipEntry by shiftID ?? ShiftDays.deterministicShiftID, build ONE ShiftRecord per group using ShiftDetails.resolve + TipBreakdown.total, record legacyEntryIDs. GROUPING: both rows carry the non-nil shiftID ...0101, so ShiftDays.groupedByShift buckets them by that id and this fixture does NOT exercise deterministicShiftID or date bucketing at all (N3 covers that); only workDay derivation depends on the date. The ShiftRecord id equals the legacy shiftID group key by deliberate convention (the same rule N3 applies with deterministicShiftID): the id is derived from the legacy data, never minted, so two devices running the migration converge on the same record. TIP-OUT (the rule under test): ShiftDetails.resolve (Payday/Utilities/ShiftDetails.swift) reads credit?.tipOutCents ?? cash?.tipOutCents and NEVER sums across rows, and TipBreakdown.total adds details.tipOutCents once per shift, so tipOutCents = 1000 even though the value is stored on both rows (the duplicate on the cash row is the corrupted-secondary-row case ShiftDetails.write would normally clear). VOLUNTARY TIPS: receiptMetricsJSON is null on both rows, so TipBreakdown.total passes amountCents through unnormalized: cash 6000, credit 4000, gratuityFees 0 (no payload, so employeeGratuityFeesCents contributes 0). Metric registry: voluntaryTips = 6000 + 4000 = 10000; nonWageEarnings = cash + credit + gratuity - tipOut = 6000 + 4000 + 0 - 1000 = 9000; earnedIncome = 9000 + regular 0 + overtime 0 = 9000. WAGE: hoursWorked is nil on both rows, so ShiftDetails.resolve gives nil hours and minutesWorked is nil; Design 1 step 4: nil hours contribute 0 minutes and the valuation is .unavailable(.hoursMissing). A confirmed 283c rate policy effective 2026-09-28 is present ONLY so that nil hours is the single missing wage input and .hoursMissing is the only reason the plan can produce (Design 1 gives no precedence between step 1's .rateNotSet and step 4's .hoursMissing when both apply, so a no-rate version of this fixture was two-way readable; same pattern as N3). The rate policy changes no cents: regular = 283 * 0 * 100 = 0 units, overtime = 0 units, roundCents(0) = (0 + 6000) / 12000 = 0 for both streams, so the tip-out rule stays isolated. Calendar policy is Monday-start (weekday 2) effective Mon 2026-09-28 in America/New_York, the W2 week; 2026-09-29 is the Tuesday of that week, so workweekStart = 2026-09-28. DATES: TipEntry.date is a Foundation Date (Payday/Models/TipEntry.swift), so the legacy rows carry full offset timestamps, not date-only strings; a bare '2026-09-29' decoded by ISO8601DateFormatter's default GMT would be 2026-09-28 20:00 EDT and land the workDay on 09-28. 17:30 EDT = 21:30 UTC = 11:30 HST, so the civil day is 2026-09-29 in every zone the fixtures use (America/New_York, UTC, Pacific/Honolulu) and the workDay cannot be misread. deviceTimeZone is recorded as N3 does; the payroll zone on the calendar policy is what CivilDay uses. Day and month totals are the sum of the single shift's components (Design 1 step 6): 2026-09-29 and 2026-09 both read nonWage 9000 / earnedIncome 9000. asOf 2026-10-02 is after the work day, so nothing is clamped out (Design 2 asOf rule). COMPLETENESS (Design 2): 1 shift, 0 with hours, 0 wage-valued, 0 assumed; a rate policy exists so wageFeatureEnabled is true and the state is .partial(missingHours: 1, missingRate: 0) (contrast H1, which has no rate policy and reports .off). Idempotent on legacyEntryIDs (running the migration twice yields the same one record) and order-invariant (credit-then-cash input yields the identical record), per the PR 2 gate 'migration is idempotent and order-invariant on fixtures N1-N3'. WRONG ANSWERS, each key suffixed with the metric it contrasts: today's per-row TipEntry.netCents path gives (6000 - 1000) + (4000 - 1000) = 8000 nonWage, which is the 'not 8000' the spec names; summing tipOutCents across rows gives tipOut 2000 and nonWage 6000 + 4000 - 2000 = 8000, which COLLIDES with the per-row wrong answer, so the test must assert the tipOut component (1000), not only the total; ignoring tip-out gives tipOut 0 and nonWage 10000. VOCABULARY: shiftRecords[] uses Design 0 ShiftRecord field names (cashTipsCents / creditTipsCents), the same as N2 and N3; the wage is encoded in the dotted 'unavailable.hoursMissing' form used by W2, H1, N2 and C1 (N3's split wage / wageReason form is the outlier in the set and should be aligned to the dotted form, outside this fixture); the shiftRecordCount / shiftRecords block matches N3 (N2's migratedShiftCount / migratedShift should be aligned separately)."
+}

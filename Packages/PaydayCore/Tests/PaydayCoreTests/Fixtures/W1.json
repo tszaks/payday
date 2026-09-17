@@ -1,0 +1,104 @@
+{
+  "id": "W1",
+  "description": "Two shifts (255 min + 330 min) in one Monday-start workweek at 283c/h. Cumulative rounding per stream gives per-shift regular wages 1203 and 1556 and a week total of 2759, not the 2760 that per-shift rounding produces.",
+  "kind": "ledger",
+  "policies": {
+    "rate": [
+      {
+        "effectiveFrom": "2025-12-29",
+        "hourlyRateCents": 283,
+        "provenance": "confirmed"
+      }
+    ],
+    "calendar": [
+      {
+        "effectiveFrom": "2025-12-29",
+        "workweekStartWeekday": 2,
+        "overtimeThresholdMinutes": 2400,
+        "overtimeMultiplierHundredths": 150,
+        "payrollTimeZone": "America/New_York"
+      }
+    ]
+  },
+  "schedule": null,
+  "shifts": [
+    {
+      "id": "00000000-0000-0000-0000-000000000001",
+      "workDay": "2026-09-28",
+      "period": "dinner",
+      "minutesWorked": 255,
+      "voluntaryCashCents": 0,
+      "voluntaryCreditCents": 0,
+      "gratuityFeesCents": 0,
+      "tipOutCents": null
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000002",
+      "workDay": "2026-09-29",
+      "period": "dinner",
+      "minutesWorked": 330,
+      "voluntaryCashCents": 0,
+      "voluntaryCreditCents": 0,
+      "gratuityFeesCents": 0,
+      "tipOutCents": null
+    }
+  ],
+  "legacyEntries": [],
+  "paychecks": [],
+  "asOf": null,
+  "expected": {
+    "engineVersion": 1,
+    "workweekStart": "2026-09-28",
+    "perShift": [
+      {
+        "id": "00000000-0000-0000-0000-000000000001",
+        "workDay": "2026-09-28",
+        "minutesWorked": 255,
+        "regularMinutes": 255,
+        "overtimeMinutes": 0,
+        "exactRegularNumerator": 7216500,
+        "cumulativeRegularNumerator": 7216500,
+        "regularWagesCents": 1203,
+        "overtimeWagesCents": 0,
+        "wagesCents": 1203,
+        "nonWageEarningsCents": 0,
+        "earnedIncomeCents": 1203,
+        "wage": "valued",
+        "assumed": false
+      },
+      {
+        "id": "00000000-0000-0000-0000-000000000002",
+        "workDay": "2026-09-29",
+        "minutesWorked": 330,
+        "regularMinutes": 330,
+        "overtimeMinutes": 0,
+        "exactRegularNumerator": 9339000,
+        "cumulativeRegularNumerator": 16555500,
+        "regularWagesCents": 1556,
+        "overtimeWagesCents": 0,
+        "wagesCents": 1556,
+        "nonWageEarningsCents": 0,
+        "earnedIncomeCents": 1556,
+        "wage": "valued",
+        "assumed": false
+      }
+    ],
+    "week": {
+      "minutes": 585,
+      "regularMinutes": 585,
+      "overtimeMinutes": 0,
+      "regularWagesCents": 2759,
+      "overtimeWagesCents": 0,
+      "wagesCents": 2759,
+      "nonWageEarningsCents": 0,
+      "earnedIncomeCents": 2759,
+      "roundCentsOfExactSum": 2759
+    },
+    "completeness": "complete",
+    "wrongAnswers": {
+      "perShiftRoundingWeekTotal": 2760,
+      "perShiftRoundingShiftB": 1557
+    }
+  },
+  "notes": "Plan Design 1, Worked example A, and .pr1-spec.md row W1. Units are 1/6000 cent; regular numerator = rate * minutes * 100; roundCents(x) = (2x + 6000) / 12000 with integer division. Both shifts fall in the Monday-start workweek beginning Mon 2026-09-28 (Mon 09-28 and Tue 09-29), total 585 min < 2400 threshold, so every minute is regular and the overtime stream is empty. Shift A (255 min = 4.25h): 283 * 255 * 100 = 7216500 (= 1202.75c). Cumulative after A = 7216500; roundCents = (14433000 + 6000) / 12000 = 14439000 / 12000 = 1203 (1203.25 truncated). A = 1203 - 0 = 1203. Shift B (330 min = 5.5h): 283 * 330 * 100 = 9339000 (= 1556.50c). Cumulative after B = 7216500 + 9339000 = 16555500; roundCents = (33111000 + 6000) / 12000 = 33117000 / 12000 = 2759 (2759.75 truncated). B = 2759 - 1203 = 1556. Week = 1203 + 1556 = 2759 = roundCents(16555500), the exact sum 1202.75 + 1556.50 = 2759.25 rounded half-up. Each shift is within 1c of its naive rounding (1203 vs 1202.75; 1556 vs 1556.50). Wrong answers: today's per-shift path rounds B alone to 1557 (1556.50 half-up) and sums 1203 + 1557 = 2760; the plan says the golden fixture expects 2759 and roundsPerShiftNotPerTotal is superseded. Order within the week is workDay then period rank, so A (Mon) is allocated before B (Tue). Tips are all zero so earnedIncome == wages. Policies start Mon 2025-12-29 with confirmed provenance so no value is marked assumed and completeness is .complete."
+}

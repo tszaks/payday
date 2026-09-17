@@ -1,0 +1,99 @@
+{
+  "id": "M1",
+  "description": "Calendar chart point equals the day's earnedIncome for every W2 day. Uses the W2 inputs (Mon Sep 28 .. Fri Oct 2 2026, 48h at 283c, Monday-start workweek, 40h/1.5x). The chart may never compute its own number: each point is the sum of that day's ShiftValuation components, so the Thursday point carries its 849c overtime share and the Friday point is all overtime.",
+  "kind": "presentation",
+  "policies": {
+    "rate": [
+      { "effectiveFrom": "2025-12-29", "hourlyRateCents": 283, "provenance": "confirmed" }
+    ],
+    "calendar": [
+      {
+        "effectiveFrom": "2025-12-29",
+        "workweekStartWeekday": 2,
+        "overtimeThresholdMinutes": 2400,
+        "overtimeMultiplierHundredths": 150,
+        "payrollTimeZone": "America/New_York"
+      }
+    ]
+  },
+  "schedule": { "frequency": "biweekly", "anchorPeriodEnd": "2026-10-04", "firstWeekday": 2 },
+  "shifts": [
+    { "id": "00000000-0000-0000-0000-000000000001", "workDay": "2026-09-28", "period": "dinner", "minutesWorked": 615, "voluntaryCashCents": 0, "voluntaryCreditCents": 0, "gratuityFeesCents": 0, "tipOutCents": null },
+    { "id": "00000000-0000-0000-0000-000000000002", "workDay": "2026-09-29", "period": "dinner", "minutesWorked": 585, "voluntaryCashCents": 0, "voluntaryCreditCents": 0, "gratuityFeesCents": 0, "tipOutCents": null },
+    { "id": "00000000-0000-0000-0000-000000000003", "workDay": "2026-09-30", "period": "dinner", "minutesWorked": 630, "voluntaryCashCents": 0, "voluntaryCreditCents": 0, "gratuityFeesCents": 0, "tipOutCents": null },
+    { "id": "00000000-0000-0000-0000-000000000004", "workDay": "2026-10-01", "period": "dinner", "minutesWorked": 690, "voluntaryCashCents": 0, "voluntaryCreditCents": 0, "gratuityFeesCents": 0, "tipOutCents": null },
+    { "id": "00000000-0000-0000-0000-000000000005", "workDay": "2026-10-02", "period": "dinner", "minutesWorked": 360, "voluntaryCashCents": 0, "voluntaryCreditCents": 0, "gratuityFeesCents": 0, "tipOutCents": null }
+  ],
+  "legacyEntries": [],
+  "paychecks": [],
+  "asOf": "2026-10-02",
+  "deviceTimeZone": "America/New_York",
+  "expected": {
+    "metric": "earnedIncome",
+    "completeness": "complete",
+    "chartPointEqualsDayEarnedIncome": true,
+    "days": [
+      {
+        "workDay": "2026-09-28",
+        "shiftIDs": ["00000000-0000-0000-0000-000000000001"],
+        "minutesWorked": 615,
+        "regularMinutes": 615,
+        "overtimeMinutes": 0,
+        "components": { "cash": 0, "credit": 0, "gratuityFees": 0, "tipOut": 0, "regularWages": 2901, "overtimeWages": 0 },
+        "earnedIncomeCents": 2901,
+        "chartPointCents": 2901
+      },
+      {
+        "workDay": "2026-09-29",
+        "shiftIDs": ["00000000-0000-0000-0000-000000000002"],
+        "minutesWorked": 585,
+        "regularMinutes": 585,
+        "overtimeMinutes": 0,
+        "components": { "cash": 0, "credit": 0, "gratuityFees": 0, "tipOut": 0, "regularWages": 2759, "overtimeWages": 0 },
+        "earnedIncomeCents": 2759,
+        "chartPointCents": 2759
+      },
+      {
+        "workDay": "2026-09-30",
+        "shiftIDs": ["00000000-0000-0000-0000-000000000003"],
+        "minutesWorked": 630,
+        "regularMinutes": 630,
+        "overtimeMinutes": 0,
+        "components": { "cash": 0, "credit": 0, "gratuityFees": 0, "tipOut": 0, "regularWages": 2972, "overtimeWages": 0 },
+        "earnedIncomeCents": 2972,
+        "chartPointCents": 2972
+      },
+      {
+        "workDay": "2026-10-01",
+        "shiftIDs": ["00000000-0000-0000-0000-000000000004"],
+        "minutesWorked": 690,
+        "regularMinutes": 570,
+        "overtimeMinutes": 120,
+        "components": { "cash": 0, "credit": 0, "gratuityFees": 0, "tipOut": 0, "regularWages": 2688, "overtimeWages": 849 },
+        "earnedIncomeCents": 3537,
+        "chartPointCents": 3537
+      },
+      {
+        "workDay": "2026-10-02",
+        "shiftIDs": ["00000000-0000-0000-0000-000000000005"],
+        "minutesWorked": 360,
+        "regularMinutes": 0,
+        "overtimeMinutes": 360,
+        "components": { "cash": 0, "credit": 0, "gratuityFees": 0, "tipOut": 0, "regularWages": 0, "overtimeWages": 2547 },
+        "earnedIncomeCents": 2547,
+        "chartPointCents": 2547
+      }
+    ],
+    "monthTotalsCents": { "2026-09": 8632, "2026-10": 6084 },
+    "monthTotalEqualsSumOfChartPoints": true,
+    "rangeTotalCents": 14716,
+    "wrongAnswers": {
+      "chartPointThuMonthFirstNoOvertime": 3255,
+      "chartPointFriMonthFirstNoOvertime": 1698,
+      "chartPointThuPerShiftRounding": 3538,
+      "octoberMonthFirst": 4953,
+      "rangeTotalMonthFirst": 13585
+    }
+  },
+  "notes": "Plan Design 1 worked example B, restated per day so the Calendar chart can be checked against it (plan 'Metric registry' + 'PR 1': M1 chart point == day total; Design 2 'Facts structs -> thin adapters': Calendar dailyTotals move to the engine). Arithmetic in 1/6000 cent, rate 283c, threshold 2400 min, multiplier 150, roundCents(x) = (2x+6000)/12000 integer division, threshold split chronologically, cumulative rounding per stream. REGULAR stream: Mon 615m -> cum 615, exact 283*615*100 = 17,404,500, roundCents = (34,809,000+6,000)/12,000 = 2901 (2901.25 truncates) -> Mon 2901. Tue 585m -> cum 1200, exact 33,960,000, roundCents = 67,926,000/12,000 = 5660 (5660.5 truncates) -> Tue 5660-2901 = 2759. Wed 630m -> cum 1830, exact 51,789,000, roundCents = 103,584,000/12,000 = 8632 -> Wed 8632-5660 = 2972. Thu 690m -> regular = clamp(2400-1830, 0, 690) = 570, cum 2400, exact 67,920,000, roundCents = 135,846,000/12,000 = 11320 (11320.5 truncates) -> Thu regular 11320-8632 = 2688. Fri 360m -> regular 0 (threshold already reached), cum stays 2400 -> Fri regular 0. Regular sum 2901+2759+2972+2688+0 = 11320 = 40h*283c. OVERTIME stream: Thu 120m -> exact 283*120*150 = 5,094,000, roundCents = 10,194,000/12,000 = 849 -> Thu OT 849. Fri 360m -> cum 480, exact 283*480*150 = 20,376,000, roundCents = 40,758,000/12,000 = 3396 (3396.5 truncates) -> Fri OT 3396-849 = 2547. OT sum 3396 = 8h*424.5c. DAY earnedIncome = cash+credit+gratuity-tipOut+regular+overtime with all tips 0: Mon 2901, Tue 2759, Wed 2972, Thu 2688+849 = 3537, Fri 0+2547 = 2547. Chart point for a day is by definition that same sum, so chartPointCents == earnedIncomeCents on every row. MONTHS are sums of per-shift components: Sep (Mon-Wed) 2901+2759+2972 = 8632; Oct (Thu-Fri) 3537+2547 = 6084; range 8632+6084 = 14716. WRONG ANSWERS: today's month-first path restarts the 40h threshold at Oct 1 so Thu is valued regular-only 283*690/60 = 3254.5 -> 3255 and Fri 283*360/60 = 1698; October 3255+1698 = 4953 and range 8632+4953 = 13585, losing $11.31 of overtime (plan example B). Per-shift naive rounding of Thu regular 283*570/60 = 2688.5 -> 2689 gives a Thu point of 2689+849 = 3538, one cent off the cumulative-rounded 2688+849 = 3537 (Design 1 step 5: within 1c but not equal). Tips are 0 by construction of W2, so the discriminating quantities here are the overtime share and the cumulative rounding; the tips leg of chart == day total is covered by the H1 and W1 shapes. asOf 2026-10-02 clamps nothing (all shifts on or before it). Policy effectiveFrom 2025-12-29 is a Monday, satisfying the workweek-start rule for the calendar policy. deviceTimeZone equals the policy zone here; T1 covers the Honolulu case."
+}

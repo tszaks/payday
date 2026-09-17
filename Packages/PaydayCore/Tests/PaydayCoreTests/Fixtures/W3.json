@@ -1,0 +1,102 @@
+{
+  "id": "W3",
+  "description": "W2's 48-hour Mon-start boundary week (Mon 2026-09-28 .. Fri 2026-10-02, rate 283c, 40h/1.5x) with exactly one input changed: the calendar-grid PaySchedule.firstWeekday flips from Monday (2) to Sunday (1) while PayrollCalendarPolicy.workweekStartWeekday stays Monday (2). Policies, shifts, paychecks, asOf and schedule.anchorPeriodEnd are byte-identical to W2.json. The ShiftValuation array CompensationLedger.value produces for W3 must equal W2's as Swift values, and every cents/minutes key below that also exists in W2.expected carries W2's value. firstWeekday is grid-only and owns nothing about overtime.",
+  "kind": "ledger",
+  "policies": {
+    "rate": [
+      { "effectiveFrom": "2025-12-29", "hourlyRateCents": 283, "provenance": "confirmed" }
+    ],
+    "calendar": [
+      {
+        "effectiveFrom": "2025-12-29",
+        "workweekStartWeekday": 2,
+        "overtimeThresholdMinutes": 2400,
+        "overtimeMultiplierHundredths": 150,
+        "payrollTimeZone": "America/New_York"
+      }
+    ]
+  },
+  "schedule": { "frequency": "biweekly", "anchorPeriodEnd": "2026-10-04", "firstWeekday": 1 },
+  "shifts": [
+    { "id": "00000000-0000-0000-0000-000000000001", "workDay": "2026-09-28", "period": "dinner", "minutesWorked": 615, "voluntaryCashCents": 0, "voluntaryCreditCents": 0, "gratuityFeesCents": 0, "tipOutCents": null },
+    { "id": "00000000-0000-0000-0000-000000000002", "workDay": "2026-09-29", "period": "dinner", "minutesWorked": 585, "voluntaryCashCents": 0, "voluntaryCreditCents": 0, "gratuityFeesCents": 0, "tipOutCents": null },
+    { "id": "00000000-0000-0000-0000-000000000003", "workDay": "2026-09-30", "period": "dinner", "minutesWorked": 630, "voluntaryCashCents": 0, "voluntaryCreditCents": 0, "gratuityFeesCents": 0, "tipOutCents": null },
+    { "id": "00000000-0000-0000-0000-000000000004", "workDay": "2026-10-01", "period": "dinner", "minutesWorked": 690, "voluntaryCashCents": 0, "voluntaryCreditCents": 0, "gratuityFeesCents": 0, "tipOutCents": null },
+    { "id": "00000000-0000-0000-0000-000000000005", "workDay": "2026-10-02", "period": "dinner", "minutesWorked": 360, "voluntaryCashCents": 0, "voluntaryCreditCents": 0, "gratuityFeesCents": 0, "tipOutCents": null }
+  ],
+  "legacyEntries": [],
+  "paychecks": [],
+  "asOf": "2026-10-02",
+  "expected": {
+    "identicalToFixture": "W2",
+    "identityScope": {
+      "ledgerOutput": "CompensationLedger.value(shifts, rates, calendars) for W3 must equal the same call for W2 field-for-field as Swift values: id, workDay, ratePolicyID, calendarPolicyID, workweekStart, minutesWorked, regularMinutes, overtimeMinutes, wage, and every EarningsComponents field. Because policies are byte-identical to W2, any content-derived policy IDs are equal too.",
+      "expectedBlock": "Every key under expected.workweekStart, expected.perShift, expected.week, expected.months, expected.monthsSumEarnedIncomeCents and expected.wrongAnswers that also exists in W2.expected must carry W2's value; W3 adds keys (identityScope, inputDifferencesFromW2, manifest, scheduleFirstWeekday, workweekStartWeekdayUsed, perShift[*].workweekStart, payPeriod, wrongAnswers.workweekStartIfGridFirstWeekdayDroveBucketing) and removes none. The expected blocks are not compared as whole JSON objects.",
+      "manifest": "InputManifest.shiftsDigest, paychecksDigest and policiesDigest must equal W2's; scheduleDigest and digest must differ from W2's."
+    },
+    "inputDifferencesFromW2": [
+      { "path": "schedule.firstWeekday", "w2": 2, "w3": 1 }
+    ],
+    "manifest": {
+      "shiftsDigestEqualsW2": true,
+      "paychecksDigestEqualsW2": true,
+      "policiesDigestEqualsW2": true,
+      "scheduleDigestEqualsW2": false,
+      "digestEqualsW2": false
+    },
+    "scheduleFirstWeekday": 1,
+    "workweekStartWeekdayUsed": 2,
+    "workweekStart": "2026-09-28",
+    "perShift": [
+      { "id": "00000000-0000-0000-0000-000000000001", "workDay": "2026-09-28", "workweekStart": "2026-09-28", "minutesWorked": 615, "regularMinutes": 615, "overtimeMinutes": 0,   "regularWagesCents": 2901, "overtimeWagesCents": 0,    "wagesCents": 2901, "nonWageEarningsCents": 0, "earnedIncomeCents": 2901 },
+      { "id": "00000000-0000-0000-0000-000000000002", "workDay": "2026-09-29", "workweekStart": "2026-09-28", "minutesWorked": 585, "regularMinutes": 585, "overtimeMinutes": 0,   "regularWagesCents": 2759, "overtimeWagesCents": 0,    "wagesCents": 2759, "nonWageEarningsCents": 0, "earnedIncomeCents": 2759 },
+      { "id": "00000000-0000-0000-0000-000000000003", "workDay": "2026-09-30", "workweekStart": "2026-09-28", "minutesWorked": 630, "regularMinutes": 630, "overtimeMinutes": 0,   "regularWagesCents": 2972, "overtimeWagesCents": 0,    "wagesCents": 2972, "nonWageEarningsCents": 0, "earnedIncomeCents": 2972 },
+      { "id": "00000000-0000-0000-0000-000000000004", "workDay": "2026-10-01", "workweekStart": "2026-09-28", "minutesWorked": 690, "regularMinutes": 570, "overtimeMinutes": 120, "regularWagesCents": 2688, "overtimeWagesCents": 849,  "wagesCents": 3537, "nonWageEarningsCents": 0, "earnedIncomeCents": 3537 },
+      { "id": "00000000-0000-0000-0000-000000000005", "workDay": "2026-10-02", "workweekStart": "2026-09-28", "minutesWorked": 360, "regularMinutes": 0,   "overtimeMinutes": 360, "regularWagesCents": 0,    "overtimeWagesCents": 2547, "wagesCents": 2547, "nonWageEarningsCents": 0, "earnedIncomeCents": 2547 }
+    ],
+    "week": {
+      "requestedRange": { "start": "2026-09-28", "end": "2026-10-04" },
+      "effectiveRange": { "start": "2026-09-28", "end": "2026-10-02" },
+      "minutes": 2880,
+      "regularMinutes": 2400,
+      "overtimeMinutes": 480,
+      "regularWagesCents": 11320,
+      "overtimeWagesCents": 3396,
+      "wagesCents": 14716,
+      "nonWageEarningsCents": 0,
+      "earnedIncomeCents": 14716,
+      "hourlyRateCents": 307,
+      "coveredShifts": 5,
+      "totalShifts": 5,
+      "completeness": "complete"
+    },
+    "months": {
+      "2026-09": { "shiftIDs": ["00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000002", "00000000-0000-0000-0000-000000000003"], "minutes": 1830, "regularMinutes": 1830, "overtimeMinutes": 0,   "regularWagesCents": 8632, "overtimeWagesCents": 0,    "earnedIncomeCents": 8632 },
+      "2026-10": { "shiftIDs": ["00000000-0000-0000-0000-000000000004", "00000000-0000-0000-0000-000000000005"], "minutes": 1050, "regularMinutes": 570, "overtimeMinutes": 480, "regularWagesCents": 2688, "overtimeWagesCents": 3396, "earnedIncomeCents": 6084 }
+    },
+    "monthsSumEarnedIncomeCents": 14716,
+    "payPeriod": {
+      "requestedRange": { "start": "2026-09-21", "end": "2026-10-04" },
+      "effectiveRange": { "start": "2026-09-21", "end": "2026-10-02" },
+      "boundarySource": "schedule.frequency + schedule.anchorPeriodEnd only; schedule.firstWeekday never moves a period boundary (PayPeriodCalculator.periodicBoundary steps 14 days from the anchor and does not read firstWeekday)",
+      "shiftIDs": ["00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000002", "00000000-0000-0000-0000-000000000003", "00000000-0000-0000-0000-000000000004", "00000000-0000-0000-0000-000000000005"],
+      "minutes": 2880,
+      "regularMinutes": 2400,
+      "overtimeMinutes": 480,
+      "regularWagesCents": 11320,
+      "overtimeWagesCents": 3396,
+      "earnedIncomeCents": 14716,
+      "hourlyRateCents": 307,
+      "coveredShifts": 5,
+      "totalShifts": 5,
+      "completeness": "complete"
+    },
+    "wrongAnswers": {
+      "monthFirstOctoberEarnedIncomeCents": 4953,
+      "monthFirstTotalEarnedIncomeCents": 13585,
+      "overtimeLostByMonthFirstCents": 1131,
+      "workweekStartIfGridFirstWeekdayDroveBucketing": "2026-09-27"
+    }
+  },
+  "notes": "Plan Design 1, 'Severing calendar from payroll': PaySchedule.firstWeekday becomes grid-only; PayrollCalendarPolicy.workweekStartWeekday owns overtime. Spec row W3: 'W2 inputs with calendar-grid firstWeekday flipped Sunday<->Monday, payroll workweekStart unchanged -> identical valuations'. INPUTS: this fixture is W2.json with schedule.firstWeekday = 1 (Sunday) instead of 2 (Monday). Policies (rate and calendar both effectiveFrom 2025-12-29, a Monday, so the calendar policy sits on a Monday workweek boundary and cannot trip the Design 1 boundary diagnostic), shifts, legacyEntries, paychecks, asOf and schedule.anchorPeriodEnd/frequency are byte-identical to W2.json; expected.inputDifferencesFromW2 lists the single difference. A previous revision moved both effectiveFrom dates to 2026-08-31; reviewers correctly refuted that as a second input change which would make InputManifest.policiesDigest and any content-derived ratePolicyID/calendarPolicyID differ from W2 for a reason unrelated to firstWeekday, so W3 could no longer prove that the schedule flip ALONE left valuations unchanged. IDENTITY SCOPE (expected.identityScope): 'identical' means (a) the ShiftValuation array from CompensationLedger.value is equal to W2's as Swift values, (b) every key W3 shares with W2.expected carries W2's value, and (c) manifest sub-digests shifts/paychecks/policies equal W2's while scheduleDigest and the top-level digest differ (Design 2: sub-digests exist 'so the UI and tests can say what changed'; here the only thing that changed is the schedule). W3's expected block is a superset of W2's with W2's exact key names, so the two blocks are directly diffable; W3 adds per-shift workweekStart, workweekStartWeekdayUsed, scheduleFirstWeekday, payPeriod and one wrongAnswers key. ARITHMETIC (Design 1, integer units of 1/6000 cent; regular = 283*minutes*100, overtime = 283*minutes*150, roundCents(x) = (2x+6000)/12000 integer division, chronological threshold split, cumulative rounding per stream): calendar policy for every shift = the 2025-12-29 policy (workweekStartWeekday 2); startOfWorkweek(startingOn: 2) for Mon Sep 28 .. Fri Oct 2 is 2026-09-28 for all five shifts, so they share one bucket. Threshold split against 2400 min: Mon 615 (cum 615, all regular), Tue 585 (cum 1200, regular), Wed 630 (cum 1830, regular), Thu 690 -> regular clamp(2400-1830, 0, 690) = 570, overtime 120 (cum 2520), Fri 360 -> regular clamp(2400-2520, 0, 360) = 0, overtime 360 (cum 2880). Regular stream exact numerators: 615*283*100 = 17404500, cum 17404500 -> (34809000+6000)/12000 = 2901; +585 -> 16555500, cum 33960000 -> 5660, shift = 5660-2901 = 2759; +630 -> 17829000, cum 51789000 -> 8632, shift = 8632-5660 = 2972; +570 -> 16131000, cum 67920000 -> 11320, shift = 11320-8632 = 2688; Fri +0, cum 67920000 -> 11320, shift 0. Regular total 11320 = 2400 min * 283c / 60 exactly. Overtime stream: Thu 120*283*150 = 5094000, cum 5094000 -> (10188000+6000)/12000 = 849; Fri 360*283*150 = 15282000, cum 20376000 -> (40752000+6000)/12000 = 3396, shift = 3396-849 = 2547. Overtime total 3396 = 480 min * 424.5c / 60 exactly. Per-shift wages 2901/2759/2972/2688/0 regular and 0/0/0/849/2547 overtime; nonWageEarnings 0 everywhere and earnedIncome equals wages because every tip component is 0 and tipOut is null (not recorded, 0 for arithmetic). Months are sums of per-shift components (Design 1 rule 6): September (Mon-Wed) 2901+2759+2972 = 8632 over 1830 min; October (Thu-Fri) 2688+849+0+2547 = 6084 over 1050 min (570 regular, 480 overtime); 8632+6084 = 14716 = roundCents(67920000) + roundCents(20376000). week.requestedRange is the Mon-start workweek Sep 28 .. Oct 4 and week.effectiveRange is that range clamped by asOf 2026-10-02 (Design 2: asOf clamps like StatsEngine.periodToDateTotal and applies to tips AND wages); all five shifts fall inside both. week.hourlyRateCents = 14716*60/2880 = 306.58 -> 307 half-up, coveredShifts 5 of totalShifts 5 (same keys and values as W2.expected.week). PAY PERIOD: biweekly anchored on Sun 2026-10-04; PayPeriodCalculator.periodicBoundary steps 14 days from the anchor without reading firstWeekday, so the period containing asOf is Mon 2026-09-21 .. Sun 2026-10-04 under both firstWeekday values, (payPeriod.requestedRange) and asOf 2026-10-02 clamps the end to 2026-10-02 (payPeriod.effectiveRange). All five shifts are inside, so the period total is the same 14716, hourlyRateCents 307 over 5 of 5 shifts, and the period is complete. WRONG ANSWERS: monthFirstOctoberEarnedIncomeCents 4953 and monthFirstTotalEarnedIncomeCents 13585 are today's month-first path (plan Worked example B, carried verbatim from W2 so the two blocks diff clean): valuing October alone resets the threshold, so Thu 690 + Fri 360 = 1050 min all regular -> 1050*283*100 = 29715000 -> roundCents 4953, and 8632+4953 = 13585; overtimeLostByMonthFirstCents = 6084-4953 = 1131. workweekStartIfGridFirstWeekdayDroveBucketing 2026-09-27 is the W3-specific leak: today's PeriodIncome.wages(entries:wageCentsPerHour:firstWeekday:) sets calendar.firstWeekday to the schedule's grid value and buckets hours by calendar.dateInterval(of: .weekOfYear), so under firstWeekday 1 it would put every shift in the Sunday-start week beginning 2026-09-27; a ledger that inherited that override would report ShiftValuation.workweekStart 2026-09-27 instead of 2026-09-28. For THESE dates the Sunday-start bucket (Sep 27 .. Oct 3) still contains the same five Mon-Fri shifts, so every cent would coincidentally match W2 and only workweekStart exposes the leak. That is why expected.perShift[*].workweekStart is asserted, not just cents, and why the identity check in identityScope.ledgerOutput includes workweekStart. The case where a wrong weekday moves money (Sat+Sun 25h each: Mon-start 10h OT vs Sun-start 0) is the CompensationLedgerTests case named in Design 1, not this fixture. Dates: 2025-12-29 Monday; 2026-09-21 Monday; 2026-09-27 Sunday; 2026-09-28 Monday; 2026-10-04 Sunday."
+}
