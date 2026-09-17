@@ -1,0 +1,126 @@
+{
+  "id": "W2",
+  "description": "48-hour Monday-start workweek straddling the September/October 2026 month boundary at $2.83/h with 40h/1.5x overtime. Overtime begins mid-Thursday (Oct 1) and Friday (Oct 2) is entirely overtime. Month totals must be sums of per-shift components; a month-first recomputation loses $11.31 of overtime.",
+  "kind": "ledger",
+  "policies": {
+    "rate": [
+      { "effectiveFrom": "2025-12-29", "hourlyRateCents": 283, "provenance": "confirmed" }
+    ],
+    "calendar": [
+      { "effectiveFrom": "2025-12-29", "workweekStartWeekday": 2, "overtimeThresholdMinutes": 2400, "overtimeMultiplierHundredths": 150, "payrollTimeZone": "America/New_York" }
+    ]
+  },
+  "schedule": {
+    "frequency": "biweekly",
+    "anchorPeriodEnd": "2026-10-04",
+    "firstWeekday": 2
+  },
+  "shifts": [
+    {
+      "id": "00000000-0000-0000-0000-000000000001",
+      "workDay": "2026-09-28",
+      "period": "dinner",
+      "minutesWorked": 615,
+      "voluntaryCashCents": 0,
+      "voluntaryCreditCents": 0,
+      "gratuityFeesCents": 0,
+      "tipOutCents": null
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000002",
+      "workDay": "2026-09-29",
+      "period": "dinner",
+      "minutesWorked": 585,
+      "voluntaryCashCents": 0,
+      "voluntaryCreditCents": 0,
+      "gratuityFeesCents": 0,
+      "tipOutCents": null
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000003",
+      "workDay": "2026-09-30",
+      "period": "dinner",
+      "minutesWorked": 630,
+      "voluntaryCashCents": 0,
+      "voluntaryCreditCents": 0,
+      "gratuityFeesCents": 0,
+      "tipOutCents": null
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000004",
+      "workDay": "2026-10-01",
+      "period": "dinner",
+      "minutesWorked": 690,
+      "voluntaryCashCents": 0,
+      "voluntaryCreditCents": 0,
+      "gratuityFeesCents": 0,
+      "tipOutCents": null
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000005",
+      "workDay": "2026-10-02",
+      "period": "dinner",
+      "minutesWorked": 360,
+      "voluntaryCashCents": 0,
+      "voluntaryCreditCents": 0,
+      "gratuityFeesCents": 0,
+      "tipOutCents": null
+    }
+  ],
+  "legacyEntries": [],
+  "paychecks": [],
+  "asOf": "2026-10-02",
+  "expected": {
+    "workweekStart": "2026-09-28",
+    "perShift": [
+      { "id": "00000000-0000-0000-0000-000000000001", "workDay": "2026-09-28", "minutesWorked": 615, "regularMinutes": 615, "overtimeMinutes": 0, "regularWagesCents": 2901, "overtimeWagesCents": 0, "wagesCents": 2901, "nonWageEarningsCents": 0, "earnedIncomeCents": 2901 },
+      { "id": "00000000-0000-0000-0000-000000000002", "workDay": "2026-09-29", "minutesWorked": 585, "regularMinutes": 585, "overtimeMinutes": 0, "regularWagesCents": 2759, "overtimeWagesCents": 0, "wagesCents": 2759, "nonWageEarningsCents": 0, "earnedIncomeCents": 2759 },
+      { "id": "00000000-0000-0000-0000-000000000003", "workDay": "2026-09-30", "minutesWorked": 630, "regularMinutes": 630, "overtimeMinutes": 0, "regularWagesCents": 2972, "overtimeWagesCents": 0, "wagesCents": 2972, "nonWageEarningsCents": 0, "earnedIncomeCents": 2972 },
+      { "id": "00000000-0000-0000-0000-000000000004", "workDay": "2026-10-01", "minutesWorked": 690, "regularMinutes": 570, "overtimeMinutes": 120, "regularWagesCents": 2688, "overtimeWagesCents": 849, "wagesCents": 3537, "nonWageEarningsCents": 0, "earnedIncomeCents": 3537 },
+      { "id": "00000000-0000-0000-0000-000000000005", "workDay": "2026-10-02", "minutesWorked": 360, "regularMinutes": 0, "overtimeMinutes": 360, "regularWagesCents": 0, "overtimeWagesCents": 2547, "wagesCents": 2547, "nonWageEarningsCents": 0, "earnedIncomeCents": 2547 }
+    ],
+    "week": {
+      "requestedRange": { "start": "2026-09-28", "end": "2026-10-04" },
+      "effectiveRange": { "start": "2026-09-28", "end": "2026-10-02" },
+      "minutes": 2880,
+      "regularMinutes": 2400,
+      "overtimeMinutes": 480,
+      "regularWagesCents": 11320,
+      "overtimeWagesCents": 3396,
+      "wagesCents": 14716,
+      "nonWageEarningsCents": 0,
+      "earnedIncomeCents": 14716,
+      "hourlyRateCents": 307,
+      "coveredShifts": 5,
+      "totalShifts": 5,
+      "completeness": "complete"
+    },
+    "months": {
+      "2026-09": {
+        "shiftIDs": ["00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000002", "00000000-0000-0000-0000-000000000003"],
+        "minutes": 1830,
+        "regularMinutes": 1830,
+        "overtimeMinutes": 0,
+        "regularWagesCents": 8632,
+        "overtimeWagesCents": 0,
+        "earnedIncomeCents": 8632
+      },
+      "2026-10": {
+        "shiftIDs": ["00000000-0000-0000-0000-000000000004", "00000000-0000-0000-0000-000000000005"],
+        "minutes": 1050,
+        "regularMinutes": 570,
+        "overtimeMinutes": 480,
+        "regularWagesCents": 2688,
+        "overtimeWagesCents": 3396,
+        "earnedIncomeCents": 6084
+      }
+    },
+    "monthsSumEarnedIncomeCents": 14716,
+    "wrongAnswers": {
+      "monthFirstOctoberEarnedIncomeCents": 4953,
+      "monthFirstTotalEarnedIncomeCents": 13585,
+      "overtimeLostByMonthFirstCents": 1131
+    }
+  },
+  "notes": "Plan Design 1 'Worked example B' and the PR 1 W2 row of .pr1-spec.md. Rate 283c, threshold 2400 min, multiplier 150 hundredths. Minutes: Mon 615, Tue 585, Wed 630, Thu 690, Fri 360 = 2880 (48h). Cumulative minutes before each shift: 0, 615, 1200, 1830, 2520. Chronological split (Design 1 step 4): regular = clamp(2400 - cumulative, 0, m) -> 615, 585, 630, 570, 0; overtime = 0, 0, 0, 120, 360. Exact numerators in 1/6000 cent: regular_i = 283*regMin*100; overtime_i = 283*otMin*150; roundCents(x) = (2x + 6000) / 12000 integer division. REGULAR stream cumulative: 17404500 -> 2901 (naive 2900.75, half-up 2901); 33960000 -> 5660.00 cumulative, allocated 5660-2901 = 2759 (naive 2759.25); 51789000 -> 8631.5 -> 8632, allocated 8632-5660 = 2972 (naive 2971.5); 67920000 -> 11320.0, allocated 11320-8632 = 2688 (naive 2688.5); Fri adds 0 -> 0. Sum 11320 = 40h * 283c exactly. OVERTIME stream cumulative: 5094000 -> 849.0 -> 849; 20376000 -> 3396.0, allocated 3396-849 = 2547. Sum 3396 = 8h * 424.5c. Note Mon rounds UP from .75 and Wed rounds up from .5 while Tue and Thu round DOWN because the allocation telescopes on the cumulative (Design 1 step 5): each shift is within 1c of its naive rounding and the week total equals roundCents(sum exact). Week = 11320 + 3396 = 14716. September (Sep 28-30) = 2901 + 2759 + 2972 = 8632. October (Oct 1-2) = (2688 + 849) + (0 + 2547) = 6084. 8632 + 6084 = 14716 = week (Design 1 step 6: every aggregate is a sum of per-shift components, and step 7: shifts are never split across the workweek). week.hourlyRateCents = coveredComponents.earnedIncomeCents 14716 * 60 / 2880 covered minutes = 306.58 -> 307 half-up (Design 2 EarningsResult hourlyRateCents; 5 of 5 shifts carry hours so coveredComponents == knownComponents and coveredShifts 5 of totalShifts 5). It is scoped to the week/range query, not top-level, so the test knows which result it belongs to. WRONG ANSWER (asserted as wrong): today's month-first path treats October in isolation, so Thu 690 + Fri 360 = 1050 min sit under the 2400 threshold and are all valued at regular: 283*1050*100 = 29715000 -> 4952.5 -> 4953. Wrong total 8632 + 4953 = 13585; the difference 6084 - 4953 = 1131c = $11.31 is the lost overtime premium (480 OT min at 1.5x = 3396c versus 2264c at regular, 1132c exact, 1131c after each path rounds its own cumulative), matching the plan. Tips are all zero so earnedIncome == wages. RANGES (fixed after review 2026-09-17, no number changed): week.requestedRange is the Design 1 step 2 workweek bucket Mon 2026-09-28..Sun 2026-10-04 and is never clamped; week.effectiveRange is what EarningsResult.range reports for range(requestedRange, asOf: 2026-10-02), because Design 2 clamps the range end to asOf exactly as StatsEngine.periodToDateTotal does (cutoff = min(startOfDay(asOf), period.end), inclusive), so end = 2026-10-02. The old single key 'range' = 2026-10-04 was ambiguous: a test asserting result.range after an asOf-clamped query would have failed while a test asserting the bucket span passed. Both ranges select the same five shifts, so every cent figure is identical under either. Vocabulary matches S2.json (requestedRange/effectiveRange). completeness stays the bare string 'complete' like W1/W3/T1; C1/H1 use the object form because they exercise partial/off states. Dates: 2025-12-29 is a Monday (policy effectiveFrom on a workweek boundary); 2026-09-28 Monday; 2026-10-04 Sunday closes the week and the biweekly anchor period."
+}

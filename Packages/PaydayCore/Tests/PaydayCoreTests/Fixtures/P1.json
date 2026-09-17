@@ -1,0 +1,70 @@
+{
+  "id": "P1",
+  "description": "Paycheck stub whose gross equation implies a 50c tips-line correction: observedPaidTips stays 10000 while proposedPaidTipsCorrection reports 10050 as a separate, never-auto-applied value.",
+  "kind": "paycheck",
+  "policies": {
+    "rate": [],
+    "calendar": [
+      {
+        "effectiveFrom": "2026-09-21",
+        "workweekStartWeekday": 2,
+        "overtimeThresholdMinutes": 2400,
+        "overtimeMultiplierHundredths": 150,
+        "payrollTimeZone": "America/New_York"
+      }
+    ]
+  },
+  "schedule": {
+    "frequency": "biweekly",
+    "anchorPeriodEnd": "2026-10-04",
+    "firstWeekday": 2
+  },
+  "shifts": [],
+  "legacyEntries": [],
+  "paychecks": [
+    {
+      "id": "00000000-0000-0000-0000-0000000000a1",
+      "periodStart": "2026-09-21",
+      "periodEnd": "2026-10-04",
+      "paidTipsCents": 10000,
+      "regularWagesCents": 5000,
+      "overtimeWagesCents": 0,
+      "gratuityCents": 0,
+      "grossPayCents": 15050,
+      "netPayCents": null,
+      "taxesCents": null,
+      "hourlyRateCents": null,
+      "owedTipsCents": null,
+      "note": null
+    }
+  ],
+  "asOf": "2026-10-04",
+  "expected": {
+    "paycheckID": "00000000-0000-0000-0000-0000000000a1",
+    "observedPaidTipsCents": 10000,
+    "observedGratuityCents": 0,
+    "observedRegularWagesCents": 5000,
+    "observedOvertimeWagesCents": 0,
+    "observedGrossPayCents": 15050,
+    "proposedPaidTipsCorrection": {
+      "present": true,
+      "inferredTipsCents": 10050,
+      "correctionCents": 50,
+      "label": "Looks like $100.50 (accept?)"
+    },
+    "observedPaidTipsCentsAfterProposal": 10000,
+    "storedPaidTipsCentsAfterEditorOpenAndSave": 10000,
+    "storedPaidTipsCentsAfterScanPrefill": 10000,
+    "exportedPaycheckDollars": "100.00",
+    "apiPaidTipsCents": 10000,
+    "reconciliationObservedTipsSideCents": 10000,
+    "wrongAnswers": {
+      "reconciledPaidTipsCentsAutoApplied": 10050,
+      "periodsListPaidTipEarningsCents": 10050,
+      "periodDetailCheckPaidCents": 10050,
+      "paycheckEditorPrefillAmountCents": 10050,
+      "paidTipsCentsWrittenBackOnEditorSave": 10050
+    }
+  },
+  "notes": "Plan, Metric registry: `observedPaidTips` is the stub field as stored; `proposedPaidTipsCorrection` is the +/-100c inferred correction, a SEPARATE value, never auto-applied; allowed labels \"Paid\" and \"Looks like $X (accept?)\". Spec row P1: paidTips 10000, regular 5000, OT 0, gratuity 0, gross 15050 -> observed 10000, proposed 10050, observed unchanged. Arithmetic (all cents, integers): inferred = gross - regular - (OT ?? 0) - (gratuity ?? 0) = 15050 - 5000 - 0 - 0 = 10050. correction = inferred - observed = 10050 - 10000 = +50. Proposal exists because regularWages and gross are both present, inferred 10050 >= 0, correction 50 != 0, and |50| <= 100. Observed side stays 10000 everywhere it is read, exported (CSV %.2f of 10000 -> \"100.00\"), synced, or compared; the proposal is only surfaced for the user to accept. Wrong answers: today's PaycheckRecord.reconciledPaidTipsCents / reconciledTipsCents (PaycheckRecord.swift L58-86) returns the inferred 10050 and every in-app reader substitutes it silently: PeriodsView.swift L290 (paidTipEarningsCents = 10050 + 0), PeriodDetailView.swift L406 ('check paid' 10050), PaycheckEntrySheet.swift L85 prefills amountCents with 10050 so an unedited Save writes 10050 back to paidTipsCents, and PaycheckOCR.swift L43 (correctingSmallGrossMismatch) rewrites scanned tips before they reach the sheet. These are METRICS.md inventory rows HP-03, HP-23, PE-01, PE-15, PE-16, PE-18, PE-19. Schedule and calendar policy are present only so the paycheck (periodEnd 2026-10-04, a Sunday) resolves to the biweekly period Mon 2026-09-21 .. Sun 2026-10-04 under the Monday-start grid; no shifts and no rate policy are included because this fixture asserts the observed/proposed split, not the expected side of reconciliationDelta. 2026-09-28 is a Monday (plan Worked example B), so 2026-10-04 is a Sunday and 2026-09-21 the previous Monday."
+}

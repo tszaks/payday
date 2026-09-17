@@ -1,0 +1,114 @@
+{
+  "id": "N3",
+  "description": "Legacy nil-shiftID cash 3000c + credit 5000c logged on the same civil day (Mon 2026-09-28, America/New_York) migrate into ONE ShiftRecord with cash 3000, credit 5000, no tip-out, no hours. Grouping key is ShiftDays.deterministicShiftID(for: date) in the payroll zone, so the late credit row (23:40 EDT, already 2026-09-29 in UTC) still joins the Monday shift.",
+  "kind": "migration",
+  "policies": {
+    "rate": [
+      { "effectiveFrom": "2026-09-28", "hourlyRateCents": 283, "provenance": "confirmed" }
+    ],
+    "calendar": [
+      {
+        "effectiveFrom": "2026-09-28",
+        "workweekStartWeekday": 2,
+        "overtimeThresholdMinutes": 2400,
+        "overtimeMultiplierHundredths": 150,
+        "payrollTimeZone": "America/New_York"
+      }
+    ]
+  },
+  "schedule": { "frequency": "biweekly", "anchorPeriodEnd": "2026-10-04", "firstWeekday": 2 },
+  "shifts": [],
+  "legacyEntries": [
+    {
+      "id": "00000000-0000-0000-0000-000000000031",
+      "shiftID": null,
+      "date": "2026-09-28T15:10:00-04:00",
+      "amountCents": 3000,
+      "kind": "cash",
+      "tipOutCents": null,
+      "hoursWorked": null,
+      "receiptMetricsJSON": null
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000032",
+      "shiftID": null,
+      "date": "2026-09-28T23:40:00-04:00",
+      "amountCents": 5000,
+      "kind": "credit",
+      "tipOutCents": null,
+      "hoursWorked": null,
+      "receiptMetricsJSON": null
+    }
+  ],
+  "paychecks": [],
+  "asOf": "2026-10-02",
+  "deviceTimeZone": "America/New_York",
+  "expected": {
+    "shiftRecordCount": 1,
+    "shiftRecords": [
+      {
+        "id": "5AAC5D00-0000-0000-B924-000000000000",
+        "workDay": "2026-09-28",
+        "period": null,
+        "cashTipsCents": 3000,
+        "creditTipsCents": 5000,
+        "tipOutCents": null,
+        "gratuityFeesCents": 0,
+        "minutesWorked": null,
+        "legacyEntryIDs": [
+          "00000000-0000-0000-0000-000000000031",
+          "00000000-0000-0000-0000-000000000032"
+        ]
+      }
+    ],
+    "valuations": [
+      {
+        "shiftID": "5AAC5D00-0000-0000-B924-000000000000",
+        "workDay": "2026-09-28",
+        "workweekStart": "2026-09-28",
+        "minutesWorked": null,
+        "wage": "unavailable.hoursMissing",
+        "components": {
+          "cashCents": 3000,
+          "creditCents": 5000,
+          "gratuityFeesCents": 0,
+          "tipOutCents": 0,
+          "regularWagesCents": 0,
+          "overtimeWagesCents": 0
+        }
+      }
+    ],
+    "day": {
+      "2026-09-28": {
+        "voluntaryTipsCents": 8000,
+        "gratuityFeesCents": 0,
+        "tipOutCents": 0,
+        "regularWagesCents": 0,
+        "overtimeWagesCents": 0,
+        "nonWageEarningsCents": 8000,
+        "earnedIncomeCents": 8000
+      }
+    },
+    "month": {
+      "2026-09": { "nonWageEarningsCents": 8000, "earnedIncomeCents": 8000 }
+    },
+    "completeness": {
+      "totalShifts": 1,
+      "shiftsWithHours": 0,
+      "shiftsWageValued": 0,
+      "shiftsWageAssumed": 0,
+      "state": "partial",
+      "missingHours": 1,
+      "missingRate": 0
+    },
+    "idempotent": true,
+    "orderInvariant": true,
+    "wrongAnswers": {
+      "shiftRecordCountIfRowsNotGrouped": 2,
+      "shiftRecordCountIfGroupedInUTC": 2,
+      "cashOnlyIfCreditRowDropped": 3000,
+      "creditOnlyIfCashRowDropped": 5000
+    }
+  },
+  "notes": "Plan Design 0 (Migration, MigrationRunner version 3): group TipEntry by `shiftID ?? ShiftDays.deterministicShiftID`, one ShiftRecord per group, record legacyEntryIDs. Both rows have shiftID null, so the key is deterministicShiftID(for: date) with Calendar.current in the payroll zone America/New_York. startOfDay(2026-09-28 15:10 EDT) = 2026-09-28T04:00:00Z; dayIndex = floor(seconds since 2001-01-01 / 86400) = 9401 = 0x24B9; bytes[0..3] = 5A AC 5D 00, bytes[8..15] = little-endian 9401 = B9 24 00 00 00 00 00 00; UUID = 5AAC5D00-0000-0000-B924-000000000000. The credit row at 23:40 EDT is 2026-09-29T03:40:00Z in UTC but startOfDay in New York is the same 2026-09-28T04:00:00Z, so it produces the same key: one group, two legacy ids. Row values: per TipBreakdown.total no receipt metrics on either row, so voluntary = amountCents as stored: cash 3000, credit 5000. ShiftDetails.resolve: hoursWorked = credit?.hoursWorked ?? cash?.hoursWorked = nil; tipOutCents = nil (nil, not 0, so 'no tip-out logged' stays distinguishable); receiptMetrics nil, so gratuityFeesCents = 0. Period: both shiftPeriod nil, so period null. Design 1 arithmetic: minutesWorked nil, so step 4 contributes 0 minutes and the wage is .unavailable(.hoursMissing) (a rate policy 283c and a calendar policy both cover 2026-09-28, so hoursMissing is the only reason; workweekStart under Monday-start weekday 2 is 2026-09-28 itself, weekday(2026-09-28) = 2). regular = 283*0*100 = 0 units, overtime = 0 units, roundCents(0) = (0+6000)/12000 = 0 cents for both streams. Metric registry: nonWageEarnings = cash + credit + gratuity - tipOut = 3000 + 5000 + 0 - 0 = 8000; earnedIncome = 8000 + regular 0 + overtime 0 = 8000; voluntaryTips = 8000. Day and month totals are sums of the single shift's components (Design 1 step 6), so 2026-09-28 and 2026-09 both read 8000/8000. Completeness (Design 2): 1 shift, 0 with hours, 0 wage-valued, state .partial(missingHours: 1, missingRate: 0). asOf 2026-10-02 is after the shift, so nothing is clamped out. Wrong answers: treating each nil-shiftID row as its own shift, or bucketing the 23:40 EDT row by UTC day, yields 2 records; dropping either row yields 3000 or 5000 alone. Idempotent on legacy_entry_ids (running the migration twice yields the same one record) and order-invariant (credit-then-cash input gives the identical record), per the PR 2 gate 'migration is idempotent and order-invariant on fixtures N1-N3'."
+}
