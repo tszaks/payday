@@ -1,7 +1,7 @@
 # CI
 
 `.github/workflows/ci.yml` runs on every pull request and on every push to
-`szakacsmedia`. Superseded runs on the same ref are cancelled automatically
+`production`. Superseded runs on the same ref are cancelled automatically
 (`concurrency`). Five jobs, all independent:
 
 ## core-tests — PaydayCore (`swift test`)
