@@ -1,0 +1,108 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - szakacsmedia
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core-tests:
+    name: PaydayCore (swift test)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: swift test --package-path Packages/PaydayCore
+        run: swift test --package-path Packages/PaydayCore
+
+  ios-tests:
+    name: Payday app + widget (xcodebuild test)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install xcodegen
+        run: brew install xcodegen
+      - name: Provide a secret-free Debug xcconfig
+        # Secrets.local.xcconfig is gitignored (it holds a local-only OpenAI key
+        # for Insights narration), so xcodegen cannot find the Debug config file
+        # on a clean checkout. CI resolves OPENAI_API_KEY to empty, exactly like
+        # Secrets.release.xcconfig does for archives, so InsightsService.isConfigured
+        # is false and the suite exercises the deterministic fallback path.
+        run: |
+          printf '// Generated on CI. Secret-free; mirrors Secrets.release.xcconfig.\nOPENAI_API_KEY =\n' > Secrets.local.xcconfig
+      - name: Toolchain diagnostics
+        run: |
+          xcodebuild -version
+          xcrun simctl list runtimes | grep -i ios || true
+      - name: Generate Xcode project
+        run: xcodegen generate
+      - name: Pick an available iPhone simulator
+        id: sim
+        run: |
+          cat > /tmp/pick_sim.py <<'PYEOF'
+          import json
+          import sys
+
+          data = json.load(sys.stdin)
+          for runtime, devices in data["devices"].items():
+              if "iOS" not in runtime:
+                  continue
+              for device in devices:
+                  if "iPhone" in device.get("name", ""):
+                      print(device["udid"])
+                      sys.exit(0)
+          PYEOF
+          UDID=$(xcrun simctl list devices available -j | python3 /tmp/pick_sim.py)
+          if [ -z "$UDID" ]; then
+            echo "No available iPhone simulator found" >&2
+            exit 1
+          fi
+          echo "udid=$UDID" >> "$GITHUB_OUTPUT"
+      - name: xcodebuild test
+        env:
+          SIM_UDID: ${{ steps.sim.outputs.udid }}
+        run: |
+          xcodebuild test \
+            -scheme Payday \
+            -destination "platform=iOS Simulator,id=$SIM_UDID" \
+            -derivedDataPath /tmp/payday-dd \
+            CODE_SIGNING_ALLOWED=NO
+
+  edge-tests:
+    name: payday-api (deno test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: deno test
+        working-directory: supabase/functions/payday-api
+        run: deno test
+
+  design-lint:
+    name: Design lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: scripts/design-lint.sh
+        run: bash scripts/design-lint.sh
+
+  db-migrations:
+    name: Supabase migrations (db reset)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+      - name: supabase start
+        run: supabase start
+      - name: Apply every migration from scratch
+        run: supabase db reset --local
+      - name: supabase stop
+        run: supabase stop
