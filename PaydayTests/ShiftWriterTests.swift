@@ -101,6 +101,50 @@ struct ShiftWriterTests {
         #expect(first.first?.shiftID != second.first?.shiftID)
     }
 
+    /// CHARACTERIZATION, not a specification. This pins what the shipped
+    /// two-row representation does TODAY so the regression is visible in a
+    /// diff rather than argued about.
+    ///
+    /// A shift with hours but no tips is an ordinary night: a slow lunch, a
+    /// training shift, a night the whole tip pool went out. `insertShift`
+    /// appends a `TipEntry` only for a non-zero amount (`:41`, `:46`), so it
+    /// returns an empty array, and `ShiftDetails.write` then has no row to
+    /// write onto. The hours, the tip-out, the sales, the clock times, the
+    /// server count and the receipt are all silently discarded. Nothing
+    /// throws, nothing is logged, and the save reports success.
+    ///
+    /// The one-record representation is what fixes it: a shift is a row
+    /// whether or not any money came in. When `ShiftCommands.create` lands in
+    /// S9, this test flips to `wageOnlyShiftSaves`.
+    @Test("CHARACTERIZATION: a wage-only shift is lost today")
+    func wageOnlyShiftIsLostToday() throws {
+        let context = try makeContext()
+
+        let entries = ShiftWriter.insertShift(
+            into: context,
+            date: day(2026, 7, 1),
+            cashCents: 0,
+            creditCents: 0,
+            note: "Training shift, tipped out everything",
+            hoursWorked: 7.5,
+            tipOutCents: 1_200,
+            salesCents: 180_000,
+            shiftPeriod: .dinner,
+            serverCount: 6,
+            receiptMetrics: ShiftReceiptMetrics(
+                earningsSchemaVersion: 2,
+                gratuityFeesCents: 4_200
+            )
+        )
+
+        // Every one of those facts is gone. Not stored anywhere, not
+        // recoverable, not reported.
+        #expect(entries.isEmpty)
+
+        try context.save()
+        #expect(try context.fetchCount(FetchDescriptor<TipEntry>()) == 0)
+    }
+
     @Test("recordedAt is respected as passed")
     func recordedAtIsRespected() throws {
         let context = try makeContext()

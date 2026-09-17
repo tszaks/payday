@@ -23,6 +23,7 @@ enum PaydayAccountEraser {
     struct IncompleteErasure: Error {
         let remainingTipEntries: Int
         let remainingPaychecks: Int
+        let remainingShifts: Int
     }
 
     /// Order matters. SwiftData rows go first so a widget timeline refreshed
@@ -42,6 +43,12 @@ enum PaydayAccountEraser {
     ) throws {
         try context.delete(model: TipEntry.self)
         try context.delete(model: PaycheckRecord.self)
+        // ShiftRecord is the third financial table. It is a mirror of
+        // public.shifts rather than a second copy of the tips, but it carries
+        // the same earnings in the same detail, so leaving it behind would
+        // leave a complete shift history on a device whose owner was told
+        // their account was deleted.
+        try context.delete(model: ShiftRecord.self)
         try context.save()
 
         // A successful save is not proof of an empty store: the deletes and
@@ -50,10 +57,12 @@ enum PaydayAccountEraser {
         // its own failure modes. Ask the store what is actually left.
         let remainingTips = try context.fetchCount(FetchDescriptor<TipEntry>())
         let remainingPaychecks = try context.fetchCount(FetchDescriptor<PaycheckRecord>())
-        guard remainingTips == 0, remainingPaychecks == 0 else {
+        let remainingShifts = try context.fetchCount(FetchDescriptor<ShiftRecord>())
+        guard remainingTips == 0, remainingPaychecks == 0, remainingShifts == 0 else {
             throw IncompleteErasure(
                 remainingTipEntries: remainingTips,
-                remainingPaychecks: remainingPaychecks
+                remainingPaychecks: remainingPaychecks,
+                remainingShifts: remainingShifts
             )
         }
 
@@ -79,6 +88,12 @@ enum PaydayAccountEraser {
         // made `canRegister` refuse the next Apple ID on this device with
         // accountMismatch — a lockout with no account left to mismatch.
         PaydayAuthorizationState.reset()
+
+        // Nothing to clear here for the shift cache: every durable fact about
+        // it lives in the sync checkpoint, and this function's one caller
+        // already drops that whole key with PaydaySyncState.forget(userID:)
+        // (PaydayCloudGate.swift:304-306). A second per-account store would
+        // need its own eraser line and would be missed exactly once.
 
         // The widget reads the shared app-group store directly, so it has to
         // be told the store is empty or it keeps rendering the last total.
