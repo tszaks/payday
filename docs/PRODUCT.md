@@ -264,6 +264,27 @@ deviation across the whole roadmap.
 PaydayCore package introduced (PR 0, 2026-09-17); earnings-engine
 consolidation in progress, see docs/METRICS.md (PR 1).
 
+**Known divergences under repair (PR 1, 2026-09-17).** The DONE above
+overclaims until these close. Each is a JSON fixture in
+`Packages/PaydayCore/Tests/PaydayCoreTests/Fixtures/` with an independently
+specified expected value, detailed in docs/METRICS.md section 3:
+
+- W1 wages round per shift (2760c) instead of per workweek (2759c).
+- W2 month/period/YTD filter first, then compute overtime, losing $11.31 of
+  a straddling 48h week (13585c vs 14716c).
+- W3 the calendar-grid `firstWeekday` drives overtime bucketing.
+- N1 CalendarView subtracts a duplicated tip-out twice (8000c vs 9000c).
+- N2 StatsEngine and TipBreakdown disagree on a duplicated receipt payload.
+- N3 the API cannot fetch a nil-shiftID shift grouped by day.
+- M1 chart bars do not sum to the headline above them.
+- H1 period $/hr divides all income by only the logged hours (4000c vs 2000c).
+- P1 the ±100c paycheck correction is applied silently instead of proposed.
+- E1 CSV rounds 6h 23m to "6.5" instead of "6.3833".
+- S2 Dashboard, Siri and the widget clamp tips by today but add whole-period wages.
+- Z1 a wage-only shift writes zero rows and is lost.
+- T1 `TimeZone.current` reprices history when the device travels.
+- C1 a missing wage collapses to $0 under an unchanged "Total" label.
+
 The headline work from the post-a5aa807 adversarial audit: which shifts,
 which nights, which choices actually pay. Everything below is the
 CloudKit-safe `kindRaw` pattern applied to genuinely-optional fields — plain

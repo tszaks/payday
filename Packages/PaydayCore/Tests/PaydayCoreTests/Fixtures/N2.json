@@ -1,0 +1,104 @@
+{
+  "id": "N2",
+  "description": "Migration: a legacy cash+credit TipEntry pair carrying the SAME v1 receipt payload (earningsSchemaVersion nil, gratuityFeesCents 500, credit amount includes the gratuity) on BOTH rows migrates to one ShiftRecord whose gratuity is counted once and whose voluntary credit tips are normalized (amount - gratuity) exactly once.",
+  "kind": "migration",
+  "policies": {
+    "rate": [],
+    "calendar": [
+      {
+        "effectiveFrom": "2026-09-28",
+        "workweekStartWeekday": 2,
+        "overtimeThresholdMinutes": 2400,
+        "overtimeMultiplierHundredths": 150,
+        "payrollTimeZone": "America/New_York"
+      }
+    ]
+  },
+  "schedule": null,
+  "shifts": [],
+  "legacyEntries": [
+    {
+      "id": "00000000-0000-0000-0000-000000000011",
+      "shiftID": "00000000-0000-0000-0000-000000000001",
+      "date": "2026-09-29",
+      "amountCents": 3000,
+      "kind": "cash",
+      "tipOutCents": null,
+      "hoursWorked": null,
+      "receiptMetricsJSON": "{\"guestCount\":40,\"creditCheckCount\":18,\"netSalesCents\":80000,\"gratuityFeesCents\":500}"
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000012",
+      "shiftID": "00000000-0000-0000-0000-000000000001",
+      "date": "2026-09-29",
+      "amountCents": 7500,
+      "kind": "credit",
+      "tipOutCents": null,
+      "hoursWorked": 6.0,
+      "receiptMetricsJSON": "{\"guestCount\":40,\"creditCheckCount\":18,\"netSalesCents\":80000,\"gratuityFeesCents\":500}"
+    }
+  ],
+  "paychecks": [],
+  "asOf": null,
+  "expected": {
+    "migratedShiftCount": 1,
+    "migratedShifts": [
+      {
+        "id": "00000000-0000-0000-0000-000000000001",
+        "workDay": "2026-09-29",
+        "period": null,
+        "cashTipsCents": 3000,
+        "creditTipsCents": 7000,
+        "gratuityFeesCents": 500,
+        "tipOutCents": null,
+        "hoursWorked": 6.0,
+        "minutesWorked": 360,
+        "receiptMetrics": {
+          "earningsSchemaVersion": 2,
+          "gratuityFeesCents": 500,
+          "guestCount": 40,
+          "creditCheckCount": 18,
+          "netSalesCents": 80000
+        },
+        "legacyEntryIDs": [
+          "00000000-0000-0000-0000-000000000011",
+          "00000000-0000-0000-0000-000000000012"
+        ]
+      }
+    ],
+    "receiptMetricsComparison": "exact",
+    "legacyEntryIDsComparison": "setEquality",
+    "components": {
+      "cashCents": 3000,
+      "creditCents": 7000,
+      "gratuityFeesCents": 500,
+      "tipOutCents": 0,
+      "regularWagesCents": 0,
+      "overtimeWagesCents": 0,
+      "nonWageEarningsCents": 10500,
+      "wagesCents": 0,
+      "earnedIncomeCents": 10500
+    },
+    "wage": "unavailable.rateNotSet",
+    "idempotence": {
+      "migratedShiftCountAfterMigrationRerun": 1,
+      "creditTipsCentsAfterMigrationRerun": 7000,
+      "gratuityFeesCentsAfterMigrationRerun": 500,
+      "creditTipsCentsOnSecondReadOfStoredRecord": 7000,
+      "gratuityFeesCentsOnSecondReadOfStoredRecord": 500
+    },
+    "wrongAnswers": {
+      "gratuityCountedTwice_gratuityFeesCents": 1000,
+      "gratuityCountedTwice_nonWageEarningsCents": 11000,
+      "voluntaryNormalizedTwice_cashTipsCents": 2500,
+      "voluntaryNormalizedTwice_nonWageEarningsCents": 10000,
+      "noNormalization_creditTipsCents": 7500,
+      "noNormalization_nonWageEarningsCents": 11000,
+      "perRowNetCents_cashTipsCents": 2500,
+      "perRowNetCents_gratuityFeesCents": 1000,
+      "renormalizedAfterMigration_creditTipsCents": 6500,
+      "migrationRerunDuplicatesGroup_migratedShiftCount": 2
+    }
+  },
+  "notes": "Plan Design 0 (ShiftRecord): migration groups TipEntry by shiftID, builds ONE ShiftRecord per group using ShiftDetails.resolve + TipBreakdown.total for the last time, and applies receipt v1/v2 normalization (ShiftReceiptMetrics.voluntaryTipsCents) exactly once, at migration, so creditTipsCents is always voluntary and gratuityFeesCents always separate. Registry row gratuityFees (METRICS.md 1.1): counted once per shift regardless of how many legacy rows carry a copy of the payload (fixture N2). INPUT: both rows share shiftID ...0001 on Tue 2026-09-29 (inside the Monday-start week beginning 2026-09-28) and both carry the identical v1 payload {gratuityFeesCents 500, no earningsSchemaVersion}. Under v1 the scanner stored Toast's combined tips-and-gratuity figure on the credit row, so credit amountCents 7500 = 7000 voluntary + 500 gratuity; the cash row's 3000 is plain cash and contains no gratuity. CORRECT (owner-row rule, TipBreakdown.total + ShiftDetails.resolve: the credit row owns the payload because credit?.receiptMetrics is non-nil): credit voluntary = max(0, 7500 - 500) = 7000; cash = 3000 (not the owner, raw amount); gratuity = employeeGratuityFeesCents of the resolved payload once = 500; tipOut nil on both rows -> nil on the record, 0 in components; hours = credit 6.0 -> hoursWorked 6.0 on the Design 0 ShiftRecord (Double?), minutesWorked 360 = Int((6.0 * 60).rounded()) at the Design 1 adapter. nonWage = 3000 + 7000 + 500 - 0 = 10500. No rate policy, so wage = .unavailable(.rateNotSet) with regular 0 / overtime 0 (the 360 minutes still count toward the 2400 threshold; irrelevant at this volume), earnedIncome = 10500 + 0 = 10500. SHAPE: expected.migratedShifts is an array (matching N1 and the migratedShiftCount counter); each element carries Design 0 storage names (cashTipsCents, creditTipsCents, tipOutCents, hoursWorked, receiptMetrics, legacyEntryIDs) plus the two Design 1 adapter values (gratuityFeesCents, minutesWorked) so an implementer can assert against either the stored record or the ShiftInput. N3 currently names the same array shiftRecords; whoever owns N3 should align it to migratedShifts. receiptMetricsComparison exact: the migrated payload is rewritten with earningsSchemaVersion 2 and the four listed keys, nothing else, so a later read never subtracts again. legacyEntryIDsComparison setEquality: order is not specified by the plan. IDEMPOTENCE: *AfterMigrationRerun means running the migration a second time over the same legacy rows (Design 0: idempotent on legacy_entry_ids) still yields exactly one ShiftRecord with credit 7000 and gratuity 500, never a second group or a re-normalized value. *OnSecondReadOfStoredRecord is not vacuous: the ShiftRecord persists receiptMetricsJSON, so a reader that re-applied voluntaryTipsCents(fromStoredAmount: creditTipsCents) against a payload still tagged v1 would produce 6500; the earningsSchemaVersion 2 rewrite is what keeps the second read at 7000. WRONG ANSWERS: (a) summing employeeGratuityFeesCents over both rows -> gratuity 1000, nonWage 3000+7000+1000 = 11000; (b) normalizing both rows -> cash max(0, 3000-500) = 2500, nonWage 2500+7000+500 = 10000; (c) treating v1 as v2 (no normalization) -> credit 7500, nonWage 3000+7500+500 = 11000; (d) today's per-row TipEntry.netCents path (employeeEarningsCents per row, METRICS.md CA-01): cash row (3000-500)+500 = 3000, credit row (7500-500)+500 = 7500, sum 10500, which COLLIDES with the correct total because the double subtraction and the double addition cancel; its components do not (cash 2500, gratuity 1000), so the test must assert components, not only the total; (e) re-running v1 normalization on the migrated record -> 7000-500 = 6500; (f) a migration re-run that fails the legacy_entry_ids idempotence check creates a second ShiftRecord -> count 2. Every value under wrongAnswers MUST differ from the correct value of the metric it names; the per-row TipEntry.netCents path is pinned by its cash (2500) and gratuity (1000) components because its nonWage total (3000 + 7500 = 10500) coincides with the correct 10500 and so cannot serve as a wrong answer (a loader that asserts actual != each wrongAnswers value would otherwise fail a correct engine). REVIEW 2026-09-17: both reviewers confirmed every number above by recomputation; the refutations were shape/ambiguity only (colliding wrongAnswer removed, hoursWorked added, array + idempotence keys renamed, comparison modes stated). The 'second read is vacuous' point was not adopted for the reason given under IDEMPOTENCE."
+}

@@ -1,0 +1,121 @@
+{
+  "id": "Z1",
+  "description": "Wage-only shift: 300 minutes, cash 0, credit 0, rate 283c/h. The ShiftRecord persists and regularWages is 1415c; a shift with hours but no tips is a first-class record.",
+  "kind": "ledger",
+  "policies": {
+    "rate": [
+      {
+        "effectiveFrom": "2026-09-01",
+        "hourlyRateCents": 283,
+        "provenance": "confirmed"
+      }
+    ],
+    "calendar": [
+      {
+        "effectiveFrom": "2026-09-07",
+        "workweekStartWeekday": 2,
+        "overtimeThresholdMinutes": 2400,
+        "overtimeMultiplierHundredths": 150,
+        "payrollTimeZone": "America/New_York"
+      }
+    ]
+  },
+  "schedule": {
+    "frequency": "biweekly",
+    "anchorPeriodEnd": "2026-10-04",
+    "firstWeekday": 2
+  },
+  "shifts": [
+    {
+      "id": "00000000-0000-0000-0000-000000000001",
+      "workDay": "2026-09-28",
+      "period": "dinner",
+      "minutesWorked": 300,
+      "voluntaryCashCents": 0,
+      "voluntaryCreditCents": 0,
+      "gratuityFeesCents": 0,
+      "tipOutCents": null
+    }
+  ],
+  "legacyEntries": [],
+  "paychecks": [],
+  "asOf": "2026-10-02",
+  "expected": {
+    "shiftRecordPersists": true,
+    "shiftCount": 1,
+    "valuations": [
+      {
+        "id": "00000000-0000-0000-0000-000000000001",
+        "workDay": "2026-09-28",
+        "workweekStart": "2026-09-28",
+        "minutesWorked": 300,
+        "regularMinutes": 300,
+        "overtimeMinutes": 0,
+        "wage": "valued",
+        "assumed": false,
+        "components": {
+          "cashCents": 0,
+          "creditCents": 0,
+          "gratuityFeesCents": 0,
+          "tipOutCents": 0,
+          "regularWagesCents": 1415,
+          "overtimeWagesCents": 0,
+          "nonWageEarningsCents": 0,
+          "wagesCents": 1415,
+          "earnedIncomeCents": 1415
+        }
+      }
+    ],
+    "day": {
+      "workDay": "2026-09-28",
+      "earnedIncomeCents": 1415,
+      "nonWageEarningsCents": 0,
+      "regularWagesCents": 1415,
+      "overtimeWagesCents": 0
+    },
+    "workweek": {
+      "start": "2026-09-28",
+      "end": "2026-10-04",
+      "regularWagesCents": 1415,
+      "overtimeWagesCents": 0,
+      "earnedIncomeCents": 1415
+    },
+    "month": {
+      "yearMonth": "2026-09",
+      "regularWagesCents": 1415,
+      "overtimeWagesCents": 0,
+      "nonWageEarningsCents": 0,
+      "earnedIncomeCents": 1415
+    },
+    "payPeriod": {
+      "start": "2026-09-21",
+      "end": "2026-10-04",
+      "clampedEnd": "2026-10-02",
+      "shiftCount": 1,
+      "earnedIncomeCents": 1415,
+      "nonWageEarningsCents": 0,
+      "regularWagesCents": 1415,
+      "overtimeWagesCents": 0
+    },
+    "hourlyRateCents": 283,
+    "hourlyRateCoverage": { "covered": 1, "of": 1 },
+    "completeness": {
+      "state": "complete",
+      "totalShifts": 1,
+      "shiftsWithHours": 1,
+      "shiftsWageValued": 1,
+      "shiftsWageAssumed": 0,
+      "wageFeatureEnabled": true
+    },
+    "labels": {
+      "headline": "Total"
+    },
+    "wrongAnswers": {
+      "todayShiftNotPersistedShiftCount": 0,
+      "todayShiftNotPersistedEarnedIncomeCents": 0,
+      "todayDashboardHeroGateSeesPeriodAsEmpty": true,
+      "todayAPICreateShiftRejectsZeroTipShift": true
+    }
+  },
+  "notes": "Plan Design 1 (integer arithmetic, units of 1/6000 cent) and Design 0 ('a wage-only or gratuity-only shift is simply a ShiftRecord with zero tips'); PR 1 fixture list ('Z1 wage-only 5h shift -> 1415c'). One shift, Mon 2026-09-28 (Monday-start workweek, weekday 2, calendar policy effectiveFrom 2026-09-07 is itself a Monday so it is a valid boundary). Threshold split: cumulative minutes before this shift = 0, regularMinutes = clamp(2400 - 0, 0, 300) = 300, overtimeMinutes = 0. Regular exact = rate * minutes * 100 = 283 * 300 * 100 = 8,490,000 units. roundCents(8,490,000) = (2 * 8,490,000 + 6,000) / 12,000 = 16,986,000 / 12,000 = 1415 (integer division; the exact value is 8,490,000 / 6,000 = 1415.000 cents, no rounding needed, and 5h * 283c = 1415c as a sanity check). Cumulative allocation per stream: roundCents(cum_0 = 0) = 6,000 / 12,000 = 0, so cents_1 = 1415 - 0 = 1415. Overtime exact = 283 * 0 * 150 = 0 units -> 0 cents. Components: cash 0 + credit 0 + gratuity 0 - tipOut 0 (nil tipOut contributes 0) + regular 1415 + overtime 0 = earnedIncome 1415; nonWage 0; wages 1415. Day, workweek (Mon 2026-09-28 .. Sun 2026-10-04), month (September 2026) and pay period (biweekly ending Sun 2026-10-04, so Mon 2026-09-21 .. Sun 2026-10-04) totals are sums of the single shift's components = 1415. asOf 2026-10-02 clamps the pay period's result range end from the schedule end 2026-10-04 to 2026-10-02 (payPeriod.clampedEnd, the same convention T1 and W3 use; Design 2: payPeriod(_, asOf:) clamps exactly as StatsEngine.periodToDateTotal, whose cutoff = min(startOfDay(asOf), period.end)), but it excludes no shift (the only shift is on 09-28) so every total is unchanged; payPeriod.end stays the schedule's period end. September (ends 09-30) is not clamped. workweek.end is the ledger's overtime grouping boundary (Design 1), not an asOf-clamped query; if the same days are read through range(_, asOf:) the clamped end is likewise 2026-10-02. Completeness carries wageFeatureEnabled true because a confirmed rate policy is in force (Design 2 struct field; matches C1/H1). hourlyRate = coveredComponents.earnedIncomeCents * 60 / minutes = 1415 * 60 / 300 = 84,900 / 300 = 283 exactly, coverage 1 of 1. Completeness: 1 shift, 1 with hours, 1 wage-valued, provenance confirmed -> .complete, headline label 'Total' (Metric registry: earnedIncome allowed labels). wrongAnswers document today's behaviour, which the plan calls out rather than a wrong number: LogTipSheet.canSave (Payday/Views/Shared/LogTipSheet.swift:268) is `cashCents > 0 || creditCents > 0`, so ShiftWriter writes zero rows and the shift never exists (shiftCount 0, earnedIncome 0); Dashboard gates DB-02/DB-03 test the tips-only periodToDateTotal so a wage-only period reads as empty; API create_shift (supabase/functions/payday-api/index.ts:1081-1087) rejects cash 0 / credit 0 as empty_shift. See docs/METRICS.md section Z1 for the mapped rows (DB-02, DB-03, SC-01, BP-35; LS-23 references Z1 only from its own inventory row, as the source of the stored hours figure that becomes minutesWorked 300). Review 2026-09-17: both reviewers confirmed every number; the only changes were adding payPeriod.clampedEnd and shiftCount, workweek.end, completeness.wageFeatureEnabled, and correcting these notes. No expected number changed."
+}

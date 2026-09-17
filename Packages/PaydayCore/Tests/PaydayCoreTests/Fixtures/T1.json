@@ -1,0 +1,266 @@
+{
+  "id": "T1",
+  "description": "W2's 48-hour Mon-start boundary week (Mon 2026-09-28 .. Fri 2026-10-02, rate 283c, 40h/1.5x) valued twice: once with the device time zone set to America/New_York and once with it set to Pacific/Honolulu (UTC-10, no DST). PayrollCalendarPolicy.payrollTimeZone is frozen at America/New_York in both runs. Every ShiftValuation, week, month and pay-period number must be byte-identical between the two runs and identical to W2. A device time zone change moves no money.",
+  "kind": "ledger",
+  "policies": {
+    "rate": [
+      {
+        "effectiveFrom": "2025-12-29",
+        "hourlyRateCents": 283,
+        "provenance": "confirmed"
+      }
+    ],
+    "calendar": [
+      {
+        "effectiveFrom": "2025-12-29",
+        "workweekStartWeekday": 2,
+        "overtimeThresholdMinutes": 2400,
+        "overtimeMultiplierHundredths": 150,
+        "payrollTimeZone": "America/New_York"
+      }
+    ]
+  },
+  "schedule": {
+    "frequency": "biweekly",
+    "anchorPeriodEnd": "2026-10-04",
+    "firstWeekday": 2
+  },
+  "shifts": [
+    {
+      "id": "00000000-0000-0000-0000-000000000001",
+      "workDay": "2026-09-28",
+      "period": "dinner",
+      "minutesWorked": 615,
+      "voluntaryCashCents": 0,
+      "voluntaryCreditCents": 0,
+      "gratuityFeesCents": 0,
+      "tipOutCents": null
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000002",
+      "workDay": "2026-09-29",
+      "period": "dinner",
+      "minutesWorked": 585,
+      "voluntaryCashCents": 0,
+      "voluntaryCreditCents": 0,
+      "gratuityFeesCents": 0,
+      "tipOutCents": null
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000003",
+      "workDay": "2026-09-30",
+      "period": "dinner",
+      "minutesWorked": 630,
+      "voluntaryCashCents": 0,
+      "voluntaryCreditCents": 0,
+      "gratuityFeesCents": 0,
+      "tipOutCents": null
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000004",
+      "workDay": "2026-10-01",
+      "period": "dinner",
+      "minutesWorked": 690,
+      "voluntaryCashCents": 0,
+      "voluntaryCreditCents": 0,
+      "gratuityFeesCents": 0,
+      "tipOutCents": null
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000005",
+      "workDay": "2026-10-02",
+      "period": "dinner",
+      "minutesWorked": 360,
+      "voluntaryCashCents": 0,
+      "voluntaryCreditCents": 0,
+      "gratuityFeesCents": 0,
+      "tipOutCents": null
+    }
+  ],
+  "legacyEntries": [],
+  "paychecks": [],
+  "asOf": "2026-10-02",
+  "deviceTimeZone": "Pacific/Honolulu",
+  "expected": {
+    "identicalToFixture": "W2",
+    "inputsIdenticalToFixture": "W2",
+    "inputsIdenticalToFixtureExcludingKeys": [
+      "deviceTimeZone"
+    ],
+    "valuationsIdenticalToFixture": "W2",
+    "deviceTimeZonesEvaluated": [
+      "America/New_York",
+      "Pacific/Honolulu"
+    ],
+    "deviceTimeZoneInputIsSecondRun": true,
+    "payrollTimeZoneUsed": "America/New_York",
+    "valuationsIdenticalAcrossDeviceTimeZones": true,
+    "workweekStart": "2026-09-28",
+    "perShift": [
+      {
+        "id": "00000000-0000-0000-0000-000000000001",
+        "workDay": "2026-09-28",
+        "workweekStart": "2026-09-28",
+        "civilDayInPayrollZone": "2026-09-28",
+        "minutesWorked": 615,
+        "regularMinutes": 615,
+        "overtimeMinutes": 0,
+        "regularWagesCents": 2901,
+        "overtimeWagesCents": 0,
+        "wagesCents": 2901,
+        "nonWageEarningsCents": 0,
+        "earnedIncomeCents": 2901
+      },
+      {
+        "id": "00000000-0000-0000-0000-000000000002",
+        "workDay": "2026-09-29",
+        "workweekStart": "2026-09-28",
+        "civilDayInPayrollZone": "2026-09-29",
+        "minutesWorked": 585,
+        "regularMinutes": 585,
+        "overtimeMinutes": 0,
+        "regularWagesCents": 2759,
+        "overtimeWagesCents": 0,
+        "wagesCents": 2759,
+        "nonWageEarningsCents": 0,
+        "earnedIncomeCents": 2759
+      },
+      {
+        "id": "00000000-0000-0000-0000-000000000003",
+        "workDay": "2026-09-30",
+        "workweekStart": "2026-09-28",
+        "civilDayInPayrollZone": "2026-09-30",
+        "minutesWorked": 630,
+        "regularMinutes": 630,
+        "overtimeMinutes": 0,
+        "regularWagesCents": 2972,
+        "overtimeWagesCents": 0,
+        "wagesCents": 2972,
+        "nonWageEarningsCents": 0,
+        "earnedIncomeCents": 2972
+      },
+      {
+        "id": "00000000-0000-0000-0000-000000000004",
+        "workDay": "2026-10-01",
+        "workweekStart": "2026-09-28",
+        "civilDayInPayrollZone": "2026-10-01",
+        "minutesWorked": 690,
+        "regularMinutes": 570,
+        "overtimeMinutes": 120,
+        "regularWagesCents": 2688,
+        "overtimeWagesCents": 849,
+        "wagesCents": 3537,
+        "nonWageEarningsCents": 0,
+        "earnedIncomeCents": 3537
+      },
+      {
+        "id": "00000000-0000-0000-0000-000000000005",
+        "workDay": "2026-10-02",
+        "workweekStart": "2026-09-28",
+        "civilDayInPayrollZone": "2026-10-02",
+        "minutesWorked": 360,
+        "regularMinutes": 0,
+        "overtimeMinutes": 360,
+        "regularWagesCents": 0,
+        "overtimeWagesCents": 2547,
+        "wagesCents": 2547,
+        "nonWageEarningsCents": 0,
+        "earnedIncomeCents": 2547
+      }
+    ],
+    "week": {
+      "workweekStart": "2026-09-28",
+      "requestedRange": {
+        "start": "2026-09-28",
+        "end": "2026-10-04"
+      },
+      "effectiveRange": {
+        "start": "2026-09-28",
+        "end": "2026-10-02"
+      },
+      "minutes": 2880,
+      "regularMinutes": 2400,
+      "overtimeMinutes": 480,
+      "regularWagesCents": 11320,
+      "overtimeWagesCents": 3396,
+      "wagesCents": 14716,
+      "nonWageEarningsCents": 0,
+      "earnedIncomeCents": 14716,
+      "hourlyRateCents": 307,
+      "coveredShifts": 5,
+      "totalShifts": 5,
+      "completeness": "complete"
+    },
+    "months": {
+      "2026-09": {
+        "shiftIDs": [
+          "00000000-0000-0000-0000-000000000001",
+          "00000000-0000-0000-0000-000000000002",
+          "00000000-0000-0000-0000-000000000003"
+        ],
+        "shiftCount": 3,
+        "minutes": 1830,
+        "regularMinutes": 1830,
+        "overtimeMinutes": 0,
+        "regularWagesCents": 8632,
+        "overtimeWagesCents": 0,
+        "earnedIncomeCents": 8632
+      },
+      "2026-10": {
+        "shiftIDs": [
+          "00000000-0000-0000-0000-000000000004",
+          "00000000-0000-0000-0000-000000000005"
+        ],
+        "shiftCount": 2,
+        "minutes": 1050,
+        "regularMinutes": 570,
+        "overtimeMinutes": 480,
+        "regularWagesCents": 2688,
+        "overtimeWagesCents": 3396,
+        "earnedIncomeCents": 6084
+      }
+    },
+    "monthsSumEarnedIncomeCents": 14716,
+    "payPeriod": {
+      "start": "2026-09-21",
+      "end": "2026-10-04",
+      "clampedEnd": "2026-10-02",
+      "shiftCount": 5,
+      "regularWagesCents": 11320,
+      "overtimeWagesCents": 3396,
+      "earnedIncomeCents": 14716
+    },
+    "completeness": "complete",
+    "wrongAnswers": {
+      "deviceZoneDrivesCivilDayTotal": 13584,
+      "deviceZoneDrivesCivilDayOvertime": 0,
+      "deviceZoneDrivesCivilDaySeptember": 11886,
+      "deviceZoneDrivesCivilDayOctober": 1698,
+      "deviceZoneDrivesCivilDayPerShiftRegular": [
+        2901,
+        2759,
+        2972,
+        3254,
+        1698
+      ],
+      "deviceZoneDrivesCivilDayWorkDays": [
+        "2026-09-27",
+        "2026-09-28",
+        "2026-09-29",
+        "2026-09-30",
+        "2026-10-01"
+      ],
+      "deviceZoneDrivesCivilDayWorkweekStarts": [
+        "2026-09-21",
+        "2026-09-28",
+        "2026-09-28",
+        "2026-09-28",
+        "2026-09-28"
+      ],
+      "monthFirstTotalEarnedIncomeCents": 13585,
+      "monthFirstOctoberEarnedIncomeCents": 4953,
+      "overtimeLostByMonthFirstCents": 1131
+    }
+  },
+  "notes": "Plan Design 1, 'Frozen payroll timezone': payrollTimeZone is captured when the calendar policy is created and changes only when the user creates a new calendar policy; CivilDay(date, in: policy.payrollTimeZone) is therefore stable when the device travels, and nothing observes NSSystemTimeZoneDidChange for money. Design 1 test list: 'a device timezone change does not alter any valuation (policy zone fixed)'. Spec row T1: 'W2 evaluated with device TZ America/New_York then Pacific/Honolulu, policy TZ fixed America/New_York -> identical valuations'. INPUTS are W2's exactly (same ids, days, minutes, rate 283c, rate and Mon-start calendar policies both effective Mon 2025-12-29 as in W2.json, biweekly schedule anchored Sun 2026-10-04 with firstWeekday 2); the only added input is the top-level deviceTimeZone = Pacific/Honolulu, which is the second (travelling) zone. A harness that honours expected.inputsIdenticalToFixture may diff every input key except those in expected.inputsIdenticalToFixtureExcludingKeys against W2.json and must find no difference. The harness must run the ledger once under each entry of expected.deviceTimeZonesEvaluated (America/New_York first, then Pacific/Honolulu) and assert every run equals expected.perShift, expected.week, expected.months and expected.payPeriod, and equals W2's expected valuations. Reviewer correction 2026-09-17: an earlier draft of this fixture set both policies effectiveFrom 2026-08-31 while claiming byte-identity with W2; that deviated from W2's 2025-12-29 (numerically inert, since both are Mondays before every shift, but a manifest or input diff against W2 would have failed), so the inputs now match W2 verbatim. Pacific/Honolulu was chosen because Hawaii has no DST (UTC-10 year round) and sits 6 hours behind New York's EDT (UTC-4 on Sep 28 .. Oct 2 2026; US DST ends Nov 1 2026), so every New York midnight lands at 18:00 the PREVIOUS civil day in Honolulu: 2026-09-28T00:00-04:00 = 2026-09-27T18:00-10:00. CORRECT ARITHMETIC (Design 1, integer units of 1/6000 cent; regular = 283*minutes*100, overtime = 283*minutes*150, roundCents(x) = (2x+6000)/12000 integer division, chronological threshold split, cumulative rounding per stream): every shift's CivilDay in the payroll zone is its own workDay, startOfWorkweek(Monday) is 2026-09-28 for all five, one bucket. Threshold split vs 2400: Mon 615 (cum 615, regular), Tue 585 (cum 1200), Wed 630 (cum 1830), Thu 690 -> regular clamp(2400-1830, 0, 690) = 570, overtime 120 (cum 2520), Fri 360 -> regular 0, overtime 360 (cum 2880). Regular stream: 615*283*100 = 17404500 -> roundCents = (34809000+6000)/12000 = 2901; cum 33960000 -> 5660, Tue = 5660-2901 = 2759; cum 51789000 -> 8632, Wed = 2972; cum 67920000 -> 11320, Thu = 2688; Fri +0 -> 0. Overtime stream: Thu 120*283*150 = 5094000 -> (10188000+6000)/12000 = 849; Fri +15282000 -> cum 20376000 -> (40752000+6000)/12000 = 3396, Fri = 3396-849 = 2547. Wages 2901/2759/2972/3537/2547; earnedIncome equals wages because all tip components are 0 and tipOut is null (not recorded, 0 for arithmetic). Month totals are sums of per-shift components (Design 1 rule 6): September 2901+2759+2972 = 8632; October 2688+849+2547 = 6084; total 14716 = roundCents(67920000) + roundCents(20376000). Pay period Mon 2026-09-21 .. Sun 2026-10-04 clamped by asOf to 2026-10-02 holds all five shifts, so 14716. WRONG ANSWERS (deviceZoneDrivesCivilDay*): if an implementation derived CivilDay from the device zone (or reinterpreted a stored start-of-day-in-payroll-zone Date in TimeZone.current), every shift would slide back one civil day under Pacific/Honolulu: workDays 2026-09-27, 09-28, 09-29, 09-30, 10-01. Sun 2026-09-27 then belongs to the Mon-start workweek beginning 2026-09-21, alone, 615 min all regular -> 17404500 -> 2901. The remaining four (585+630+690+360 = 2265 min) share the week beginning 2026-09-28 and never cross 2400, so overtime disappears entirely: regular stream 16555500 -> (33111000+6000)/12000 = 2759; cum 34384500 -> (68769000+6000)/12000 = 5731, shift 2972; cum 53911500 -> (107823000+6000)/12000 = 8985, shift 3254; cum 64099500 -> (128199000+6000)/12000 = 10683, shift 1698. Per-shift regular 2901/2759/2972/3254/1698, overtime 0, total 13584 (1132c short of 14716); September would read 2901+2759+2972+3254 = 11886 and October 1698 because the Oct 2 shift is misfiled into Oct 1 and the Oct 1 shift into Sep 30. Note the leaked total 13584 is 1c off the month-first wrong answer 13585 (carried from W2 as monthFirstTotalEarnedIncomeCents for reference), so a test that only checks the grand total against 13585 would not catch this leak; assert the per-shift rows and workweekStart. In the reverse direction (device America/New_York, payroll zone America/New_York) nothing moves, which is why both device zones are evaluated and compared to each other and to W2, not just one. Rate and calendar policies effective Mon 2025-12-29 (W2's dates), a Monday boundary that cannot trip the Design 1 boundary diagnostic. Dates: 2025-12-29, 2026-09-21 and 2026-09-28 are Mondays; 2026-09-27 is a Sunday; 2026-10-04 is a Sunday. SHAPE PARITY WITH W2 (2026-09-17): perShift rows carry nonWageEarningsCents 0; week uses W2's vocabulary, requestedRange = the Design 1 step 2 workweek bucket Mon 2026-09-28..Sun 2026-10-04 (never clamped) and effectiveRange = what EarningsResult.range reports after the Design 2 asOf clamp, end 2026-10-02; both select the same five shifts. week.hourlyRateCents = 14716 * 60 / 2880 = 306.58 -> 307 half-up with coveredShifts 5 of totalShifts 5 (every shift carries hours). months carry shiftIDs, regularMinutes and overtimeMinutes as in W2 (Sep 1830/0, Oct 570/480); monthsSumEarnedIncomeCents 14716. wrongAnswers repeats W2's month-first trio (October 4953, total 13585, lost overtime 1131) under W2's exact key names so identicalToFixture can be checked row for row. All of these are unchanged W2 values; the only T1-specific expected keys are the device-zone header fields, civilDayInPayrollZone and workweekStart per row, payPeriod, and the deviceZoneDrivesCivilDay* wrong answers."
+}
