@@ -261,6 +261,9 @@ deviation across the whole roadmap.
 
 ## Pillar 8: The Earnings Engine (Deep Audit Phase 3, 2026-07-14) — DONE
 
+PaydayCore package introduced (PR 0, 2026-09-17); earnings-engine
+consolidation in progress, see docs/METRICS.md (PR 1).
+
 The headline work from the post-a5aa807 adversarial audit: which shifts,
 which nights, which choices actually pay. Everything below is the
 CloudKit-safe `kindRaw` pattern applied to genuinely-optional fields — plain
