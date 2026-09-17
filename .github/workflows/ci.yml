@@ -104,5 +104,16 @@ jobs:
         run: supabase start
       - name: Apply every migration from scratch
         run: supabase db reset --local
+      - name: SQL schema tests
+        # Plain psql scripts, not pgTAP: every assertion lands in a temporary
+        # results table and the script raises at the end if any failed, so
+        # ON_ERROR_STOP makes a failure a non-zero exit. The connection string
+        # is the local stack's fixed one (supabase/config.toml [db] port 54322).
+        run: |
+          for f in supabase/tests/*_test.sql; do
+            echo "== $f"
+            psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres" \
+              -v ON_ERROR_STOP=1 -f "$f"
+          done
       - name: supabase stop
         run: supabase stop
