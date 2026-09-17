@@ -26,6 +26,18 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install xcodegen
         run: brew install xcodegen
+      - name: Provide a secret-free Debug xcconfig
+        # Secrets.local.xcconfig is gitignored (it holds a local-only OpenAI key
+        # for Insights narration), so xcodegen cannot find the Debug config file
+        # on a clean checkout. CI resolves OPENAI_API_KEY to empty, exactly like
+        # Secrets.release.xcconfig does for archives, so InsightsService.isConfigured
+        # is false and the suite exercises the deterministic fallback path.
+        run: |
+          printf '// Generated on CI. Secret-free; mirrors Secrets.release.xcconfig.\nOPENAI_API_KEY =\n' > Secrets.local.xcconfig
+      - name: Toolchain diagnostics
+        run: |
+          xcodebuild -version
+          xcrun simctl list runtimes | grep -i ios || true
       - name: Generate Xcode project
         run: xcodegen generate
       - name: Pick an available iPhone simulator

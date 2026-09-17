@@ -84,3 +84,7 @@ sandbox because local Docker was not available to run `supabase start`.
 The workflow YAML was validated with `actionlint` and by hand; the actual
 `supabase db reset --local` run against a live local stack is unverified
 until it runs in GitHub Actions or on a machine with Docker running.
+
+## Why the iOS job writes `Secrets.local.xcconfig`
+
+`project.yml` points the Debug configuration at `Secrets.local.xcconfig`, which is gitignored because it carries a local-only OpenAI key for Insights narration. On a clean checkout xcodegen fails with `Invalid config file "Secrets.local.xcconfig"`. The iOS job therefore writes a placeholder whose only line is `OPENAI_API_KEY =` before generating the project. That matches the committed Release config, so `InsightsService.isConfigured` is false on CI and the tests run the deterministic fallback path, never a live model call.
