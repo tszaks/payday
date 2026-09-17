@@ -21,6 +21,8 @@ packages:
   Supabase:
     url: https://github.com/supabase/supabase-swift.git
     exactVersion: 2.55.1
+  PaydayCore:
+    path: Packages/PaydayCore
 
 targets:
   Payday:
@@ -95,6 +97,7 @@ targets:
       - target: PaydayWidget
         embed: true
       - package: Supabase
+      - package: PaydayCore
 
   PaydayWidget:
     type: app-extension
@@ -106,7 +109,6 @@ targets:
       - path: Payday/Models/PaycheckRecord.swift
       - path: Payday/Models/PayScheduleStore.swift
       - path: Payday/Utilities/PayPeriod.swift
-      - path: Payday/Utilities/Money.swift
       - path: Payday/Utilities/TipBreakdown.swift
       - path: Payday/Utilities/StatsEngine.swift
       # StatsEngine's Move copy spells its counts through this — the widget
@@ -131,6 +133,7 @@ targets:
       - path: Payday/Utilities/ShiftSessionStore.swift
       - path: Payday/Utilities/ShiftSessionManager.swift
       - path: Payday/Intents/ShiftIntents.swift
+      - path: Payday/PaydayCoreExports.swift
     settings:
       base:
         PRODUCT_NAME: PaydayWidget
@@ -144,6 +147,8 @@ targets:
         # The widget shares Payday's local cache but never links the Supabase
         # client. The flag keeps extension-only compilation explicit.
         SWIFT_ACTIVE_COMPILATION_CONDITIONS: WIDGET_EXTENSION
+    dependencies:
+      - package: PaydayCore
     info:
       path: Generated/PaydayWidget-Info.plist
       properties:
@@ -161,6 +166,7 @@ targets:
       - path: PaydayTests
     dependencies:
       - target: Payday
+      - package: PaydayCore
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.szakacsmedia.payday.tests
