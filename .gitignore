@@ -6,6 +6,8 @@ xcuserdata/
 .swiftpm/
 *.xcuserstate
 Generated/
+# Swift Package Manager build artifacts (e.g. Packages/PaydayCore/.build)
+.build/
 Secrets.local.xcconfig
 payday_api_key.txt
 .env
