@@ -96,6 +96,17 @@ struct ShiftAuthorityLegTests {
     /// The timestamps actually PARSE. Without this the suite above passes for
     /// the wrong reason: an unparseable `rollback_at` is nil, and nil refuses
     /// nothing — it would look like a pass while the account got promoted.
+    ///
+    /// **Why all three and not just `migrated_at`.** The two withdrawal
+    /// markers fail in the OPPOSITE direction from the conversion marker, and
+    /// this test is the one that holds that. An unparseable `migrated_at`
+    /// reads as "never converted" and demotes a promoted account; an
+    /// unparseable `rollback_at` or `conservation_failed_at` reads as "not
+    /// withdrawn" and keeps an account authoritative that the server
+    /// explicitly disowned, showing figures its own conservation check
+    /// flagged. Both are covered because `authorityState()` throws on any
+    /// present-but-unreadable value — see its header for why that symmetry is
+    /// deliberate rather than a side effect of how the helper is written.
     @Test("the refusing timestamps parse rather than reading as absent")
     func refusingTimestampsParse() throws {
         let row = try decode("""

@@ -953,10 +953,38 @@ struct RemoteShiftMigrationState: Decodable, Equatable, Sendable {
     /// distinguishable at every level -- the invariant the row-level guard
     /// established, restored at the field level, via the safe path that
     /// already existed rather than a second one.
+    /// ## ALL THREE timestamps must throw. This is not incidental.
+    ///
+    /// Recorded because the symmetry was, for a while, correct BY ACCIDENT:
+    /// the `parse` helper made per-field special-casing awkward, so all three
+    /// got the same treatment before anyone had reasoned through why the
+    /// other two need it. Nobody was holding that, which means a later
+    /// refactor -- a lenient `rollback_at` for some import path, say --
+    /// could special-case one field, silently reopen the hazard, and leave
+    /// every test passing, because the tests assert the behaviour and not
+    /// the reason. A true property with no stated reason is one refactor
+    /// from being a false one.
+    ///
+    /// The two directions are opposite failures with the same root:
+    ///
+    /// - **`migrated_at` unparseable, read as nil** -> "never converted" ->
+    ///   DEMOTES a promoted account, hiding every shift logged since
+    ///   promotion, because those exist only as `ShiftRecord`s.
+    /// - **`rollback_at` or `conservation_failed_at` unparseable, read as
+    ///   nil** -> "not withdrawn" -> KEEPS an account authoritative that the
+    ///   server explicitly disowned, showing figures its own conservation
+    ///   check flagged.
+    ///
+    /// So the rule is the field-level twin of the leg's row-level one: a
+    /// genuine SQL NULL is the ONLY thing allowed to mean absent, for every
+    /// one of these columns, in both directions.
     func authorityState() throws -> ShiftReadAuthority.State {
         func parse(_ value: String?, _ column: String) throws -> Date? {
             // A genuine SQL NULL. The only thing allowed to mean "absent".
             guard let value else { return nil }
+            // Present but unreadable. NEVER nil -- see the header: for
+            // `migrated_at` a nil demotes a promoted account, and for the
+            // other two a nil keeps a withdrawn account authoritative.
             guard let parsed = PaydayRemoteDate.parseInstant(value) else {
                 throw UnparseableTimestamp(column: column, value: value)
             }
