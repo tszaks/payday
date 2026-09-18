@@ -26,6 +26,7 @@ struct BackfillSheet: View {
     @FocusState private var focusedField: CurrencyRowField?
 
     @State private var shiftsAddedCount = 0
+    @State private var saveFailed = false
     @State private var datesWithExistingShifts: Set<Date> = []
     /// Entries saved this session, appended to allEntries when rescheduling
     /// the nudge at dismiss — same defensive concatenation LogTipSheet.saveNew
@@ -129,6 +130,12 @@ struct BackfillSheet: View {
         }
         .presentationDragIndicator(.visible)
         .presentationBackground(PaydayColor.background)
+        .alert(
+            ShiftCommands.Failure.saveFailed.message,
+            isPresented: $saveFailed
+        ) {
+            Button("OK", role: .cancel) {}
+        }
     }
 
     private var dateCard: some View {
@@ -174,13 +181,28 @@ struct BackfillSheet: View {
     /// The one place a shift actually gets written — shared by "Save & Add
     /// Another" and both Done buttons so there's exactly one save path.
     private func performSave() {
-        let entries = ShiftWriter.insertShift(
-            into: modelContext,
-            date: selectedDate,
-            cashCents: cashCents,
-            creditCents: creditCents,
-            tipOutCents: tipOutCents > 0 ? tipOutCents : nil
-        )
+        // Explicit and atomic. This path persisted only through autosave, so
+        // with autosave off a backfilled shift would vanish on relaunch --
+        // and backfill is used to enter a whole history at once, so the loss
+        // would be many nights rather than one.
+        let entries: [TipEntry]
+        do {
+            entries = try ShiftCommands.commit(in: modelContext) {
+                ShiftWriter.insertShift(
+                    into: modelContext,
+                    date: selectedDate,
+                    cashCents: cashCents,
+                    creditCents: creditCents,
+                    tipOutCents: tipOutCents > 0 ? tipOutCents : nil
+                )
+            }
+        } catch {
+            // Rolled back. The amounts stay on screen so the night can be
+            // re-entered rather than silently lost, and the counter does not
+            // advance on a save that did not happen.
+            saveFailed = true
+            return
+        }
         sessionEntries.append(contentsOf: entries)
         datesWithExistingShifts.insert(Calendar.current.startOfDay(for: selectedDate))
         PaydayHaptics.success()

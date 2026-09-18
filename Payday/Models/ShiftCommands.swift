@@ -94,6 +94,19 @@ enum ShiftCommands {
         }
     }
 
+    /// The atomic boundary, for the SwiftUI write paths that are not yet
+    /// commands.
+    ///
+    /// Those paths persisted only through autosave and several never called
+    /// `save()` at all, which is why `autosaveEnabled = false` could not land
+    /// before them: flipping it first silently stops persisting logged shifts,
+    /// paychecks and live field edits, and stops firing `ModelContext.didSave`
+    /// so nothing syncs either. Each one now wraps its mutations in this, so
+    /// the flag and the conversions land together.
+    static func commit<T>(in context: ModelContext, _ body: () throws -> T) throws -> T {
+        try perform(in: context, body)
+    }
+
     // MARK: - What counts as worth saving
 
     /// Whether there is anything here to save.
