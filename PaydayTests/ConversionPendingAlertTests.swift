@@ -41,11 +41,14 @@ struct ConversionPendingAlertTests {
     /// fix from overclaiming.
 
     @Test("a mayMutate refusal says the shift is syncing, not that the save failed")
+    @MainActor
     func refusalSaysSyncing() {
-        // Exactly what the view evaluates: `(saveFailure ?? .saveFailed).message`
-        // with `saveFailure` set from `error as? ShiftCommands.Failure`.
+        // The VIEW'S property, not a restatement of its expression. An
+        // earlier draft rebuilt `(saveFailure ?? .saveFailed).message` here,
+        // which would stay green if the view's copy changed -- the same
+        // rebuild-the-arithmetic pattern refused on the payday card.
         let saveFailure: ShiftCommands.Failure? = .conversionPending
-        let shown = (saveFailure ?? .saveFailed).message
+        let shown = saveFailure.alertMessage
         #expect(shown == ShiftCommands.Failure.conversionPending.message)
         #expect(shown == "Payday is still syncing this shift. Try again in a moment.")
         // And it is NOT the generic one, which is the whole defect.
@@ -59,9 +62,10 @@ struct ConversionPendingAlertTests {
     /// by an over-confident one. Fixing the first by committing the second
     /// is the trade this test refuses.
     @Test("an unknown failure still reads as the generic save failure")
+    @MainActor
     func unknownStaysGeneric() {
-        let unknown: ShiftCommands.Failure? = nil
-        let shown = (unknown ?? .saveFailed).message
+        let saveFailure: ShiftCommands.Failure? = nil
+        let shown = saveFailure.alertMessage
         #expect(shown == ShiftCommands.Failure.saveFailed.message)
         #expect(shown != ShiftCommands.Failure.conversionPending.message)
     }
