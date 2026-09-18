@@ -226,6 +226,21 @@ public struct InputManifest: Hashable, Codable, Sendable {
         Canonical.sha256Hex(text)
     }
 
+    /// The name Design 2 gives what `SnapshotStamp` carries: "the manifest
+    /// summary (digests + counts)".
+    ///
+    /// It is a typealias rather than a second struct because this type IS
+    /// that summary already — it holds five digests, four counts,
+    /// `engineVersion` and `asOf`, and not one byte of a shift, paycheck or
+    /// policy. A separate summary struct would be a second copy of the same
+    /// eleven fields, and the two could disagree about which digest belongs
+    /// to which count.
+    public typealias Summary = InputManifest
+
+    /// This manifest as the stamp's summary. A no-op that documents the
+    /// line above at the call site.
+    public var summary: Summary { self }
+
     // MARK: - Canonical encoding
 
     enum Canonical {

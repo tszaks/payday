@@ -181,6 +181,9 @@ public enum CompensationLedger {
                 calendarPolicyID: nil,
                 workweekStart: nil,
                 minutesWorked: shift.minutesWorked,
+                // No workweek, so no threshold to split against.
+                regularMinutes: nil,
+                overtimeMinutes: nil,
                 wage: .unavailable(.noCalendarPolicy),
                 components: shift.nonWageComponents
             ))
@@ -232,6 +235,9 @@ public enum CompensationLedger {
                     calendarPolicyID: calendarPolicy.id,
                     workweekStart: workweekStart,
                     minutesWorked: nil,
+                    // No hours logged, so there is nothing to split.
+                    regularMinutes: nil,
+                    overtimeMinutes: nil,
                     wage: .unavailable(.hoursMissing),
                     components: shift.nonWageComponents
                 ))
@@ -264,6 +270,11 @@ public enum CompensationLedger {
                     calendarPolicyID: calendarPolicy.id,
                     workweekStart: workweekStart,
                     minutesWorked: minutes,
+                    // The threshold split is a calendar fact and survives a
+                    // missing rate: these minutes are known, their value is
+                    // not (fixture H1 asserts regularMinutes 300 here).
+                    regularMinutes: regularMinutes,
+                    overtimeMinutes: overtimeMinutes,
                     wage: .unavailable(.rateNotSet),
                     components: shift.nonWageComponents
                 ))
@@ -308,6 +319,10 @@ public enum CompensationLedger {
                 calendarPolicyID: calendarPolicy.id,
                 workweekStart: workweekStart,
                 minutesWorked: minutes,
+                // Same two locals the WageComponents above were built from,
+                // so the calendar split and the priced split cannot drift.
+                regularMinutes: regularMinutes,
+                overtimeMinutes: overtimeMinutes,
                 wage: .valued(wage, assumed: ratePolicy.provenance == .assumedFromLegacySetting),
                 components: components
             ))
