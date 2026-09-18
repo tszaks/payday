@@ -24,6 +24,13 @@ struct PaydayApp: App {
     @State private var earningsStore: EarningsStore
 
     init() {
+        // First, before anything that can fail. Opening the shared SwiftData
+        // container is the one startup failure this app has already shipped a
+        // recovery screen for (SharedStoreRecoveryView below), and a reporter
+        // started after it would never hear about it. No-ops entirely when no
+        // SENTRY_DSN is in the bundle, which is every Debug and test build.
+        PaydayCrashReporting.start()
+
         // The stores this one reads must exist before it does, so they are
         // built here rather than relying on property initialization order.
         let policyStore = PolicyStore()
