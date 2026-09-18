@@ -28,9 +28,10 @@ struct PeriodDetailFacts {
         period: PayPeriod,
         schedule: PaySchedule?,
         wageCentsPerHour: Int?,
+        payrollTimeZone: TimeZone,
         calendar: Calendar = .current
     ) {
-        let calculator = PayPeriodCalculator(schedule: schedule ?? .fallback, calendar: calendar)
+        let calculator = PayPeriodCalculator(payrollTimeZone: payrollTimeZone, schedule: schedule ?? .fallback, calendar: calendar)
         let resolvedPayDate = calculator.payDate(for: period)
         let resolvedEntries = allEntries
             .filter { $0.date >= period.start && $0.date <= period.end }
@@ -49,6 +50,7 @@ struct PeriodDetailFacts {
 
         let resolvedBreakdown = TipBreakdown.total(of: resolvedEntries)
         let resolvedNights = StatsEngine(
+            payrollTimeZone: payrollTimeZone,
             records: resolvedEntries.map(TipRecord.init),
             calendar: calendar
         ).nightlyTotals()
@@ -156,6 +158,7 @@ private struct PeriodDetailFactsCache {
 struct PeriodDetailView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(PayScheduleStore.self) private var scheduleStore
+    @Environment(PolicyStore.self) private var policyStore
     @Environment(UserPreferencesStore.self) private var preferencesStore
     @Query private var allEntries: [TipEntry]
     @Query private var paycheckRecords: [PaycheckRecord]
@@ -259,7 +262,8 @@ struct PeriodDetailView: View {
             paycheckRecords: paycheckRecords,
             period: period,
             schedule: scheduleStore.schedule,
-            wageCentsPerHour: preferencesStore.baseHourlyWageCents
+            wageCentsPerHour: preferencesStore.baseHourlyWageCents,
+            payrollTimeZone: policyStore.payrollTimeZone
         )
     }
 

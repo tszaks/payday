@@ -46,7 +46,7 @@ struct CashWeekdayFactsTests {
         for (y, m, d) in [(2026, 7, 6), (2026, 7, 13), (2026, 7, 20), (2026, 7, 8), (2026, 7, 15), (2026, 7, 22)] {
             records += shift(y, m, d, cashCents: 1000, creditCents: 9000)
         }
-        let engine = StatsEngine(records: records)
+        let engine = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: records)
         let cashWeekday = engine.insightsFacts(referenceDate: date(2026, 7, 26))?.cashWeekday
         #expect(cashWeekday?.weekday == weekday(2026, 7, 10))
         #expect(cashWeekday?.nightCount == 3)
@@ -65,7 +65,7 @@ struct CashWeekdayFactsTests {
         for (y, m, d) in [(2026, 7, 6), (2026, 7, 13), (2026, 7, 20), (2026, 7, 8), (2026, 7, 15), (2026, 7, 22)] {
             records += shift(y, m, d, cashCents: 1000, creditCents: 9000)
         }
-        let engine = StatsEngine(records: records)
+        let engine = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: records)
         #expect(engine.insightsFacts(referenceDate: date(2026, 7, 26))?.cashWeekday == nil)
     }
 
@@ -80,7 +80,7 @@ struct CashWeekdayFactsTests {
         for (y, m, d) in [(2026, 7, 6), (2026, 7, 13), (2026, 7, 20), (2026, 7, 27), (2026, 8, 3)] {
             records += shift(y, m, d, cashCents: 1000, creditCents: 9000)
         }
-        let engine = StatsEngine(records: records)
+        let engine = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: records)
         #expect(engine.insightsFacts(referenceDate: date(2026, 8, 10))?.cashWeekday == nil)
     }
 
@@ -96,7 +96,7 @@ struct CashWeekdayFactsTests {
         for (y, m, d) in [(2026, 7, 6), (2026, 7, 13), (2026, 7, 20), (2026, 7, 8), (2026, 7, 15), (2026, 7, 22)] {
             records += shift(y, m, d, cashCents: 1000, creditCents: 9000)
         }
-        let engine = StatsEngine(records: records)
+        let engine = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: records)
         #expect(engine.insightsFacts(referenceDate: date(2026, 7, 26))?.cashWeekday == nil)
     }
 
@@ -111,7 +111,7 @@ struct CashWeekdayFactsTests {
         for (y, m, d) in [(2026, 7, 6), (2026, 7, 13), (2026, 7, 20), (2026, 7, 8), (2026, 7, 15), (2026, 7, 22)] {
             records += shift(y, m, d, cashCents: 3000, creditCents: 7000)
         }
-        let engine = StatsEngine(records: records)
+        let engine = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: records)
         #expect(engine.insightsFacts(referenceDate: date(2026, 7, 26))?.cashWeekday == nil)
     }
 
@@ -130,7 +130,7 @@ struct CashWeekdayFactsTests {
         for (y, m, d) in [(2026, 7, 6), (2026, 7, 13), (2026, 7, 20), (2026, 7, 8), (2026, 7, 15), (2026, 7, 22)] {
             records += shift(y, m, d, cashCents: 0, creditCents: 10000)
         }
-        let engine = StatsEngine(records: records)
+        let engine = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: records)
         let cashWeekday = engine.insightsFacts(referenceDate: date(2026, 7, 26))?.cashWeekday
         #expect(cashWeekday?.weekday == weekday(2026, 7, 10))
         #expect(cashWeekday.map { abs($0.sharePercent - (10000.0 / 55000.0 * 100)) < 0.01 } == true)
@@ -153,7 +153,7 @@ struct CashWeekdayFactsTests {
         for (y, m, d) in [(2026, 7, 6), (2026, 7, 13), (2026, 7, 20), (2026, 7, 8), (2026, 7, 15), (2026, 7, 22)] {
             records += shift(y, m, d, cashCents: 0, creditCents: 10000)
         }
-        let engine = StatsEngine(records: records)
+        let engine = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: records)
         let cashWeekday = engine.insightsFacts(referenceDate: date(2026, 7, 26))?.cashWeekday
         #expect(cashWeekday?.weekday == weekday(2026, 7, 10))
         #expect(cashWeekday?.nightCount == 3)
@@ -166,7 +166,7 @@ struct CashWeekdayFactsTests {
         for (y, m, d) in [(2026, 7, 6), (2026, 7, 13), (2026, 7, 20), (2026, 7, 8), (2026, 7, 15), (2026, 7, 22)] {
             records += shift(y, m, d, cashCents: 5000, creditCents: 5000)
         }
-        let engine = StatsEngine(records: records)
+        let engine = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: records)
         #expect(engine.insightsFacts(referenceDate: date(2026, 7, 26))?.cashWeekday == nil)
     }
 }

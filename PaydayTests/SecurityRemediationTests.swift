@@ -157,6 +157,7 @@ struct CSVFormulaNeutralizationTests {
     private func noteCell(_ note: String) -> String {
         let day = Date(timeIntervalSince1970: 1_780_000_000)
         let calculator = PayPeriodCalculator(
+            payrollTimeZone: PaydayTestZone.payroll,
             schedule: PaySchedule(frequency: .biweekly, anchorPeriodEnd: Date(timeIntervalSince1970: 1_779_000_000))
         )
         let entry = TipEntry(date: day, amountCents: 5_000, kind: .cash, note: note)

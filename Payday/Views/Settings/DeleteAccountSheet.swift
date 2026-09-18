@@ -75,7 +75,7 @@ struct DeleteAccountSheet: View {
                             CSVExporter.export(
                                 entries: allEntries,
                                 paycheckRecords: paycheckRecords,
-                                calculator: PayPeriodCalculator(schedule: scheduleStore.schedule ?? .fallback)
+                                calculator: PayPeriodCalculator(payrollTimeZone: policyStore.payrollTimeZone, schedule: scheduleStore.schedule ?? .fallback)
                             )
                         },
                         preview: SharePreview("Payday-Export.csv")

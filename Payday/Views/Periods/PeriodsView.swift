@@ -23,10 +23,11 @@ struct PeriodsPageFacts {
         paycheckRecords: [PaycheckRecord],
         schedule: PaySchedule?,
         wageCentsPerHour: Int?,
+        payrollTimeZone: TimeZone,
         now: Date = .now,
         calendar: Calendar = .current
     ) {
-        let periodCalculator = PayPeriodCalculator(schedule: schedule ?? .fallback, calendar: calendar)
+        let periodCalculator = PayPeriodCalculator(payrollTimeZone: payrollTimeZone, schedule: schedule ?? .fallback, calendar: calendar)
         calculator = periodCalculator
 
         var periods: [PayPeriod] = []
@@ -72,7 +73,7 @@ struct PeriodsPageFacts {
         let yearEntries = allEntries.filter {
             calendar.component(.year, from: $0.date) == currentYear
         }
-        yearToDateNights = StatsEngine(records: yearEntries.map(TipRecord.init)).nightlyTotals()
+        yearToDateNights = StatsEngine(payrollTimeZone: payrollTimeZone, records: yearEntries.map(TipRecord.init)).nightlyTotals()
         yearToDateWages = PeriodIncome.wages(
             entries: yearEntries,
             wageCentsPerHour: wageCentsPerHour,
@@ -107,6 +108,7 @@ private struct PeriodsPageFactsCache {
 struct PeriodsView: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(PayScheduleStore.self) private var scheduleStore
+    @Environment(PolicyStore.self) private var policyStore
     @Environment(TabRouter.self) private var tabRouter
     @Environment(UserPreferencesStore.self) private var preferencesStore
     @Query private var allEntries: [TipEntry]
@@ -197,6 +199,7 @@ struct PeriodsView: View {
             paycheckRecords: paycheckRecords,
             schedule: scheduleStore.schedule,
             wageCentsPerHour: preferencesStore.baseHourlyWageCents,
+            payrollTimeZone: policyStore.payrollTimeZone,
             now: currentDay
         )
     }

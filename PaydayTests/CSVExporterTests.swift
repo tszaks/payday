@@ -9,7 +9,7 @@ private func date(_ year: Int, _ month: Int, _ day: Int) -> Date {
     return calendar.date(from: DateComponents(year: year, month: month, day: day))!
 }
 
-private let calculator = PayPeriodCalculator(schedule: PaySchedule(frequency: .biweekly, anchorPeriodEnd: date(2026, 7, 19), firstWeekday: 2))
+private let calculator = PayPeriodCalculator(payrollTimeZone: PaydayTestZone.payroll, schedule: PaySchedule(frequency: .biweekly, anchorPeriodEnd: date(2026, 7, 19), firstWeekday: 2))
 
 @MainActor
 private func makeContext() throws -> ModelContext {
