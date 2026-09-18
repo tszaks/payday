@@ -30,13 +30,24 @@ struct BreakdownRow: Identifiable {
 
 /// The drawer's contents, composed from ONE `EarningsResult`.
 ///
-/// Dashboard and Period detail each built this list by hand, from their own
-/// arithmetic, in the same order, with the same labels — and drifted anyway:
-/// Period detail back-derived its tip-out as
+/// Dashboard and Period detail each build this list by hand, from their own
+/// arithmetic, in the same order, with the same labels — and have drifted:
+/// Period detail back-derives its tip-out as
 /// `max(0, cash + credit + gratuity − net)` instead of reading the tip-out
-/// the ledger already knew, so any rounding disagreement upstream became a
-/// phantom "Tipped out" row. There is one composition now, and both screens
-/// call it.
+/// the ledger already knew, so any rounding disagreement upstream becomes a
+/// phantom "Tipped out" row.
+///
+/// **NOT YET CALLED BY EITHER SCREEN.** These four functions exist, are
+/// tested (`HeroBreakdownDrawerSnapshotTests`) and are the one composition
+/// wave 1 swaps onto — but as of PR 5 wave 0 they have zero production
+/// callers. `DashboardView.heroWithDrawer` and `PeriodDetailFacts` still
+/// compose their own rows, still back-derive the tip-out, and still write
+/// `tipOutCents > 0 ? "You kept" : "Total"` (DashboardView.swift:570,
+/// PeriodDetailView.swift:264) instead of `CompletenessCopy`'s label, so
+/// Dashboard can still print "Total" over a partial period. The swap needs
+/// the hero PERIOD's `EarningsResult`, which is the hero migration itself:
+/// group 2.1 (Dashboard) and group 2.4 (Period detail), both wave 1. Do not
+/// read `docs/METRICS.md` rows [SC-02] or [SC-03] as closing those.
 ///
 /// Order is fixed and is the reason the component exists: everything that
 /// ADDS, then the subtotal, then everything that SUBTRACTS, then what is

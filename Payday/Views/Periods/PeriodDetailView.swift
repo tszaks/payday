@@ -42,6 +42,7 @@ struct PeriodDetailFacts {
         period: PayPeriod,
         schedule: PaySchedule?,
         wageCentsPerHour: Int?,
+        policies: CompensationPolicies,
         payrollTimeZone: TimeZone,
         calendar: Calendar = .current
     ) {
@@ -69,20 +70,33 @@ struct PeriodDetailFacts {
             calendar: calendar
         ).nightlyTotals()
         let nonWageEarningsCents = resolvedNights.reduce(0) { $0 + $1.cents }
+        // ONE workweek for this screen: the calendar POLICY in effect, the
+        // same one the snapshot below buckets by. `PeriodIncome` is a
+        // pre-policy helper that can only take a scalar, and handing it
+        // `schedule?.firstWeekday` (the pay-period GRID's weekday, which PR 3
+        // severed from the workweek) put this hero on a different week than
+        // the shift rows under it. Falls back to the grid weekday only before
+        // the first calendar policy exists, which is what shipped before.
+        let workweekStartWeekday = policies.calendar(on: CivilDay(period.end, in: payrollTimeZone))?.workweekStartWeekday
+            ?? schedule?.firstWeekday
         let resolvedWages = PeriodIncome.wages(
             payrollTimeZone: payrollTimeZone,
             entries: resolvedEntries,
             wageCentsPerHour: wageCentsPerHour,
-            firstWeekday: schedule?.firstWeekday,
+            firstWeekday: workweekStartWeekday,
             calendar: calendar
         )
         let resolvedHeroTotalCents = nonWageEarningsCents + (resolvedWages?.totalCents ?? 0)
 
+        // The USER'S rate and workweek history, effective dates intact.
+        // `schedule?.firstWeekday` is the pay-period GRID's weekday and is
+        // no longer a workweek source: PR 3 severed the two, and feeding it
+        // here let this screen allocate overtime across different weeks than
+        // Insights did over the same days.
         let resolvedShiftSnapshot = LegacySnapshotBridge.snapshot(
             shifts: resolvedShiftDays,
-            rateCents: wageCentsPerHour,
+            policies: policies,
             payrollTimeZone: payrollTimeZone,
-            workweekStartWeekday: schedule?.firstWeekday ?? calendar.firstWeekday,
             asOf: period.end
         )
         // Off the snapshot rather than a second `CompensationLedger` run
@@ -196,6 +210,9 @@ private struct PeriodDetailFactsKey: Equatable {
     let payDelayDays: Int?
     let firstWeekday: Int?
     let wageCentsPerHour: Int?
+    /// The whole policy value: a dated raise or a queued workweek change
+    /// moves this screen's cents without moving `wageCentsPerHour`.
+    let policies: CompensationPolicies
 }
 
 private struct PeriodDetailFactsCache {
@@ -231,7 +248,8 @@ struct PeriodDetailView: View {
             anchorPeriodEnd: schedule?.anchorPeriodEnd,
             payDelayDays: schedule?.payDelayDays,
             firstWeekday: schedule?.firstWeekday,
-            wageCentsPerHour: preferencesStore.baseHourlyWageCents
+            wageCentsPerHour: preferencesStore.baseHourlyWageCents,
+            policies: policyStore.policies
         )
         let facts = factsCache?.key == key
             ? factsCache!.facts
@@ -311,6 +329,7 @@ struct PeriodDetailView: View {
             period: period,
             schedule: scheduleStore.schedule,
             wageCentsPerHour: preferencesStore.baseHourlyWageCents,
+            policies: policyStore.policies,
             payrollTimeZone: policyStore.payrollTimeZone
         )
     }

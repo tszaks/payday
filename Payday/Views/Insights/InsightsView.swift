@@ -29,12 +29,6 @@ struct InsightsView: View {
     @State private var currentDay = Calendar.current.startOfDay(for: .now)
 
     var body: some View {
-        // The workweek the ledger buckets overtime by. `PolicyStore` owns it
-        // now (PR 3 severed it from the pay-period grid), so this reads the
-        // policy in effect and falls back to the device calendar only when
-        // no policy exists yet.
-        let workweekStartWeekday = policyStore.latestCalendarPolicy?.workweekStartWeekday
-            ?? Calendar.current.firstWeekday
         let key = InsightsPageFactsKey(
             entriesRevision: dataRevision,
             ledgerRevision: moveLedgerStore.revision,
@@ -50,8 +44,7 @@ struct InsightsView: View {
             // this whole key in favour of `SnapshotStamp` (PR 5 adapter
             // contract, rule 3); it cannot go yet because the key also
             // covers the StatsEngine facts this screen still computes.
-            rateCents: policyStore.currentHourlyRateCents,
-            workweekStartWeekday: workweekStartWeekday
+            policies: policyStore.policies
         )
         let pageFacts = pageFactsCache?.key == key
             ? pageFactsCache!.facts
@@ -59,8 +52,7 @@ struct InsightsView: View {
                 allEntries: allEntries,
                 ledger: moveLedgerStore.firstShownAt,
                 payrollTimeZone: policyStore.payrollTimeZone,
-                rateCents: policyStore.currentHourlyRateCents,
-                workweekStartWeekday: workweekStartWeekday,
+                policies: policyStore.policies,
                 now: currentDay
             )
         NavigationStack {
@@ -535,8 +527,7 @@ private struct InsightsPageFacts {
         allEntries: [TipEntry],
         ledger: [String: Date],
         payrollTimeZone: TimeZone,
-        rateCents: Int?,
-        workweekStartWeekday: Int,
+        policies: CompensationPolicies,
         now: Date = .now
     ) {
         let records = allEntries.map(TipRecord.init)
@@ -545,11 +536,17 @@ private struct InsightsPageFacts {
         moves = statsEngine.moves(referenceDate: now)
         followUps = statsEngine.followUps(ledger: ledger, referenceDate: now)
         chartFacts = EarningsChartFacts(
+            // The USER'S rate and workweek history, effective dates
+            // intact. This used to read
+            // `policyStore.latestCalendarPolicy?.workweekStartWeekday` while
+            // Dashboard and Period detail read `schedule?.firstWeekday` —
+            // two independent Settings controls, so setting them differently
+            // made this chart allocate overtime across different weeks than
+            // Period detail's chart did over the same days.
             wholeOf: LegacySnapshotBridge.snapshot(
                 entries: allEntries,
-                rateCents: rateCents,
+                policies: policies,
                 payrollTimeZone: payrollTimeZone,
-                workweekStartWeekday: workweekStartWeekday,
                 asOf: now
             ),
             timeZone: payrollTimeZone
@@ -572,8 +569,10 @@ private struct InsightsPageFactsKey: Hashable {
     let ledgerRevision: Int
     let currentDay: Date
     let payrollTimeZone: String
-    let rateCents: Int?
-    let workweekStartWeekday: Int
+    /// The whole policy value, not a scalar view of it: a dated raise or a
+    /// queued workweek change moves every bar without moving
+    /// `currentHourlyRateCents`.
+    let policies: CompensationPolicies
 }
 
 private struct InsightsPageFactsCache {

@@ -27,6 +27,30 @@ struct RenderFactsPerformanceTests {
         calendar.date(from: DateComponents(year: year, month: month, day: day))!
     }
 
+    /// The policies a Facts struct values with, as `PolicyStore` would hold
+    /// them. A calendar policy is not optional furniture here: with none on
+    /// file the ledger has no workweek to bucket into and every shift takes
+    /// the cheap unbucketed path, which would quietly make this budget
+    /// measure the wrong code.
+    private func policies(rateCents: Int?, zone: TimeZone) -> CompensationPolicies {
+        let calendar = PayrollCalendarPolicy(
+            id: PolicyMigration.deterministicID("perf/calendar"),
+            effectiveFrom: .distantPast,
+            workweekStartWeekday: 2,
+            payrollTimeZone: zone
+        )
+        guard let rateCents else { return CompensationPolicies(rates: [], calendars: [calendar]) }
+        return CompensationPolicies(
+            rates: [PayRatePolicy(
+                id: PolicyMigration.deterministicID("perf/rate"),
+                effectiveFrom: .distantPast,
+                hourlyRateCents: rateCents,
+                provenance: .confirmed
+            )],
+            calendars: [calendar]
+        )
+    }
+
     @Test("calendar reduces a 10,000-row history once within an interactive budget")
     func calendarFactsStayFastForLargeHistory() {
         var calendar = Calendar(identifier: .gregorian)
@@ -132,6 +156,7 @@ struct RenderFactsPerformanceTests {
             period: period,
             schedule: schedule,
             wageCentsPerHour: nil,
+            policies: policies(rateCents: nil, zone: PaydayTestZone.payroll),
             payrollTimeZone: PaydayTestZone.payroll,
             calendar: calendar
         )

@@ -19,6 +19,20 @@ enum LegacyLedgerBridge {
     /// implies. Ids are content-derived so two calls with the same inputs
     /// produce the same policy, which keeps `ShiftValuation` comparable
     /// across calls.
+    ///
+    /// **Do not reach for this from anything new.** It is rate-BLIND by
+    /// construction: one scalar becomes a single `PayRatePolicy` at
+    /// `effectiveFrom: .distantPast` with `provenance: .confirmed`, so every
+    /// shift ever worked is priced at today's rate and `.estimated` is
+    /// unreachable. That is a faithful restatement of what `WageEstimate` and
+    /// `PeriodIncome` have always done — those two are the only callers left
+    /// and both die in PR 8 — but it is NOT what a new money path should do.
+    /// `LegacySnapshotBridge` was briefly built on this and the divergence
+    /// was measured: $520.00 / `.complete` here against $440.00 /
+    /// `.estimated` through `PolicyStore`'s real history, for two 8h shifts
+    /// at $10/h then $20/h. Anything new takes the whole
+    /// `CompensationPolicies` value and lets the engine do the effective
+    /// dating.
     static func policies(
         rateCents: Int?,
         payrollTimeZone: TimeZone,

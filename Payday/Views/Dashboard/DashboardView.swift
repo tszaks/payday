@@ -89,7 +89,7 @@ private struct DashboardFacts {
     let paydayCashCents: Int
     let tonightLine: String?
 
-    init(allEntries: [TipEntry], schedule: PaySchedule?, now: Date, forcedPaydayPhase: PaydayMoment.Phase?, dismissedClosedEnd: Date?, dismissedCheckEnd: Date?, wageCentsPerHour: Int?, payrollTimeZone: TimeZone) {
+    init(allEntries: [TipEntry], schedule: PaySchedule?, now: Date, forcedPaydayPhase: PaydayMoment.Phase?, dismissedClosedEnd: Date?, dismissedCheckEnd: Date?, wageCentsPerHour: Int?, policies: CompensationPolicies, payrollTimeZone: TimeZone) {
         let calendar = Calendar.current
         calculator = PayPeriodCalculator(payrollTimeZone: payrollTimeZone, schedule: schedule ?? .fallback)
         let period = calculator.period(containing: now)
@@ -98,11 +98,14 @@ private struct DashboardFacts {
         breakdown = TipBreakdown.total(of: periodEntries)
         daysRemaining = calculator.daysRemaining(from: now)
         shiftDays = ShiftDays.groupedByShift(periodEntries, shiftID: \.shiftID, date: \.date, period: \.shiftPeriod)
+        // The USER'S rate and workweek history, effective dates intact —
+        // never a scalar rate re-stamped as `.distantPast`, which repriced
+        // every pre-raise shift at today's rate. See the bridge's header for
+        // the measured $520-vs-$440 divergence that rule closed.
         let resolvedShiftSnapshot = LegacySnapshotBridge.snapshot(
             shifts: shiftDays,
-            rateCents: wageCentsPerHour,
+            policies: policies,
             payrollTimeZone: payrollTimeZone,
-            workweekStartWeekday: schedule?.firstWeekday ?? calendar.firstWeekday,
             asOf: now
         )
         shiftSnapshot = resolvedShiftSnapshot
@@ -114,6 +117,20 @@ private struct DashboardFacts {
             shiftDays.map { ($0.shiftID, resolvedShiftSnapshot?.valuation($0.shiftID)?.components.wagesCents ?? 0) },
             uniquingKeysWith: +
         )
+        // ONE workweek for this screen. The snapshot above buckets overtime
+        // by the calendar POLICY; `PeriodIncome` below is a pre-policy helper
+        // that can only take a scalar, so it gets the scalar for the policy
+        // IN EFFECT rather than `schedule?.firstWeekday` — which is the
+        // pay-period GRID's weekday, a different Settings control PR 3
+        // severed from the workweek. Handing the two different weekdays put
+        // the hero and the shift rows beneath it on different weeks, which is
+        // the "a screen a cent apart from itself" defect PR 3's review
+        // already paid for once. Falls back to the grid weekday only before
+        // the first calendar policy exists (the async hop in
+        // `PaydayCloudGate.adoptPolicyInputs`), which is exactly what shipped
+        // before. Wave 1 deletes `PeriodIncome` and this line with it.
+        let workweekStartWeekday = policies.calendar(on: CivilDay(now, in: payrollTimeZone))?.workweekStartWeekday
+            ?? schedule?.firstWeekday
         // A "shift" now counts closeouts, not calendar days.
         shiftCount = shiftDays.count
         // Days that hold more than one shift — the emergent doubles.
@@ -169,7 +186,7 @@ private struct DashboardFacts {
             // PeriodIncome — the same function the hero total uses — so the
             // check figure and the hero can never disagree about a week that
             // crossed 40 hours, which is what WageEstimate used to do here.
-            let payWages = PeriodIncome.wages(payrollTimeZone: payrollTimeZone, entries: payEntries, wageCentsPerHour: wageCentsPerHour, firstWeekday: schedule?.firstWeekday)
+            let payWages = PeriodIncome.wages(payrollTimeZone: payrollTimeZone, entries: payEntries, wageCentsPerHour: wageCentsPerHour, firstWeekday: workweekStartWeekday)
             predictedPaycheckCents = PredictedPaycheck.cents(from: payBreakdown, wagesCents: payWages?.totalCents ?? 0)
             predictedPayDate = calculator.payDate(for: pay)
             paydayCashCents = payBreakdown.cashCents
@@ -221,7 +238,7 @@ private struct DashboardFacts {
             }
         } else {
             isBestPeriodEver = false
-            let currentWages = PeriodIncome.wages(payrollTimeZone: payrollTimeZone, entries: periodEntries, wageCentsPerHour: wageCentsPerHour, firstWeekday: schedule?.firstWeekday)
+            let currentWages = PeriodIncome.wages(payrollTimeZone: payrollTimeZone, entries: periodEntries, wageCentsPerHour: wageCentsPerHour, firstWeekday: workweekStartWeekday)
             predictedPaycheckCents = PredictedPaycheck.cents(from: breakdown, wagesCents: currentWages?.totalCents ?? 0)
             predictedPayDate = calculator.payDate(for: period)
             paydayCashCents = breakdown.cashCents
@@ -245,7 +262,7 @@ private struct DashboardFacts {
         let heroPeriodStart = heroPeriod.start
         let heroPeriodEnd = heroPeriod.end
         let heroEntries = allEntries.filter { $0.date >= heroPeriodStart && $0.date <= heroPeriodEnd }
-        heroWages = PeriodIncome.wages(payrollTimeZone: payrollTimeZone, entries: heroEntries, wageCentsPerHour: wageCentsPerHour, firstWeekday: schedule?.firstWeekday)
+        heroWages = PeriodIncome.wages(payrollTimeZone: payrollTimeZone, entries: heroEntries, wageCentsPerHour: wageCentsPerHour, firstWeekday: workweekStartWeekday)
         heroTotalCents = heroTipsNetCents + (heroWages?.totalCents ?? 0)
 
         // Echo of tonight's reveal verdict, for the most recently logged
@@ -296,6 +313,11 @@ private struct DashboardFactsKey: Hashable {
     let dismissedClosedEndRaw: Double
     let dismissedCheckEndRaw: Double
     let wageCentsPerHour: Int?
+    /// The whole policy value, not a scalar view of it: a queued workweek
+    /// change or a dated raise moves the snapshot's cents without touching
+    /// `wageCentsPerHour`, so anything less than this leaves the cache
+    /// serving figures computed under the old history.
+    let policies: CompensationPolicies
     /// An input to every bucketed figure below, so a new calendar policy has
     /// to invalidate the cache rather than wait for the entries to change.
     let payrollTimeZone: String
@@ -381,6 +403,7 @@ struct DashboardView: View {
             dismissedClosedEndRaw: dismissedClosedEndRaw,
             dismissedCheckEndRaw: dismissedCheckEndRaw,
             wageCentsPerHour: preferencesStore.baseHourlyWageCents,
+            policies: policyStore.policies,
             payrollTimeZone: policyStore.payrollTimeZone.identifier
         )
         let facts = factsCache?.key == key
@@ -393,6 +416,7 @@ struct DashboardView: View {
                 dismissedClosedEnd: dismissedClosedEnd,
                 dismissedCheckEnd: dismissedCheckEnd,
                 wageCentsPerHour: preferencesStore.baseHourlyWageCents,
+                policies: policyStore.policies,
                 payrollTimeZone: policyStore.payrollTimeZone
             )
         NavigationStack {

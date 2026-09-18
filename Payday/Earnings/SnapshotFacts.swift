@@ -79,11 +79,15 @@ import Foundation
 //
 //    • `ShiftDayRowFacts(valuation:...)` / `(snapshot:shiftID:...)` — a row's
 //      amount, from the ledger's workweek allocation. Never a rate.
-//    • `BreakdownRow.ledgerRows(_:)` and `.total(_:)` — the hero drawer's
-//      itemization and its bottom line, built from ONE `EarningsResult`.
-//      Dashboard and Period detail were each composing this list by hand
-//      from their own arithmetic, and Period detail was BACK-DERIVING its
-//      tip-out. Both now call the same function.
+//    • `BreakdownRow.ledgerRows(_:)`, `.total(_:)`, `.lipText(_:)` and
+//      `.hasBreakdown(_:)` — the hero drawer's itemization, bottom line and
+//      collapsed lip, built from ONE `EarningsResult`. They EXIST and are
+//      tested; **neither screen calls them yet.** Dashboard and Period
+//      detail still compose the list by hand from their own arithmetic, and
+//      Period detail still BACK-DERIVES its tip-out. The swap needs the hero
+//      period's `EarningsResult`, which is the hero migration: groups 2.1
+//      and 2.4, wave 1. This is the worked example to copy, not a closed
+//      row.
 //    • `EarningsChartFacts(snapshot:range:asOf:)` — one engine query per
 //      bar, so a bar is an answer and not a number that agrees with one.
 //
@@ -96,10 +100,44 @@ import Foundation
 //  lands shows a person with four years of shifts an empty screen.
 //
 //  Until then, wave 0 feeds the shared components a REAL snapshot built from
-//  the legacy rows: `LegacySnapshotBridge.snapshot(shifts:...)`, same engine,
-//  same types, different input table. When S7 lands, wave 1's swap is one
-//  line per screen and nothing below it changes. That is the whole point of
-//  making the SHAPE snapshot-native now.
+//  the legacy rows: `LegacySnapshotBridge.snapshot(shifts:policies:...)`,
+//  same engine, same types, and the user's OWN `PolicyStore.policies` — so
+//  the rate history, the workweek history and the frozen payroll zone are
+//  the store's. What the bridge does not carry is the `paychecks` and
+//  `schedule` inputs `EarningsStore` supplies, so a caller that starts
+//  asking `snapshot.payPeriod(_:)` has to wait for the swap. Every wave-0
+//  consumer asks `day(_:)`, `range(_:)` or `valuation(_:)`, which read
+//  neither. See the bridge's own header for the list.
+//
+//  **The three heroes are the open hole.** Dashboard's, Period detail's and
+//  DayDetailSheet's hero figures are still composed by the screen: the
+//  snapshot on their facts structs feeds the ROWS and the CHART, not the
+//  number at the top. So `tipOutCents > 0 ? "You kept" : "Total"` is still
+//  live on DashboardView.swift:570 and PeriodDetailView.swift:264, and
+//  Period detail's tip-out is still `max(0, cash + credit + gratuity − net)`
+//  rather than the ledger's. Groups 2.1, 2.2 and 2.4 own those.
+//
+//  **One workweek source, and it is `PolicyStore.policies`.** Wave 0's first
+//  cut had four screens spelling this four ways — two reading
+//  `schedule?.firstWeekday` (the pay-period GRID's weekday, which PR 3
+//  severed from the workweek) and two reading `latestCalendarPolicy`, which
+//  is `calendars.last` and therefore a QUEUED FUTURE policy. Set the two
+//  Settings controls differently and Insights allocated overtime across
+//  different weeks than Period detail did over the same days. All four now
+//  hand the bridge the whole `CompensationPolicies` value and let the engine
+//  do the effective dating. Never reintroduce a scalar weekday or a scalar
+//  rate on a money path.
+//
+//  The corollary, and it bit immediately: moving only the ROWS onto the
+//  policy puts them on a different week than a hero still computed by
+//  `PeriodIncome`, which takes a scalar. So the two screens that have both
+//  read the scalar from the SAME policy (`policies.calendar(on:)`, the
+//  effective-dated lookup — never `latestCalendar`, which is `calendars.last`
+//  and can be a queued FUTURE policy). Pinned by
+//  `OneWorkweekPerScreenTests`: with the grid weekday set against the policy,
+//  Period detail's hero read $500.00 while its rows read $550.00 over the
+//  same five shifts. If you migrate half a screen, migrate its workweek
+//  whole.
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// What every PR 5 screen adapter is.

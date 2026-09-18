@@ -253,3 +253,103 @@ struct MonthEqualsSumOfItsDaysTests {
         #expect(facts.monthDailyTotals.map(\.cents).sorted() == naive.map { $0 + 1000 }.sorted())
     }
 }
+
+/// Definition of Done #5, and the rule the whole goal is measured against:
+/// "the same metric, date scope, cutoff, source revision, **compensation
+/// policy**, and engine version must return the same integer-cents result on
+/// every consumer." Within one screen, that means the hero and the rows
+/// beneath it must bucket overtime by the SAME workweek.
+///
+/// This is the trap PR 5 wave 0's first cut walked into. Payday has two
+/// independent weekday controls in the same Settings screen, and they never
+/// write each other:
+///
+/// - Settings > "First day" writes `PaySchedule.firstWeekday`, the pay-period
+///   GRID's weekday (SettingsView.swift:249).
+/// - Settings > Payroll > "Workweek starts" writes
+///   `PayrollCalendarPolicy.workweekStartWeekday`, which is what actually owns
+///   overtime (PayrollSettingsSection.swift:96). PR 3 severed the two on
+///   purpose.
+///
+/// Wave 0 moved the shift ROWS onto `EarningsSnapshot`, which buckets by the
+/// policy, while the hero stayed on `PeriodIncome`, which was handed the
+/// grid's weekday. Set the two controls differently and one screen answered
+/// two different overtime allocations over the same shifts.
+@Suite("A screen's hero and its rows bucket overtime by one workweek")
+struct OneWorkweekPerScreenTests {
+    /// Five 10-hour days, Sunday 2026-09-27 through Thursday 2026-10-01, at
+    /// $10.00/hr. The bucketing is the whole point:
+    ///
+    /// - **Monday-start (2):** Sun 9/27 sits alone in the week of Mon 9/21
+    ///   (10h), and Mon–Thu fill the week of Mon 9/28 to exactly 40h. No
+    ///   overtime anywhere: 50h x $10 = $500.00.
+    /// - **Sunday-start (1):** all five days are one week of 50h, so 10h
+    ///   cross the threshold: 40 x $10 + 10 x $15 = $550.00.
+    ///
+    /// A $50.00 gap, which is what makes the disagreement legible rather than
+    /// a rounding cent.
+    private func entries() -> [TipEntry] {
+        [
+            (2026, 9, 27, 1), (2026, 9, 28, 2), (2026, 9, 29, 3),
+            (2026, 9, 30, 4), (2026, 10, 1, 5)
+        ].map { year, month, day, index in
+            TipEntry(
+                date: at(year, month, day),
+                amountCents: 1_000,
+                kind: .credit,
+                hoursWorked: 10,
+                shiftID: shiftID(index)
+            )
+        }
+    }
+
+    /// The user's real history: overtime is bucketed Sunday-start.
+    private func sundayStartPolicies() -> CompensationPolicies {
+        CompensationPolicies(
+            rates: [PayRatePolicy(
+                id: PolicyMigration.deterministicID("parity/rate/1000"),
+                effectiveFrom: .distantPast,
+                hourlyRateCents: 1_000,
+                provenance: .confirmed
+            )],
+            calendars: [PayrollCalendarPolicy(
+                id: PolicyMigration.deterministicID("parity/calendar/1"),
+                effectiveFrom: .distantPast,
+                workweekStartWeekday: 1,
+                payrollTimeZone: PaydayTestZone.payroll
+            )]
+        )
+    }
+
+    @Test("Period detail: the hero's wages are exactly the sum of its rows' wages, with the grid weekday set against the policy")
+    func periodDetailHeroEqualsItsRows() throws {
+        let period = PayPeriod(start: at(2026, 9, 27, hour: 0), end: at(2026, 10, 10, hour: 23))
+        // The GRID says Monday. The POLICY says Sunday. Only the policy owns
+        // overtime, so every wage figure on this screen must read 55000.
+        let schedule = PaySchedule(
+            frequency: .biweekly,
+            anchorPeriodEnd: at(2026, 10, 10, hour: 0),
+            firstWeekday: 2
+        )
+        let facts = PeriodDetailFacts(
+            allEntries: entries(),
+            paycheckRecords: [],
+            period: period,
+            schedule: schedule,
+            wageCentsPerHour: 1_000,
+            policies: sundayStartPolicies(),
+            payrollTimeZone: PaydayTestZone.payroll,
+            calendar: payrollCalendar()
+        )
+
+        let rowWages = facts.wagesByShiftID.values.reduce(0, +)
+        // 40h regular + 10h at 1.5x, because the POLICY buckets Sunday-start.
+        #expect(rowWages == 55_000)
+        #expect(facts.wages?.totalCents == 55_000)
+        // The invariant: the hero's wage figure IS the sum of the row
+        // figures. Before the workweek was unified this read 50000 against
+        // 55000 — one screen, two overtime allocations, $50.00 apart.
+        #expect(facts.wages?.totalCents == rowWages)
+        #expect(facts.wages?.totalCents != 50_000, "the superseded grid-weekday allocation")
+    }
+}

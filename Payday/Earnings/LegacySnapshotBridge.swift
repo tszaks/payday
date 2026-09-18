@@ -18,12 +18,27 @@ import Foundation
 /// second engine and it is not a mock: it builds `EarningsInputs` and calls
 /// `EarningsSnapshot.build`, so the output is the same `CompensationLedger`
 /// valuation, the same `SnapshotStamp`, the same `Completeness`, and the same
-/// queries the store's snapshot answers. The only difference is which table
-/// the rows were read out of.
+/// queries the store's snapshot answers.
 ///
 /// **Delete it when PR 2 S7 lands.** The replacement is one line per screen:
-/// `LegacySnapshotBridge.snapshot(...)` becomes `earningsStore.snapshot`, and
-/// nothing below that line changes, which is exactly what wave 0 was for.
+/// `LegacySnapshotBridge.snapshot(shifts:policies:...)` becomes
+/// `earningsStore.snapshot`.
+///
+/// ## What differs from `EarningsStore`, exactly
+///
+/// Only the SHIFT TABLE, and two absences. The policies are the user's own
+/// (see below), so the rate history, the workweek history and the frozen
+/// payroll zone are identical to the store's. What the bridge does not carry:
+///
+/// - **No `paychecks` and no `schedule`.** `EarningsInputs` accepts both and
+///   `EarningsStore` supplies them from `PaycheckRecord` and `PayScheduleStore`.
+///   The bridge omits them, so `snapshot.payPeriod(_:)` and any
+///   reconciliation query answer over a period the caller has to bound
+///   itself. Every wave-0 consumer asks `day(_:)`, `range(_:)` or
+///   `valuation(_:)`, which do not read either.
+/// - **The caller's `asOf`, not `now()`.** Period detail deliberately passes
+///   `.distantFuture` so a future day of the current period still renders as
+///   its own labelled slot.
 ///
 /// ## The one judgement it makes, and why it is not a new one
 ///
@@ -39,6 +54,34 @@ import Foundation
 /// renders and the one `private.derive_shifts` was written to match. So the
 /// bridge restates no rule; it only moves an answer that already exists into
 /// the engine's input shape.
+///
+/// ## It values with the USER'S policies, never a synthesized pair
+///
+/// This is the fix for a measured defect in wave 0's first cut, and it is
+/// the reason the parameter is `CompensationPolicies` and not an `Int?` rate
+/// plus an `Int` weekday.
+///
+/// That first cut handed `LegacyLedgerBridge.policies` one scalar rate, which
+/// turns into a single `PayRatePolicy` at `effectiveFrom: .distantPast` with
+/// `provenance: .confirmed`. MEASURED on the simulator (two 8h shifts, $10/h
+/// until 2026-06-01 then $20/h): the synthesized pair priced the March shift
+/// at 16000c and reported the year as $520.00, state `.complete`, caption
+/// nil; the same shifts under `PolicyStore`'s real history give 8000c,
+/// $440.00, `.estimated`, and the caption "Wages estimated from your current
+/// rate". So every pre-raise shift was repriced at today's rate on every
+/// migrated surface, and `.estimated` was unreachable — which made
+/// `CompletenessCopy.caption(.estimated)` dead code in production even though
+/// `PayrollSettingsSection` ships a "Rate changed on…" control that writes
+/// exactly that history.
+///
+/// One consequence worth knowing, because it is the honest engine answer and
+/// not a bug: with **no calendar policy on file** the ledger has no workweek
+/// to allocate into, so every wage reads `.unavailable(.noCalendarPolicy)`.
+/// `PolicyStore.runMigrationsIfNeeded` always creates one, and
+/// `PaydayCloudGate` calls it on launch and after every sync, so this is
+/// reachable only in the async hop before that first adoption on a single
+/// launch. `EarningsStore` answers identically there, which is the point:
+/// the bridge must not invent a policy the store would not have.
 enum LegacySnapshotBridge {
     /// One snapshot over the caller's OWN shift grouping.
     ///
@@ -49,13 +92,16 @@ enum LegacySnapshotBridge {
     ///     `LegacyLedgerBridge.shiftInput`'s id, which falls back to a
     ///     different deterministic UUID for a nil-`shiftID` group and would
     ///     therefore miss.)
-    ///   - rateCents: the legacy `baseHourlyWageCents`, or nil when the wage
-    ///     feature is off. Nil produces a snapshot with
-    ///     `wageFeatureEnabled == false`, which is what makes every figure
-    ///     read "Tips" rather than "Total".
-    ///   - payrollTimeZone: the FROZEN payroll zone from `PolicyStore`, never
-    ///     `TimeZone.current` at the call site.
-    ///   - asOf: today, for the period-to-date clamp. The caller's `now`.
+    ///   - policies: `PolicyStore.policies`, whole and unmodified — the real
+    ///     effective-dated rate and workweek history. The ONE policy source
+    ///     for the whole app: passing anything else here is how two screens
+    ///     came to bucket overtime by two different workweeks.
+    ///   - payrollTimeZone: the FROZEN payroll zone, which is
+    ///     `PolicyStore.payrollTimeZone` (`policies.payrollTimeZone ?? .current`)
+    ///     and never `TimeZone.current` at the call site. It is a parameter
+    ///     rather than derived because the caller has already grouped its
+    ///     rows by civil day in this zone and the two must be the same zone.
+    ///   - asOf: the period-to-date clamp. Usually the caller's `now`.
     ///
     /// Returns nil only when the inputs cannot be canonically fingerprinted
     /// (`InputManifest.ValidationError`). That is a refusal, not a crash: a
@@ -64,20 +110,14 @@ enum LegacySnapshotBridge {
     /// rather than zeros for it.
     static func snapshot(
         shifts: [(day: Date, shiftID: UUID, items: [TipEntry])],
-        rateCents: Int?,
+        policies: CompensationPolicies,
         payrollTimeZone: TimeZone,
-        workweekStartWeekday: Int,
         asOf: Date
     ) -> EarningsSnapshot? {
-        let (rates, calendars) = LegacyLedgerBridge.policies(
-            rateCents: rateCents,
-            payrollTimeZone: payrollTimeZone,
-            workweekStartWeekday: workweekStartWeekday
-        )
         let inputs = EarningsInputs(
             shifts: shifts.compactMap { shiftInput(for: $0, payrollTimeZone: payrollTimeZone) },
-            rates: rates,
-            calendars: calendars,
+            rates: policies.rates,
+            calendars: policies.calendars,
             asOf: CivilDay(asOf, in: payrollTimeZone)
         )
         return try? EarningsSnapshot.build(inputs)
@@ -110,9 +150,8 @@ enum LegacySnapshotBridge {
     /// grouping rule.
     static func snapshot(
         entries: [TipEntry],
-        rateCents: Int?,
+        policies: CompensationPolicies,
         payrollTimeZone: TimeZone,
-        workweekStartWeekday: Int,
         asOf: Date
     ) -> EarningsSnapshot? {
         snapshot(
@@ -122,9 +161,8 @@ enum LegacySnapshotBridge {
                 date: \.date,
                 period: \.shiftPeriod
             ),
-            rateCents: rateCents,
+            policies: policies,
             payrollTimeZone: payrollTimeZone,
-            workweekStartWeekday: workweekStartWeekday,
             asOf: asOf
         )
     }
