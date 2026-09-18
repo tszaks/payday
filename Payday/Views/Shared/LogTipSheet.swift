@@ -573,6 +573,24 @@ struct LogTipSheet: View {
         prefersCreditFirstCache = computePrefersCreditFirst()
         applyLiveShiftEndModeIfNeeded()
         seedShiftDetailDefaults()
+        // Holds back a promotion to the new representation for as long as
+        // THIS sheet is editing a legacy row. See
+        // `ShiftReadAuthority.resolve` for why the flip has to wait rather
+        // than be handled, and why only promotion waits.
+        if isEditingLegacyRow { LegacyEditSheetPresence.begin() }
+    }
+
+    /// Whether this sheet's commit path writes the LEGACY representation.
+    ///
+    /// Derived from the TARGET, the same way `deleteRoute` and
+    /// `editingRecord` are, because the target is captured at presentation
+    /// and so cannot change under the sheet. Only `.edit` qualifies:
+    /// `.editShift` already edits a record, and `.new` deliberately re-reads
+    /// the flag at save time so a sheet opened before a flip writes the new
+    /// representation, which is correct.
+    private var isEditingLegacyRow: Bool {
+        if case .edit = target { return true }
+        return false
     }
 
     /// Every entry belonging to the same shift (closeout) as `entry` — the
@@ -782,6 +800,13 @@ struct LogTipSheet: View {
                     receiptScanSnapshot = nil
                     isDeferringReceiptScanRowDeletion = false
                     pruneZeroedRows()
+                    // LAST, after `commitLiveEdit` above, and the order is
+                    // the whole point: this is the legacy write the deferral
+                    // exists to protect. Releasing the hold first would leave
+                    // a window in which a sync could promote the account
+                    // between the release and the write, which is precisely
+                    // the straddle being prevented.
+                    if isEditingLegacyRow { LegacyEditSheetPresence.end() }
                 }
             }
         }
