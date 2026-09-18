@@ -835,8 +835,23 @@ fi
 #     upstream -- so the rule is shown to DISCRIMINATE rather than merely to
 #     fire.
 #
-#     Proven to work: stubbing rule 23's reporting branch makes the self-test
-#     report 9 misses and fail.
+#     It also proves the rule's ROOTS, which is a separate thing from its
+#     pattern and the one that actually bit. Rule 23 shipped scoped to
+#     `Payday` alone, so `PaydayWidget` -- a separate target opening the same
+#     App Group store and rendering its own money -- was unchecked by the lint
+#     written to prevent that class of miss, and gap 9 was found there by
+#     hand. The self-test now asserts the INVOCATION passes "${SRC[@]}".
+#
+#     That distinction was itself paid for: the first version planted a
+#     violation in each root but invoked the perl script directly with all of
+#     them, which proved the SCRIPT could scan a root rather than that
+#     design-lint TELLS it to -- and it passed while the invocation was
+#     re-narrowed to `Payday`. A check inventing its own answer, for the third
+#     time in this engagement and the second inside this rule's own test.
+#
+#     Proven to work, both halves: stubbing rule 23's reporting branch makes
+#     the self-test report 9 misses and fail; re-narrowing the invocation to
+#     `Payday` makes it fail with "MISS (scope)".
 REPRESENTATION_SELFTEST=$(bash scripts/lint-selftest-representation.sh 2>&1)
 REPRESENTATION_SELFTEST_STATUS=$?
 if [ "$REPRESENTATION_SELFTEST_STATUS" -ne 0 ]; then
@@ -845,7 +860,7 @@ if [ "$REPRESENTATION_SELFTEST_STATUS" -ne 0 ]; then
   printf '%s\n' "$REPRESENTATION_SELFTEST" | sed 's/^/   /'
   echo ""
 else
-  echo "[PASS] rule 23 proves itself: 9 defect shapes caught, 6 correct shapes left alone"
+  printf '[PASS] %s\n' "$REPRESENTATION_SELFTEST"
 fi
 
 echo ""

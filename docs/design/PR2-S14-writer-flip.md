@@ -273,6 +273,14 @@ be lost between slices.**
 > A deferred promotion is re-attempted, and completes, once the legacy-edit
 > sheet closes.
 
+**LANDED in S15**, and the guarantee is conditional in a way worth stating
+exactly: *a deferral requests a retry UNLESS the next read fails.* The leg's
+`catch` returns "not deferred", so if a follow-up pass's own migration-state
+read fails, no further follow-up is requested and the promotion waits for the
+next natural sync. Benign -- legacy is the safe fallback -- but weaker than
+the unconditional reading, and stating it unconditionally is how a caveat
+becomes a surprise.
+
 The reason is structural, not hypothetical. `resolve` returns
 `.deferPromotion` while a legacy-edit sheet is open, and **nothing inside the
 deferral re-arms it**. If the sync leg treats `.deferPromotion` as a no-op and
