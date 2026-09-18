@@ -143,6 +143,10 @@ struct LogTipSheet: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Query(sort: \TipEntry.date, order: .reverse) private var allEntries: [TipEntry]
     @Query private var paycheckRecords: [PaycheckRecord]
+    /// The other representation. SmartNudgeScheduler picks between this and
+    /// `allEntries` on `shiftsAreAuthoritative`; it must never read both, or a
+    /// converted shift counts twice.
+    @Query private var shiftRecords: [ShiftRecord]
 
     let target: TipEntrySheetTarget
 
@@ -1715,7 +1719,7 @@ struct LogTipSheet: View {
         // usual night's instead. allEntries' @Query hasn't necessarily
         // refreshed within this same call, so the just-inserted entries
         // are appended explicitly rather than relied on to already be in it.
-        SmartNudgeScheduler.reschedule(preferencesStore: preferencesStore, allEntries: allEntries + newEntries)
+        SmartNudgeScheduler.reschedule(preferencesStore: preferencesStore, allEntries: allEntries + newEntries, shiftRecords: shiftRecords)
         PaydayPushScheduler.reschedule(preferencesStore: preferencesStore, schedule: scheduleStore.schedule, allEntries: allEntries + newEntries, paycheckRecords: paycheckRecords)
         if isFirstShiftEver {
             Task { await SmartNudgeScheduler.requestAuthorizationIfNeeded() }
