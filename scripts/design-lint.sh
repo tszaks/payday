@@ -801,7 +801,18 @@ fi
 #     mentioned the predicate for an unrelated shift count three lines away.
 #     And it flagged `DayDetailSheet`, which was correct all along. "The file
 #     has a switch in it" is not evidence that a given read is switched.
-REPRESENTATION=$(perl scripts/lint-representation-switch.pl Payday 2>&1)
+#
+#     SCOPE, and this was wrong when the rule was written: it ran against
+#     `Payday` alone, so the WIDGET -- a separate target that reads the same
+#     App Group store and shows its own money -- was never checked by the
+#     rule written to prevent exactly that class of miss. Found by running it
+#     against `PaydayWidget` by hand, which turned up the pace baseline
+#     reading `allEntries` directly. That is the same narrower-than-the-family
+#     error rule 20 already paid for (it knew only the tip queues and was
+#     blind to three others), repeated inside the rule meant to end it. It now
+#     takes "${SRC[@]}", the same roots every other rule uses, so the scope
+#     cannot drift from the rest of the script again.
+REPRESENTATION=$(perl scripts/lint-representation-switch.pl "${SRC[@]}" 2>&1)
 REPRESENTATION_STATUS=$?
 if [ "$REPRESENTATION_STATUS" -ne 0 ]; then
   FAIL=1

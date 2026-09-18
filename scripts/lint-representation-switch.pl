@@ -117,6 +117,13 @@ for my $path (sort @files) {
         next if $args =~ /\brecords\s*:/;
         next if $args =~ /\bshiftRecords\s*:/;
 
+        # WidgetKit's `Timeline(entries:policy:)`. Its `entries` are
+        # TIMELINE entries -- one rendering per future date -- and have
+        # nothing to do with `TipEntry`. Matched on the `policy:` companion
+        # label rather than on the type name, because the constructor is
+        # sometimes spelled without one.
+        next if $args =~ /\bpolicy\s*:\s*\./;
+
         # A TUPLE literal whose label happens to be `entries`, not a call
         # reading a representation. `LogTipsIntent.targetShiftID` groups
         # today's rows into `(shiftID:entries:)` pairs; it is reached only
