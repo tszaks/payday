@@ -133,14 +133,22 @@ The goal contract's first item reads "PRs 0-8 merged to `production` with CI gre
 
 Neither cause is a code failure. Two were a race in our own workflow; one was a GitHub API rate limit while `supabase/setup-cli` resolved `version: latest`. Both are fixed: pushes key the concurrency group on `github.sha`, so no merge commit can cancel another, and the CLI is pinned to an explicit version so `supabase db reset` cannot change behaviour with no change in this repo.
 
-**The honest claim, and the only one a re-run earns.** Re-running those three commits runs them against the workflow **as it stands now**, not as it stood that afternoon. A green re-run therefore proves:
+### Re-running those three commits cannot fix the record, and here is the measurement
 
-> every PR-0-8 commit's tree passes CI on the current workflow
+A re-run replays the workflow **as it was at that commit**, not the workflow as it stands now. Measured on the re-run of `852f36a` (run 35333038807): `gh api` reports `head_sha=852f36aa0`, `path=.github/workflows/ci.yml`, `run_attempt=2`, and that commit's own `ci.yml` still contains `version: latest` and the ref-keyed `cancel-in-progress: true`. So the attempt runs the unpinned CLI, re-inheriting the exact flake that reddened `c800493`.
 
-and it does **not** prove "CI was green at the moment each commit merged." That verdict was cancelled or flaked, and it cannot be reconstructed. The current-tree claim is the one that matters for shipping, which is why it is the line below. The historical claim is not recoverable, and a green tick here must not be recorded as if it were.
+That rules out both tempting claims. A green re-run does **not** prove "CI was green when this commit merged" — that verdict was cancelled or flaked and cannot be reconstructed. And it does **not** prove "this commit's tree passes CI on the current workflow" either, because the current workflow is not what runs.
 
-- [ ] Every merge commit in PRs 0-8's history has a completed, successful CI run **on the current workflow**. Record the run id per commit. `gh run list --branch production --limit 40 --json headSha,status,conclusion`
-- [ ] No merge commit's run is `cancelled`. A cancelled run is not a pass and not a failure; it is an absence, and in a listing an absence reads like neither.
+### The claim that is true, and is the one that matters
+
+The current `production` tree passes CI in full, and every line those three commits introduced is contained in that tree. A break shipped through any of them would surface in every later full rebuild, and there are consecutive green production merge commits after all three. So the three unverified commits are covered **transitively**, by later green rebuilds of the tree that contains them — not by any individual re-run.
+
+That is weaker than a per-commit historical verdict and stronger than nothing, and it is the claim that governs shipping: what ships is the current tree.
+
+- [ ] The current release-candidate commit's full CI is green. Record the run id and every job's conclusion.
+- [ ] Every merge commit after the concurrency fix has a completed, successful run — no `cancelled`, no `failure`. `gh run list --branch production --limit 40 --json headSha,status,conclusion`
+- [ ] The three pre-fix commits (`8260f7d`, `852f36a`, `c800493`) are recorded here as transitively covered, with the later green merge commit that covers them named. They are **not** to be ticked as individually verified, because they cannot be.
+- [ ] No merge commit's run is `cancelled`. A cancelled run is not a pass and not a failure; it is an absence, and in a listing an absence reads like neither. That is exactly how these three went unnoticed.
 
 ## Human lines — Tyler only
 
