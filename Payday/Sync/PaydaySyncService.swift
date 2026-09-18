@@ -653,48 +653,50 @@ final class PaydaySyncService {
               PaydayRemoteDate.parseInstant(settingsServerUpdatedAt) != nil else {
             throw PaydayMigrationError.invalidRemoteData
         }
-        PaydaySyncState.save(
-            userID: userID,
-            tipEntryIDs: Set(acknowledgedTips.map(\.id)),
-            paycheckIDs: Set(acknowledgedPaychecks.map(\.id)),
-            migrationVerified: true,
+        // `mutate`, never a fresh Snapshot. Writing one here would erase every
+        // field this block does not name -- which is all seven shift fields --
+        // at the end of every pass.
+        PaydaySyncState.mutate(userID: userID) { checkpointToWrite in
+            checkpointToWrite.tipEntryIDs = Set(acknowledgedTips.map(\.id))
+            checkpointToWrite.paycheckIDs = Set(acknowledgedPaychecks.map(\.id))
+            checkpointToWrite.migrationVerified = true
             // Written for a possible rollback to the timestamp scheme only.
             // Change detection compares the fingerprints below.
-            tipClientUpdatedAt: PaydaySyncState.acknowledgedVersions(
+            checkpointToWrite.tipClientUpdatedAt = PaydaySyncState.acknowledgedVersions(
                 current: Dictionary(uniqueKeysWithValues: acknowledgedTips.map {
                     ($0.id, $0.clientUpdatedAt)
                 }),
                 checkpoint: checkpoint.tipClientUpdatedAt,
                 changedDuringSync: tipsChangedDuringSync
-            ),
-            paycheckClientUpdatedAt: PaydaySyncState.acknowledgedVersions(
+            )
+            checkpointToWrite.paycheckClientUpdatedAt = PaydaySyncState.acknowledgedVersions(
                 current: Dictionary(uniqueKeysWithValues: acknowledgedPaychecks.map {
                     ($0.id, $0.clientUpdatedAt)
                 }),
                 checkpoint: checkpoint.paycheckClientUpdatedAt,
                 changedDuringSync: paychecksChangedDuringSync
-            ),
+            )
             // The prior versions here are the ones this sync actually compared
             // against — the SEEDED map on a seeding sync — so a row edited
             // while the network work was suspended stays eligible for the next
             // upload instead of being acknowledged on the strength of a
             // checkpoint that never held a fingerprint for it.
-            tipContentFingerprint: PaydaySyncState.acknowledgedVersions(
+            checkpointToWrite.tipContentFingerprint = PaydaySyncState.acknowledgedVersions(
                 current: acknowledgedTipFingerprints,
                 checkpoint: acknowledgedTipVersions,
                 changedDuringSync: tipsChangedDuringSync
-            ),
-            paycheckContentFingerprint: PaydaySyncState.acknowledgedVersions(
+            )
+            checkpointToWrite.paycheckContentFingerprint = PaydaySyncState.acknowledgedVersions(
                 current: acknowledgedPaycheckFingerprints,
                 checkpoint: acknowledgedPaycheckVersions,
                 changedDuringSync: paychecksChangedDuringSync
-            ),
-            settingsClientUpdatedAt: remoteSettings?.clientUpdatedAt
-                ?? checkpoint.settingsClientUpdatedAt,
-            tipServerCursor: tipCursor,
-            paycheckServerCursor: paycheckCursor,
-            settingsServerUpdatedAt: settingsServerUpdatedAt
-        )
+            )
+            checkpointToWrite.settingsClientUpdatedAt = remoteSettings?.clientUpdatedAt
+                ?? checkpoint.settingsClientUpdatedAt
+            checkpointToWrite.tipServerCursor = tipCursor
+            checkpointToWrite.paycheckServerCursor = paycheckCursor
+            checkpointToWrite.settingsServerUpdatedAt = settingsServerUpdatedAt
+        }
         return PaydaySyncOutcome(
             report: try Self.cachedReport(context: context, userID: userID),
             requiresFollowUpSync: !tipsChangedDuringSync.isEmpty
