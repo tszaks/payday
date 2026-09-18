@@ -23,6 +23,7 @@ struct DeleteAccountSheet: View {
     @Environment(InsightsStore.self) private var insightsStore
     @Environment(UserPreferencesStore.self) private var preferencesStore
     @Environment(MoveLedgerStore.self) private var moveLedgerStore
+    @Environment(PolicyStore.self) private var policyStore
     @Environment(PaydayCloudState.self) private var cloudState
     @Query private var allEntries: [TipEntry]
     @Query private var paycheckRecords: [PaycheckRecord]
@@ -152,7 +153,8 @@ struct DeleteAccountSheet: View {
             scheduleStore: scheduleStore,
             insightsStore: insightsStore,
             preferencesStore: preferencesStore,
-            moveLedgerStore: moveLedgerStore
+            moveLedgerStore: moveLedgerStore,
+            policyStore: policyStore
         )
         isDeleting = false
         if let failure {

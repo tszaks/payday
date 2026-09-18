@@ -7,7 +7,7 @@ import SwiftData
 /// or on demand from the Settings > Developer section.
 enum DebugSeeder {
     @MainActor
-    static func seedIfRequested(scheduleStore: PayScheduleStore, insightsStore: InsightsStore, moveLedgerStore: MoveLedgerStore, preferencesStore: UserPreferencesStore) {
+    static func seedIfRequested(scheduleStore: PayScheduleStore, insightsStore: InsightsStore, moveLedgerStore: MoveLedgerStore, policyStore: PolicyStore, preferencesStore: UserPreferencesStore) {
         let arguments = ProcessInfo.processInfo.arguments
         if let index = arguments.firstIndex(of: "-Appearance"),
            arguments.count > index + 1,
@@ -442,7 +442,7 @@ enum DebugSeeder {
     }
 
     @MainActor
-    static func clearAll(scheduleStore: PayScheduleStore, insightsStore: InsightsStore, moveLedgerStore: MoveLedgerStore) {
+    static func clearAll(scheduleStore: PayScheduleStore, insightsStore: InsightsStore, moveLedgerStore: MoveLedgerStore, policyStore: PolicyStore) {
         let context = SharedModelContainer.shared.mainContext
         try? context.delete(model: TipEntry.self)
         try? context.delete(model: PaycheckRecord.self)
@@ -451,6 +451,10 @@ enum DebugSeeder {
         scheduleStore.schedule = nil
         insightsStore.snapshot = nil
         moveLedgerStore.reset()
+        // Clearing the data has to clear the policies too, or the next seed
+        // runs against a rate policy whose effectiveFrom sits after every
+        // seeded shift and every wage comes back `.rateNotSet`.
+        policyStore.reset()
     }
 }
 #endif

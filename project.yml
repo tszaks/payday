@@ -114,6 +114,10 @@ targets:
       # "Couldn't load" while the app is perfectly healthy.
       - path: Payday/Models/ShiftRecord.swift
       - path: Payday/Models/PayScheduleStore.swift
+      # The widget values shifts too, so it reads the same compensation
+      # policies — and therefore the same frozen payroll time zone — the app
+      # does, out of the shared App Group defaults.
+      - path: Payday/Models/PolicyStore.swift
       - path: Payday/Utilities/PayPeriod.swift
       - path: Payday/Utilities/TipBreakdown.swift
       - path: Payday/Utilities/StatsEngine.swift

@@ -48,6 +48,7 @@ final class PaydayMigrationService {
         scheduleStore: PayScheduleStore,
         preferencesStore: UserPreferencesStore,
         moveLedgerStore: MoveLedgerStore,
+        policyStore: PolicyStore,
         deviceID: UUID
     ) async throws -> PaydayMigrationReport {
         let user = try await client.auth.session.user
@@ -61,7 +62,8 @@ final class PaydayMigrationService {
             userID: userID,
             scheduleStore: scheduleStore,
             preferencesStore: preferencesStore,
-            moveLedgerStore: moveLedgerStore
+            moveLedgerStore: moveLedgerStore,
+            policyStore: policyStore
         )
 
         // Initial import is insert-only. A second device may contribute rows,
@@ -107,6 +109,7 @@ final class PaydayMigrationService {
             scheduleStore: scheduleStore,
             preferencesStore: preferencesStore,
             moveLedgerStore: moveLedgerStore,
+            policyStore: policyStore,
             // Initial import is insert-only. Its readback is therefore the
             // canonical server value whether this is the first device or a
             // later one; never let a fresh device's defaults win by clock.

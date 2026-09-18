@@ -9,6 +9,7 @@ struct SettingsView: View {
     @Environment(InsightsStore.self) private var insightsStore
     @Environment(UserPreferencesStore.self) private var preferencesStore
     @Environment(MoveLedgerStore.self) private var moveLedgerStore
+    @Environment(PolicyStore.self) private var policyStore
     @Environment(PaydayCloudState.self) private var cloudState
     @Environment(\.dismiss) private var dismiss
     @Query private var allEntries: [TipEntry]
@@ -164,7 +165,7 @@ struct SettingsView: View {
                         DebugSeeder.seedFollowUpDemoData(insightsStore: insightsStore, moveLedgerStore: moveLedgerStore)
                     }
                     Button("Clear all data", role: .destructive) {
-                        DebugSeeder.clearAll(scheduleStore: scheduleStore, insightsStore: insightsStore, moveLedgerStore: moveLedgerStore)
+                        DebugSeeder.clearAll(scheduleStore: scheduleStore, insightsStore: insightsStore, moveLedgerStore: moveLedgerStore, policyStore: policyStore)
                     }
                 }
                 .listRowBackground(PaydayColor.fieldBackground)

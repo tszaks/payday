@@ -44,7 +44,8 @@ final class PaydayCloudState {
         context: ModelContext,
         scheduleStore: PayScheduleStore,
         preferencesStore: UserPreferencesStore,
-        moveLedgerStore: MoveLedgerStore
+        moveLedgerStore: MoveLedgerStore,
+        policyStore: PolicyStore
     ) async {
         #if DEBUG || targetEnvironment(simulator)
         if ProcessInfo.processInfo.arguments.contains("-UITestOffline") {
@@ -107,6 +108,7 @@ final class PaydayCloudState {
                 scheduleStore: scheduleStore,
                 preferencesStore: preferencesStore,
                 moveLedgerStore: moveLedgerStore,
+                policyStore: policyStore,
                 showProgress: false
             )
         } else {
@@ -114,7 +116,8 @@ final class PaydayCloudState {
                 context: context,
                 scheduleStore: scheduleStore,
                 preferencesStore: preferencesStore,
-                moveLedgerStore: moveLedgerStore
+                moveLedgerStore: moveLedgerStore,
+                policyStore: policyStore
             )
         }
     }
@@ -126,7 +129,8 @@ final class PaydayCloudState {
         context: ModelContext,
         scheduleStore: PayScheduleStore,
         preferencesStore: UserPreferencesStore,
-        moveLedgerStore: MoveLedgerStore
+        moveLedgerStore: MoveLedgerStore,
+        policyStore: PolicyStore
     ) async {
         phase = .migrating
         do {
@@ -161,6 +165,7 @@ final class PaydayCloudState {
                     scheduleStore: scheduleStore,
                     preferencesStore: preferencesStore,
                     moveLedgerStore: moveLedgerStore,
+                    policyStore: policyStore,
                     showProgress: false
                 )
             } else {
@@ -168,7 +173,8 @@ final class PaydayCloudState {
                     context: context,
                     scheduleStore: scheduleStore,
                     preferencesStore: preferencesStore,
-                    moveLedgerStore: moveLedgerStore
+                    moveLedgerStore: moveLedgerStore,
+                    policyStore: policyStore
                 )
             }
         } catch {
@@ -180,7 +186,8 @@ final class PaydayCloudState {
         context: ModelContext,
         scheduleStore: PayScheduleStore,
         preferencesStore: UserPreferencesStore,
-        moveLedgerStore: MoveLedgerStore
+        moveLedgerStore: MoveLedgerStore,
+        policyStore: PolicyStore
     ) async {
         do {
             let userID = try await client.auth.session.user.id
@@ -190,6 +197,7 @@ final class PaydayCloudState {
                     scheduleStore: scheduleStore,
                     preferencesStore: preferencesStore,
                     moveLedgerStore: moveLedgerStore,
+                    policyStore: policyStore,
                     showProgress: true
                 )
             } else {
@@ -197,7 +205,8 @@ final class PaydayCloudState {
                     context: context,
                     scheduleStore: scheduleStore,
                     preferencesStore: preferencesStore,
-                    moveLedgerStore: moveLedgerStore
+                    moveLedgerStore: moveLedgerStore,
+                    policyStore: policyStore
                 )
             }
         } catch {
@@ -210,6 +219,7 @@ final class PaydayCloudState {
         scheduleStore: PayScheduleStore,
         preferencesStore: UserPreferencesStore,
         moveLedgerStore: MoveLedgerStore,
+        policyStore: PolicyStore,
         minimumInterval: TimeInterval? = 120
     ) async {
         guard case .ready = phase else { return }
@@ -225,6 +235,7 @@ final class PaydayCloudState {
             scheduleStore: scheduleStore,
             preferencesStore: preferencesStore,
             moveLedgerStore: moveLedgerStore,
+            policyStore: policyStore,
             showProgress: false
         )
     }
@@ -271,7 +282,8 @@ final class PaydayCloudState {
         scheduleStore: PayScheduleStore,
         insightsStore: InsightsStore,
         preferencesStore: UserPreferencesStore,
-        moveLedgerStore: MoveLedgerStore
+        moveLedgerStore: MoveLedgerStore,
+        policyStore: PolicyStore
     ) async -> String? {
         do {
             try await client.rpc("delete_my_account").execute()
@@ -290,7 +302,8 @@ final class PaydayCloudState {
                 scheduleStore: scheduleStore,
                 insightsStore: insightsStore,
                 preferencesStore: preferencesStore,
-                moveLedgerStore: moveLedgerStore
+                moveLedgerStore: moveLedgerStore,
+                policyStore: policyStore
             )
         } catch {
             // The remote account is gone but this device still holds
@@ -325,7 +338,8 @@ final class PaydayCloudState {
         context: ModelContext,
         scheduleStore: PayScheduleStore,
         preferencesStore: UserPreferencesStore,
-        moveLedgerStore: MoveLedgerStore
+        moveLedgerStore: MoveLedgerStore,
+        policyStore: PolicyStore
     ) async {
         phase = .migrating
         do {
@@ -334,6 +348,7 @@ final class PaydayCloudState {
                 scheduleStore: scheduleStore,
                 preferencesStore: preferencesStore,
                 moveLedgerStore: moveLedgerStore,
+                policyStore: policyStore,
                 deviceID: PaydayDeviceIdentity.current
             ))
         } catch {
@@ -346,6 +361,7 @@ final class PaydayCloudState {
         scheduleStore: PayScheduleStore,
         preferencesStore: UserPreferencesStore,
         moveLedgerStore: MoveLedgerStore,
+        policyStore: PolicyStore,
         showProgress: Bool
     ) async {
         guard !isSyncing else { return }
@@ -359,14 +375,16 @@ final class PaydayCloudState {
                 context: context,
                 scheduleStore: scheduleStore,
                 preferencesStore: preferencesStore,
-                moveLedgerStore: moveLedgerStore
+                moveLedgerStore: moveLedgerStore,
+                policyStore: policyStore
             )
             while outcome.requiresFollowUpSync {
                 outcome = try await syncService.synchronize(
                     context: context,
                     scheduleStore: scheduleStore,
                     preferencesStore: preferencesStore,
-                    moveLedgerStore: moveLedgerStore
+                    moveLedgerStore: moveLedgerStore,
+                    policyStore: policyStore
                 )
             }
             consecutiveSyncFailures = 0
@@ -418,6 +436,7 @@ struct PaydayCloudGate<Content: View>: View {
     @Environment(InsightsStore.self) private var insightsStore
     @Environment(UserPreferencesStore.self) private var preferencesStore
     @Environment(MoveLedgerStore.self) private var moveLedgerStore
+    @Environment(PolicyStore.self) private var policyStore
     @Environment(OnboardingStateStore.self) private var onboardingStore
     @Environment(\.modelContext) private var modelContext
     @Environment(\.scenePhase) private var scenePhase
@@ -464,7 +483,8 @@ struct PaydayCloudGate<Content: View>: View {
                                 context: modelContext,
                                 scheduleStore: scheduleStore,
                                 preferencesStore: preferencesStore,
-                                moveLedgerStore: moveLedgerStore
+                                moveLedgerStore: moveLedgerStore,
+                                policyStore: policyStore
                             )
                         }
                     },
@@ -478,15 +498,28 @@ struct PaydayCloudGate<Content: View>: View {
                 scheduleStore: scheduleStore,
                 insightsStore: insightsStore,
                 moveLedgerStore: moveLedgerStore,
+                policyStore: policyStore,
                 preferencesStore: preferencesStore
             )
             #endif
             MigrationRunner.runPending(in: modelContext)
+            // The two compensation-policy migrations (Design 1). They run
+            // AFTER MigrationRunner, so the earliest shift date they read is
+            // the repaired one, and BEFORE restore, so a first sync uploads
+            // the policies it just created. Neither touches the settings
+            // clock, so this cannot make an untouched install look newer
+            // than another device's real settings.
+            policyStore.runMigrationsIfNeeded(
+                resolvedFirstWeekday: scheduleStore.schedule?.resolvedFirstWeekday ?? Calendar.current.firstWeekday,
+                earliestShiftDate: PolicyMigrationInputs.earliestShiftDate(in: modelContext),
+                baseHourlyWageCents: preferencesStore.baseHourlyWageCents
+            )
             await cloudState.restore(
                 context: modelContext,
                 scheduleStore: scheduleStore,
                 preferencesStore: preferencesStore,
-                moveLedgerStore: moveLedgerStore
+                moveLedgerStore: moveLedgerStore,
+                policyStore: policyStore
             )
         }
         .onChange(of: cloudState.phase) { _, newPhase in
@@ -520,6 +553,7 @@ struct PaydayCloudGate<Content: View>: View {
             scheduleStore: scheduleStore,
             preferencesStore: preferencesStore,
             moveLedgerStore: moveLedgerStore,
+            policyStore: policyStore,
             minimumInterval: minimumInterval
         )
     }
@@ -551,7 +585,8 @@ struct PaydayCloudGate<Content: View>: View {
                     context: modelContext,
                     scheduleStore: scheduleStore,
                     preferencesStore: preferencesStore,
-                    moveLedgerStore: moveLedgerStore
+                    moveLedgerStore: moveLedgerStore,
+                    policyStore: policyStore
                 )
             }
         } catch let error as ASAuthorizationError where error.code == .canceled {
