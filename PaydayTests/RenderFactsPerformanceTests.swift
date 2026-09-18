@@ -75,10 +75,28 @@ struct RenderFactsPerformanceTests {
         )
     }
 
-    @Test("calendar reduces a 10,000-row history once within an interactive budget")
+    /// PR 5 wave 1 (group 2.2): the calendar no longer reduces the rows, it
+    /// values the WHOLE dataset once through the engine and then asks it twice
+    /// — `range(month)` for the headline, `days(in: month)` for the tiles.
+    /// That is what makes a tile carry the week's overtime, and it is strictly
+    /// more work than the old per-day slice, so the budget now covers the
+    /// snapshot BUILD (manifest digest over 10,000 rows plus the ledger's
+    /// workweek allocation) as well as the month's queries.
+    ///
+    /// There is no facts cache behind this number. A cache key has to exist
+    /// before the value it guards, and the only honest key is the snapshot's
+    /// own `stamp` (contract rule 3, which deletes the hand-maintained
+    /// `Key`/`dataRevision` pair), which does not exist until the snapshot is
+    /// built. So the measurement below is what a month swipe actually costs.
+    @Test("calendar values a 10,000-row history and queries one month within an interactive budget")
     func calendarFactsStayFastForLargeHistory() {
         var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        // One zone for the grid and for the engine: the facts read
+        // `calendar.timeZone` to name a tile's civil day, and the snapshot has
+        // to be valued in the same zone or a tile and its shift disagree about
+        // which day it was.
+        let zone = TimeZone(secondsFromGMT: 0)!
+        calendar.timeZone = zone
         let historyStart = date(2000, 1, 1, calendar: calendar)
         let displayedMonth = date(2026, 7, 1, calendar: calendar)
         let entries = (0..<10_000).map { index in
@@ -91,19 +109,54 @@ struct RenderFactsPerformanceTests {
 
         let startedAt = Date.timeIntervalSinceReferenceDate
         let facts = CalendarMonthFacts(
-            allEntries: entries,
+            snapshot: CalendarEarnings.snapshot(
+                shifts: CalendarEarnings.shiftGroups(entries: entries, payrollTimeZone: zone),
+                policies: policies(rateCents: nil, zone: zone),
+                payrollTimeZone: zone
+            ),
             displayedMonth: displayedMonth,
-            calendar: calendar,
-            wageCentsPerHour: nil,
-            firstWeekday: nil,
-            payrollTimeZone: PaydayTestZone.payroll
+            calendar: calendar
         )
         let elapsed = Date.timeIntervalSinceReferenceDate - startedAt
 
         #expect(facts.daysWorkedCount == 31)
-        #expect(facts.monthTotalCents == 3_100)
+        #expect(facts.monthFigure.cents == 3_100)
+        #expect(facts.monthFigure.cents == facts.tiles.compactMap(\.figure.cents).reduce(0, +))
         #expect(facts.gridDays.count == 35)
         #expect(elapsed < Self.budget(0.5), "Calendar render facts took \(elapsed) seconds against a 0.5s budget scaled x\(Self.budgetScale)")
+    }
+
+    /// The day sheet reads the same whole-dataset snapshot, so it pays the
+    /// same build. Measured because it happens on a tap, not on a swipe.
+    @Test("the day sheet values a 10,000-row history and queries one day within an interactive budget")
+    func dayDetailFactsStayFastForLargeHistory() {
+        var calendar = Calendar(identifier: .gregorian)
+        let zone = TimeZone(secondsFromGMT: 0)!
+        calendar.timeZone = zone
+        let historyStart = date(2000, 1, 1, calendar: calendar)
+        let entries = (0..<10_000).map { index in
+            TipEntry(
+                date: calendar.date(byAdding: .day, value: index, to: historyStart)!,
+                amountCents: 100,
+                recordedAt: historyStart,
+                hoursWorked: 5
+            )
+        }
+        let openedDay = calendar.date(byAdding: .day, value: 9_000, to: historyStart)!
+
+        let startedAt = Date.timeIntervalSinceReferenceDate
+        let facts = DayDetailFacts(
+            allEntries: entries,
+            date: openedDay,
+            policies: policies(rateCents: 1_500, zone: zone),
+            payrollTimeZone: zone
+        )
+        let elapsed = Date.timeIntervalSinceReferenceDate - startedAt
+
+        #expect(facts.shifts.count == 1)
+        // One 5-hour shift in its own workweek: 7500c of wages plus 100c tips.
+        #expect(facts.total.cents == 7_600)
+        #expect(elapsed < Self.budget(0.5), "Day detail render facts took \(elapsed) seconds against a 0.5s budget scaled x\(Self.budgetScale)")
     }
 
     @Test("chart queries 20,000 shifts into 14 bars within an interactive budget")
