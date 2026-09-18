@@ -350,32 +350,77 @@ struct ShiftWriteWireTests {
         #expect(ids.count == 1)
     }
 
-    @Test("fetchShiftChanges reads the shifts table on the same keyset cursor")
-    func fetchShiftChangesUsesTheKeyset() async throws {
-        let repository = repository(body: "[]")
+    /// REPLACES an S6 test that asserted a plain table select with a keyset
+    /// filter and an explicit column list. That read path is gone: it could
+    /// not carry a server snapshot time, so its cursor could advance past a
+    /// shift folded by a still-open transaction and lose it permanently. The
+    /// RPC owns the filter, the ordering and the column set now, and it is
+    /// tested where those live -- `supabase/tests` for the shape and
+    /// `db-test-race.sh` case 10 for the fence.
+    @Test("fetchShiftChanges calls the fenced RPC with the keyset it holds")
+    func fetchShiftChangesCallsTheFencedRPC() async throws {
+        let repository = repository(body: """
+        {"server_now":"2026-09-18T12:00:00.000Z","rows":[]}
+        """)
         let cursor = PaydaySyncState.ServerCursor(
             updatedAt: "2026-09-04T12:34:56.123Z",
             id: UUID(uuidString: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")!
         )
 
-        let rows = try await repository.fetchShiftChanges(userID: Self.userID, cursor: cursor)
-        #expect(rows.isEmpty)
+        let result = try await repository.fetchShiftChanges(cursor: cursor)
+
+        #expect(result.rows.isEmpty)
+        // The snapshot time comes back even on an empty page, which is what
+        // lets the cursor advance safely when nothing changed.
+        #expect(result.serverNow == PaydayRemoteDate.parseInstant("2026-09-18T12:00:00.000Z"))
 
         let request = try #require(StubbingURLProtocol.recorded().first)
-        #expect(request.url?.path.hasSuffix("/shifts") == true)
-        let items = URLComponents(
-            url: try #require(request.url), resolvingAgainstBaseURL: false
-        )?.queryItems ?? []
-        let delta = try #require(items.first { $0.name == "or" }?.value)
-        #expect(delta.contains("updated_at.gt.2026-09-04T12:34:56.123Z"))
-        #expect(delta.contains("id.gt.aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"))
-        #expect(items.contains { $0.name == "order" && $0.value?.contains("updated_at.asc") == true })
-        // Provenance has to come down with the row: the bridge and the rollback
-        // query both read it, and neither can ask for it later.
-        let columns = try #require(items.first { $0.name == "select" }?.value)
-        for column in ["source", "legacy_entry_ids", "native_modified_at",
-                       "deleted_reason", "non_wage_earnings_cents", "version"] {
-            #expect(columns.contains(column), "select list omits \(column)")
+        #expect(request.url?.path.hasSuffix("/rpc/fetch_shift_changes") == true)
+        let object = try Self.firstBodyObject()
+        #expect(object["p_after_updated_at"] as? String == "2026-09-04T12:34:56.123Z")
+        #expect((object["p_after_id"] as? String)?.lowercased()
+            == "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+        #expect(object["p_limit"] as? Int == 1_000)
+    }
+
+    /// A baseline is the same fenced feed with no cursor, not a separate
+    /// unfenced read. S6's snapshot path was an unfenced table select, so the
+    /// one sync that pulls a whole history was also the one with no fence.
+    @Test("the baseline pull is the same fenced feed with no cursor")
+    func baselineUsesTheSameFeed() async throws {
+        let repository = repository(body: """
+        {"server_now":"2026-09-18T12:00:00.000Z","rows":[]}
+        """)
+
+        _ = try await repository.fetchShiftSnapshot()
+
+        let request = try #require(StubbingURLProtocol.recorded().first)
+        #expect(request.url?.path.hasSuffix("/rpc/fetch_shift_changes") == true)
+        let object = try Self.firstBodyObject()
+        // OMITTED rather than sent as explicit nulls: the Supabase client
+        // drops nil values from the payload. That is equivalent here only
+        // because `fetch_shift_changes` defaults both parameters to null, so
+        // an absent key and a null key select the same first page. If those
+        // defaults are ever removed, this call starts failing to resolve the
+        // overload rather than silently paging from the wrong place --
+        // `anUppercaseUuidIsAcceptedAndNormalised`'s sibling lesson, and the
+        // reason the SQL suite exercises the null-cursor call directly.
+        #expect(object["p_after_updated_at"] == nil)
+        #expect(object["p_after_id"] == nil)
+        #expect(object["p_limit"] as? Int == 1_000)
+    }
+
+    /// Without a readable snapshot time there is no safe fence, and advancing
+    /// the cursor on a guess is the exact failure this path exists to
+    /// prevent. So it refuses rather than proceeding.
+    @Test("a page with an unreadable server time is refused, not guessed at")
+    func unreadableServerTimeIsRefused() async throws {
+        let repository = repository(body: """
+        {"server_now":"not a timestamp","rows":[]}
+        """)
+
+        await #expect(throws: PaydayMigrationError.invalidRemoteData) {
+            _ = try await repository.fetchShiftChanges(cursor: nil)
         }
     }
 }

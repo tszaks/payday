@@ -210,18 +210,6 @@ struct PaydayRemoteRepository {
         return outcomes
     }
 
-    /// Every shift the account has, tombstones included.
-    func fetchShiftSnapshot(userID: UUID) async throws -> [RemoteShift] {
-        let rows: [RemoteShift] = try await fetchChanged(
-            table: "shifts",
-            columns: shiftColumns,
-            userID: userID,
-            after: .beginning,
-            cursor: { PaydaySyncState.ServerCursor(updatedAt: $0.serverUpdatedAt ?? "", id: $0.id) }
-        )
-        return deduplicated(rows, id: \.id)
-    }
-
     /// Shifts changed since `cursor`, on the same `(updated_at, id)` keyset the
     /// tip leg uses.
     ///
@@ -233,18 +221,66 @@ struct PaydayRemoteRepository {
     /// those rows for good. That is exactly why Design 3's watermark is a
     /// server-issued monotonic `dataset_revision` and not a clock, and it
     /// lands with the snapshot work rather than being approximated here.
+    /// Shifts changed since `cursor`, read through `fetch_shift_changes` so
+    /// the page and the server's snapshot time arrive together.
+    ///
+    /// This replaces the plain table select S6 shipped. A keyset cursor over
+    /// `updated_at` alone is not safe here: `updated_at` is the TRANSACTION
+    /// timestamp and the fold runs at the end of a 1.0 build's batch, so a
+    /// shift can be stamped seconds before it becomes visible, and a cursor
+    /// that advanced past that stamp would filter the row out on every
+    /// subsequent pass, forever, on every device. See `clampedShiftCursor`.
+    ///
+    /// Returns the MINIMUM `server_now` across the pages it read, not the
+    /// last. Each page carries its own snapshot time and time moves forward,
+    /// so the earliest one is the only value that is behind every row this
+    /// call could have missed.
     func fetchShiftChanges(
-        userID: UUID,
-        cursor: PaydaySyncState.ServerCursor
-    ) async throws -> [RemoteShift] {
-        try await fetchChanged(
-            table: "shifts",
-            columns: shiftColumns,
-            userID: userID,
-            after: cursor,
-            cursor: { PaydaySyncState.ServerCursor(updatedAt: $0.serverUpdatedAt ?? "", id: $0.id) }
-        )
+        cursor: PaydaySyncState.ServerCursor?
+    ) async throws -> (rows: [RemoteShift], serverNow: Date) {
+        var collected: [RemoteShift] = []
+        var earliestServerNow: Date?
+        var after = cursor
+
+        while true {
+            let page: RemoteShiftPage = try await client
+                .rpc("fetch_shift_changes", params: PaydayShiftFeedParameters(
+                    afterUpdatedAt: after?.updatedAt,
+                    afterID: after?.id,
+                    limit: Self.shiftFeedPageSize
+                ))
+                .execute()
+                .value
+
+            guard let stamp = PaydayRemoteDate.parseInstant(page.serverNow) else {
+                // Without a readable snapshot time there is no safe fence, and
+                // advancing the cursor on a guess is the failure this whole
+                // path exists to prevent. Refuse rather than proceed.
+                throw PaydayMigrationError.invalidRemoteData
+            }
+            earliestServerNow = earliestServerNow.map { min($0, stamp) } ?? stamp
+
+            collected.append(contentsOf: page.rows)
+            guard page.rows.count == Self.shiftFeedPageSize,
+                  let last = page.rows.last,
+                  let lastUpdatedAt = last.serverUpdatedAt
+            else { break }
+            after = PaydaySyncState.ServerCursor(updatedAt: lastUpdatedAt, id: last.id)
+        }
+
+        guard let serverNow = earliestServerNow else {
+            throw PaydayMigrationError.invalidRemoteData
+        }
+        return (deduplicated(collected, id: \.id), serverNow)
     }
+
+    /// Every shift the account has, tombstones included, through the same
+    /// fenced feed.
+    func fetchShiftSnapshot() async throws -> (rows: [RemoteShift], serverNow: Date) {
+        try await fetchShiftChanges(cursor: nil)
+    }
+
+    static let shiftFeedPageSize = 1_000
 
     func fetchShifts(userID: UUID, ids: Set<UUID>) async throws -> [RemoteShift] {
         try await fetchByIDs(table: "shifts", columns: shiftColumns, userID: userID, ids: ids)
@@ -835,6 +871,124 @@ final class PaydaySyncService {
             entry.serverCount = row.serverCount
             entry.receiptMetrics = row.receiptMetrics
             entry.modifiedAt = modifiedAt
+            activeIDs.insert(row.id)
+        }
+        return activeIDs
+    }
+
+    /// The shift half of `reconcileTips`, copied field for field rather than
+    /// reinvented.
+    ///
+    /// The design is explicit that copying the shipped shapes is near-zero
+    /// risk and inventing a rule is not, so `localVersionsAtStart`,
+    /// `localRowChangedDuringSync` and the `locallyDeletedDuringSync` set
+    /// difference are used verbatim. Two things differ, and only two:
+    ///
+    /// **No `forceRemote`.** There is no path on this leg that wants the
+    /// server to win unconditionally.
+    ///
+    /// **`restoringIDs`.** A shift the user undid is queued for
+    /// `restore_shifts` and has not been confirmed yet, so the server still
+    /// holds it tombstoned. Applying that tombstone would delete the row the
+    /// user just restored, which is the undo silently failing. Those ids are
+    /// exempt from the deletion arm until the restore confirms.
+    ///
+    /// **`locallyChangedBeforeSync` exists because this leg pulls BEFORE it
+    /// pushes**, and that inversion is safe only with this guard. The tip leg
+    /// pushes first, so a pulled row is always the device's own echo. Pull
+    /// first and a shift the user edited an hour ago, still unpushed, would be
+    /// overwritten by whatever the server holds -- including a refold.
+    ///
+    /// The exclusion applies to PULL-sourced rows only, which is why the
+    /// caller makes two calls rather than passing one merged set. Excluding
+    /// those ids from the readback too would mean never adopting the server's
+    /// canonical result for the rows this device just wrote -- a
+    /// server-clamped `client_updated_at`, a sanitised receipt payload, or a
+    /// refold -- while still acknowledging the local value, so the row would
+    /// read clean forever after and the divergence would be permanent and
+    /// unpushable.
+    static func reconcileShifts(
+        _ rows: [RemoteShift],
+        in context: ModelContext,
+        localVersionsAtStart: [UUID: String]? = nil,
+        locallyDeletedDuringSync: Set<UUID> = [],
+        locallyChangedBeforeSync: Set<UUID> = [],
+        restoringIDs: Set<UUID> = []
+    ) throws -> Set<UUID> {
+        let local = try context.fetch(FetchDescriptor<ShiftRecord>())
+        var byID = Dictionary(uniqueKeysWithValues: local.map { ($0.id, $0) })
+        var activeIDs: Set<UUID> = []
+        for row in rows {
+            guard !locallyDeletedDuringSync.contains(row.id) else { continue }
+            // Unpushed local edits win over a pull, because the push has not
+            // happened yet on this leg. Steps 7 and 9 settle them.
+            guard !locallyChangedBeforeSync.contains(row.id) else {
+                activeIDs.insert(row.id)
+                continue
+            }
+            guard let modifiedAt = PaydayRemoteDate.parseInstant(row.clientUpdatedAt) else {
+                throw PaydayMigrationError.invalidRemoteData
+            }
+            if let record = byID[row.id], let localVersionsAtStart {
+                // A row fetched after this sync's upload and readback is the
+                // canonical server result, regardless of device clock.
+                // Preserve only a genuine edit made while network work was
+                // suspended.
+                if PaydaySyncState.localRowChangedDuringSync(
+                    id: row.id,
+                    currentVersion: try PaydayRowFingerprint.value(record),
+                    capturedVersions: localVersionsAtStart
+                ) {
+                    activeIDs.insert(row.id)
+                    continue
+                }
+            }
+            if row.deletedAt != nil {
+                // The undo has not been confirmed by the server yet, so its
+                // tombstone is stale by construction. Deleting here would
+                // undo the user's undo.
+                guard !restoringIDs.contains(row.id) else {
+                    activeIDs.insert(row.id)
+                    continue
+                }
+                if let record = byID.removeValue(forKey: row.id) { context.delete(record) }
+                continue
+            }
+            guard let workDate = PaydayRemoteDate.parseDay(row.workDate) else {
+                throw PaydayMigrationError.invalidRemoteData
+            }
+            let record: ShiftRecord
+            if let existing = byID[row.id] {
+                record = existing
+            } else {
+                record = ShiftRecord(id: row.id, workDate: workDate)
+                context.insert(record)
+                byID[row.id] = record
+            }
+            record.workDate = workDate
+            record.shiftPeriod = row.shiftPeriod.flatMap(ShiftPeriod.init(rawValue:))
+            record.cashTipsCents = row.cashTipsCents
+            record.creditTipsCents = row.creditTipsCents
+            record.tipOutCents = row.tipOutCents
+            record.salesCents = row.salesCents
+            record.hoursWorked = row.hoursWorked
+            record.clockIn = row.clockIn.flatMap(PaydayRemoteDate.parseInstant)
+            record.clockOut = row.clockOut.flatMap(PaydayRemoteDate.parseInstant)
+            record.serverCount = row.serverCount
+            record.receiptMetrics = row.receiptMetrics
+            record.note = row.note
+            record.recordedAt = row.recordedAt.flatMap(PaydayRemoteDate.parseInstant)
+            // Provenance is adopted from the server, never invented locally:
+            // `source` plus `legacyEntryIDs` is the rollback query, and a
+            // device that guessed either would make a conversion artifact
+            // unfindable.
+            if let source = row.source.flatMap(ShiftRecordSource.init(rawValue:)) {
+                record.source = source
+            }
+            if let legacyEntryIDs = row.legacyEntryIDs {
+                record.legacyEntryIDs = Set(legacyEntryIDs)
+            }
+            record.modifiedAt = modifiedAt
             activeIDs.insert(row.id)
         }
         return activeIDs
