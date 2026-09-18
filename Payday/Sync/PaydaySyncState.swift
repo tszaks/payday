@@ -581,6 +581,85 @@ enum PaydaySyncState {
     /// widening a shipped cursor's behaviour is a separate risk.
     static let shiftCursorSafetyWindow: TimeInterval = 300
 
+    /// Where the shift cursor is allowed to advance to.
+    ///
+    /// **This is the fence, and it is the whole reason the feed returns a
+    /// server timestamp.** A cursor that advanced to the newest `updated_at`
+    /// it pulled would be correct for the tip leg and permanently wrong here:
+    ///
+    ///   - `updated_at` is written as `now()`, the TRANSACTION timestamp.
+    ///   - The fold runs in an after-statement trigger at the end of a 1.0
+    ///     build's batch of up to 500 rows plus 50 groups of fold work, so it
+    ///     can be open for seconds.
+    ///   - So a shift is stamped at t0 and becomes visible at t0 + seconds. A
+    ///     pull in between sees only later-stamped rows, advances past t0, and
+    ///     every subsequent delta filters that shift out. Forever. On every
+    ///     device. With nothing indicating a fault.
+    ///
+    /// Fatal on this leg alone, because `shifts` is the only read surface
+    /// here, the writer is a third party so a readback over this device's own
+    /// ids cannot cover it, and `shiftCacheRequiresBaseline` compares ID sets
+    /// so a present-but-stale shift never forces a re-baseline.
+    ///
+    /// Returning `nil` means "do not advance", which is always safe: the next
+    /// pass re-reads from the existing cursor.
+    ///
+    /// Two details that are easy to get wrong:
+    ///
+    /// - The clamp can move the cursor BACKWARDS relative to the rows just
+    ///   pulled, and that is intended. Re-pulling is free because reconciling
+    ///   a shift is idempotent, and the volume is one account's recent shifts.
+    /// - When the clamp binds, the id half of the cursor becomes the all-zero
+    ///   UUID rather than a pulled row's id. The filter is
+    ///   `updated_at > X or (updated_at = X and id > Y)`, so carrying a real
+    ///   id alongside a clamped-down timestamp would skip any row sitting
+    ///   exactly at X with a lower id.
+    static func clampedShiftCursor(
+        from current: ServerCursor?,
+        pulledUpdatedAt: [(updatedAt: String?, id: UUID)],
+        serverNow: Date
+    ) -> ServerCursor? {
+        let fence = serverNow.addingTimeInterval(-shiftCursorSafetyWindow)
+
+        let candidates = pulledUpdatedAt.compactMap { candidate -> (cursor: ServerCursor, date: Date)? in
+            guard let updatedAt = candidate.updatedAt,
+                  let date = PaydayRemoteDate.parseInstant(updatedAt) else { return nil }
+            return (ServerCursor(updatedAt: updatedAt, id: candidate.id), date)
+        }
+
+        // The newest pulled row, ties broken by id exactly as the shipped tip
+        // cursor does, so one transaction stamping a whole batch identically
+        // cannot make the client skip rows.
+        let newest = candidates.reduce(nil) { best, candidate -> (cursor: ServerCursor, date: Date)? in
+            guard let best else { return candidate }
+            if candidate.date != best.date { return candidate.date > best.date ? candidate : best }
+            return candidate.cursor.id.uuidString > best.cursor.id.uuidString ? candidate : best
+        }
+
+        let proposed: ServerCursor
+        if let newest, newest.date <= fence {
+            // The newest row is already older than the fence, so it is outside
+            // the in-flight window and safe to sit on.
+            proposed = newest.cursor
+        } else {
+            // Either nothing was pulled, or what was pulled is inside the
+            // window. Either way the cursor may only go as far as the fence.
+            proposed = ServerCursor(
+                updatedAt: PaydayRemoteDate.instant(fence),
+                id: UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
+            )
+        }
+
+        // Never move backwards past a cursor already held: that would re-pull
+        // an unbounded history every pass on a device whose clock or whose
+        // server drifted, which is a different failure from the one above.
+        guard let current,
+              let currentDate = PaydayRemoteDate.parseInstant(current.updatedAt),
+              let proposedDate = PaydayRemoteDate.parseInstant(proposed.updatedAt)
+        else { return proposed }
+        return proposedDate >= currentDate ? proposed : current
+    }
+
     /// Whether `public.shifts` may be read as the authority for this account.
     ///
     /// A server-sourced fact, persisted once observed. Both failure directions
