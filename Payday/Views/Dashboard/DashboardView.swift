@@ -586,6 +586,8 @@ struct DashboardView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
     @Query(sort: \TipEntry.date, order: .reverse) private var allEntries: [TipEntry]
+    /// The other representation. `DashboardEarnings.build` picks one.
+    @Query private var shiftRecords: [ShiftRecord]
 
     @State private var sheetTarget: TipEntrySheetTarget?
     @State private var showSettings = false
@@ -679,12 +681,18 @@ struct DashboardView: View {
         // `DashboardEarnings.build`.
         let dataset = renderCache?.revision == snapshotRevision
             ? renderCache!.dataset
-            : DashboardEarnings.build(
-                entries: allEntries,
-                policies: policyStore.policies,
-                payrollTimeZone: payrollTimeZone,
-                calendar: payrollCalendar
-            )
+            : (PaydaySyncState.shiftsAreAuthoritativeForCurrentAccount
+                ? DashboardEarnings.build(
+                    records: shiftRecords,
+                    policies: policyStore.policies,
+                    payrollTimeZone: payrollTimeZone
+                )
+                : DashboardEarnings.build(
+                    entries: allEntries,
+                    policies: policyStore.policies,
+                    payrollTimeZone: payrollTimeZone,
+                    calendar: payrollCalendar
+                ))
         let snapshot = dataset.snapshot
         // Rule 3: the facts are keyed on the dataset's own digest, the
         // complete computed key, plus this screen's presentational selection.
@@ -693,6 +701,7 @@ struct DashboardView: View {
             : DashboardFacts(
                 snapshot: snapshot,
                 allShifts: dataset.shiftDays,
+                allShiftRecords: dataset.shiftRecordDays,
                 schedule: scheduleStore.schedule,
                 now: now,
                 forcedPaydayPhase: forcedPaydayPhase,
@@ -1162,11 +1171,16 @@ struct DashboardView: View {
             .padding(.top, PaydaySpacing.p16)
             .padding(.bottom, PaydaySpacing.p8)
 
+            // Exactly one of these is populated, by construction.
             ForEach(Array(facts.shiftDays.prefix(Self.maxShiftRows).enumerated()), id: \.element.shiftID) { index, group in
                 if index > 0 { Divider() }
                 shiftRow(for: group, facts: facts)
             }
-            if facts.shiftDays.count > Self.maxShiftRows {
+            ForEach(Array(facts.shiftRecordDays.prefix(Self.maxShiftRows).enumerated()), id: \.element.id) { index, record in
+                if index > 0 { Divider() }
+                shiftRow(for: record, facts: facts)
+            }
+            if facts.shiftCount > Self.maxShiftRows {
                 Divider()
                 Button {
                     // "See all" used to just switch tabs and leave the
@@ -1185,6 +1199,30 @@ struct DashboardView: View {
                 .buttonStyle(.plain)
             }
         }
+    }
+
+    /// The record row. No `if let anchor`: a record IS the shift, where the
+    /// legacy row below has to reach for `items.first` and renders nothing at
+    /// all if the group is somehow empty.
+    private func shiftRow(
+        for record: ShiftRecord,
+        facts: DashboardFacts
+    ) -> some View {
+        Button {
+            sheetTarget = .editShift(record)
+        } label: {
+            ShiftDayRow(facts: ShiftDayRowFacts(
+                snapshot: facts.snapshot,
+                shiftID: record.id,
+                day: record.workDate,
+                period: record.shiftPeriod,
+                dayHasMultipleShifts: facts.multiShiftDays.contains(record.workDate)
+            ))
+            .padding(.vertical, PaydaySpacing.p12)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .shiftContextMenu(record: record, sheetTarget: $sheetTarget, undoState: undoState, context: modelContext)
     }
 
     @ViewBuilder

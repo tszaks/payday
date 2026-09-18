@@ -76,6 +76,33 @@ enum DashboardEarnings {
     ///   - calendar: the GRID calendar, in the frozen payroll zone
     ///     (`PayrollCalendar.gridCalendar(in:)`). It groups and it bounds
     ///     periods; it prices nothing.
+    /// The shift-representation dataset.
+    ///
+    /// The swap this type's header promised: "`LegacySnapshotBridge` and not
+    /// `earningsStore.snapshot`: nothing writes `ShiftRecord` on a device
+    /// until PR 2 slice S7 ... the swap is inside `DashboardEarnings.build`."
+    /// This is that swap, and it keeps the snapshot and the rows on the SAME
+    /// representation so the hero cannot sit over rows drawn from the other
+    /// one.
+    @MainActor
+    static func build(
+        records: [ShiftRecord],
+        policies: CompensationPolicies,
+        payrollTimeZone: TimeZone
+    ) -> Dataset {
+        let adapted = ShiftInputAdapter.adapt(records, calendars: policies.calendars)
+        let snapshot = try? EarningsSnapshot.build(EarningsInputs(
+            shifts: adapted.inputs,
+            rates: policies.rates,
+            calendars: policies.calendars,
+            // Unclamped, the same decision the legacy build makes below: the
+            // to-date cutoff is the HERO's scope, not the dataset's.
+            asOf: CivilDay(.distantFuture, in: payrollTimeZone),
+            unreadableReceiptShiftIDs: adapted.unreadableReceiptShiftIDs
+        ))
+        return Dataset(snapshot: snapshot, shiftDays: [], shiftRecordDays: records)
+    }
+
     static func build(
         entries: [TipEntry],
         policies: CompensationPolicies,
@@ -99,7 +126,8 @@ enum DashboardEarnings {
                 // dataset's; see the type header.
                 asOf: .distantFuture
             ),
-            shiftDays: shiftDays
+            shiftDays: shiftDays,
+            shiftRecordDays: []
         )
     }
 
@@ -118,5 +146,8 @@ enum DashboardEarnings {
         /// Newest day first, lunch before dinner — `ShiftDays`' order, which
         /// is what the rows render in.
         let shiftDays: [(day: Date, shiftID: UUID, items: [TipEntry])]
+        /// The same rows in the shift representation. Exactly one of the two
+        /// is populated, because `build` chooses a source rather than merging.
+        let shiftRecordDays: [ShiftRecord]
     }
 }
