@@ -34,51 +34,45 @@ enum StatsRecordAdapter {
 
     /// One record's rows.
     private static func rows(for record: ShiftRecord) -> [TipRecord] {
-        // The v2 fold, run through the ONE function allowed to stamp
-        // `earningsSchemaVersion`, and run for a reason worth stating
-        // precisely.
+        // Read RAW, deliberately, and this is a retraction of what this
+        // function did when it was written.
         //
-        // `TipRecord.voluntaryTipCents` is
-        // `metrics.voluntaryTipsCents(fromStoredAmount: amountCents)`, which
-        // on a **v1** payload returns `max(0, amount - gratuity)` —
-        // `employeeGratuityFeesCents` is NOT version-guarded, only
-        // `separatedGratuityFeesCents` is. A `ShiftRecord`'s amounts are
-        // already voluntary (`ShiftInputAdapter`: "ShiftRecord stores v2
-        // earnings only, so the v1 gratuity fold already happened once, at
-        // the deriver"), so handing a v1-stamped payload straight to
-        // `TipRecord` would subtract the gratuity a SECOND time and leave
-        // Insights lower than every other screen by exactly that amount.
+        // The first version routed cash/credit/metrics through
+        // `ShiftReceiptMetrics.normalizedToV2` to avoid folding a v1 gratuity
+        // twice, reasoning that `employeeGratuityFeesCents` is not
+        // version-guarded while `voluntaryTipsCents(fromStoredAmount:)` is.
+        // The reasoning about those two functions is correct. The conclusion
+        // was wrong, for two reasons.
         //
-        // Routing through `normalizedToV2` removes the dependency on that
-        // invariant instead of trusting it. The function is idempotent: on
-        // the v2 metrics a record is supposed to carry it returns the
-        // amounts and the payload untouched, so this is a no-op on all real
-        // data. If the invariant were ever violated it folds ONCE and stamps
-        // v2, converging on the same semantics the snapshot uses rather than
-        // double-subtracting. Trusting the invariant silently is the shape of
-        // bug this adapter is guarding against, so it does not.
-        let cash: Int
-        let credit: Int
-        let metrics: ShiftReceiptMetrics?
-        if let stored = record.receiptMetrics {
-            // `.credit` is the owner `ShiftDetails.metricsOwner` and
-            // `private.derive_shifts`' `metrics_rank` both pick. Two
-            // spellings of the owner is a money difference, not a style
-            // difference.
-            let folded = ShiftReceiptMetrics.normalizedToV2(
-                cashCents: record.cashTipsCents,
-                creditCents: record.creditTipsCents,
-                metrics: stored,
-                owner: .credit
-            )
-            cash = folded.cash
-            credit = folded.credit
-            metrics = folded.metrics
-        } else {
-            cash = record.cashTipsCents
-            credit = record.creditTipsCents
-            metrics = nil
-        }
+        // **A v1 payload cannot reach a `ShiftRecord`**, enforced at both
+        // write points rather than asserted:
+        //
+        // 1. The server deriver stamps the version. `derive_shifts`'
+        //    sanitizer does `jsonb_set(..., '{earningsSchemaVersion}',
+        //    '2'::jsonb, true)` with `create_missing = true`, so every
+        //    derived payload is v2 whether or not the legacy row said so.
+        // 2. On device, `ShiftRecord.receiptMetrics`' setter asserts
+        //    `(earningsSchemaVersion ?? 2) >= 2`, and `design-lint` fails the
+        //    build on `.receiptMetrics =` outside `ShiftRecord.swift` -- so
+        //    the only writer is `applyEarnings`, which folds through
+        //    `normalizedToV2` before assigning.
+        //
+        // So the fold was a no-op on every reachable record. That alone would
+        // make it harmless dead code; the second reason is why it had to go.
+        //
+        // **`ShiftRecord.nonWageEarningsCents` is the model's own definition
+        // of a record's money, and it reads `employeeGratuityFeesCents`
+        // UNGUARDED.** A reader that folds first is therefore a SECOND
+        // definition of what a shift earned. On reachable data the two agree,
+        // which is exactly what makes it dangerous: the disagreement would
+        // only ever appear on the data nobody had tested, and "two surfaces
+        // disagreeing about one fact" is the thing this project exists to
+        // end. The CSV exporter reads the field raw, matching the model; this
+        // now does too, so there is one definition rather than two that
+        // happen to coincide.
+        let cash = record.cashTipsCents
+        let credit = record.creditTipsCents
+        let metrics = record.receiptMetrics
 
         var rows: [TipRecord] = []
         // A wage-only or gratuity-only shift has zero tips of either kind and
