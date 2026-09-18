@@ -75,5 +75,32 @@ enum SharedModelContainer {
     }()
 
     static var shared: ModelContainer { resolution.container }
+
+    /// AUTOSAVE OFF. This is what makes `ShiftCommands`' atomicity real rather
+    /// than claimed: with autosave on, a run-loop save landing between a
+    /// mutation and a throw persists a partial change that `rollback()` cannot
+    /// undo, so "one logical shift saves atomically" would be false however
+    /// carefully the commands were written.
+    ///
+    /// IT LANDS IN THE SAME SLICE AS THE WRITE PATHS, DELIBERATELY. Every
+    /// SwiftUI write path in this app depended on autosave and several never
+    /// called `save()` at all: the paycheck sheet's save and delete, the
+    /// backfill sheet's save, and LogTipSheet's saveNew, live edit, zero-row
+    /// prune and delete. Turning this off before those were converted would
+    /// have silently stopped persisting logged shifts, paychecks and live
+    /// field edits -- and stopped firing `ModelContext.didSave`, which is what
+    /// queues a sync, so nothing would have synced either. An earlier plan
+    /// landed this flag several slices early; any build cut in that window
+    /// loses money.
+    ///
+    /// A separate main-actor call rather than part of `shared`, because
+    /// `mainContext` is main-actor isolated and `shared` is reachable from the
+    /// widget process off the main actor. Called first thing in
+    /// `PaydayApp.init`, before any view can obtain the context.
+    @MainActor
+    static func disableMainContextAutosave() {
+        resolution.container.mainContext.autosaveEnabled = false
+    }
+
     static var openingFailed: Bool { resolution.didFallBackToMemory }
 }
