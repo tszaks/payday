@@ -685,6 +685,50 @@ else
   echo "[PASS] No deletion is queued from inside a transaction"
 fi
 
+# 21. The device's time zone cannot reach the earnings path, except at the
+#     three sites that freeze it or precede any policy.
+#
+#     A frozen payroll zone is a T1 guarantee: a device that travels must not
+#     re-date a shift into another week or another pay period.
+#     `PolicyStore` line ~335 freezes the device zone INTO a calendar policy
+#     at migration, so after that `calendars` is non-empty and the `?? .current`
+#     fallbacks are unreachable. The property holds.
+#
+#     What did not hold is the ENFORCEMENT. `EarningsStore` carried the comment
+#     "`TimeZone.current` appears nowhere in this file" three lines above
+#     `policies.payrollTimeZone ?? .current`. Literally true about that exact
+#     string, false about the property it was asserting -- the same shape as
+#     `LegacySnapshotBridge`'s tip-out comment claiming to preserve a
+#     distinction its own input had already destroyed. A comment was doing a
+#     lint's job, so nothing stopped a fourth fallback appearing.
+#
+#     Counted per file rather than merely named, so a SECOND fallback inside
+#     an already-allowlisted file still fails. Proven both ways: adding one to
+#     `LegacySnapshotBridge` (allowlisted for 0) fails, and adding a second to
+#     `ShiftInputAdapter` (allowlisted for 1) fails.
+#
+#     The list ratchets DOWN. When `ShiftDraftPreview` moves off
+#     `Calendar.current`, lower its number; do not leave slack.
+DEVICE_ZONE=$(perl scripts/lint-device-zone.pl 2>&1)
+DEVICE_ZONE_STATUS=$?
+if [ "$DEVICE_ZONE_STATUS" -ne 0 ]; then
+  FAIL=1
+  echo "[FAIL] rule 21's checker could not run, so the rule proved nothing"
+  printf '%s\n' "$DEVICE_ZONE" | sed 's/^/   /'
+  echo ""
+elif [ -n "$DEVICE_ZONE" ]; then
+  FAIL=1
+  echo "[FAIL] The device time zone reaches the earnings path somewhere new"
+  printf '%s\n' "$DEVICE_ZONE" | sed 's/^/   /'
+  echo "   -> Money must be dated by the FROZEN payroll zone, or a user who"
+  echo "      travels re-dates their own history. If the site is genuinely a"
+  echo "      pre-policy first launch, raise its count in"
+  echo "      scripts/lint-device-zone.pl and say why."
+  echo ""
+else
+  echo "[PASS] The device time zone reaches the earnings path only where allowlisted"
+fi
+
 echo ""
 if [ "$FAIL" -eq 1 ]; then
   echo "=== Design lint FAILED — see docs/DESIGN.md ==="

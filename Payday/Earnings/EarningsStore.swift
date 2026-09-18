@@ -469,9 +469,18 @@ final class ModelContextEarningsInputSource: EarningsInputSource {
         guard storeOpened else { throw EarningsUnavailable.storeUnavailable }
 
         let policies = policies()
-        // The FROZEN payroll zone. `TimeZone.current` appears nowhere in
-        // this file: a device that travels must not move a shift into
-        // another week or another pay period.
+        // The FROZEN payroll zone. The device zone is consulted ONLY when
+        // there is no calendar policy at all, which is a first launch before
+        // the migration -- `PolicyStore` then freezes the device zone into a
+        // policy, so afterwards this fallback is unreachable and a device
+        // that travels cannot re-date a shift into another week or another
+        // pay period.
+        //
+        // The previous wording here said "`TimeZone.current` appears nowhere
+        // in this file", three lines above `?? .current`. True about that
+        // exact string and false about the property, which is why the claim
+        // is now enforced by `design-lint.sh` rule 21 instead of asserted in
+        // a comment.
         let zone = policies.payrollTimeZone ?? .current
 
         let context = makeContext()
