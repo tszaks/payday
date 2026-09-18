@@ -271,33 +271,91 @@ overclaim from the other side: the app had shared helpers but not a shared
 INTERPRETATION, so the same stored shift produced different answers on
 different screens. The heading now matches the body, and the body is dated.
 
-**Status as of 2026-09-18, measured rather than asserted.** This paragraph
-is written functionally rather than as a count of merged slices, because the
-count is precisely what went stale last time -- and it had gone stale in BOTH
-directions, first overclaiming and then, once the work sped up, understating
-what had landed.
+**Status as of 2026-09-21, measured on the post-PR-8 tree.** This is the
+one current-state section; it is edited in place rather than appended to,
+per the rule recorded below the HISTORY divider.
 
 True now, on the in-app screens: every figure comes from the one engine.
-PR 0, 1, 3 and 4 and all three waves of PR 5 are merged, so the screens read
-`EarningsSnapshot` rather than computing their own arithmetic.
+The screens read `EarningsSnapshot`; none computes its own arithmetic.
 
-True now, beyond the screens: the **widget and Siri** read the engine through
-one shared function and label a wage-inclusive number correctly instead of
-calling it "TIPS"; a failed read renders "Couldn't load" rather than `$0`.
-The **CSV export** writes exact minutes (`6.3833`) instead of quarter-hour
-rounding. The **money-boundary lint** is in place and ratchets, so a new
-money computation outside the engine fails CI.
+True now, beyond the screens: the **widget and Siri** read the engine
+through one shared function and label a wage-inclusive number correctly
+instead of calling it "TIPS"; a failed read renders "Couldn't load" rather
+than `$0`. The **CSV export** writes exact minutes. The **money-boundary
+lint** ratchets — the allowlist holds four files and only those.
 
-True now, on the STORED shape (PR 2 slices S14 and S15, 2026-09-18). A shift
-is one `ShiftRecord` rather than a cash row plus a credit row, and on an
-account the server has converted, every reader takes its shifts from that
-record: the calendar grid, History and its period detail, the Dashboard,
-Insights, the day sheet, the log sheet's reveal, the CSV export, the delete
-confirmation's shift count, the payday notification's spoken figure, the
-widget's pace baseline, and Siri's logging. A sweep found NINE of those
-reading the legacy rows with no switch at all, and every parity gate in the
-suite stayed green through all nine, because each surface was internally
-consistent with whatever it happened to read.
+True now, on the STORED shape — and this changed on 2026-09-21. A shift is
+one `ShiftRecord`, and as of PR 8 that is the ONLY shape a screen can read:
+the dual-arm builders, the per-screen representation switch, and the legacy
+read/write paths (`LegacySnapshotBridge`, `LegacyEditSheetPresence`,
+`PredictedPaycheck`, `ShiftWriter`, `TipBreakdown`) are deleted rather than
+switched off. "Every surface agrees" is no longer a discipline the code has
+to maintain; there is one path.
+
+What remains of the legacy world, deliberately: `TipEntry` the model, its
+sync legs, `ShiftDetails`, `LegacyShiftRow`, `StatsEngine` and
+`PaycheckAudit`. The tip legs serve an account the server has not
+converted — they write to the server and drain pre-upgrade queues, and
+nothing renders from them. They die when the last unconverted account is
+gone, which is a server-side fact, not a client one.
+
+Authority: an account's shifts are authoritative once the server stamps
+`shift_migration_state.migrated_at`; new accounts are born stamped and a
+read-path view synthesizes the stamp for accounts that predate the trigger
+(#135). Measured on production: the only account holding data is converted
+(103 tip rows folded to 61 shifts) and stamped; the other three are empty.
+There is no flip left to take — the app speaks records.
+
+Sync lifecycle (PR 7): merged, and the wire-level fault sweep (#138) pins
+the last open row — every public repository method throws on a faulted or
+unreadable response rather than marking rows synced, releasing a partial
+page, or advancing a cursor past records it never received.
+
+Serves, measured rather than asserted: `/v1/summary` reads
+`earnings_snapshots` — the device-published, `dataset_revision`-fenced
+snapshot — through `engineEarnings`, and a deno test exercises it. The
+deployed function (v5, 2026-09-19 16:31 UTC) postdates the last source
+change. The legacy tips-only `shifts`/`paychecks` fields still ride
+alongside — additive on purpose — so an agent reading those fields still
+gets a wageless number.
+
+Not true yet, and a reader should not assume otherwise:
+
+- **Two answers still coexist in one API response.** `earnings` is the
+  engine's; `shifts`/`paychecks` are tips-only. A consumer has to be moved
+  off the old fields, and nothing forces that today.
+- **The human lines of the release gate are still open** — device checks,
+  the paycheck reconcile, the October soak. Machine lines are green; the
+  human ones are marked open, not green.
+
+---
+
+### Everything below this line is HISTORY, and some of it is false now
+
+**Read the status section above for what is true. Do not quote from below it
+without checking.**
+
+This pillar was written append-only: each PR added a dated block —
+"What PR 4 added", "Superseded 2026-09-18", "What is still NOT true,
+precisely" — without reconciling the blocks already there. By 2026-09-18 that
+produced flat contradictions about the same facts, a hundred lines apart:
+
+| Said above | Said below | Which is true |
+|---|---|---|
+| "the money-boundary lint is in place and ratchets" | "There is no money-boundary lint yet" | **Above.** `design-lint.sh` rule 4 exists and fires; it caught a `.netCents` in the CSV exporter on 2026-09-18. |
+| "the widget and Siri read the engine through one shared function" | "The widget, Siri and the CSV export still compute their own figures" | **Above.** Both reach `AmbientPeriodFigure`, which calls `EarningsStore.buildOnce`. |
+
+A reader asking "is my overtime right?" got opposite answers depending on
+which paragraph they reached. That is the precise failure this pillar's own
+heading correction was about, recurring in the body rather than the heading.
+
+**The rule this establishes, because patching the two sentences would not
+stop the third:** there is ONE current-state section, it is the one above,
+and a new PR EDITS it rather than appending a new dated block. Blocks below
+are kept because the reasoning in them is worth reading and because deleting
+a record of what was believed when is its own kind of dishonesty — but they
+are dated evidence, not status.
+
 
 **Updated 2026-09-19, and the update is mostly about what is still FALSE.**
 The paragraph above is written functionally precisely so it can go stale in
@@ -395,73 +453,6 @@ does ratchet and does block, as claimed above. But until `f4a8215` on
 Any conclusion resting on rules 31-34 before that commit should be
 re-derived rather than trusted.
 
-The choice is no longer the screen's to make. A builder takes both stored
-shapes and resolves which to read itself, so a half-switched screen is not
-expressible, and `design-lint.sh` rule 23 fails the build on any app-code
-read that hands over only the legacy list.
-
-**This changes nothing for anyone today, and that is deliberate.** An account
-becomes authoritative only when the server reports its conversion complete,
-unrolled and conserved, and no account has one yet. So the flip ships as a
-no-op and stays one until the server's own conversion runs.
-
-Not true yet, and a reader should not assume otherwise:
-
-- **The `/v1` API reports non-wage figures only.** S11 deleted the backend's
-  duplicate money math, so the API no longer computes a *second* answer --
-  but it has no wage concept either, because a wage is a property of a
-  workweek under a rate history the server does not hold. Wage-inclusive
-  totals reach it only through a device-published snapshot. **This bullet
-  said group 2.14 "is not built" and that now contradicts the dated update
-  above, which records that it landed.** Both readings mislead on their own:
-  the code exists, and none of it is connected, so the practical state is
-  the same as not built. The update above is authoritative; this bullet is
-  kept because a reader greps for the claim, not for the date.
-  `docs/PAYDAY_API.md` states this at the top of its contract. An API total and an app total are the same *non-wage* number
-  and are not comparable as totals.
-- **That deletion is in the repository, not necessarily in production.** The
-  deployed edge function changes only when someone runs
-  `supabase functions deploy payday-api`. Until then the live API is whatever
-  was last deployed, regardless of what this file or the source says.
-- **The old calculation paths still exist**, but the REASON changed on
-  2026-09-18 and the old reason is worth correcting rather than leaving.
-  This bullet used to say they were live "because the screens still read
-  through them", and that deleting them "cannot start until every reader has
-  been switched to `ShiftRecord` and the writer flipped". That precondition
-  is now MET. `TipEntry` remains the legacy write surface and is never
-  rewritten, and `ShiftDetails`, `TipBreakdown` and `ShiftDays.groupedByShift`
-  are still live as the LEGACY ARM — the path an unconverted account still
-  takes, and every account is unconverted today. They go when legacy goes,
-  which is PR 8.
-- **PR 7's lifecycle hardening is not started.**
-
----
-
-### Everything below this line is HISTORY, and some of it is false now
-
-**Read the status section above for what is true. Do not quote from below it
-without checking.**
-
-This pillar was written append-only: each PR added a dated block —
-"What PR 4 added", "Superseded 2026-09-18", "What is still NOT true,
-precisely" — without reconciling the blocks already there. By 2026-09-18 that
-produced flat contradictions about the same facts, a hundred lines apart:
-
-| Said above | Said below | Which is true |
-|---|---|---|
-| "the money-boundary lint is in place and ratchets" | "There is no money-boundary lint yet" | **Above.** `design-lint.sh` rule 4 exists and fires; it caught a `.netCents` in the CSV exporter on 2026-09-18. |
-| "the widget and Siri read the engine through one shared function" | "The widget, Siri and the CSV export still compute their own figures" | **Above.** Both reach `AmbientPeriodFigure`, which calls `EarningsStore.buildOnce`. |
-
-A reader asking "is my overtime right?" got opposite answers depending on
-which paragraph they reached. That is the precise failure this pillar's own
-heading correction was about, recurring in the body rather than the heading.
-
-**The rule this establishes, because patching the two sentences would not
-stop the third:** there is ONE current-state section, it is the one above,
-and a new PR EDITS it rather than appending a new dated block. Blocks below
-are kept because the reasoning in them is worth reading and because deleting
-a record of what was believed when is its own kind of dishonesty — but they
-are dated evidence, not status.
 
 ---
 
