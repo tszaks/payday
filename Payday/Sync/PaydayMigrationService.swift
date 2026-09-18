@@ -130,28 +130,34 @@ final class PaydayMigrationService {
             .filter { activeIDs.tipIDs.contains($0.id) }
         let reconciledPaychecks = try context.fetch(FetchDescriptor<PaycheckRecord>())
             .filter { activeIDs.paycheckIDs.contains($0.id) }
-        PaydaySyncState.save(
-            userID: userID,
-            tipEntryIDs: activeIDs.tipIDs,
-            paycheckIDs: activeIDs.paycheckIDs,
-            migrationVerified: true,
-            tipClientUpdatedAt: Dictionary(uniqueKeysWithValues: remoteTips.map { ($0.id, $0.clientUpdatedAt) }),
-            paycheckClientUpdatedAt: Dictionary(uniqueKeysWithValues: remotePaychecks.map { ($0.id, $0.clientUpdatedAt) }),
+        // The fingerprints are computed OUTSIDE the mutation, because the
+        // closure cannot throw and these can.
+        let tipFingerprints = try PaydayRowFingerprint.values(reconciledTips)
+        let paycheckFingerprints = try PaydayRowFingerprint.values(reconciledPaychecks)
+        // `mutate`, never a fresh Snapshot: see PaydaySyncState.mutate.
+        PaydaySyncState.mutate(userID: userID) { checkpoint in
+            checkpoint.tipEntryIDs = activeIDs.tipIDs
+            checkpoint.paycheckIDs = activeIDs.paycheckIDs
+            checkpoint.migrationVerified = true
+            checkpoint.tipClientUpdatedAt = Dictionary(
+                uniqueKeysWithValues: remoteTips.map { ($0.id, $0.clientUpdatedAt) })
+            checkpoint.paycheckClientUpdatedAt = Dictionary(
+                uniqueKeysWithValues: remotePaychecks.map { ($0.id, $0.clientUpdatedAt) })
             // Recording these is also what keeps a freshly migrated install
             // off the one-time seeding read.
-            tipContentFingerprint: try PaydayRowFingerprint.values(reconciledTips),
-            paycheckContentFingerprint: try PaydayRowFingerprint.values(reconciledPaychecks),
-            settingsClientUpdatedAt: snapshot.settings.clientUpdatedAt,
-            tipServerCursor: PaydaySyncState.ServerCursor.advanced(
+            checkpoint.tipContentFingerprint = tipFingerprints
+            checkpoint.paycheckContentFingerprint = paycheckFingerprints
+            checkpoint.settingsClientUpdatedAt = snapshot.settings.clientUpdatedAt
+            checkpoint.tipServerCursor = PaydaySyncState.ServerCursor.advanced(
                 from: .beginning,
                 candidates: snapshot.tips.map { ($0.serverUpdatedAt, $0.id) }
-            ),
-            paycheckServerCursor: PaydaySyncState.ServerCursor.advanced(
+            )
+            checkpoint.paycheckServerCursor = PaydaySyncState.ServerCursor.advanced(
                 from: .beginning,
                 candidates: snapshot.paychecks.map { ($0.serverUpdatedAt, $0.id) }
-            ),
-            settingsServerUpdatedAt: snapshot.settings.serverUpdatedAt
-        )
+            )
+            checkpoint.settingsServerUpdatedAt = snapshot.settings.serverUpdatedAt
+        }
 
         return PaydayMigrationReport(
             localTipEntryCount: localTips.count,

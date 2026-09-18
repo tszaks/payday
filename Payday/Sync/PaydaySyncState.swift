@@ -70,6 +70,42 @@ enum PaydaySyncState {
         var paycheckServerCursor: ServerCursor?
         var settingsServerUpdatedAt: String?
 
+        // MARK: Shifts (PR 2 slice S7)
+        //
+        // Seven fields, and every one of them fails SILENTLY if its decode
+        // line is forgotten. `init(from:)` below is hand-written with
+        // `decodeIfPresent` for every key so that an old checkpoint still
+        // loads, which means a missing line does not throw -- it produces a
+        // write-only field that always reads back as its default. Nothing
+        // logs, nothing crashes, no test fails on its own. A non-persisting
+        // `pendingShiftRestores` quietly deletes a shift the user undid; a
+        // non-persisting cursor re-baselines the whole account every pass.
+        // `design-lint.sh` compares this property list against both
+        // `CodingKeys` and the assignments in `init(from:)`, and
+        // `everySnapshotFieldSurvivesEncodeDecode` round-trips a fully
+        // non-default Snapshot so a forgotten key fails as a value mismatch
+        // even if the lint is bypassed.
+
+        /// Shift ids this checkpoint believes the server holds.
+        var shiftIDs: Set<UUID>
+        var shiftServerCursor: ServerCursor?
+        var shiftClientUpdatedAt: [UUID: String]
+        /// Durability, from SERVER RESPONSES ONLY -- never from a local fetch,
+        /// which would assert local presence as server durability.
+        var shiftServerAckedIDs: Set<UUID>
+        /// Failed-write retry counts, on a 1/2/4/8-pass backoff. A shift the
+        /// server refused is retried and surfaced, never dropped and never
+        /// acknowledged: a loop, not a loss.
+        var shiftWriteAttempts: [UUID: Int]
+        /// Undo that has not yet been confirmed by the server. Durable,
+        /// because losing it means a shift the user restored stays deleted.
+        var pendingShiftRestores: [UUID: Date]
+        /// A SERVER-SOURCED coverage fact, not a local one. Non-nil is what
+        /// switches the reader from the legacy leg to `shifts`. Clearing it is
+        /// what switches the reader back, which is how rollback and an account
+        /// switch both work.
+        var shiftsAreAuthoritativeAt: String?
+
         init(
             tipEntryIDs: Set<UUID> = [],
             paycheckIDs: Set<UUID> = [],
@@ -82,7 +118,14 @@ enum PaydaySyncState {
             settingsClientUpdatedAt: String? = nil,
             tipServerCursor: ServerCursor? = nil,
             paycheckServerCursor: ServerCursor? = nil,
-            settingsServerUpdatedAt: String? = nil
+            settingsServerUpdatedAt: String? = nil,
+            shiftIDs: Set<UUID> = [],
+            shiftServerCursor: ServerCursor? = nil,
+            shiftClientUpdatedAt: [UUID: String] = [:],
+            shiftServerAckedIDs: Set<UUID> = [],
+            shiftWriteAttempts: [UUID: Int] = [:],
+            pendingShiftRestores: [UUID: Date] = [:],
+            shiftsAreAuthoritativeAt: String? = nil
         ) {
             self.tipEntryIDs = tipEntryIDs
             self.paycheckIDs = paycheckIDs
@@ -96,6 +139,13 @@ enum PaydaySyncState {
             self.tipServerCursor = tipServerCursor
             self.paycheckServerCursor = paycheckServerCursor
             self.settingsServerUpdatedAt = settingsServerUpdatedAt
+            self.shiftIDs = shiftIDs
+            self.shiftServerCursor = shiftServerCursor
+            self.shiftClientUpdatedAt = shiftClientUpdatedAt
+            self.shiftServerAckedIDs = shiftServerAckedIDs
+            self.shiftWriteAttempts = shiftWriteAttempts
+            self.pendingShiftRestores = pendingShiftRestores
+            self.shiftsAreAuthoritativeAt = shiftsAreAuthoritativeAt
         }
 
         private enum CodingKeys: String, CodingKey {
@@ -111,6 +161,13 @@ enum PaydaySyncState {
             case tipServerCursor
             case paycheckServerCursor
             case settingsServerUpdatedAt
+            case shiftIDs
+            case shiftServerCursor
+            case shiftClientUpdatedAt
+            case shiftServerAckedIDs
+            case shiftWriteAttempts
+            case pendingShiftRestores
+            case shiftsAreAuthoritativeAt
         }
 
         /// Hand-written so a checkpoint persisted by any earlier build still
@@ -133,6 +190,13 @@ enum PaydaySyncState {
             tipServerCursor = try values.decodeIfPresent(ServerCursor.self, forKey: .tipServerCursor)
             paycheckServerCursor = try values.decodeIfPresent(ServerCursor.self, forKey: .paycheckServerCursor)
             settingsServerUpdatedAt = try values.decodeIfPresent(String.self, forKey: .settingsServerUpdatedAt)
+            shiftIDs = try values.decodeIfPresent(Set<UUID>.self, forKey: .shiftIDs) ?? []
+            shiftServerCursor = try values.decodeIfPresent(ServerCursor.self, forKey: .shiftServerCursor)
+            shiftClientUpdatedAt = try values.decodeIfPresent([UUID: String].self, forKey: .shiftClientUpdatedAt) ?? [:]
+            shiftServerAckedIDs = try values.decodeIfPresent(Set<UUID>.self, forKey: .shiftServerAckedIDs) ?? []
+            shiftWriteAttempts = try values.decodeIfPresent([UUID: Int].self, forKey: .shiftWriteAttempts) ?? [:]
+            pendingShiftRestores = try values.decodeIfPresent([UUID: Date].self, forKey: .pendingShiftRestores) ?? [:]
+            shiftsAreAuthoritativeAt = try values.decodeIfPresent(String.self, forKey: .shiftsAreAuthoritativeAt)
         }
     }
 
@@ -140,14 +204,75 @@ enum PaydaySyncState {
         "com.szakacsmedia.payday.supabaseSync.\(userID.uuidString.lowercased())"
     }
 
+    /// Every queue that carries an unflushed deletion.
+    ///
+    /// The decoder is hand-written and every key is optional, and that is
+    /// load-bearing rather than stylistic. Swift's SYNTHESIZED decoder does
+    /// not use property defaults, so the moment a key is added here every
+    /// blob a 1.0 build wrote throws `keyNotFound` -- and `loadPending`
+    /// swallows that with `try?` and returns an empty queue. The result is
+    /// that adding a field would SILENTLY DISCARD every tip and paycheck
+    /// deletion the shipped build made and never managed to flush, which is
+    /// the only record that those deletions ever happened. Measured, not
+    /// assumed.
+    ///
+    /// Normative for this file: every persisted `Codable` here has a
+    /// hand-written decoder in which every key is optional. No exceptions.
+    ///
+    /// One trap for whoever writes a fixture for this: `[UUID: Date]` is NOT
+    /// a JSON object. `UUID` does not conform to `CodingKeyRepresentable`, so
+    /// Swift encodes these as a flat unkeyed ARRAY of alternating id and
+    /// number. A hand-written `{"tipEntries":{"<uuid>":"..."}}` fixture
+    /// decodes as `typeMismatch`, `loadPending` swallows it, and the test
+    /// fails against a perfectly correct decoder -- which invites someone to
+    /// "fix" the storage shape and break reading every real 1.0 blob. Generate
+    /// fixtures by ENCODING.
     private struct PendingDeletions: Codable {
         var tipEntries: [UUID: Date] = [:]
         var paychecks: [UUID: Date] = [:]
+        var shifts: [UUID: Date] = [:]
+        var shiftTombstones: [UUID: ShiftTombstone] = [:]
+        /// The legacy source rows of a deleted shift, queued for the shipped
+        /// `soft_delete_tip_entries`.
+        ///
+        /// This has its OWN key rather than sharing `tipEntries`, and the
+        /// reason is specific. `synchronize` cancels any pending tip deletion
+        /// whose local `TipEntry` row still exists, and it does that BEFORE
+        /// the flush runs. Today that is safe only because the 1.0 delete
+        /// paths hard-delete the local row in the same breath. Under the
+        /// shift model the local legacy mirror is deliberately kept, so every
+        /// id queued into `tipEntries` would still be present on the next
+        /// pass and the restore-cancel arm would empty the queue **without
+        /// one `soft_delete_tip_entries` call ever being issued**: the shift
+        /// tombstone reaches the server and the legacy rows stay live
+        /// forever. The restore-cancel arm does not touch this key.
+        var legacyEntries: [UUID: Date] = [:]
+
+        private enum CodingKeys: String, CodingKey {
+            case tipEntries, paychecks, shifts, shiftTombstones, legacyEntries
+        }
+
+        init() {}
+
+        init(from decoder: Decoder) throws {
+            let v = try decoder.container(keyedBy: CodingKeys.self)
+            tipEntries = try v.decodeIfPresent([UUID: Date].self, forKey: .tipEntries) ?? [:]
+            paychecks = try v.decodeIfPresent([UUID: Date].self, forKey: .paychecks) ?? [:]
+            shifts = try v.decodeIfPresent([UUID: Date].self, forKey: .shifts) ?? [:]
+            shiftTombstones = try v.decodeIfPresent([UUID: ShiftTombstone].self, forKey: .shiftTombstones) ?? [:]
+            legacyEntries = try v.decodeIfPresent([UUID: Date].self, forKey: .legacyEntries) ?? [:]
+        }
     }
 
     private static let currentUserKey = "com.szakacsmedia.payday.supabaseCurrentUserID"
 
-    private static func deletionKey(for userID: UUID) -> String {
+    /// Internal rather than private for exactly one reason: the test that
+    /// proves a blob written by the shipped 1.0 build still decodes has to
+    /// write to the REAL key. A test that rebuilt this format string itself
+    /// would keep passing if the key were ever renamed, while every real 1.0
+    /// blob silently became unreachable -- which is the loss the hand-written
+    /// decoder above exists to prevent.
+    static func deletionKey(for userID: UUID) -> String {
         "com.szakacsmedia.payday.supabasePendingDeletions.\(userID.uuidString.lowercased())"
     }
 
@@ -414,37 +539,192 @@ enum PaydaySyncState {
         return result
     }
 
-    static func save(
-        userID: UUID,
-        tipEntryIDs: Set<UUID>,
-        paycheckIDs: Set<UUID>,
-        migrationVerified: Bool,
-        tipClientUpdatedAt: [UUID: String] = [:],
-        paycheckClientUpdatedAt: [UUID: String] = [:],
-        tipContentFingerprint: [UUID: String] = [:],
-        paycheckContentFingerprint: [UUID: String] = [:],
-        settingsClientUpdatedAt: String? = nil,
-        tipServerCursor: ServerCursor? = nil,
-        paycheckServerCursor: ServerCursor? = nil,
-        settingsServerUpdatedAt: String? = nil
-    ) {
-        let snapshot = Snapshot(
-            tipEntryIDs: tipEntryIDs,
-            paycheckIDs: paycheckIDs,
-            migrationVerified: migrationVerified,
-            tipClientUpdatedAt: tipClientUpdatedAt,
-            paycheckClientUpdatedAt: paycheckClientUpdatedAt,
-            tipContentFingerprint: tipContentFingerprint,
-            paycheckContentFingerprint: paycheckContentFingerprint,
-            versioningScheme: currentVersioningScheme,
-            settingsClientUpdatedAt: settingsClientUpdatedAt,
-            tipServerCursor: tipServerCursor,
-            paycheckServerCursor: paycheckServerCursor,
-            settingsServerUpdatedAt: settingsServerUpdatedAt
-        )
+    /// Read, modify, write. **The only way to write a checkpoint.**
+    ///
+    /// This replaces a `save` that took the shipped nine fields and built a
+    /// FRESH `Snapshot`, so any caller that omitted a field erased it. With
+    /// seven shift fields added, leaving that in place would have wiped all
+    /// seven at the end of every single sync pass: re-baseline every pass,
+    /// re-push every shift every pass, and `pendingShiftRestores` lost, which
+    /// silently deletes a shift the user undid. Both shipped callers passed
+    /// only the nine, so the erasure would have been immediate and total.
+    ///
+    /// A closure over `inout` makes the erasure unexpressible: a caller
+    /// touches the fields it means to and cannot omit the rest.
+    static func mutate(userID: UUID, _ body: (inout Snapshot) -> Void) {
+        var snapshot = load(for: userID)
+        body(&snapshot)
+        snapshot.versioningScheme = currentVersioningScheme
         if let data = try? JSONEncoder().encode(snapshot) {
             AppGroup.defaults.set(data, forKey: key(for: userID))
         }
+    }
+
+    // MARK: - Shifts (PR 2 slice S7)
+
+    /// How far back the shift cursor is held from the server's clock.
+    ///
+    /// The tip cursor advances to the newest `updated_at` it pulled. That is
+    /// wrong for shifts, because a shift is written by the on-arrival fold
+    /// INSIDE a 1.0 build's transaction: its `updated_at` is stamped when the
+    /// fold runs, but the row only becomes visible when that transaction
+    /// commits, which can be much later. A cursor that had already advanced
+    /// past that stamp would never deliver the row, and the shift would be
+    /// invisible on every device forever.
+    ///
+    /// So the cursor is `min(newest pulled, serverNow - this)`. Rows inside
+    /// the window are re-pulled next pass, which costs nothing: reconciling a
+    /// shift is idempotent and the volume is one account's recent shifts.
+    ///
+    /// Deliberately NOT applied to the tip cursor in this PR. Nothing folds
+    /// tip entries into existence, so they do not have this hazard, and
+    /// widening a shipped cursor's behaviour is a separate risk.
+    static let shiftCursorSafetyWindow: TimeInterval = 300
+
+    /// Whether `public.shifts` may be read as the authority for this account.
+    ///
+    /// A server-sourced fact, persisted once observed. Both failure directions
+    /// are real and neither is recoverable by guessing: read the legacy leg
+    /// too long and every newly logged shift is invisible, so the user logs it
+    /// twice and two ids reach the server; switch too early and the history
+    /// renders empty or partial. So this is never inferred from a local
+    /// migration version, which is what both earlier designs did.
+    static func shiftsAreAuthoritative(for userID: UUID) -> Bool {
+        load(for: userID).shiftsAreAuthoritativeAt != nil
+    }
+
+    /// The shift half of `cacheRequiresBaseline`: a durable cursor must never
+    /// outlive the replaceable cache it describes.
+    ///
+    /// Kept as its own function rather than folded into the existing one
+    /// because an account can legitimately have a full tip cache and no shift
+    /// cache at all -- that is every account before its conversion is
+    /// observed -- and a combined predicate would force a pointless full
+    /// re-baseline of the tips as well.
+    static func shiftCacheRequiresBaseline(
+        localShiftIDs: Set<UUID>,
+        pendingShiftDeletionIDs: Set<UUID> = [],
+        checkpoint: Snapshot
+    ) -> Bool {
+        checkpoint.shiftServerCursor != nil
+            && !checkpoint.shiftIDs.subtracting(pendingShiftDeletionIDs).isSubset(of: localShiftIDs)
+    }
+
+    // MARK: Shift deletions
+
+    static func recordShiftDeletion(
+        _ id: UUID,
+        at date: Date = .now,
+        for userID: UUID? = nil
+    ) {
+        guard let userID = userID ?? currentUserID else { return }
+        var pending = loadPending(for: userID)
+        pending.shifts[id] = date
+        // The durable tombstone, written in the same breath. It is cleared
+        // only by a restore, never pruned by time and never by a sync, so an
+        // undo remains an exact inverse however long it takes.
+        pending.shiftTombstones[id] = ShiftTombstone(deletedAt: date)
+        savePending(pending, for: userID)
+    }
+
+    static func pendingShiftDeletions(for userID: UUID) -> [UUID: Date] {
+        loadPending(for: userID).shifts
+    }
+
+    static func clearShiftDeletions(_ ids: some Sequence<UUID>, for userID: UUID) {
+        var pending = loadPending(for: userID)
+        for id in ids { pending.shifts.removeValue(forKey: id) }
+        savePending(pending, for: userID)
+    }
+
+    static func shiftTombstones(for userID: UUID) -> [UUID: ShiftTombstone] {
+        loadPending(for: userID).shiftTombstones
+    }
+
+    /// Records that the server accepted the tombstone. Kept, not deleted:
+    /// whether a deletion reached the server is what decides whether an undo
+    /// has to re-push the legacy source rows or merely un-queue them.
+    static func markShiftTombstonesFlushed(_ ids: some Sequence<UUID>, for userID: UUID) {
+        var pending = loadPending(for: userID)
+        for id in ids where pending.shiftTombstones[id] != nil {
+            pending.shiftTombstones[id]?.flushedToServer = true
+        }
+        savePending(pending, for: userID)
+    }
+
+    static func clearShiftTombstones(_ ids: some Sequence<UUID>, for userID: UUID) {
+        var pending = loadPending(for: userID)
+        for id in ids { pending.shiftTombstones.removeValue(forKey: id) }
+        savePending(pending, for: userID)
+    }
+
+    // MARK: Shift restores
+
+    /// A restore queued durably, because an undo that is lost on relaunch
+    /// leaves the shift deleted and the user has no way to know.
+    ///
+    /// Lives in the checkpoint rather than the deletion blob so that
+    /// `forget` and a rollback clear it with everything else.
+    static func recordShiftRestore(_ id: UUID, at date: Date = .now, for userID: UUID? = nil) {
+        guard let userID = userID ?? currentUserID else { return }
+        mutate(userID: userID) { $0.pendingShiftRestores[id] = date }
+    }
+
+    static func pendingShiftRestores(for userID: UUID) -> [UUID: Date] {
+        load(for: userID).pendingShiftRestores
+    }
+
+    /// Cleared only after a confirmation read shows the shift is live again.
+    static func clearShiftRestores(_ ids: some Sequence<UUID>, for userID: UUID) {
+        mutate(userID: userID) { snapshot in
+            for id in ids { snapshot.pendingShiftRestores.removeValue(forKey: id) }
+        }
+    }
+
+    // MARK: The legacy source rows of a deleted shift
+
+    /// Queues the legacy rows behind a deleted shift for the shipped
+    /// `soft_delete_tip_entries`, through a key of their own.
+    ///
+    /// See `PendingDeletions.legacyEntries` for why sharing the tip queue
+    /// would have emptied it without ever issuing one call.
+    static func recordLegacyEntryDeletions(
+        _ ids: some Sequence<UUID>,
+        at date: Date = .now,
+        for userID: UUID? = nil
+    ) {
+        guard let userID = userID ?? currentUserID else { return }
+        var pending = loadPending(for: userID)
+        for id in ids { pending.legacyEntries[id] = date }
+        savePending(pending, for: userID)
+    }
+
+    /// Undo before the flush: the rows were never tombstoned, so un-queueing
+    /// them is the whole inverse.
+    static func cancelLegacyEntryDeletions(_ ids: some Sequence<UUID>, for userID: UUID? = nil) {
+        guard let userID = userID ?? currentUserID else { return }
+        var pending = loadPending(for: userID)
+        for id in ids { pending.legacyEntries.removeValue(forKey: id) }
+        savePending(pending, for: userID)
+    }
+
+    static func pendingLegacyEntryDeletions(for userID: UUID) -> [UUID: Date] {
+        loadPending(for: userID).legacyEntries
+    }
+
+    /// Cleared against the RPC's RETURN SET, never unconditionally.
+    ///
+    /// `soft_delete_tip_entries` only writes rows where
+    /// `p_deleted_at >= client_updated_at`, and `client_updated_at` was
+    /// clamped to the server's clock while `p_deleted_at` is the device's. A
+    /// device running behind the server therefore tombstones NOTHING and gets
+    /// no error, and the shipped client clears its whole queue regardless. So
+    /// the caller passes only the ids the server said it wrote; the rest stay
+    /// queued and retry, and the skew is bounded so it converges.
+    static func clearLegacyEntryDeletions(_ ids: some Sequence<UUID>, for userID: UUID) {
+        var pending = loadPending(for: userID)
+        for id in ids { pending.legacyEntries.removeValue(forKey: id) }
+        savePending(pending, for: userID)
     }
 
     private static func load(for userID: UUID) -> Snapshot {
@@ -470,6 +750,46 @@ enum PaydaySyncState {
     private static func savePending(_ value: PendingDeletions, for userID: UUID) {
         guard let data = try? JSONEncoder().encode(value) else { return }
         AppGroup.defaults.set(data, forKey: deletionKey(for: userID))
+    }
+}
+
+/// A deletion this device made, remembered until it is undone.
+///
+/// Local only, never a wire type. Durable and never pruned by time or by a
+/// sync, because it is what makes an undo an exact inverse rather than a
+/// best effort.
+struct ShiftTombstone: Codable, Equatable {
+    var deletedAt: Date
+    /// Whether the server accepted the tombstone. This is what decides
+    /// whether an undo merely un-queues the legacy source rows or has to
+    /// re-push them to un-delete rows the server already tombstoned.
+    var flushedToServer: Bool = false
+
+    private enum CodingKeys: String, CodingKey {
+        case deletedAt, flushedToServer
+    }
+
+    init(deletedAt: Date, flushedToServer: Bool = false) {
+        self.deletedAt = deletedAt
+        self.flushedToServer = flushedToServer
+    }
+
+    /// Hand-written and all-optional, under this file's normative rule. No
+    /// shipped build ever wrote this type, so the defaulting branch is
+    /// unreachable for any blob that exists today; it is here so that adding
+    /// a field later cannot make an existing blob throw, which would take
+    /// every queued deletion with it.
+    ///
+    /// `.distantPast` for a missing date is the deliberate choice over `.now`.
+    /// The flush only writes rows where the requested date is at or after the
+    /// stored one, so a distant-past tombstone stays queued, retries, and
+    /// surfaces to the user. `.now` would instead flush a deletion stamped
+    /// with a fabricated time. For a deletion, staying stuck and visible
+    /// beats proceeding on an invented value.
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        deletedAt = try values.decodeIfPresent(Date.self, forKey: .deletedAt) ?? .distantPast
+        flushedToServer = try values.decodeIfPresent(Bool.self, forKey: .flushedToServer) ?? false
     }
 }
 
