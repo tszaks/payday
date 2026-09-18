@@ -9,6 +9,46 @@ struct PaydayMigrationReport: Equatable, Sendable {
     let remotePaycheckCount: Int
     let tipEntryHash: String
     let paycheckHash: String
+
+    /// How many legacy groups the server has not converted yet, or nil when
+    /// the question does not apply.
+    ///
+    /// **A SUB-STATE ON THE REPORT, NEVER A `Phase`**, and the reason is
+    /// specific enough to be worth writing at the declaration. An earlier
+    /// design made this `Phase.awaitingAccountConversion` and said
+    /// `syncIfReady` would not fire in that phase. That turns into a total
+    /// account outage, because `PaydayCloudState.syncIfReady` opens with
+    /// `guard case .ready = phase` and `queueSyncAfterLocalChange` routes
+    /// through the same function. The moment the phase were not `.ready`
+    /// NOTHING would sync: no tip pull, no tip push, no paycheck or settings
+    /// sync, and no flush of `pendingTipDeletions` -- which is the only
+    /// carrier of a deletion a 1.0 build queued and never sent.
+    ///
+    /// So the phase stays `.ready`, everything else syncs normally, only the
+    /// shift leg is skipped, and the wait is a BANNER.
+    var conversionPending: Int?
+
+    init(
+        localTipEntryCount: Int,
+        localPaycheckCount: Int,
+        remoteTipEntryCount: Int,
+        remotePaycheckCount: Int,
+        tipEntryHash: String,
+        paycheckHash: String,
+        conversionPending: Int? = nil
+    ) {
+        self.localTipEntryCount = localTipEntryCount
+        self.localPaycheckCount = localPaycheckCount
+        self.remoteTipEntryCount = remoteTipEntryCount
+        self.remotePaycheckCount = remotePaycheckCount
+        self.tipEntryHash = tipEntryHash
+        self.paycheckHash = paycheckHash
+        self.conversionPending = conversionPending
+    }
+
+    /// Whether a conversion is outstanding. `0` means finished, not pending,
+    /// so this is deliberately not `conversionPending != nil`.
+    var isConversionPending: Bool { (conversionPending ?? 0) > 0 }
 }
 
 enum PaydayMigrationError: LocalizedError {
@@ -16,6 +56,9 @@ enum PaydayMigrationError: LocalizedError {
     case paycheckMismatch
     case invalidRemoteData
     case accountMismatch
+    /// The account's legacy rows are uploaded and backed up, but the server
+    /// has not finished converting them into shifts yet.
+    case conversionIncomplete
 
     var errorDescription: String? {
         switch self {
@@ -27,6 +70,13 @@ enum PaydayMigrationError: LocalizedError {
             "A synced record couldn't be read. Your local copy is unchanged."
         case .accountMismatch:
             "This device already has another Payday account's offline data. Sign back into that account so its cache is never mixed with yours."
+        case .conversionIncomplete:
+            // Verbatim from the design. The first clause is only TRUE because
+            // public.tip_entries is never rewritten by the conversion, so
+            // this copy and that invariant ship together: if a future slice
+            // ever rewrites a legacy row, this sentence becomes a lie and has
+            // to change with it.
+            "Payday is still updating your shifts. Everything you've logged is saved and already backed up to your account; your shifts start syncing as soon as that finishes."
         }
     }
 }
