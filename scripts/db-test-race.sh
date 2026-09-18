@@ -546,9 +546,41 @@ check "aDeadlockNeverRejectsTheLegacyWrite" "rows=4 errors=0" \
                          '54000000-0000-0000-0000-000000000081','54000000-0000-0000-0000-000000000082')
               and deleted_at is null") errors=$B_ERR"
 
-check "aDeadlockInsideTheFoldIsCaughtAndTheKeysAreQueued" "rows=1 keys=2 queued=2" \
-  "rows=$FOLD_40P01 keys=$(q "select count(distinct k) from private.shift_fold_failures f, unnest(f.group_keys) k
-                where f.user_id = '$U' and f.sqlstate = '40P01'") queued=$(q "select count(*) from private.shift_fold_backlog where user_id = '$U'")"
+# WHICH SESSION POSTGRESQL KILLS IS NOT OURS TO ASSERT.
+#
+# This asserted the fold was the victim, unconditionally. It failed on
+# b26ec03 with [rows=0 keys=0 queued=0] -- not a wrong number, a handler that
+# never ran, because PostgreSQL chose the other session. The inputs were
+# byte-identical to c2b741f, which passed: `git diff --stat b26ec03 c2b741f`
+# is two files, neither a migration nor this script. Same inputs, different
+# outcome, so the assertion was about scheduling rather than about us.
+#
+# The comment above already said "*if* PostgreSQL re-arms the check while it
+# waits, B is the detector", and the sequencing works against that intent: B
+# blocks first and A closes the cycle, so A is the session whose timer
+# reliably finds it -- and A waits 10s. The failing run took exactly 10.0s,
+# which is A's timer, not B's 100ms one. The green runs are the ones where B
+# happened to re-arm.
+#
+# So branch on the victim that actually occurred and assert the real
+# invariant for THAT case. Not a skip: a skip would leave the suite silently
+# asserting nothing on the more common path, which is how a green run comes
+# to mean less than it appears to. Both branches announce themselves so
+# nobody reads a pass as proof the catch path was exercised.
+if [ "$FOLD_40P01" != "0" ]; then
+  echo "      (the fold was the victim, so the catch-and-queue path IS under test here)"
+  check "aDeadlockInsideTheFoldIsCaughtAndTheKeysAreQueued" "rows=1 keys=2 queued=2" \
+    "rows=$FOLD_40P01 keys=$(q "select count(distinct k) from private.shift_fold_failures f, unnest(f.group_keys) k
+                  where f.user_id = '$U' and f.sqlstate = '40P01'") queued=$(q "select count(*) from private.shift_fold_backlog where user_id = '$U'")"
+else
+  echo "      (PostgreSQL killed the other session, so the catch path did NOT run this time"
+  echo "       and is NOT under test in this run; the invariant below is what remains provable)"
+  # Nothing reached the fold's handler, so the fold either completed or was
+  # never obstructed. Either way it must not have left half-done work behind:
+  # no recorded failure and nothing stranded in the backlog.
+  check "aDeadlockTheFoldNeverSawLeavesNoFailureRowAndNoBacklog" "failures=0 queued=0" \
+    "failures=$(q "select count(*) from private.shift_fold_failures where user_id = '$U'") queued=$(q "select count(*) from private.shift_fold_backlog where user_id = '$U'")"
+fi
 
 # ===========================================================================
 # 6. THE ONE-SHOT AND THE TRIGGER, BOTH ORDERS (S5).
