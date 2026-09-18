@@ -315,6 +315,36 @@ else
   echo "[PASS] No ON CONFLICT ... WHERE on public.shifts"
 fi
 
+# 15b. The Release configuration carries a real Sentry DSN.
+#      The failure this catches is silent by construction: with no DSN,
+#      PaydayCrashReporting.start() returns immediately and the app ships with
+#      crash reporting completely off. That is the correct behaviour for Debug
+#      and for CI, and it is indistinguishable from a healthy build, so the one
+#      place it must NOT happen -- Release -- needs an assertion rather than a
+#      habit. It also pins the DSN to Release: in `settings.base` every local
+#      debug run would report into the same project and bury the production
+#      signal.
+SENTRY_DSN_LINE=$(awk '
+  /^      configs:/ { inconf = 1; next }
+  /^    [a-z]/ { inconf = 0 }
+  inconf && /SENTRY_DSN:/ { print; found = 1 }
+  END { if (!found) print "MISSING" }
+' project.yml)
+if printf '%s' "$SENTRY_DSN_LINE" | grep -qE 'SENTRY_DSN: *https://[0-9a-f]+@[a-z0-9.]+/[0-9]+'; then
+  echo "[PASS] Release carries a real Sentry DSN"
+elif grep -qE '^ *SENTRY_DSN:' project.yml; then
+  FAIL=1
+  echo "[FAIL] SENTRY_DSN is present but not a usable DSN on the Release config"
+  echo "   got: $SENTRY_DSN_LINE"
+  echo "   -> A blank or base-scoped DSN ships with reporting silently OFF, which looks exactly like a healthy build. See docs/SENTRY.md"
+  echo ""
+else
+  FAIL=1
+  echo "[FAIL] No SENTRY_DSN in project.yml, so a Release build reports no crashes"
+  echo "   -> Add it under the Payday target's settings.configs.Release. See docs/SENTRY.md"
+  echo ""
+fi
+
 # 16. Every hand-written Codable decoder in PaydaySyncState.swift is complete.
 #     A missing line in a hand-written init(from:) that uses decodeIfPresent is
 #     a SILENT default, not a throw: the field becomes write-only and always

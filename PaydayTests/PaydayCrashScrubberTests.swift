@@ -225,9 +225,14 @@ struct PaydayCrashReportingTests {
 
     /// The whole mechanism by which Debug builds, unit tests and CI stay
     /// silent. No build flag does this; the absence of a DSN does.
-    @Test("with no DSN in the bundle nothing is configured")
+    ///
+    /// A real DSN now exists, and project.yml scopes it to the **Release**
+    /// configuration precisely so this stays true. Had it gone in
+    /// `settings.base`, every local debug run would report into the same
+    /// project and bury the production signal the thing exists to read. This
+    /// test is what notices if someone moves it.
+    @Test("a Debug or test build has no DSN and is completely inert")
     func absentDSNMeansDisabled() {
-        // This suite runs in a test build, where SENTRY_DSN is blank.
         #expect(PaydayCrashReporting.dsn == nil)
         #expect(!PaydayCrashReporting.isConfigured)
     }
