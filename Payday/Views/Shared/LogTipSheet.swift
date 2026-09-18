@@ -2002,6 +2002,36 @@ struct LogTipSheet: View {
         PaydaySyncState.recordTipDeletions(deletedRows.map(\.id))
     }
 
+    /// Which write path a delete takes, as a value rather than as control
+    /// flow, so the ROUTING can be asserted independently of the commands.
+    ///
+    /// This exists because of a real bug and a real gap. Adding
+    /// `.editShift` obliged the compiler only at exhaustive switches; the
+    /// write paths consume `target` through `guard case` / `if case`, which
+    /// fall through in SILENCE. So `delete()` dismissed having deleted
+    /// nothing, and the user watched the sheet close believing it worked.
+    ///
+    /// A command-level test cannot catch that. `ShiftCommands.delete` was
+    /// correct throughout and its witness passed, because the sheet never
+    /// reached the command at all -- the command being right and the call site
+    /// reaching it are two different facts, and only the second was broken.
+    /// `.none` for an editing target is therefore itself a bug, which is what
+    /// `LogTipSheetDeleteRouteTests` pins.
+    enum DeleteRoute: Equatable {
+        case record(ShiftRecord)
+        case legacy(TipEntry)
+        /// Nothing to delete, which is only correct for `.new`.
+        case none
+    }
+
+    var deleteRoute: DeleteRoute {
+        switch target {
+        case .editShift(let record): .record(record)
+        case .edit(let entry): .legacy(entry)
+        case .new: .none
+        }
+    }
+
     private func delete() {
         // The record branch FIRST, and it must exist: with only the `.edit`
         // branch below, an `.editShift` target fell through to `dismiss()`
