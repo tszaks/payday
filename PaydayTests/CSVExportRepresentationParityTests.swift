@@ -132,6 +132,149 @@ struct CSVExportRepresentationParityTests {
         }
     }
 
+    // MARK: - Constructed legacy, not mirrored
+
+    /// **The case the mirror cannot generate.**
+    ///
+    /// Every parity assertion above derives its legacy side from
+    /// `ShiftProjection.rows(for:)`, and a test built by MIRRORING cannot
+    /// catch a defect in the mirror: it proves the record arm agrees with the
+    /// projection's legacy VIEW of that record, not that a shift which
+    /// genuinely exists as a legacy pair exports correctly.
+    ///
+    /// The projection puts every shift-level value on exactly ONE row. Real
+    /// legacy data does not: `CSVExporter`'s own header names the shape --
+    /// "a shift with a stray value on both entries (legacy data) still
+    /// reports one number here, matching every other reader in the app,
+    /// rather than double-counting it." The mirror can never produce that
+    /// pair, so no mirrored test can check the claim.
+    ///
+    /// So this constructs the legacy rows by hand, with `tipOutCents` on BOTH
+    /// of them, and asserts the export subtracts it ONCE. A double-subtraction
+    /// here is real money: $12.00 of tip-out taken twice is $12.00 missing
+    /// from a file someone may take to a payroll dispute.
+    ///
+    /// **Honest scope.** This shape turned out to be ALREADY gated, by
+    /// `CSVExporterTests`' "hours/tip-out/sales set on BOTH entries
+    /// (corruption) resolve to one canonical value, never a sum" -- measured:
+    /// summing instead of resolving fails both that test and this one. So this
+    /// duplicates existing coverage rather than adding it, and it is kept for
+    /// one narrow reason: it sits in the PARITY suite, where a reader
+    /// evaluating whether the arms agree will look, and it documents the
+    /// mirror limitation at the place the mirror is used.
+    ///
+    /// The generalizable finding is more useful than the test: the mirror
+    /// blind spot in parity suites is **partly compensated by single-arm
+    /// suites that construct their inputs**. A parity suite cannot see a
+    /// defect in its own mirror, but `CSVExporterTests` can, because it builds
+    /// legacy rows by hand and never projects. So the audit question is not
+    /// "does this parity suite mirror?" but "is there a constructed
+    /// counterpart ANYWHERE for the shapes the mirror cannot emit?" -- and
+    /// that is what was actually checked before adding this.
+    @Test("a legacy pair with a stray tip-out on BOTH rows subtracts it once")
+    func strayValueOnBothLegacyRowsIsCountedOnce() throws {
+        let day = Self.day(0)
+        let shiftID = UUID()
+        // Constructed, NOT projected: both rows carry hours and tip-out, which
+        // `ShiftProjection` would never emit.
+        let cash = TipEntry(
+            date: day, amountCents: 4_000, kind: .cash, recordedAt: day,
+            hoursWorked: 6, tipOutCents: 1_200, shiftPeriod: .dinner, shiftID: shiftID
+        )
+        let credit = TipEntry(
+            date: day, amountCents: 6_000, kind: .credit, recordedAt: day,
+            hoursWorked: 6, tipOutCents: 1_200, shiftPeriod: .dinner, shiftID: shiftID
+        )
+
+        let csv = CSVExporter.export(
+            entries: [cash, credit], records: [], paycheckRecords: [],
+            calculator: Self.calculator(), representation: .legacy
+        )
+        let lines = csv.split(separator: "\n").map(String.init)
+        #expect(lines.count == 2, "one shift, one row, however many entries back it")
+        let cells = try cells(lines)
+
+        // Tip-out reported ONCE, not summed across the two rows.
+        #expect(cells["Tip-Out"] == "12.00", "the stray duplicate must not double the tip-out")
+        // And Net subtracts it once: 4000 + 6000 - 1200.
+        #expect(cells["Net"] == "88.00", "Net must subtract the tip-out exactly once")
+        // Hours likewise resolved to the one canonical value, not 12.
+        #expect(cells["Hours"] == "6.0000", "hours must not be summed across the pair")
+    }
+
+    /// The same discipline for the other direction: a legacy pair where only
+    /// ONE row carries the shift-level values, which is what the projection
+    /// emits and what most real data looks like. Constructed here anyway, so
+    /// the suite has a hand-built baseline to compare the stray case against
+    /// rather than trusting that the mirror and the hand-built agree.
+    /// **The shape with no constructed counterpart anywhere**, found by asking
+    /// the better audit question: not "does this suite mirror?" but "is there
+    /// a constructed test for the shapes the mirror cannot emit?"
+    ///
+    /// `ShiftProjection` emits at most one row per KIND. Real legacy data can
+    /// hold two cash rows under one `shiftID` -- two cash amounts logged for
+    /// one closeout -- and `TipBreakdown` accumulates them
+    /// (`result.cashCents += voluntaryCents`). So the sum is the intended
+    /// behaviour, and the record side has a single `cashTipsCents` field to
+    /// hold it.
+    ///
+    /// Asserted because nothing asserted it: the mirror cannot generate the
+    /// shape, and unlike the stray-value case there was no single-arm suite
+    /// covering it either.
+    @Test("a legacy shift with TWO cash rows sums them into one row's Cash cell")
+    func twoSameKindLegacyRowsAreSummed() throws {
+        let day = Self.day(0)
+        let shiftID = UUID()
+        let first = TipEntry(
+            date: day, amountCents: 3_000, kind: .cash, recordedAt: day,
+            hoursWorked: 6, tipOutCents: 500, shiftPeriod: .dinner, shiftID: shiftID
+        )
+        let second = TipEntry(
+            date: day, amountCents: 2_500, kind: .cash,
+            recordedAt: day.addingTimeInterval(60), shiftID: shiftID
+        )
+
+        let csv = CSVExporter.export(
+            entries: [first, second], records: [], paycheckRecords: [],
+            calculator: Self.calculator(), representation: .legacy
+        )
+        let lines = csv.split(separator: "\n").map(String.init)
+        #expect(lines.count == 2, "two rows of one shift are still ONE exported shift")
+        let cells = try cells(lines)
+
+        // Summed, because both rows are real cash the person took home.
+        #expect(cells["Cash"] == "55.00", "two cash rows of one shift sum")
+        // The shift-level tip-out is still resolved once, not multiplied by
+        // the number of rows.
+        #expect(cells["Tip-Out"] == "5.00")
+        #expect(cells["Net"] == "50.00", "5500 - 500")
+        #expect(cells["Hours"] == "6.0000")
+    }
+
+    @Test("a constructed legacy pair with values on one row matches the mirrored expectation")
+    func constructedLegacyPairMatchesMirror() throws {
+        let day = Self.day(0)
+        let shiftID = UUID()
+        let cash = TipEntry(
+            date: day, amountCents: 4_000, kind: .cash, recordedAt: day,
+            hoursWorked: 6, tipOutCents: 1_200, shiftPeriod: .dinner, shiftID: shiftID
+        )
+        let credit = TipEntry(
+            date: day, amountCents: 6_000, kind: .credit, recordedAt: day,
+            shiftPeriod: .dinner, shiftID: shiftID
+        )
+        let csv = CSVExporter.export(
+            entries: [cash, credit], records: [], paycheckRecords: [],
+            calculator: Self.calculator(), representation: .legacy
+        )
+        let cells = try cells(csv.split(separator: "\n").map(String.init))
+        #expect(cells["Tip-Out"] == "12.00")
+        #expect(cells["Net"] == "88.00")
+        #expect(cells["Hours"] == "6.0000")
+        #expect(cells["Cash"] == "40.00")
+        #expect(cells["Credit"] == "60.00")
+    }
+
     @Test("a cash+credit shift with a tip-out exports identically from both representations")
     func plainShiftIsIdentical() throws {
         let record = ShiftRecord(
