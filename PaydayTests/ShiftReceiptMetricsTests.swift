@@ -126,4 +126,130 @@ struct ShiftReceiptMetricsTests {
 
         #expect(metrics.separatedGratuityFeesCents == 4_050)
     }
+
+    // MARK: - normalizedToV2
+
+    /// The N4 shape: cash 5000, credit 2000, and a v1 receipt on the CREDIT
+    /// row carrying a folded gratuity of 4200 that the credit amount is short
+    /// of. The read path gives cash 5000 / credit 0 / gratuity 4200 /
+    /// non-wage 8200 (with a tip-out of 1000).
+    @Test("normalizedToV2 on N4 reproduces the read path, not the edit path")
+    func normalizedToV2MatchesTheReadPathOnN4() {
+        let v1 = ShiftReceiptMetrics(earningsSchemaVersion: nil, gratuityFeesCents: 4_200)
+
+        let result = ShiftReceiptMetrics.normalizedToV2(
+            cashCents: 5_000,
+            creditCents: 2_000,
+            metrics: v1,
+            owner: .credit
+        )
+
+        #expect(result.cash == 5_000)
+        #expect(result.credit == 0)
+        #expect(result.metrics.earningsSchemaVersion == 2)
+        #expect(result.metrics.employeeGratuityFeesCents == 4_200)
+        // cash + credit + gratuity - tip-out
+        #expect(result.cash + result.credit + result.metrics.employeeGratuityFeesCents - 1_000 == 8_200)
+
+        // The edit path's rule would have produced 800 / 2000 / 4200 / 6000
+        // on this same shift: $22.00 less, and a different cash-versus-credit
+        // split, which is the number the paycheck comparison runs on.
+        #expect(result.cash != 800)
+        #expect(result.credit != 2_000)
+    }
+
+    @Test("the owner decides which amount the folded gratuity comes out of")
+    func theOwnerDecidesWhichAmountIsReduced() {
+        let v1 = ShiftReceiptMetrics(earningsSchemaVersion: nil, gratuityFeesCents: 4_200)
+
+        let creditOwned = ShiftReceiptMetrics.normalizedToV2(
+            cashCents: 5_000, creditCents: 2_000, metrics: v1, owner: .credit
+        )
+        #expect(creditOwned.cash == 5_000)
+        #expect(creditOwned.credit == 0)
+
+        let cashOwned = ShiftReceiptMetrics.normalizedToV2(
+            cashCents: 5_000, creditCents: 2_000, metrics: v1, owner: .cash
+        )
+        #expect(cashOwned.cash == 800)
+        #expect(cashOwned.credit == 2_000)
+    }
+
+    @Test("normalizedToV2 is idempotent")
+    func normalizedToV2IsIdempotent() {
+        let v1 = ShiftReceiptMetrics(earningsSchemaVersion: nil, gratuityFeesCents: 4_200)
+
+        let once = ShiftReceiptMetrics.normalizedToV2(
+            cashCents: 5_000, creditCents: 2_000, metrics: v1, owner: .credit
+        )
+        let twice = ShiftReceiptMetrics.normalizedToV2(
+            cashCents: once.cash, creditCents: once.credit, metrics: once.metrics, owner: .credit
+        )
+        let thrice = ShiftReceiptMetrics.normalizedToV2(
+            cashCents: twice.cash, creditCents: twice.credit, metrics: twice.metrics, owner: .credit
+        )
+
+        #expect(twice.cash == once.cash)
+        #expect(twice.credit == once.credit)
+        #expect(twice.metrics == once.metrics)
+        #expect(thrice.cash == once.cash)
+        #expect(thrice.credit == once.credit)
+        #expect(thrice.metrics == once.metrics)
+    }
+
+    @Test("a payload already labelled v2 is returned untouched")
+    func versionTwoInputIsReturnedUntouched() {
+        let v2 = ShiftReceiptMetrics(earningsSchemaVersion: 2, gratuityFeesCents: 4_200)
+
+        let result = ShiftReceiptMetrics.normalizedToV2(
+            cashCents: 5_000, creditCents: 2_000, metrics: v2, owner: .credit
+        )
+
+        #expect(result.cash == 5_000)
+        #expect(result.credit == 2_000)
+        #expect(result.metrics == v2)
+    }
+
+    @Test("an absent earningsSchemaVersion is treated as v1, because that is live data")
+    func anAbsentVersionIsTreatedAsV1() throws {
+        // ReceiptAIParser writes `earningsSchemaVersion: creditTipsCents != nil
+        // ? 2 : nil`, and older scans never wrote the key at all, so this
+        // payload shape is in production stores right now.
+        let stored = Data(#"{"gratuityFeesCents":4200}"#.utf8)
+        let metrics = try JSONDecoder().decode(ShiftReceiptMetrics.self, from: stored)
+        #expect(metrics.earningsSchemaVersion == nil)
+
+        let result = ShiftReceiptMetrics.normalizedToV2(
+            cashCents: 5_000, creditCents: 2_000, metrics: metrics, owner: .credit
+        )
+
+        #expect(result.credit == 0)
+        #expect(result.metrics.earningsSchemaVersion == 2)
+    }
+
+    @Test("the subtraction floors at zero rather than going negative")
+    func theSubtractionFloorsAtZero() {
+        let v1 = ShiftReceiptMetrics(earningsSchemaVersion: nil, gratuityFeesCents: 9_999)
+
+        let result = ShiftReceiptMetrics.normalizedToV2(
+            cashCents: 100, creditCents: 0, metrics: v1, owner: .cash
+        )
+
+        #expect(result.cash == 0)
+        #expect(result.credit == 0)
+    }
+
+    @Test("a v1 payload with no gratuity moves nothing but is still relabelled")
+    func aV1PayloadWithNoGratuityMovesNothing() {
+        let v1 = ShiftReceiptMetrics(earningsSchemaVersion: nil, netSalesCents: 11_800)
+
+        let result = ShiftReceiptMetrics.normalizedToV2(
+            cashCents: 5_000, creditCents: 2_000, metrics: v1, owner: .credit
+        )
+
+        #expect(result.cash == 5_000)
+        #expect(result.credit == 2_000)
+        #expect(result.metrics.earningsSchemaVersion == 2)
+        #expect(result.metrics.netSalesCents == 11_800)
+    }
 }

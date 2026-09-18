@@ -107,6 +107,12 @@ targets:
       - path: PaydayWidget
       - path: Payday/Models/TipEntry.swift
       - path: Payday/Models/PaycheckRecord.swift
+      # The widget opens the same App Group store through
+      # SharedModelContainer, so its schema list has to be satisfiable in
+      # this process too. Miss this and ModelContainer(for:) throws in the
+      # widget, openingFailed is set, and the Lock Screen renders
+      # "Couldn't load" while the app is perfectly healthy.
+      - path: Payday/Models/ShiftRecord.swift
       - path: Payday/Models/PayScheduleStore.swift
       - path: Payday/Utilities/PayPeriod.swift
       - path: Payday/Utilities/TipBreakdown.swift
