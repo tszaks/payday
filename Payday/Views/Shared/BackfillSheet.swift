@@ -18,6 +18,10 @@ struct BackfillSheet: View {
     @Environment(UserPreferencesStore.self) private var preferencesStore
     @Query(sort: \TipEntry.date, order: .reverse) private var allEntries: [TipEntry]
     @Query private var paycheckRecords: [PaycheckRecord]
+    /// The other representation. SmartNudgeScheduler picks between this and
+    /// `allEntries` on `shiftsAreAuthoritative`; it must never read both, or a
+    /// converted shift counts twice.
+    @Query private var shiftRecords: [ShiftRecord]
 
     @State private var selectedDate: Date
     @State private var cashCents: Int = 0
@@ -117,7 +121,7 @@ struct BackfillSheet: View {
             }
             .onDisappear {
                 guard shiftsAddedCount > 0 else { return }
-                SmartNudgeScheduler.reschedule(preferencesStore: preferencesStore, allEntries: allEntries + sessionEntries)
+                SmartNudgeScheduler.reschedule(preferencesStore: preferencesStore, allEntries: allEntries + sessionEntries, shiftRecords: shiftRecords)
                 PaydayPushScheduler.reschedule(preferencesStore: preferencesStore, schedule: scheduleStore.schedule, allEntries: allEntries + sessionEntries, paycheckRecords: paycheckRecords)
                 PaydayWidgetRefresh.request()
             }

@@ -12,6 +12,10 @@ struct RootView: View {
     @State private var onboardingViewModel = PaydayOnboardingViewModel()
     @Query private var allEntries: [TipEntry]
     @Query private var paycheckRecords: [PaycheckRecord]
+    /// The other representation. SmartNudgeScheduler picks between this and
+    /// `allEntries` on `shiftsAreAuthoritative`; it must never read both, or a
+    /// converted shift counts twice.
+    @Query private var shiftRecords: [ShiftRecord]
 
     var body: some View {
         Group {
@@ -48,7 +52,7 @@ struct RootView: View {
             case .background:
                 lockController.armIfEnabled(preferencesStore)
             case .active:
-                SmartNudgeScheduler.reschedule(preferencesStore: preferencesStore, allEntries: allEntries)
+                SmartNudgeScheduler.reschedule(preferencesStore: preferencesStore, allEntries: allEntries, shiftRecords: shiftRecords)
                 PaydayPushScheduler.reschedule(preferencesStore: preferencesStore, schedule: scheduleStore.schedule, allEntries: allEntries, paycheckRecords: paycheckRecords)
             default:
                 break

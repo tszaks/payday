@@ -20,37 +20,84 @@ enum SmartNudgeScheduler {
     /// authorization is ALREADY granted. Asking is a separate, explicit
     /// call (requestAuthorizationIfNeeded below) made only at a moment of
     /// actual relevant value, never on launch.
-    static func reschedule(preferencesStore: UserPreferencesStore, allEntries: [TipEntry]) {
+    static func reschedule(
+        preferencesStore: UserPreferencesStore,
+        allEntries: [TipEntry],
+        shiftRecords: [ShiftRecord]
+    ) {
         Task {
-            await performReschedule(preferencesStore: preferencesStore, allEntries: allEntries)
+            await performReschedule(
+                preferencesStore: preferencesStore,
+                allEntries: allEntries,
+                shiftRecords: shiftRecords
+            )
         }
     }
 
-    private static func performReschedule(preferencesStore: UserPreferencesStore, allEntries: [TipEntry]) async {
+    private static func performReschedule(
+        preferencesStore: UserPreferencesStore,
+        allEntries: [TipEntry],
+        shiftRecords: [ShiftRecord]
+    ) async {
         let center = UNUserNotificationCenter.current()
         center.removePendingNotificationRequests(withIdentifiers: [notificationIdentifier])
         guard preferencesStore.isSmartNudgeEnabled else { return }
 
-        guard let fireDate = rhythmFireDate(allEntries: allEntries) else { return }
+        guard let fireDate = rhythmFireDate(allEntries: allEntries, shiftRecords: shiftRecords) else { return }
 
         guard await isCurrentlyAuthorized(center: center) else { return }
         schedule(at: fireDate, center: center)
     }
 
+    /// The per-account switch, in ONE place for this reader.
+    ///
+    /// Both representations exist at once during the conversion window -- a
+    /// converted shift is a `ShiftRecord` AND its original `TipEntry` rows,
+    /// which are never rewritten -- so reading the union would count that
+    /// shift twice. `shiftsAreAuthoritative` is therefore a switch, not a
+    /// merge: `ShiftRecord` when true, `TipEntry` when false.
+    ///
+    /// It lives here rather than at the call sites because this reader has
+    /// FOUR of them -- `RootView`, `LogTipsIntent`, `BackfillSheet` and
+    /// `LogTipSheet` -- and a switch duplicated four ways is a switch that
+    /// can disagree with itself.
+    ///
+    /// No shipped account is authoritative yet, so today this always takes
+    /// the `TipEntry` branch and the behaviour is byte-identical to before.
+    /// `switchIsANoOpForAnAccountThatHasNotConverted` asserts exactly that.
+    static func rhythmFireDate(
+        allEntries: [TipEntry],
+        shiftRecords: [ShiftRecord],
+        from now: Date = .now
+    ) -> Date? {
+        if PaydaySyncState.shiftsAreAuthoritativeForCurrentAccount {
+            return rhythmFireDate(rows: ShiftProjection.rows(for: shiftRecords), from: now)
+        }
+        return rhythmFireDate(rows: allEntries, from: now)
+    }
+
     /// The learned typical-hour heuristic keeps reminders useful without
     /// reading or connecting to the user's calendar.
-    private static func rhythmFireDate(allEntries: [TipEntry]) -> Date? {
-        let engine = StatsEngine(payrollTimeZone: PolicyStore.storedPayrollTimeZone(), records: allEntries.map(TipRecord.init))
-        let rhythm = engine.workRhythm()
+    /// Generic over the row rather than existential, so Release still
+    /// specializes it: the measured witness-table cost of a protocol here is
+    /// a `-Onone` effect only (see docs/design/FOLLOWUP-release-perf-budget.md).
+    static func rhythmFireDate<Row: LegacyShiftRow>(rows: [Row], from now: Date = .now) -> Date? {
+        let engine = StatsEngine(payrollTimeZone: PolicyStore.storedPayrollTimeZone(), records: rows.map(TipRecord.init))
+        // `referenceDate: now`, not the default `.now`. The rhythm window and
+        // the fire-date search must share ONE clock: with the default, the
+        // rhythm was computed against wall-clock time while the search below
+        // used the caller's `now`, so one decision rested on two different
+        // "now"s. That also made this untestable.
+        let rhythm = engine.workRhythm(referenceDate: now)
         guard !rhythm.usualWeekdays.isEmpty, let typicalLogHour = rhythm.typicalLogHour else { return nil }
-        return nextFireDate(usualWeekdays: rhythm.usualWeekdays, typicalLogHour: typicalLogHour, allEntries: allEntries)
+        return nextFireDate(usualWeekdays: rhythm.usualWeekdays, typicalLogHour: typicalLogHour, rows: rows, from: now)
     }
 
     /// The next moment worth nudging: today if it's a usual night, the
     /// time hasn't passed, and nothing's logged yet — otherwise the next
     /// usual weekday after today, no "already logged" check needed since
     /// that day hasn't happened yet.
-    private static func nextFireDate(usualWeekdays: Set<Int>, typicalLogHour: Int, allEntries: [TipEntry], from now: Date = .now) -> Date? {
+    static func nextFireDate<Row: LegacyShiftRow>(usualWeekdays: Set<Int>, typicalLogHour: Int, rows: [Row], from now: Date = .now) -> Date? {
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: now)
         for dayOffset in 0..<8 {
@@ -59,7 +106,12 @@ enum SmartNudgeScheduler {
             guard let fireTime = calendar.date(bySettingHour: typicalLogHour, minute: minutesPastTypicalHour, second: 0, of: candidateDay),
                   fireTime > now
             else { continue }
-            if dayOffset == 0, allEntries.contains(where: { calendar.isDate($0.date, inSameDayAs: candidateDay) }) {
+            // "Already logged tonight, so do not nudge." This is the check
+            // that goes blind the moment the writer flips to ShiftCommands
+            // (which writes ShiftRecord and never TipEntry) unless this reader
+            // has already been switched -- the user would be told "you haven't
+            // logged today" straight after logging.
+            if dayOffset == 0, rows.contains(where: { calendar.isDate($0.date, inSameDayAs: candidateDay) }) {
                 continue
             }
             return fireTime
