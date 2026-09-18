@@ -306,6 +306,52 @@ That is weaker than a per-commit historical verdict and stronger than nothing, a
 - [ ] The four commits without their own green verdict (`8260f7d`, `852f36a`, `c800493`, `013de83`) are recorded here as transitively covered, with the later green merge commit that covers each one named — `013de83` is covered by `4d631c9`. They are **not** to be ticked as individually verified, because they cannot be.
 - [ ] No merge commit's run is `cancelled`, and none is missing entirely. A cancelled run is not a pass and not a failure; it is an absence, and in a listing an absence reads like neither. That is exactly how these went unnoticed.
 
+## PR 8 entry condition: the records arm must out-gate the legacy arm first
+
+**PR 8 may not delete the legacy calculation paths until the records arm's
+catch count, for the same mutation, reaches what the legacy arm's was.**
+
+Ruled 2026-09-18, and it exists because of a measured asymmetry rather than a
+worry. The instrument is a per-arm mutation comparison: introduce ONE
+cross-surface defect on each representation in turn -- clamping a builder's
+DATASET to today while its sibling stays unclamped is the canonical one,
+since that is exactly the divergence criterion 5 forbids -- and count the
+suites and tests that fail.
+
+Measured on `DashboardEarnings`:
+
+| Mutation | Suites | Failing tests |
+|---|---|---|
+| legacy arm clamps  | 5 | 32 |
+| records arm clamps, before | 1 | 3 |
+| records arm clamps, after `DashboardRecordsArmParityTests` | 2 | 12 |
+
+And on `CalendarEarnings`:
+
+| Mutation | Suites | Failing tests |
+|---|---|---|
+| records arm clamps, before | 1 | 3 |
+| records arm clamps, after the four-way chain | 2 | 6 |
+
+**Why this is a gate and not a note.** PR 8 deletes the legacy paths, and the
+legacy parity suites go with them, because they exercise `TipEntry`-based
+code that will no longer exist. So PR 8 as conceived removes roughly 32
+catching tests and leaves 12 -- stripping most of the project's cross-surface
+protection at the exact moment every account depends on the records arm.
+
+**The failure mode this guards is not a broken gate.**
+`DashboardPeriodParityTests` is correctly named, correctly written and
+correctly passing; it catches exactly what it was built to catch. It simply
+stopped pointing at the dangerous thing. Nobody erred when those 22 tests
+were written, because the second representation did not exist yet. The RISK
+moved and the tests did not.
+
+That is entropy with a direction, and it is predictable: test mass
+accumulates where the code has been longest, risk migrates to where the code
+is newest, so the two diverge by default in every migration. Expect the
+asymmetry rather than being surprised by it, and measure it rather than
+assuming the count is where you left it.
+
 ## Human lines — Tyler only
 
 - [H] Clean install on a real device, release configuration, exercised for a full logging session.
