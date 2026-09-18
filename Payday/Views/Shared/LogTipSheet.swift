@@ -201,6 +201,8 @@ struct LogTipSheet: View {
     @State private var isEndingLiveShift = false
     /// Cancel-while-ending disambiguation — see the Cancel button.
     @State private var isShowingEndShiftCancelDialog = false
+    /// A save that did not happen must not look like one that did.
+    @State private var saveFailed = false
     /// New-entry only: the details group opens collapsed behind a one-line
     /// belief sentence (ShiftBeliefLine) instead of every row at full volume.
     /// Editing never touches this — that flow keeps the card always open.
@@ -677,6 +679,12 @@ struct LogTipSheet: View {
                 // to a toolbar button, a confirmation dialog presents as a
                 // popover that hides the cancel option behind tap-outside.
                 // The centered box shows all three intents explicitly.
+                .alert(
+                    ShiftCommands.Failure.saveFailed.message,
+                    isPresented: $saveFailed
+                ) {
+                    Button("OK", role: .cancel) {}
+                }
                 .alert("End shift?", isPresented: $isShowingEndShiftCancelDialog) {
                     Button("End Shift Without Saving", role: .destructive) {
                         Task {
@@ -1663,22 +1671,38 @@ struct LogTipSheet: View {
             )
         }
 
-        let newEntries = ShiftWriter.insertShift(
-            into: modelContext,
-            date: date,
-            cashCents: cashCents,
-            creditCents: creditCents,
-            note: trimmedNote,
-            recordedAt: recordedAt,
-            hoursWorked: hoursWorked,
-            tipOutCents: effectiveTipOutCents,
-            salesCents: effectiveSalesCents,
-            shiftPeriod: shiftPeriod,
-            clockIn: clockIn,
-            clockOut: clockOut,
-            serverCount: serverCount,
-            receiptMetrics: receiptMetrics
-        )
+        // Explicit and atomic. This is the path a user takes every night, and
+        // it persisted only through autosave: with autosave off and no save
+        // here, a logged shift is gone on relaunch. Everything after it --
+        // the reveal, the nudge reschedule, the dismissal -- is a claim that
+        // the shift was saved, so none of it may run if it was not.
+        let newEntries: [TipEntry]
+        do {
+            newEntries = try ShiftCommands.commit(in: modelContext) {
+                ShiftWriter.insertShift(
+                    into: modelContext,
+                    date: date,
+                    cashCents: cashCents,
+                    creditCents: creditCents,
+                    note: trimmedNote,
+                    recordedAt: recordedAt,
+                    hoursWorked: hoursWorked,
+                    tipOutCents: effectiveTipOutCents,
+                    salesCents: effectiveSalesCents,
+                    shiftPeriod: shiftPeriod,
+                    clockIn: clockIn,
+                    clockOut: clockOut,
+                    serverCount: serverCount,
+                    receiptMetrics: receiptMetrics
+                )
+            }
+        } catch {
+            // Rolled back, so the form still holds the night's figures and
+            // the sheet stays open to try again. No reveal, because there is
+            // nothing to celebrate.
+            saveFailed = true
+            return
+        }
 
         revealResult = reveal
         revealFigure = draftFigure
@@ -1731,42 +1755,62 @@ struct LogTipSheet: View {
         guard rows.contains(where: { $0.id == anchor.id }) else { return }
         let normalizedDate = Calendar.current.startOfDay(for: min(date, .now))
         let trimmedNote = note.isEmpty ? nil : note
-        for kind in [TipKind.cash, .credit] {
-            let cents = kind == .cash ? cashCents : creditCents
-            if let row = rows.first(where: { $0.kind == kind }) {
-                if cents > 0 || row.id == anchor.id || rows.count == 1 || isDeferringReceiptScanRowDeletion {
-                    row.amountCents = cents          // never delete the anchor mid-edit
-                    row.touch()
-                } else {
-                    PaydaySyncState.recordTipDeletions([row.id])
-                    modelContext.delete(row)          // non-anchor row zeroed out
-                    rows.removeAll { $0.id == row.id }
+        // One transaction for the whole reconciliation. Every live edit used
+        // to persist through autosave alone, so with autosave off nothing
+        // here would survive a relaunch. The debounce above means this runs
+        // once after the user pauses, not per keystroke, so a save per call
+        // is exactly what the coalescing was for.
+        do {
+            try ShiftCommands.commit(in: modelContext) {
+                for kind in [TipKind.cash, .credit] {
+                    let cents = kind == .cash ? cashCents : creditCents
+                    if let row = rows.first(where: { $0.kind == kind }) {
+                        if cents > 0 || row.id == anchor.id || rows.count == 1 || isDeferringReceiptScanRowDeletion {
+                            row.amountCents = cents          // never delete the anchor mid-edit
+                            row.touch()
+                        } else {
+                            PaydaySyncState.recordTipDeletions([row.id])
+                            modelContext.delete(row)          // non-anchor row zeroed out
+                            rows.removeAll { $0.id == row.id }
+                        }
+                    } else if cents > 0 {
+                        let newRow = TipEntry(date: normalizedDate, amountCents: cents, kind: kind, note: trimmedNote, recordedAt: .now, shiftID: anchor.shiftID)
+                        modelContext.insert(newRow)
+                        rows.append(newRow)
+                    }
                 }
-            } else if cents > 0 {
-                let newRow = TipEntry(date: normalizedDate, amountCents: cents, kind: kind, note: trimmedNote, recordedAt: .now, shiftID: anchor.shiftID)
-                modelContext.insert(newRow)
-                rows.append(newRow)
+                for row in rows { row.date = normalizedDate; row.note = trimmedNote; row.touch() }
+
+                // Shift-level details land on the shift's one canonical entry
+                // (credit preferred, same convention as saveNew) and get cleared
+                // from every other entry in the shift — self-healing any shift
+                // that ended up with a value split across both entries.
+                ShiftDetails.write(
+                    hoursWorked: hoursWorked,
+                    tipOutCents: tipOutCents > 0 ? tipOutCents : nil,
+                    salesCents: salesCents > 0 ? salesCents : nil,
+                    shiftPeriod: shiftPeriod,
+                    clockIn: clockIn,
+                    clockOut: clockOut,
+                    serverCount: serverCount,
+                    receiptMetrics: receiptMetrics,
+                    into: rows
+                )
             }
+        } catch {
+            // Rolled back, so the shift is left exactly as it was rather than
+            // half-edited.
+            //
+            // Known gap, tracked in issue #26 rather than living only here:
+            // this also runs as the flush on `.onDisappear`, and a failure
+            // there has nowhere to go -- the sheet is already leaving, so the
+            // alert cannot be seen and the user's last edit is silently
+            // reverted. Reverting whole is still better than persisting half,
+            // which would leave a shift whose cash, credit and shift-level
+            // details disagree, and the alert does work for the debounced case
+            // while the sheet is open.
+            saveFailed = true
         }
-        for row in rows { row.date = normalizedDate; row.note = trimmedNote; row.touch() }
-
-        // Shift-level details land on the shift's one canonical entry
-        // (credit preferred, same convention as saveNew) and get cleared
-        // from every other entry in the shift — self-healing any shift
-        // that ended up with a value split across both entries.
-        ShiftDetails.write(
-            hoursWorked: hoursWorked,
-            tipOutCents: tipOutCents > 0 ? tipOutCents : nil,
-            salesCents: salesCents > 0 ? salesCents : nil,
-            shiftPeriod: shiftPeriod,
-            clockIn: clockIn,
-            clockOut: clockOut,
-            serverCount: serverCount,
-            receiptMetrics: receiptMetrics,
-            into: rows
-        )
-
-        PaydayWidgetRefresh.request()
     }
 
     /// A row that got zeroed out mid-edit (cash typed down to 0 while
@@ -1793,35 +1837,56 @@ struct LogTipSheet: View {
             ? [rows.first(where: { $0.id == anchor.id }) ?? rows[0]]
             : nonzeroRows
 
-        ShiftDetails.write(
-            hoursWorked: resolved.hoursWorked,
-            tipOutCents: resolved.tipOutCents,
-            salesCents: resolved.salesCents,
-            shiftPeriod: resolved.shiftPeriod,
-            clockIn: resolved.clockIn,
-            clockOut: resolved.clockOut,
-            serverCount: resolved.serverCount,
-            receiptMetrics: resolved.receiptMetrics,
-            into: survivingRows
-        )
-
+        // Migrating the facts and deleting the rows must be ONE transaction.
+        // Split across two, a failure between them discards the hours,
+        // tip-out, sales, times and receipt metrics while leaving the rows
+        // that were supposed to receive them -- which is the exact loss the
+        // migration above exists to prevent.
         let survivingIDs = Set(survivingRows.map(\.id))
         let deletedRows = rows.filter { !survivingIDs.contains($0.id) }
-        PaydaySyncState.recordTipDeletions(deletedRows.map(\.id))
-        for row in deletedRows {
-            modelContext.delete(row)
+        try? ShiftCommands.commit(in: modelContext) {
+            ShiftDetails.write(
+                hoursWorked: resolved.hoursWorked,
+                tipOutCents: resolved.tipOutCents,
+                salesCents: resolved.salesCents,
+                shiftPeriod: resolved.shiftPeriod,
+                clockIn: resolved.clockIn,
+                clockOut: resolved.clockOut,
+                serverCount: resolved.serverCount,
+                receiptMetrics: resolved.receiptMetrics,
+                into: survivingRows
+            )
+            PaydaySyncState.recordTipDeletions(deletedRows.map(\.id))
+            for row in deletedRows {
+                modelContext.delete(row)
+            }
         }
+        // `try?` deliberately: this only ever runs during dismissal, where an
+        // alert cannot be seen. A rollback leaves the zero rows in place,
+        // which is untidy but loses nothing, and the next edit sweeps them.
+        // The cheaper sibling of issue #26.
     }
 
     private func delete() {
         if case .edit(let entry) = target {
             let rows = sameShiftEntries(around: entry)
-            PaydaySyncState.recordTipDeletions(rows.map(\.id))
-            for row in rows {
-                modelContext.delete(row)
+            do {
+                try ShiftCommands.commit(in: modelContext) {
+                    // Queued and deleted together, so the server cannot be
+                    // told about a deletion the device then fails to make,
+                    // or the reverse.
+                    PaydaySyncState.recordTipDeletions(rows.map(\.id))
+                    for row in rows {
+                        modelContext.delete(row)
+                    }
+                }
+            } catch {
+                // Rolled back: the shift is still there, so do NOT dismiss on
+                // a deletion that did not happen.
+                saveFailed = true
+                return
             }
         }
-        PaydayWidgetRefresh.request()
         dismiss()
     }
 }

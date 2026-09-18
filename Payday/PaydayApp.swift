@@ -31,6 +31,10 @@ struct PaydayApp: App {
         // SENTRY_DSN is in the bundle, which is every Debug and test build.
         PaydayCrashReporting.start()
 
+        // Before any view can reach the context. See the function's comment
+        // for why the flag lives here and not inside `shared`.
+        SharedModelContainer.disableMainContextAutosave()
+
         // The stores this one reads must exist before it does, so they are
         // built here rather than relying on property initialization order.
         let policyStore = PolicyStore()
