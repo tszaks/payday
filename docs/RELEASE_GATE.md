@@ -142,6 +142,47 @@ editing `N2.json`'s gratuity now fails a test.
 - **The honesty-of-state lines** that need a debug build or a device are not
   machine-checkable here and belong with the human lines below.
 
+## Machine-line status, measured on `production` at `c77bb57` (2026-09-18)
+
+Re-run rather than re-read, per rule 4 — production moved four times today.
+A box is ticked only where a command and its number are recorded, and where
+the check has been shown to FAIL on purpose at least once.
+
+### GREEN, with the command and the number
+
+| Line | Evidence |
+|---|---|
+| PaydayCore green | `swift test --package-path Packages/PaydayCore` → `250 tests in 32 suites passed` |
+| App suite green, at/above baseline | `1141 tests in 200 suites passed`; baseline 1082/192 |
+| 14 fixtures vs the real engine | mutation sweep: **14/14 money-gated** (was 8/14). Gates call `CompensationLedger.evaluate`, `PaycheckReconciler.proposal`, `HoursFormatting.*`; grep for test-local cents arithmetic returns nothing |
+| Release gate armed | `PAYDAYCORE_RELEASE_GATE=1` green, `knownIssueCountIsZero` passed, `KnownIssues.json` = `[]`. Proven BOTH ways: planting `["W1"]` fails with `Release blocked` |
+| Dashboard == History == period detail | per-arm mutation; records 2 suites/14 tests, legacy 5/32 |
+| Calendar day == detail == Σ shifts == chart point | four-way identity on records, `ScreenNumberParityTests` + `FlipGates3And4Tests` |
+| Month == Σ its days; YTD clips | snapshot-level and arm-independent: `EarningsSnapshotTests` "range equals the sum of its days", "month plus month equals the containing range", "year to date clips a pay period that crosses the year boundary" |
+| Siri == widget == app | ambient `asOf` mutation fails the records arm, the legacy arm AND `AmbientParityTests` |
+| Money-boundary lint green and PROVEN to fire | `design-lint.sh` 30 PASS / 0 FAIL; a planted probe fires 3 representative rules and leaves prose alone |
+| Package imports | `grep -rh '^import ' Packages/PaydayCore/Sources/` → exactly `CryptoKit`, `Foundation` |
+| Pillar 8 truthful | four contradictions closed; zero active-false statements; the overtime guarantee stated exactly once |
+
+### NOT green, and why — none of these is a note
+
+| Line | Why it is open |
+|---|---|
+| Every superseded path deleted | **PR 8**, and it now has a numeric entry condition above: the records arm must reach the legacy arm's catch count (currently 5 suites/32 tests against 2/14) before deletion is permitted, because deleting legacy deletes the 32 with it |
+| Data lifecycle (interrupted save, replay, offline, account switch, rollover, timezone) | PR 7, not started |
+| Downgrade purges `ShiftRecord` and re-baselines without `$0` | needs a device |
+| Production migrations applied with row counts | needs the production database |
+| Shadow comparison, every inventory number, no unexplained cent | PR 8 |
+
+### Machine lines that need a DEVICE, so no CI run can close them
+
+Honesty-of-state is machine-checkable in principle and not from here: breaking
+the widget's store access to see "Couldn't load" rather than `$0`, removing
+hours from one shift to read `.partial` never saying "Total", the estimated-rate
+caption, and the overtime disclaimer all require a build on hardware. They are
+listed under the machine lines below because a debug build CAN verify them —
+just not this session.
+
 ## Machine lines
 
 ### Engine correctness
