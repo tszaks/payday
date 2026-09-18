@@ -46,7 +46,15 @@ struct PaydayApp: App {
                 container: SharedModelContainer.shared,
                 policyStore: policyStore,
                 scheduleStore: scheduleStore
-            )
+            ),
+            // S7's fact, finally wired. `EarningsStore.init` documents that
+            // "S7 passes its single shiftsAreAuthoritative in here", and S7
+            // shipped without doing it, so the parameter kept its pre-S7
+            // default of `false` and `.shiftCacheWiped` was unreachable in
+            // production. Post-conversion with a purged shift cache the
+            // engine then computed from ZERO shifts while `legacyTipEntryCount`
+            // knew the account still had data, and every surface rendered $0.
+            shiftsAreAuthoritative: { PaydaySyncState.shiftsAreAuthoritativeForCurrentAccount }
         ))
         try? Tips.configure([.displayFrequency(.immediate), .datastoreLocation(.applicationDefault)])
         UNUserNotificationCenter.current().delegate = NotificationDelegate.shared
