@@ -39,7 +39,8 @@ enum PaydayAccountEraser {
         scheduleStore: PayScheduleStore,
         insightsStore: InsightsStore,
         preferencesStore: UserPreferencesStore,
-        moveLedgerStore: MoveLedgerStore
+        moveLedgerStore: MoveLedgerStore,
+        policyStore: PolicyStore
     ) throws {
         try context.delete(model: TipEntry.self)
         try context.delete(model: PaycheckRecord.self)
@@ -74,6 +75,7 @@ enum PaydayAccountEraser {
         scheduleStore.schedule = nil
         insightsStore.snapshot = nil
         moveLedgerStore.reset()
+        policyStore.reset()
 
         // Every one of these is personal: the name is from Sign in with
         // Apple, and the wage is the person's pay rate.

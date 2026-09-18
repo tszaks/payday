@@ -3,10 +3,16 @@ import SwiftData
 
 private struct DayDetailFacts {
     let shifts: [(day: Date, shiftID: UUID, items: [TipEntry])]
+    /// Each shift's ledger-allocated wages, keyed by the id of the grouping
+    /// `shifts` is built from. The hero is the sum of exactly these, so the
+    /// sheet cannot print a total its own rows do not add up to.
+    let wagesByShiftID: [UUID: Int]
     let totalCents: Int
 
-    init(allEntries: [TipEntry], date: Date, wageCentsPerHour: Int?) {
-        let calendar = Calendar.current
+    init(allEntries: [TipEntry], date: Date, wageCentsPerHour: Int?, payrollTimeZone: TimeZone, workweekStartWeekday: Int) {
+        var calendar = Calendar.current
+        // The same civil day the tile that opened this sheet drew.
+        calendar.timeZone = payrollTimeZone
         let day = calendar.startOfDay(for: date)
         let entries = allEntries.filter { calendar.isDate($0.date, inSameDayAs: day) }
         let resolvedShifts = ShiftDays.groupedByShift(
@@ -16,12 +22,17 @@ private struct DayDetailFacts {
             period: \.shiftPeriod,
             calendar: calendar
         )
-        let wages = WageEstimate.centsSummedPerShift(
-            shiftGroups: resolvedShifts.map(\.items),
+        let wagesByShiftID = WageEstimate.centsByShiftID(
+            payrollTimeZone: payrollTimeZone,
+            workweekStartWeekday: workweekStartWeekday,
+            shifts: resolvedShifts,
             wageCentsPerHour: wageCentsPerHour
         )
         shifts = resolvedShifts
-        totalCents = TipBreakdown.total(of: entries).netTotalCents + wages
+        self.wagesByShiftID = wagesByShiftID
+        // Σ of the rows' own figures, never a separately-computed total.
+        totalCents = TipBreakdown.total(of: entries).netTotalCents
+            + resolvedShifts.reduce(0) { $0 + (wagesByShiftID[$1.shiftID] ?? 0) }
     }
 }
 
@@ -29,6 +40,8 @@ struct DayDetailSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
     @Environment(UserPreferencesStore.self) private var preferencesStore
+    @Environment(PayScheduleStore.self) private var scheduleStore
+    @Environment(PolicyStore.self) private var policyStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Query private var allEntries: [TipEntry]
 
@@ -48,7 +61,11 @@ struct DayDetailSheet: View {
         let facts = DayDetailFacts(
             allEntries: allEntries,
             date: date,
-            wageCentsPerHour: preferencesStore.baseHourlyWageCents
+            wageCentsPerHour: preferencesStore.baseHourlyWageCents,
+            payrollTimeZone: policyStore.payrollTimeZone,
+            workweekStartWeekday: policyStore.latestCalendarPolicy?.workweekStartWeekday
+                ?? scheduleStore.schedule?.resolvedFirstWeekday
+                ?? Calendar.current.firstWeekday
         )
         NavigationStack {
             List {
@@ -66,7 +83,11 @@ struct DayDetailSheet: View {
 
                     Section("Shifts") {
                         ForEach(facts.shifts, id: \.shiftID) { group in
-                            shiftRow(for: group, shiftCount: facts.shifts.count)
+                            shiftRow(
+                                for: group,
+                                shiftCount: facts.shifts.count,
+                                wageCents: facts.wagesByShiftID[group.shiftID] ?? 0
+                            )
                         }
                     }
                     .listRowBackground(PaydayColor.background)
@@ -131,14 +152,15 @@ struct DayDetailSheet: View {
     @ViewBuilder
     private func shiftRow(
         for group: (day: Date, shiftID: UUID, items: [TipEntry]),
-        shiftCount: Int
+        shiftCount: Int,
+        wageCents: Int
     ) -> some View {
         let period = ShiftDetails.resolve(from: group.items).shiftPeriod
         if let anchor = group.items.first {
             Button {
                 sheetTarget = .edit(anchor)
             } label: {
-                ShiftDayRow(day: group.day, period: period, dayHasMultipleShifts: shiftCount >= 2, entries: group.items, wageCentsPerHour: preferencesStore.baseHourlyWageCents, note: Self.shiftNote(from: group.items))
+                ShiftDayRow(day: group.day, period: period, dayHasMultipleShifts: shiftCount >= 2, entries: group.items, wageCents: wageCents, note: Self.shiftNote(from: group.items))
             }
             .buttonStyle(.plain)
             .swipeActions(edge: .trailing) {

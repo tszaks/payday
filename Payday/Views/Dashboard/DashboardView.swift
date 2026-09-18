@@ -51,6 +51,11 @@ private struct DashboardFacts {
     let paydayPhase: PaydayMoment.Phase?
     let shiftCount: Int
     let shiftDays: [(day: Date, shiftID: UUID, items: [TipEntry])]
+    /// Each listed shift's ledger-allocated wages, keyed by `shiftDays`' own
+    /// ids: the row prints its slice of the workweek allocation, never its
+    /// own independent rounding, so the rows and the hero's wage line are one
+    /// number source (PR 3 review, P0).
+    let wagesByShiftID: [UUID: Int]
     /// Calendar days that hold 2+ shifts — a "double" — so a row can label
     /// itself "Today · Lunch" / "Today · Dinner" only when it needs to.
     let multiShiftDays: Set<Date>
@@ -74,15 +79,21 @@ private struct DashboardFacts {
     let paydayCashCents: Int
     let tonightLine: String?
 
-    init(allEntries: [TipEntry], schedule: PaySchedule?, now: Date, forcedPaydayPhase: PaydayMoment.Phase?, dismissedClosedEnd: Date?, dismissedCheckEnd: Date?, wageCentsPerHour: Int?) {
+    init(allEntries: [TipEntry], schedule: PaySchedule?, now: Date, forcedPaydayPhase: PaydayMoment.Phase?, dismissedClosedEnd: Date?, dismissedCheckEnd: Date?, wageCentsPerHour: Int?, payrollTimeZone: TimeZone) {
         let calendar = Calendar.current
-        calculator = PayPeriodCalculator(schedule: schedule ?? .fallback)
+        calculator = PayPeriodCalculator(payrollTimeZone: payrollTimeZone, schedule: schedule ?? .fallback)
         let period = calculator.period(containing: now)
         currentPeriod = period
         periodEntries = allEntries.filter { $0.date >= period.start && $0.date <= period.end }
         breakdown = TipBreakdown.total(of: periodEntries)
         daysRemaining = calculator.daysRemaining(from: now)
         shiftDays = ShiftDays.groupedByShift(periodEntries, shiftID: \.shiftID, date: \.date, period: \.shiftPeriod)
+        wagesByShiftID = WageEstimate.centsByShiftID(
+            payrollTimeZone: payrollTimeZone,
+            workweekStartWeekday: schedule?.firstWeekday ?? calendar.firstWeekday,
+            shifts: shiftDays,
+            wageCentsPerHour: wageCentsPerHour
+        )
         // A "shift" now counts closeouts, not calendar days.
         shiftCount = shiftDays.count
         // Days that hold more than one shift — the emergent doubles.
@@ -90,7 +101,7 @@ private struct DashboardFacts {
         for shift in shiftDays { dayCounts[shift.day, default: 0] += 1 }
         multiShiftDays = Set(dayCounts.filter { $0.value >= 2 }.keys)
         let tipRecords = allEntries.map(TipRecord.init)
-        let statsEngine = StatsEngine(records: tipRecords)
+        let statsEngine = StatsEngine(payrollTimeZone: payrollTimeZone, records: tipRecords)
         // Net of any tip-out, same rule as every other analytical total —
         // breakdown above stays gross, purely for the cash/credit subtitle.
         totalCents = statsEngine.periodToDateTotal(period: period, asOf: now)
@@ -138,7 +149,7 @@ private struct DashboardFacts {
             // PeriodIncome — the same function the hero total uses — so the
             // check figure and the hero can never disagree about a week that
             // crossed 40 hours, which is what WageEstimate used to do here.
-            let payWages = PeriodIncome.wages(entries: payEntries, wageCentsPerHour: wageCentsPerHour, firstWeekday: schedule?.firstWeekday)
+            let payWages = PeriodIncome.wages(payrollTimeZone: payrollTimeZone, entries: payEntries, wageCentsPerHour: wageCentsPerHour, firstWeekday: schedule?.firstWeekday)
             predictedPaycheckCents = PredictedPaycheck.cents(from: payBreakdown, wagesCents: payWages?.totalCents ?? 0)
             predictedPayDate = calculator.payDate(for: pay)
             paydayCashCents = payBreakdown.cashCents
@@ -190,7 +201,7 @@ private struct DashboardFacts {
             }
         } else {
             isBestPeriodEver = false
-            let currentWages = PeriodIncome.wages(entries: periodEntries, wageCentsPerHour: wageCentsPerHour, firstWeekday: schedule?.firstWeekday)
+            let currentWages = PeriodIncome.wages(payrollTimeZone: payrollTimeZone, entries: periodEntries, wageCentsPerHour: wageCentsPerHour, firstWeekday: schedule?.firstWeekday)
             predictedPaycheckCents = PredictedPaycheck.cents(from: breakdown, wagesCents: currentWages?.totalCents ?? 0)
             predictedPayDate = calculator.payDate(for: period)
             paydayCashCents = breakdown.cashCents
@@ -214,7 +225,7 @@ private struct DashboardFacts {
         let heroPeriodStart = heroPeriod.start
         let heroPeriodEnd = heroPeriod.end
         let heroEntries = allEntries.filter { $0.date >= heroPeriodStart && $0.date <= heroPeriodEnd }
-        heroWages = PeriodIncome.wages(entries: heroEntries, wageCentsPerHour: wageCentsPerHour, firstWeekday: schedule?.firstWeekday)
+        heroWages = PeriodIncome.wages(payrollTimeZone: payrollTimeZone, entries: heroEntries, wageCentsPerHour: wageCentsPerHour, firstWeekday: schedule?.firstWeekday)
         heroTotalCents = heroTipsNetCents + (heroWages?.totalCents ?? 0)
 
         // Echo of tonight's reveal verdict, for the most recently logged
@@ -235,9 +246,15 @@ private struct DashboardFacts {
             // that same wage-inclusive basis via its own StatsEngine. The
             // main engine remains wage-exclusive; its earnings totals already
             // include any employee gratuity captured for the shift.
-            let shiftWageCents = details.hoursWorked.flatMap { WageEstimate.cents(wageCentsPerHour: wageCentsPerHour, hours: $0) }
+            // Read the SAME slice the shift's own row prints, not an
+            // independently-rounded `rate x hours`: "the echo and the row
+            // must reconcile on sight" is only true if both come out of one
+            // allocation. nil still means "no wage to speak of" (feature off
+            // or hours never logged), which is what drives the copy below.
+            let hasWage = (wageCentsPerHour ?? 0) > 0 && (details.hoursWorked ?? 0) > 0
+            let shiftWageCents = hasWage ? (wagesByShiftID[latest.shiftID] ?? 0) : nil
             let revealCents = netCents + (shiftWageCents ?? 0)
-            let revealEngine = StatsEngine(records: tipRecords, wageCentsPerHour: wageCentsPerHour)
+            let revealEngine = StatsEngine(payrollTimeZone: payrollTimeZone, records: tipRecords, wageCentsPerHour: wageCentsPerHour)
             let result = revealEngine.reveal(forNightAt: today, cents: revealCents, period: period, shiftID: latest.shiftID)
             tonightRevealText = "\(RevealCopy.headline(cents: revealCents, includesNonTipIncome: shiftWageCents != nil || TipBreakdown.total(of: latest.items).gratuityFeesCents > 0)) \(RevealCopy.comparison(for: result.comparison, period: details.shiftPeriod))"
         }
@@ -259,6 +276,9 @@ private struct DashboardFactsKey: Hashable {
     let dismissedClosedEndRaw: Double
     let dismissedCheckEndRaw: Double
     let wageCentsPerHour: Int?
+    /// An input to every bucketed figure below, so a new calendar policy has
+    /// to invalidate the cache rather than wait for the entries to change.
+    let payrollTimeZone: String
 }
 
 private struct DashboardFactsCache {
@@ -268,6 +288,7 @@ private struct DashboardFactsCache {
 
 struct DashboardView: View {
     @Environment(PayScheduleStore.self) private var scheduleStore
+    @Environment(PolicyStore.self) private var policyStore
     @Environment(TabRouter.self) private var tabRouter
     @Environment(UserPreferencesStore.self) private var preferencesStore
     @Environment(\.modelContext) private var modelContext
@@ -339,7 +360,8 @@ struct DashboardView: View {
             forcedPhase: forcedPaydayPhase?.rawValue,
             dismissedClosedEndRaw: dismissedClosedEndRaw,
             dismissedCheckEndRaw: dismissedCheckEndRaw,
-            wageCentsPerHour: preferencesStore.baseHourlyWageCents
+            wageCentsPerHour: preferencesStore.baseHourlyWageCents,
+            payrollTimeZone: policyStore.payrollTimeZone.identifier
         )
         let facts = factsCache?.key == key
             ? factsCache!.facts
@@ -350,7 +372,8 @@ struct DashboardView: View {
                 forcedPaydayPhase: forcedPaydayPhase,
                 dismissedClosedEnd: dismissedClosedEnd,
                 dismissedCheckEnd: dismissedCheckEnd,
-                wageCentsPerHour: preferencesStore.baseHourlyWageCents
+                wageCentsPerHour: preferencesStore.baseHourlyWageCents,
+                payrollTimeZone: policyStore.payrollTimeZone
             )
         NavigationStack {
             // A ScrollView, deliberately NOT a List: the hero's drawer changes
@@ -812,7 +835,11 @@ struct DashboardView: View {
 
             ForEach(Array(facts.shiftDays.prefix(Self.maxShiftRows).enumerated()), id: \.element.shiftID) { index, group in
                 if index > 0 { Divider() }
-                shiftRow(for: group, multiShiftDays: facts.multiShiftDays)
+                shiftRow(
+                    for: group,
+                    multiShiftDays: facts.multiShiftDays,
+                    wageCents: facts.wagesByShiftID[group.shiftID] ?? 0
+                )
             }
             if facts.shiftDays.count > Self.maxShiftRows {
                 Divider()
@@ -836,7 +863,11 @@ struct DashboardView: View {
     }
 
     @ViewBuilder
-    private func shiftRow(for group: (day: Date, shiftID: UUID, items: [TipEntry]), multiShiftDays: Set<Date>) -> some View {
+    private func shiftRow(
+        for group: (day: Date, shiftID: UUID, items: [TipEntry]),
+        multiShiftDays: Set<Date>,
+        wageCents: Int
+    ) -> some View {
         let period = ShiftDetails.resolve(from: group.items).shiftPeriod
         let dayHasMultiple = multiShiftDays.contains(group.day)
         // A shift, single-entry or merged cash+credit, is one row now — the
@@ -850,7 +881,7 @@ struct DashboardView: View {
             Button {
                 sheetTarget = .edit(anchor)
             } label: {
-                ShiftDayRow(day: group.day, period: period, dayHasMultipleShifts: dayHasMultiple, entries: group.items, wageCentsPerHour: preferencesStore.baseHourlyWageCents)
+                ShiftDayRow(day: group.day, period: period, dayHasMultipleShifts: dayHasMultiple, entries: group.items, wageCents: wageCents)
                     .padding(.vertical, PaydaySpacing.p12)
                     .contentShape(Rectangle())
             }

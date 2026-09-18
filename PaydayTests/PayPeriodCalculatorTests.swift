@@ -11,7 +11,7 @@ private func date(_ year: Int, _ month: Int, _ day: Int) -> Date {
 @Suite("Weekly")
 struct WeeklyPayPeriodTests {
     let schedule = PaySchedule(frequency: .weekly, anchorPeriodEnd: date(2026, 1, 2)) // a Friday
-    var calculator: PayPeriodCalculator { PayPeriodCalculator(schedule: schedule) }
+    var calculator: PayPeriodCalculator { PayPeriodCalculator(payrollTimeZone: PaydayTestZone.payroll, schedule: schedule) }
 
     @Test("period containing the anchor payday ends on the anchor")
     func periodContainingAnchor() {
@@ -51,7 +51,7 @@ struct WeeklyPayPeriodTests {
 @Suite("Biweekly")
 struct BiweeklyPayPeriodTests {
     let schedule = PaySchedule(frequency: .biweekly, anchorPeriodEnd: date(2026, 1, 2))
-    var calculator: PayPeriodCalculator { PayPeriodCalculator(schedule: schedule) }
+    var calculator: PayPeriodCalculator { PayPeriodCalculator(payrollTimeZone: PaydayTestZone.payroll, schedule: schedule) }
 
     @Test("14-day cadence forward")
     func forwardCadence() {
@@ -78,7 +78,7 @@ struct MonthlyPayPeriodTests {
     @Test("day 31 anchor clamps to Feb 28 in a non-leap year")
     func clampToFebNonLeap() {
         let schedule = PaySchedule(frequency: .monthly, anchorPeriodEnd: date(2026, 1, 31))
-        let calculator = PayPeriodCalculator(schedule: schedule)
+        let calculator = PayPeriodCalculator(payrollTimeZone: PaydayTestZone.payroll, schedule: schedule)
         let period = calculator.period(containing: date(2026, 2, 1))
         #expect(period.start == date(2026, 2, 1))
         #expect(period.end == date(2026, 2, 28))
@@ -87,7 +87,7 @@ struct MonthlyPayPeriodTests {
     @Test("day 31 anchor clamps to Feb 29 in a leap year")
     func clampToFebLeap() {
         let schedule = PaySchedule(frequency: .monthly, anchorPeriodEnd: date(2024, 1, 31))
-        let calculator = PayPeriodCalculator(schedule: schedule)
+        let calculator = PayPeriodCalculator(payrollTimeZone: PaydayTestZone.payroll, schedule: schedule)
         let period = calculator.period(containing: date(2024, 2, 1))
         #expect(period.end == date(2024, 2, 29))
     }
@@ -95,7 +95,7 @@ struct MonthlyPayPeriodTests {
     @Test("day 31 anchor returns to day 31 in a long month after a short one")
     func clampRecoversInLongMonth() {
         let schedule = PaySchedule(frequency: .monthly, anchorPeriodEnd: date(2026, 1, 31))
-        let calculator = PayPeriodCalculator(schedule: schedule)
+        let calculator = PayPeriodCalculator(payrollTimeZone: PaydayTestZone.payroll, schedule: schedule)
         let period = calculator.period(containing: date(2026, 3, 1))
         #expect(period.start == date(2026, 3, 1))
         #expect(period.end == date(2026, 3, 31))
@@ -104,7 +104,7 @@ struct MonthlyPayPeriodTests {
     @Test("day 30 anchor clamps in February but not in 30-day months")
     func day30Anchor() {
         let schedule = PaySchedule(frequency: .monthly, anchorPeriodEnd: date(2026, 1, 30))
-        let calculator = PayPeriodCalculator(schedule: schedule)
+        let calculator = PayPeriodCalculator(payrollTimeZone: PaydayTestZone.payroll, schedule: schedule)
         #expect(calculator.period(containing: date(2026, 2, 1)).end == date(2026, 2, 28))
         #expect(calculator.period(containing: date(2026, 4, 15)).end == date(2026, 4, 30))
     }
@@ -112,7 +112,7 @@ struct MonthlyPayPeriodTests {
     @Test("boundary date exactly on payday belongs to the ending period")
     func exactBoundary() {
         let schedule = PaySchedule(frequency: .monthly, anchorPeriodEnd: date(2026, 1, 15))
-        let calculator = PayPeriodCalculator(schedule: schedule)
+        let calculator = PayPeriodCalculator(payrollTimeZone: PaydayTestZone.payroll, schedule: schedule)
         let period = calculator.period(containing: date(2026, 2, 15))
         #expect(period.start == date(2026, 1, 16))
         #expect(period.end == date(2026, 2, 15))
@@ -122,7 +122,7 @@ struct MonthlyPayPeriodTests {
 @Suite("Twice monthly")
 struct TwiceMonthlyPayPeriodTests {
     let schedule = PaySchedule(frequency: .twiceMonthly, anchorPeriodEnd: date(2026, 1, 15))
-    var calculator: PayPeriodCalculator { PayPeriodCalculator(schedule: schedule) }
+    var calculator: PayPeriodCalculator { PayPeriodCalculator(payrollTimeZone: PaydayTestZone.payroll, schedule: schedule) }
 
     @Test("first-half period runs 1st through 15th")
     func firstHalf() {
@@ -171,8 +171,8 @@ struct TwiceMonthlyPayPeriodTests {
 struct RegroupingTests {
     @Test("switching frequency changes which period a fixed date falls into")
     func regroupsOnFrequencyChange() {
-        let weekly = PayPeriodCalculator(schedule: PaySchedule(frequency: .weekly, anchorPeriodEnd: date(2026, 1, 2)))
-        let monthly = PayPeriodCalculator(schedule: PaySchedule(frequency: .monthly, anchorPeriodEnd: date(2026, 1, 2)))
+        let weekly = PayPeriodCalculator(payrollTimeZone: PaydayTestZone.payroll, schedule: PaySchedule(frequency: .weekly, anchorPeriodEnd: date(2026, 1, 2)))
+        let monthly = PayPeriodCalculator(payrollTimeZone: PaydayTestZone.payroll, schedule: PaySchedule(frequency: .monthly, anchorPeriodEnd: date(2026, 1, 2)))
 
         let fixedDate = date(2026, 1, 20)
         let weeklyPeriod = weekly.period(containing: fixedDate)
@@ -202,7 +202,7 @@ struct WeekStartTests {
     func mondayToSundayPeriod() {
         // Jul 12 2026 is a Sunday.
         let schedule = PaySchedule(frequency: .biweekly, anchorPeriodEnd: date(2026, 7, 12))
-        let calculator = PayPeriodCalculator(schedule: schedule)
+        let calculator = PayPeriodCalculator(payrollTimeZone: PaydayTestZone.payroll, schedule: schedule)
         let period = calculator.period(containing: date(2026, 7, 14)) // a Tuesday
         #expect(period.start == date(2026, 7, 13)) // Monday
         #expect(period.end == date(2026, 7, 26))   // Sunday, 14 days
@@ -214,7 +214,7 @@ struct PayDelayTests {
     @Test("zero delay: payDate equals the period end (old, lag-unaware behavior)")
     func zeroDelayDefaultsToPeriodEnd() {
         let schedule = PaySchedule(frequency: .biweekly, anchorPeriodEnd: date(2026, 1, 2))
-        let calculator = PayPeriodCalculator(schedule: schedule)
+        let calculator = PayPeriodCalculator(payrollTimeZone: PaydayTestZone.payroll, schedule: schedule)
         let period = calculator.period(containing: date(2026, 1, 2))
         #expect(calculator.payDate(for: period) == period.end)
     }
@@ -224,7 +224,7 @@ struct PayDelayTests {
         // Tyler's actual schedule: biweekly periods ending the 5th/19th/etc.,
         // paycheck lands 5 days after the period ends.
         let schedule = PaySchedule(frequency: .biweekly, anchorPeriodEnd: date(2026, 7, 5), payDelayDays: 5)
-        let calculator = PayPeriodCalculator(schedule: schedule)
+        let calculator = PayPeriodCalculator(payrollTimeZone: PaydayTestZone.payroll, schedule: schedule)
 
         let currentPeriod = calculator.period(containing: date(2026, 7, 14))
         #expect(currentPeriod.start == date(2026, 7, 6))

@@ -377,6 +377,15 @@ struct RemoteUserSettings: Codable, Sendable {
     let smartNudgeEnabled: Bool
     let paydayReminderEnabled: Bool
     let moveLedger: [String: String]
+    /// Rate and payroll-calendar history (PaydayCore `CompensationPolicies`).
+    ///
+    /// Optional because null on the server means "the client that last wrote
+    /// this row does not know about policies" — Payday 1.0, which is already
+    /// shipped — rather than "this user has no policies". `apply` treats nil
+    /// and empty the same way: leave whatever the device already has alone.
+    /// The `upsert_user_settings` RPC coalesces a null back to the stored
+    /// value for the same reason.
+    let compensationPolicies: CompensationPolicies?
     let clientUpdatedAt: String
     let serverUpdatedAt: String?
 
@@ -391,6 +400,7 @@ struct RemoteUserSettings: Codable, Sendable {
         case smartNudgeEnabled = "smart_nudge_enabled"
         case paydayReminderEnabled = "payday_reminder_enabled"
         case moveLedger = "move_ledger"
+        case compensationPolicies = "compensation_policies"
         case clientUpdatedAt = "client_updated_at"
         case serverUpdatedAt = "updated_at"
     }
@@ -400,7 +410,8 @@ struct RemoteUserSettings: Codable, Sendable {
         userID: UUID,
         scheduleStore: PayScheduleStore,
         preferencesStore: UserPreferencesStore,
-        moveLedgerStore: MoveLedgerStore
+        moveLedgerStore: MoveLedgerStore,
+        policyStore: PolicyStore
     ) {
         let schedule = scheduleStore.schedule
         self.userID = userID
@@ -413,6 +424,9 @@ struct RemoteUserSettings: Codable, Sendable {
         self.smartNudgeEnabled = preferencesStore.isSmartNudgeEnabled
         self.paydayReminderEnabled = preferencesStore.isPaydayReminderEnabled
         self.moveLedger = moveLedgerStore.firstShownAt.mapValues(PaydayRemoteDate.instant)
+        // Sent even when empty so a device that has genuinely cleared its
+        // policies can say so; only NIL means "I do not know about policies".
+        self.compensationPolicies = policyStore.policies
         self.clientUpdatedAt = PaydayRemoteDate.instant(PaydaySettingsSyncClock.modifiedAt)
         self.serverUpdatedAt = nil
     }

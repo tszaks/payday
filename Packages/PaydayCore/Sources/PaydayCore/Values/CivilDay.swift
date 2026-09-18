@@ -104,6 +104,16 @@ public struct CivilDay: Hashable, Comparable, Codable, Sendable {
         return adding(days: -delta)
     }
 
+    /// The earliest day on or after this one whose `weekday` equals
+    /// `weekday`: this day itself when it is already a workweek start, the
+    /// next one otherwise. Settings snaps a chosen policy date with this, so
+    /// a `PayrollCalendarPolicy` can never take effect mid-week.
+    public func nextStartOfWorkweek(startingOn weekday: Int) -> CivilDay {
+        precondition((1...7).contains(weekday), "weekday must be 1 (Sunday) ... 7 (Saturday)")
+        let delta = (weekday - self.weekday + 7) % 7
+        return adding(days: delta)
+    }
+
     /// Whether `year` is a Gregorian leap year.
     public var isLeapYear: Bool { CivilDay.isLeapYear(year) }
 

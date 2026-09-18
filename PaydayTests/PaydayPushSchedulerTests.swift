@@ -14,6 +14,7 @@ struct PaydayPushSchedulerTests {
     // same shape as PaydayMoment's own weekly-lag fixture.
     private func weeklyPaidFriday() -> PayPeriodCalculator {
         PayPeriodCalculator(
+            payrollTimeZone: PaydayTestZone.payroll,
             schedule: PaySchedule(frequency: .weekly, anchorPeriodEnd: date(2026, 7, 19), payDelayDays: 5, firstWeekday: nil)
         )
     }
@@ -44,6 +45,7 @@ struct PaydayPushSchedulerTests {
         // No payroll lag: payday is the last day of the period itself, at
         // 9AM — by 2PM that same day the moment is behind, not ahead.
         let sameDay = PayPeriodCalculator(
+            payrollTimeZone: PaydayTestZone.payroll,
             schedule: PaySchedule(frequency: .weekly, anchorPeriodEnd: date(2026, 7, 19), payDelayDays: 0, firstWeekday: nil)
         )
         let decision = PaydayPushScheduler.decision(

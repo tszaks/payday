@@ -47,7 +47,8 @@ struct RenderFactsPerformanceTests {
             displayedMonth: displayedMonth,
             calendar: calendar,
             wageCentsPerHour: nil,
-            firstWeekday: nil
+            firstWeekday: nil,
+            payrollTimeZone: PaydayTestZone.payroll
         )
         let elapsed = Date.timeIntervalSinceReferenceDate - startedAt
 
@@ -111,6 +112,7 @@ struct RenderFactsPerformanceTests {
             paycheckRecords: [],
             schedule: schedule,
             wageCentsPerHour: nil,
+            payrollTimeZone: PaydayTestZone.payroll,
             now: now,
             calendar: calendar
         )
@@ -123,6 +125,7 @@ struct RenderFactsPerformanceTests {
             period: period,
             schedule: schedule,
             wageCentsPerHour: nil,
+            payrollTimeZone: PaydayTestZone.payroll,
             calendar: calendar
         )
         let detailElapsed = Date.timeIntervalSinceReferenceDate - detailStartedAt
@@ -155,7 +158,7 @@ struct RenderFactsPerformanceTests {
                 ))
             }
         }
-        let engine = StatsEngine(records: records, calendar: calendar)
+        let engine = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: records, calendar: calendar)
         let now = calendar.date(byAdding: .day, value: 260 * 7, to: historyStart)!
 
         let startedAt = Date.timeIntervalSinceReferenceDate
