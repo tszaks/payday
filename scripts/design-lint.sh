@@ -345,6 +345,102 @@ else
   echo ""
 fi
 
+# 15c. THE MONEY BOUNDARY. Outside Packages/PaydayCore, nothing computes money
+#      from raw components.
+#
+#      This is the rule that stops the original problem recurring. The audit
+#      did not find missing helpers; it found that the app shared helpers but
+#      not the INTERPRETATION, so the same stored shift produced different
+#      answers on different screens. Every one of those divergences was a
+#      screen doing its own arithmetic on raw fields. Five patterns cover the
+#      ones that actually happened:
+#
+#        .netCents            summed row by row, double-subtracting a
+#                             duplicated tip-out on the calendar
+#        cashTipsCents +      a total assembled outside the ledger
+#        tipOutCents ??       a tip-out defaulted locally instead of read
+#                             from a result
+#        * 1.5                an overtime multiplier applied by a caller
+#        / 100 / hours        an hourly rate derived by a screen
+#
+#      LANDED BEFORE THE DELETIONS, DELIBERATELY. The allowlist below is the
+#      tree as it stands, so the rule exists now and every deletion in PR 8
+#      shrinks the list. Written the other way round -- lint after cleanup --
+#      it would have been fitted to an already-clean tree and would never have
+#      been tested against a real violation.
+#
+#      THE ALLOWLIST RATCHETS. A file listed here that no longer violates
+#      anything is itself a failure, so the list cannot quietly stop
+#      shrinking and become permanent permission. That is the whole mechanism.
+#
+#      It earned its keep on the first run. The allowlist was seeded from a
+#      grep that matched COMMENTS as well as code, and the ratchet immediately
+#      failed on InsightsEarnings.swift and NightlyEarningsChart.swift because
+#      their only matches were comments that the rule strips. Two files that
+#      would otherwise have sat in an exemption list they never needed.
+MONEY_BOUNDARY_ALLOWLIST="
+Payday/Models/TipEntry.swift
+Payday/Models/LegacyShiftRow.swift
+Payday/Models/ShiftRecord.swift
+Payday/Utilities/PaycheckAudit.swift
+Payday/Utilities/TipBreakdown.swift
+Payday/Utilities/StatsEngine.swift
+Payday/Views/Shared/LogTipSheet.swift
+"
+
+money_boundary_hits() { # file
+  awk '
+    {
+      line = $0
+      # Strip line comments. A doc comment that DESCRIBES the old formula in
+      # order to explain why it is gone is not a violation -- StatsEngine
+      # documents "Double(cents)/100/hours" for exactly that reason.
+      sub(/\/\/.*$/, "", line)
+    }
+    line ~ /\.netCents/ ||
+    line ~ /cashTipsCents[[:space:]]*\+/ ||
+    line ~ /tipOutCents[[:space:]]*\?\?/ ||
+    line ~ /\*[[:space:]]*1\.5/ ||
+    line ~ /\/[[:space:]]*100[[:space:]]*\/[[:space:]]*hours/ {
+      printf "%s:%d:%s\n", FILENAME, FNR, line
+    }
+  ' "$1"
+}
+
+MONEY_NEW=""
+MONEY_STALE=""
+for f in $(find Payday PaydayWidget -name '*.swift' 2>/dev/null | sort); do
+  hits=$(money_boundary_hits "$f")
+  allowed=$(printf '%s' "$MONEY_BOUNDARY_ALLOWLIST" | grep -Fx "$f" || true)
+  if [ -n "$hits" ] && [ -z "$allowed" ]; then
+    MONEY_NEW="$MONEY_NEW$hits
+"
+  fi
+done
+for f in $(printf '%s' "$MONEY_BOUNDARY_ALLOWLIST" | grep -v '^$'); do
+  if [ ! -f "$f" ]; then continue; fi
+  if [ -z "$(money_boundary_hits "$f")" ]; then
+    MONEY_STALE="$MONEY_STALE   $f
+"
+  fi
+done
+
+if [ -n "$MONEY_NEW" ]; then
+  FAIL=1
+  echo "[FAIL] Money computed outside PaydayCore"
+  printf '%s' "$MONEY_NEW" | grep -v '^$' | sed 's/^/   /'
+  echo "   -> Ask the engine for the figure instead. If this file genuinely has to be an adapter, add it to MONEY_BOUNDARY_ALLOWLIST in this script WITH a reason, and expect to be asked why."
+  echo ""
+elif [ -n "$MONEY_STALE" ]; then
+  FAIL=1
+  echo "[FAIL] The money-boundary allowlist has entries that no longer violate anything"
+  printf '%s' "$MONEY_STALE" | grep -v '^$'
+  echo "   -> Delete them from MONEY_BOUNDARY_ALLOWLIST. The list ratchets DOWN; leaving a clean file in it turns a temporary exemption into permanent permission."
+  echo ""
+else
+  echo "[PASS] No money computed outside PaydayCore ($(printf '%s' "$MONEY_BOUNDARY_ALLOWLIST" | grep -cv '^$') file(s) still allowlisted)"
+fi
+
 # 16. Every hand-written Codable decoder in PaydaySyncState.swift is complete.
 #     A missing line in a hand-written init(from:) that uses decodeIfPresent is
 #     a SILENT default, not a throw: the field becomes write-only and always
