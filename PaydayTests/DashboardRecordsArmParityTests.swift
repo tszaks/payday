@@ -180,4 +180,73 @@ struct DashboardRecordsArmParityTests {
         #expect(result.shiftIDs.contains(records[0].id),
                 "and it must be THIS shift, not a total that happens to be non-zero")
     }
+
+    // MARK: - The calendar-day chain, on the records arm
+
+    /// **Criterion 5's second clause, end to end, on records:**
+    /// calendar day == day detail == the sum of that day's shifts == the
+    /// chart point.
+    ///
+    /// Measured before writing it, the same way the Dashboard gap was found:
+    /// clamping `CalendarEarnings`' records-arm dataset to today failed ONE
+    /// suite and three tests, all of them `gate5CalendarAgreesOnRecords`,
+    /// written the same day. The legacy arm of the equivalent Dashboard
+    /// mutation failed five suites and thirty-two tests.
+    ///
+    /// Four links, asserted as one identity rather than four separate
+    /// equalities, because the defect this forbids is any ONE of them
+    /// drifting: a tile that agrees with the chart while the day sheet it
+    /// opens disagrees is the same failure as all four disagreeing.
+    @Test("calendar day == day detail == sum of that day's shifts == chart point, on records")
+    func calendarDayChainAgreesOnRecords() throws {
+        let comp = Self.policies(rateCents: 1_800)
+        let day = Self.at(2026, 10, 5)
+        // Two shifts on ONE day, so "the sum of that day's shifts" is a real
+        // sum rather than a single value trivially equal to itself.
+        let records = [
+            ShiftRecord(workDate: day, shiftPeriod: .lunch, cashTipsCents: 4_000,
+                        creditTipsCents: 6_000, tipOutCents: 1_000, hoursWorked: 5,
+                        recordedAt: day),
+            ShiftRecord(workDate: day, shiftPeriod: .dinner, cashTipsCents: 3_000,
+                        creditTipsCents: 9_000, hoursWorked: 6,
+                        recordedAt: day.addingTimeInterval(3_600)),
+        ]
+        let civil = CivilDay(day, in: Self.zone)
+
+        // 1. The calendar tile's day.
+        let calendar = try #require(CalendarEarnings.snapshot(
+            records: records, policies: comp, payrollTimeZone: Self.zone
+        ))
+        let tileCents = calendar.day(civil).knownComponents.earnedIncomeCents
+
+        // 2. The day sheet that tile opens.
+        let detail = DayDetailFacts(
+            shiftRecords: records, date: day, policies: comp, payrollTimeZone: Self.zone
+        )
+        let detailCents = detail.total.cents
+
+        // 3. The sum of that day's shifts, from the snapshot's own valuations.
+        let shiftSum = calendar.shifts
+            .filter { $0.workDay == civil }
+            .reduce(0) { $0 + $1.components.earnedIncomeCents }
+
+        // 4. The chart point for that day.
+        let chart = EarningsChartFacts(
+            snapshot: calendar,
+            range: DayRange(start: civil, end: civil),
+            timeZone: Self.zone
+        )
+        // One day in the range, so exactly one bar. Asserted rather than
+        // assumed, because `first` on an empty array would make the
+        // comparison below vacuously nil == nil.
+        #expect(chart.points.count == 1, "a one-day range must draw exactly one bar")
+        let chartCents = chart.points.first?.figure.cents
+
+        #expect(tileCents > 0, "a zero day would satisfy every equality below trivially")
+        #expect(detailCents == tileCents, "the day sheet must match the tile that opened it")
+        #expect(shiftSum == tileCents, "the tile must be the sum of that day's own shifts")
+        #expect(chartCents == tileCents, "the chart point must be the same day total")
+        // And the day really does hold BOTH shifts, so the sum is a sum.
+        #expect(calendar.day(civil).shiftIDs.count == 2)
+    }
 }
