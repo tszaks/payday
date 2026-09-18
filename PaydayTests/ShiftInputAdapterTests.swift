@@ -176,8 +176,20 @@ struct PaycheckInputAdapterTests {
         record.gratuityCents = 0
         record.grossPayCents = 24_766
 
-        // The record itself infers a 50c repair, exactly as P1 describes.
-        #expect(record.reconciledPaidTipsCents == 10_050)
+        // The stub's own gross equation implies a 50c repair, exactly as P1
+        // describes — and since group 2.5 it is only ever a proposal. The
+        // computed `reconciledPaidTipsCents`, which returned 10050 in place
+        // of the stored 10000, is gone from this model entirely.
+        let proposal = PaycheckReconciler.proposal(for: PaycheckReconciler.Observation(
+            paidTipsCents: record.paidTipsCents,
+            regularWagesCents: record.regularWagesCents,
+            overtimeWagesCents: record.overtimeWagesCents,
+            gratuityCents: record.gratuityCents,
+            grossCents: record.grossPayCents
+        ))
+        #expect(proposal?.proposedCents == 10_050)
+        #expect(proposal?.correctionCents == 50)
+        #expect(record.paidTipsCents == 10_000, "the proposal is not the observation")
 
         let input = PaycheckInputAdapter.inputs(from: [record], payrollTimeZone: payroll)[0]
         #expect(input.paidTipsCents == 10_000, "observedPaidTips is exactly as entered")

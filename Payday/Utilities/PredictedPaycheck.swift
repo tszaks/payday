@@ -1,92 +1,69 @@
 import Foundation
 
-/// The single formula for "what the check for this period should read" —
-/// shared by the Dashboard's payday moment, the period detail screen, the
-/// payday push notification, the periods list, and the paycheck audit, so the
-/// number on a lock-screen banner and the number in the app can never quietly
-/// drift apart.
+/// The app-side façade over `PaycheckReconciler`'s expected side.
 ///
-/// Two facts, deliberately separate:
+/// **There is no formula in this file any more.** Every function below
+/// forwards to `PaydayCore.PaycheckReconciler`, which is where PR 5 group 2.5
+/// moved the stub rule, the whole-check rule and the reconciliation delta.
+/// What is left here is the call-site vocabulary five surfaces already use —
+/// the Dashboard's payday moment, period detail, the periods list, the payday
+/// push notification and the paycheck audit — so those did not all have to be
+/// rewritten in one change, and the two remaining `TipBreakdown` entry points,
+/// which the pre-engine surfaces (the notification) still need.
 ///
-/// - `tipsLineCents` is the TIPS line printed on the stub. Credit tips minus
-///   tip-out: cash never runs through payroll, and tip-out is withheld from
-///   declared tips and paid out to whoever was tipped out (Tyler, 2026-08-03 —
-///   "I never see tip out, it goes straight into the paychecks of whoever is
-///   getting tipped out"). This is the number the audit compares a real stub
-///   against, so it has to be what payroll actually prints, not what the
-///   server earned. Falls back to net of ALL tips when no credit was logged at
-///   all, so a cash-only period still gets a number to check against.
+/// The formulas themselves, and the reasons behind them, are documented on
+/// `PaycheckReconciler`: cash never runs through payroll, tip-out is withheld
+/// from declared tips and paid to whoever was tipped out (Tyler, 2026-08-03),
+/// mandatory gratuity is its own non-tip wage line, and nothing here accounts
+/// for withholding — every caller says "before taxes" out loud.
 ///
-/// - `cents(from:wagesCents:)` is the whole pre-tax check: that tips line,
-///   Toast mandatory gratuity/fees, and base/overtime wages. Mandatory
-///   gratuity is a separate non-tip wage line even though it is earned during
-///   the shift. One number, so no surface leaves the person adding it up.
-///
-/// Neither figure accounts for tax withholding; every caller says "before
-/// taxes" out loud.
+/// PR 8 deletes this type. Until then, do not add a formula to it: add it to
+/// `PaycheckReconciler` and forward.
 enum PredictedPaycheck {
-    // MARK: - The engine's basis (PR 5)
-    //
-    // `EarningsComponents` is the same six integers on the engine's side of
-    // the migration, so these are the SAME formulas over the ledger's
-    // components rather than over `TipBreakdown`'s. The legacy entry points
-    // below now delegate to them, so there is one implementation of the stub
-    // rule and not two that have to be kept in step.
-    //
-    // MetricIDs: `expectedPaycheckTipsLine` (whose registry definition names
-    // `tipsLineCents` as the implementation), `expectedPaycheckGross`, and
-    // `reconciliationDelta`. The registry wants the delta compared PER
-    // COMPONENT; that, and the ±100c proposal, are group 2.5's
-    // `PaycheckReconciler` in PR 5 wave 2. These four functions are the
-    // summed form today's screens already render, moved onto the engine.
+    // MARK: - The engine's basis
 
-    /// `MetricID.expectedPaycheckTipsLine`: credit tips net of tip-out, or
-    /// all voluntary tips net of tip-out when no credit was logged at all.
+    /// `MetricID.expectedPaycheckTipsLine`.
     static func tipsLineCents(from components: EarningsComponents) -> Int {
-        let base = components.voluntaryCreditCents > 0
-            ? components.voluntaryCreditCents
-            : components.voluntaryTipsCents
-        return max(0, base - components.tipOutCents)
+        PaycheckReconciler.tipsLineCents(from: components)
     }
 
-    /// The stub's Tips line plus its Gratuity line — the "Logged $X" half of
-    /// a paycheck comparison. A composite of two registry rows, kept in one
-    /// function because both History surfaces render exactly this sum today.
+    /// The stub's Tips line plus its Gratuity line.
     static func tipsAndGratuityCents(from components: EarningsComponents) -> Int {
-        tipsLineCents(from: components) + components.gratuityFeesCents
+        PaycheckReconciler.tipsAndGratuityCents(from: components)
     }
 
-    /// `MetricID.expectedPaycheckGross`: the whole pre-tax check. Wages come
-    /// from the components, so a period whose wages are `.unavailable`
-    /// contributes zero for them and the caller's `Completeness` says so.
+    /// `MetricID.expectedPaycheckGross`.
     static func cents(from components: EarningsComponents) -> Int {
-        tipsAndGratuityCents(from: components) + components.wagesCents
+        PaycheckReconciler.grossCents(from: components)
     }
 
-    /// `MetricID.reconciliationDelta`, summed: observed minus expected.
-    /// Negative means the check came up short.
+    /// `MetricID.reconciliationDelta`, for one component.
     static func reconciliationDeltaCents(
         observedTipEarningsCents: Int,
         expectedTipsAndGratuityCents: Int
     ) -> Int {
-        observedTipEarningsCents - expectedTipsAndGratuityCents
+        PaycheckReconciler.deltaCents(
+            observed: observedTipEarningsCents,
+            expected: expectedTipsAndGratuityCents
+        )
     }
 
     // MARK: - The legacy basis
 
-    /// The stub's tips line: credit tips net of tip-out.
-    static func tipsLineCents(from breakdown: TipBreakdown) -> Int {
-        tipsLineCents(from: components(of: breakdown))
-    }
-
-    /// The whole pre-tax check: tips owed + mandatory gratuity + wages.
-    static func cents(from breakdown: TipBreakdown, wagesCents: Int) -> Int {
-        tipsAndGratuityCents(from: components(of: breakdown)) + wagesCents
-    }
-
-    /// A `TipBreakdown` as the four non-wage components it already is. Field
-    /// for field, no arithmetic: this is a rename, so the two bases cannot
+    /// The stub's tips line for a surface that still holds a `TipBreakdown`
+    /// rather than an `EarningsResult` — today only `PaydayPushScheduler`
+    /// (group 2.12). Field for field, no arithmetic: `TipBreakdown` IS four
+    /// of the six components, so this is a rename and the two bases cannot
     /// drift into two answers.
+    static func tipsLineCents(from breakdown: TipBreakdown) -> Int {
+        PaycheckReconciler.tipsLineCents(from: components(of: breakdown))
+    }
+
+    /// The whole pre-tax check on the legacy basis.
+    static func cents(from breakdown: TipBreakdown, wagesCents: Int) -> Int {
+        PaycheckReconciler.tipsAndGratuityCents(from: components(of: breakdown)) + wagesCents
+    }
+
     private static func components(of breakdown: TipBreakdown) -> EarningsComponents {
         EarningsComponents(
             voluntaryCashCents: breakdown.cashCents,
@@ -104,54 +81,31 @@ enum PredictedPaycheck {
     /// Keep this combination only for whole-check math; audits compare the
     /// two categories independently so one cannot hide a shortage in another.
     static func paidTipEarningsCents(tipsCents: Int, gratuityCents: Int?) -> Int {
-        tipsCents + (gratuityCents ?? 0)
+        PaycheckReconciler.Observation(
+            paidTipsCents: tipsCents,
+            gratuityCents: gratuityCents
+        ).paidTipEarningsCents ?? tipsCents
     }
 }
 
 // MARK: - The figure a view renders
 
-/// `MetricID.expectedPaycheckGross` as an `EarningsFigure`.
-///
-/// Deliberately a SEPARATE extension at the end of the file, and the only
-/// thing group 2.1 (Dashboard) adds here. The engine-basis functions above
-/// are group 2.4's (History), written once, in their shape, byte for byte:
-/// both groups needed the same four formulas and the plan's rule is that a
-/// shared change "does not get made twice". MEASURED why it matters: two
-/// independent additions of `tipsLineCents(from: EarningsComponents)` in
-/// different parts of this file merge with `git apply --3way` reporting
-/// "applied cleanly" and no conflict markers, and the duplicate declarations
-/// only surface as `error: ambiguous use of 'cents(from:)'` in
-/// `PeriodDetailView.swift` — a file neither worker touched. Identical text
-/// in the identical place merges to one copy; an append below it stays an
-/// append.
 extension PredictedPaycheck {
+    /// `MetricID.expectedPaycheckGross` as an `EarningsFigure`.
+    ///
+    /// Forwards to `PaycheckReconciler.Expectation.grossFigure`, which is the
+    /// same value `PaycheckEntrySheet` renders and period detail's expected
+    /// caption reads, so the Dashboard's payday moment, the period and the
+    /// sheet are one answer rather than three that agree.
+    ///
     /// A nil `result` is a failed read, not a zero check, so it renders no
     /// currency at all (PR 5 adapter contract, rule 4). A period whose wages
-    /// are `.partial` or `.estimated` carries the matching caption, because a
-    /// check figure that silently omits an unpriced shift is exactly the
-    /// audit's headline defect wearing a different label.
+    /// are `.partial` or `.estimated` carries the matching caption.
     ///
-    /// The label is the registry's ("Expected", `MetricID
-    /// .expectedPaycheckGross.allowedLabels`). The card's own sentence —
+    /// The label is the registry's ("Expected"). The card's own sentence —
     /// "Your check should show" / "Today's check should show" — is
-    /// presentation the screen owns, and the registry has no row for it; see
-    /// `docs/METRICS.md` [DB-22].
+    /// presentation the screen owns; see `docs/METRICS.md` [DB-22].
     static func figure(from result: EarningsResult?) -> EarningsFigure {
-        guard let result else {
-            return EarningsFigure(
-                metric: .expectedPaycheckGross,
-                amount: .unavailable,
-                label: "Expected",
-                caption: nil,
-                completeness: .empty
-            )
-        }
-        return EarningsFigure(
-            metric: .expectedPaycheckGross,
-            amount: .cents(cents(from: result.knownComponents)),
-            label: "Expected",
-            caption: CompletenessCopy.caption(result.completeness.state),
-            completeness: result.completeness
-        )
+        PaycheckReconciler.Expectation(result: result, stamp: nil).grossFigure
     }
 }
