@@ -142,6 +142,40 @@ editing `N2.json`'s gratuity now fails a test.
 - **The honesty-of-state lines** that need a debug build or a device are not
   machine-checkable here and belong with the human lines below.
 
+## Criterion 1, measured rather than taken from the status line (2026-09-18)
+
+`docs/PAYDAYCORE_GOAL.md` says "(0, 1 done; PR 2 is 3 of 13 slices)". That
+described the tree when the contract was written and is now stale in the
+UNDERSTATING direction -- the same artifact-rot family this file records
+elsewhere, this time in a status line rather than a test or a doc.
+
+Measured against `production` at `c77bb57`:
+
+| PR | State | Evidence |
+|---|---|---|
+| 0, 1 | merged | package, CI, metric registry |
+| 2 | S1-S9 landed; S10 reclassified to PR 8; S11, S12 done; **S13's VIEW remains** | `ShiftRecord`, the flip, the sync leg, `agent_api_shifts_test.sql`, `ScreenNumberParityTests` |
+| 3 | merged | `CompensationLedger`, `PolicyStore` |
+| 4 | merged | `EarningsSnapshot`, `EarningsStore` |
+| 5 | merged | 14 views read the engine |
+| 6 | mostly merged; **group 2.14 unbuilt** | widget and Siri reach `buildOnce`; CSV uses `HoursFormatting`; but `earnings_snapshots`, `upsert_earnings_snapshot` and `SnapshotUploader` do not exist |
+| 7 | not started | atomic save landed with S9; the rest is open |
+| 8 | gated | behind the catch-count entry condition above |
+
+**So criterion 1's remainder is four things, not ten slices:**
+
+1. **PR 6 group 2.14**, the snapshot upload. The largest buildable piece:
+   `earnings_snapshots`, `upsert_earnings_snapshot` with the
+   server-revision acceptance rule, `SnapshotUploader`, and `/v1/summary`
+   reading the stored payload with `stale`. `dataset_revision` exists; the
+   rest does not.
+2. **PR 7**, lifecycle hardening.
+3. **PR 8**, the deletions, behind the catch-count condition.
+4. **S13's view**, which the slice gates on "a design review on renders
+   before done" -- its state, copy and tests are already built and green
+   (`PaydayConversionBanner`, `ConversionBannerTests`), so what remains is
+   the render and the review, and the review needs Tyler.
+
 ## Machine-line status, measured on `production` at `c77bb57` (2026-09-18)
 
 Re-run rather than re-read, per rule 4 — production moved four times today.
