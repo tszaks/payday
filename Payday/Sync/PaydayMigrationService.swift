@@ -113,6 +113,20 @@ final class PaydayMigrationService {
             forceRemoteRows: true,
             forceRemoteSettings: true
         )
+        // Derived from the LOCAL rows the reconcile just wrote, not from the
+        // server rows they came from. Those rows now hold canonical server
+        // content either way, but only a locally derived digest is rendered
+        // the way the NEXT sync will render it: the server's own
+        // `contentFingerprint` digests the `work_date` string it stores,
+        // while every later comparison goes through
+        // `PaydayRemoteDate.stableDay`, and those two disagree outside
+        // (UTC-10:30, UTC+13:30]. Seeded from the server side, a user in
+        // UTC-11, UTC+14 or Chatham would see the entire history re-upload on
+        // the first sync after migrating.
+        let reconciledTips = try context.fetch(FetchDescriptor<TipEntry>())
+            .filter { activeIDs.tipIDs.contains($0.id) }
+        let reconciledPaychecks = try context.fetch(FetchDescriptor<PaycheckRecord>())
+            .filter { activeIDs.paycheckIDs.contains($0.id) }
         PaydaySyncState.save(
             userID: userID,
             tipEntryIDs: activeIDs.tipIDs,
@@ -120,6 +134,10 @@ final class PaydayMigrationService {
             migrationVerified: true,
             tipClientUpdatedAt: Dictionary(uniqueKeysWithValues: remoteTips.map { ($0.id, $0.clientUpdatedAt) }),
             paycheckClientUpdatedAt: Dictionary(uniqueKeysWithValues: remotePaychecks.map { ($0.id, $0.clientUpdatedAt) }),
+            // Recording these is also what keeps a freshly migrated install
+            // off the one-time seeding read.
+            tipContentFingerprint: try PaydayRowFingerprint.values(reconciledTips),
+            paycheckContentFingerprint: try PaydayRowFingerprint.values(reconciledPaychecks),
             settingsClientUpdatedAt: snapshot.settings.clientUpdatedAt,
             tipServerCursor: PaydaySyncState.ServerCursor.advanced(
                 from: .beginning,

@@ -1507,6 +1507,7 @@ struct LogTipSheet: View {
             if let row = rows.first(where: { $0.kind == kind }) {
                 if cents > 0 || row.id == anchor.id || rows.count == 1 || isDeferringReceiptScanRowDeletion {
                     row.amountCents = cents          // never delete the anchor mid-edit
+                    row.touch()
                 } else {
                     PaydaySyncState.recordTipDeletions([row.id])
                     modelContext.delete(row)          // non-anchor row zeroed out
@@ -1518,7 +1519,7 @@ struct LogTipSheet: View {
                 rows.append(newRow)
             }
         }
-        for row in rows { row.date = normalizedDate; row.note = trimmedNote }
+        for row in rows { row.date = normalizedDate; row.note = trimmedNote; row.touch() }
 
         // Shift-level details land on the shift's one canonical entry
         // (credit preferred, same convention as saveNew) and get cleared
