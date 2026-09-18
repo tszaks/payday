@@ -109,6 +109,59 @@ today" immediately after they logged.
 
 **The flag.** Accounts may become authoritative.
 
+## What building pieces 1-3 measured, and what it changes
+
+Recorded after #53, #54 and #55, because each answered something this document
+had left open or got slightly wrong. The flip's diff is smaller and more
+predictable than the original scope implied.
+
+**The row-representation decision was a false choice.** This document said the
+class-B readers "render `ShiftRecord` and hand `ShiftRecord` to the edit
+sheet" without saying how a facts type carries a row that could be either
+representation, and the apparent options were an enum over both or a generic
+over `LegacyShiftRow`. Neither is needed. `DayDetailFacts.rowFacts` took the
+legacy tuple but its body only ever used `shiftID`, `day` and the shift's
+period -- three scalars, all of which sit directly on a `ShiftRecord`. So the
+facts are keyed on scalars and each representation supplies them from its own
+shape, with nothing to resolve on the record path because one record already
+holds the period. Settled in #55.
+
+What genuinely needs the live object is **targeting, not facts**. These rows
+are the edit and delete targets and `ProjectedShiftRow` is deliberately
+un-persistable, so the parallel property is `[ShiftRecord]` and never a
+projection. The two row lists are never both populated, so a screen cannot
+render both representations at once.
+
+**`DashboardFacts.periodEntries` is not a money input.** It is a `[TipEntry]`
+on a facts struct, which reads like one. Measured: its only consumers are an
+`isEmpty` check for the empty state and a `-OpenEditSheet` UI-test hook taking
+`.first`. So the Dashboard's record path needs an emptiness equivalent and a
+record for that hook, not a money migration. Worth stating because assuming it
+fed the hero would have pulled the Dashboard's whole money path into the flip
+unnecessarily.
+
+**`PeriodDetailFacts` and `DashboardFacts` both take their shift list as an
+init PARAMETER**, not computed internally, and both use it identically to
+`DayDetailFacts`: a list keyed on `shiftID`, filtered by the ids the engine
+selected, yielding an edit target. So the same parallel-property shape applies
+to all three, and the flip's change at each is which list the view passes.
+
+**Two prerequisites already paid off in ways worth noting**, because they argue
+for continuing to extract rather than bundling:
+
+- #45's manifest canonicalization is why #55's digest-identity assertion
+  passes. Without it, a shift with an explicit zero tip-out fingerprints
+  differently through the two adapters, and that assertion would have failed
+  for a reason unrelated to the day detail.
+- #40's per-reader scheduler switch is why gate 1 was landable a day early as
+  #54, turning the flip's gate 1 into a check on one call site.
+
+**What remains genuinely irreducible**, therefore: the parallel property on the
+two remaining facts types, the three views' row rendering, the sheet target and
+`LogTipSheet`'s edit path for a `ShiftRecord`, the writer switch in
+`LogTipSheet` and `BackfillSheet`, the money swap from
+`LegacySnapshotBridge` to `earningsStore`, and the flag. Plus the seven gates.
+
 ## Gates. This PR does not merge without all of them
 
 1. **Logged this session, not yet in `@Query`.** A shift created in the current
