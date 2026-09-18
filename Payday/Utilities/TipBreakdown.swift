@@ -36,7 +36,7 @@ struct TipBreakdown: Equatable {
 
     static let zero = TipBreakdown(cashCents: 0, creditCents: 0, tipOutCents: 0)
 
-    static func total(of entries: [TipEntry]) -> TipBreakdown {
+    static func total<Row: LegacyShiftRow>(of entries: [Row]) -> TipBreakdown {
         let shifts = ShiftDays.groupedByShift(
             entries,
             shiftID: \.shiftID,

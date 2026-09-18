@@ -72,7 +72,7 @@ enum ShiftDetails {
     /// because `UUID` is not `Comparable`; the canonical string is fixed-case
     /// hex in byte order, so its lexicographic order is exactly Postgres'
     /// `order by id asc` (a memcmp over the same 16 bytes).
-    static func detailRanked(_ entries: [TipEntry]) -> [TipEntry] {
+    static func detailRanked<Row: LegacyShiftRow>(_ entries: [Row]) -> [Row] {
         entries.sorted { left, right in
             let leftCredit = left.kind == .credit
             let rightCredit = right.kind == .credit
@@ -83,7 +83,7 @@ enum ShiftDetails {
 
     /// The group's rows in `metrics_rank` order: a row carrying a decodable
     /// receipt first, then credit, then id ascending.
-    static func metricsRanked(_ entries: [TipEntry]) -> [TipEntry] {
+    static func metricsRanked<Row: LegacyShiftRow>(_ entries: [Row]) -> [Row] {
         entries.sorted { left, right in
             let leftHas = left.receiptMetrics != nil
             let rightHas = right.receiptMetrics != nil
@@ -100,16 +100,16 @@ enum ShiftDetails {
     /// group carries a decodable payload. `TipBreakdown` must resolve the
     /// owner through here and nowhere else: a duplicated payload on a second
     /// row must not subtract gratuity twice.
-    static func metricsOwner(of entries: [TipEntry]) -> TipEntry? {
+    static func metricsOwner<Row: LegacyShiftRow>(of entries: [Row]) -> Row? {
         metricsRanked(entries).first { $0.receiptMetrics != nil }
     }
 
     /// The canonical hours/tip-out/sales/shift-period/clock/server-count and
     /// receipt for one shift's entries: each field is the first NON-NIL value
     /// in rank order across every row of the group, and NEVER a sum.
-    static func resolve(from entries: [TipEntry]) -> (hoursWorked: Double?, tipOutCents: Int?, salesCents: Int?, shiftPeriod: ShiftPeriod?, clockIn: Date?, clockOut: Date?, serverCount: Int?, receiptMetrics: ShiftReceiptMetrics?) {
+    static func resolve<Row: LegacyShiftRow>(from entries: [Row]) -> (hoursWorked: Double?, tipOutCents: Int?, salesCents: Int?, shiftPeriod: ShiftPeriod?, clockIn: Date?, clockOut: Date?, serverCount: Int?, receiptMetrics: ShiftReceiptMetrics?) {
         let ranked = detailRanked(entries)
-        func first<Value>(_ field: (TipEntry) -> Value?) -> Value? {
+        func first<Value>(_ field: (Row) -> Value?) -> Value? {
             for entry in ranked {
                 if let value = field(entry) { return value }
             }

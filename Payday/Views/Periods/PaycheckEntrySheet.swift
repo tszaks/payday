@@ -63,6 +63,10 @@ struct PaycheckEntrySheet: View {
     @State private var amountCents: Int
     @State private var note: String
     @State private var showDeleteConfirmation = false
+    /// A save that did not happen must not look like one that did. `commit`
+    /// rolls back, so the figures on screen are still the unsaved truth and
+    /// the sheet stays open.
+    @State private var saveFailed = false
 
     // Capture-only stub facts, below the tips verification anchor — same
     // zero-means-nil treatment as LogTipSheet's tip-out/sales: stored as a
@@ -270,6 +274,12 @@ struct PaycheckEntrySheet: View {
             }
         }
         .presentationDetents([.medium, .large])
+        .alert(
+            ShiftCommands.Failure.saveFailed.message,
+            isPresented: $saveFailed
+        ) {
+            Button("OK", role: .cancel) {}
+        }
         .presentationBackground(PaydayColor.background)
         .confirmationDialog("Scan pay stub", isPresented: $showScanOptions, titleVisibility: .visible) {
             if PaydayCameraView.isCameraAvailable {
@@ -718,37 +728,50 @@ struct PaycheckEntrySheet: View {
         let effectiveTaxesCents = taxesCents > 0 ? taxesCents : nil
         let effectiveNetPayCents = netPayCents > 0 ? netPayCents : nil
 
+        // Explicit and atomic. This path used to persist only through
+        // autosave, so with autosave off it would have silently stopped
+        // saving paychecks altogether -- and this sheet appeared in no
+        // slice's file list, which is how that would have shipped.
         let record: PaycheckRecord
-        if let existing {
-            existing.paidTipsCents = amountCents
-            existing.note = note.isEmpty ? nil : note
-            existing.regularWagesCents = effectiveRegularWagesCents
-            existing.overtimeWagesCents = effectiveOvertimeWagesCents
-            existing.gratuityCents = effectiveGratuityCents
-            existing.grossPayCents = effectiveGrossPayCents
-            existing.taxesCents = effectiveTaxesCents
-            existing.netPayCents = effectiveNetPayCents
-            // A corrected stub is an edit to an already-synced record, which
-            // means it only uploads if this clock advances.
-            existing.touch()
-            record = existing
-        } else {
-            record = PaycheckRecord(
-                periodStart: period.start,
-                periodEnd: period.end,
-                paidTipsCents: amountCents,
-                note: note.isEmpty ? nil : note,
-                grossPayCents: effectiveGrossPayCents,
-                netPayCents: effectiveNetPayCents,
-                regularWagesCents: effectiveRegularWagesCents,
-                overtimeWagesCents: effectiveOvertimeWagesCents,
-                gratuityCents: effectiveGratuityCents,
-                taxesCents: effectiveTaxesCents
-            )
-            modelContext.insert(record)
+        do {
+            record = try ShiftCommands.commit(in: modelContext) {
+                if let existing {
+                    existing.paidTipsCents = amountCents
+                    existing.note = note.isEmpty ? nil : note
+                    existing.regularWagesCents = effectiveRegularWagesCents
+                    existing.overtimeWagesCents = effectiveOvertimeWagesCents
+                    existing.gratuityCents = effectiveGratuityCents
+                    existing.grossPayCents = effectiveGrossPayCents
+                    existing.taxesCents = effectiveTaxesCents
+                    existing.netPayCents = effectiveNetPayCents
+                    // A corrected stub is an edit to an already-synced record,
+                    // which means it only uploads if this clock advances.
+                    existing.touch()
+                    return existing
+                }
+                let created = PaycheckRecord(
+                    periodStart: period.start,
+                    periodEnd: period.end,
+                    paidTipsCents: amountCents,
+                    note: note.isEmpty ? nil : note,
+                    grossPayCents: effectiveGrossPayCents,
+                    netPayCents: effectiveNetPayCents,
+                    regularWagesCents: effectiveRegularWagesCents,
+                    overtimeWagesCents: effectiveOvertimeWagesCents,
+                    gratuityCents: effectiveGratuityCents,
+                    taxesCents: effectiveTaxesCents
+                )
+                modelContext.insert(created)
+                return created
+            }
+        } catch {
+            // Rolled back by `commit`, so nothing was half-written. The sheet
+            // stays open with the figures intact rather than dismissing on a
+            // save that did not happen.
+            saveFailed = true
+            return
         }
         PaydayHaptics.success()
-        PaydayWidgetRefresh.request()
         // A recorded paycheck means this period's verification is done —
         // reschedule so a pending payday push for it clears immediately
         // instead of surviving until the next unrelated reschedule call.
@@ -759,10 +782,19 @@ struct PaycheckEntrySheet: View {
 
     private func delete() {
         if let existing {
-            PaydaySyncState.recordPaycheckDeletion(existing.id)
-            modelContext.delete(existing)
+            do {
+                try ShiftCommands.commit(in: modelContext) {
+                    // Queued and deleted in the same transaction, so a crash
+                    // between them cannot leave the server holding a paycheck
+                    // the device believes is gone.
+                    PaydaySyncState.recordPaycheckDeletion(existing.id)
+                    modelContext.delete(existing)
+                }
+            } catch {
+                saveFailed = true
+                return
+            }
         }
-        PaydayWidgetRefresh.request()
         dismiss()
     }
 }

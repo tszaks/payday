@@ -17,7 +17,10 @@ struct TipBreakdownTests {
 
     @Test("empty set splits to zero")
     func empty() {
-        let breakdown = TipBreakdown.total(of: [])
+        // Annotated because S9 made `total` generic over LegacyShiftRow, and
+        // an empty array literal has nothing to infer the row type from. The
+        // only such site in the tree; every other call passes real rows.
+        let breakdown = TipBreakdown.total(of: [TipEntry]())
         #expect(breakdown == .zero)
         #expect(breakdown.grossTotalCents == 0)
         #expect(breakdown.netTotalCents == 0)
