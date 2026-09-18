@@ -23,6 +23,9 @@ packages:
     exactVersion: 2.55.1
   PaydayCore:
     path: Packages/PaydayCore
+  Sentry:
+    url: https://github.com/getsentry/sentry-cocoa.git
+    exactVersion: 9.29.0
 
 targets:
   Payday:
@@ -52,6 +55,21 @@ targets:
         CODE_SIGN_ENTITLEMENTS: Payday/Payday.entitlements
         SUPABASE_URL: https://bkkxunqqfkogxibyyjmc.supabase.co
         SUPABASE_PUBLISHABLE_KEY: sb_publishable_LLozFUScbNbnXuGXVwSLSQ_Brbpy1RD
+      # RELEASE ONLY, deliberately. A Sentry DSN is a WRITE-ONLY ingest key
+      # designed to be embedded in a shipped client, so committing it is normal
+      # practice and it belongs here next to the publishable key rather than in
+      # the gitignored Secrets.local.xcconfig where the real OpenAI secret
+      # lives. Those are different kinds of thing.
+      #
+      # It is scoped to Release rather than base so that Debug builds, unit
+      # tests and CI have NO DSN and are therefore completely inert -- no SDK,
+      # no network, no disk -- which is what PaydayCrashReporting.start()
+      # already keys off. Putting it in base would send every crash from every
+      # local debug run into the same project and bury the production signal
+      # this exists to read. See docs/SENTRY.md.
+      configs:
+        Release:
+          SENTRY_DSN: https://79f515cb21d214011bf6ae135fd38be1@o4510716101459968.ingest.us.sentry.io/4512107414028288
     info:
       path: Generated/Payday-Info.plist
       properties:
@@ -60,6 +78,7 @@ targets:
         OPENAI_API_KEY: "$(OPENAI_API_KEY)"
         SUPABASE_URL: "$(SUPABASE_URL)"
         SUPABASE_PUBLISHABLE_KEY: "$(SUPABASE_PUBLISHABLE_KEY)"
+        SENTRY_DSN: "$(SENTRY_DSN)"
         ITSAppUsesNonExemptEncryption: false
         NSFaceIDUsageDescription: Payday can lock itself with Face ID when you turn that on in Settings.
         NSCameraUsageDescription: Payday uses the camera to read pay stubs and shift receipts and fill out your entries.
@@ -98,6 +117,12 @@ targets:
         embed: true
       - package: Supabase
       - package: PaydayCore
+      # App target only, deliberately. The widget and the intents extension
+      # crash in their own processes and would each need their own DSN
+      # plumbing AND their own screenshot/view-hierarchy suppression, since
+      # both render money. Worth doing; not worth bundling into the change
+      # that establishes the privacy rules.
+      - package: Sentry
 
   PaydayWidget:
     type: app-extension
