@@ -331,25 +331,40 @@ struct OneWorkweekPerScreenTests {
             anchorPeriodEnd: at(2026, 10, 10, hour: 0),
             firstWeekday: 2
         )
-        let facts = PeriodDetailFacts(
-            allEntries: entries(),
-            paycheckRecords: [],
-            period: period,
-            schedule: schedule,
-            wageCentsPerHour: 1_000,
+        // PR 5 group 2.4, wave 1: the screen's whole money side is the
+        // snapshot now, so the hero and the rows are the SAME valuations
+        // rather than two halves that have to be kept on one scalar. The
+        // numbers below are unchanged, and `HistoryGridWeekdayCannotMoveMoneyTests`
+        // adds the stronger form — the grid weekday can no longer move any
+        // figure on either History surface at all.
+        let build = HistoryEarnings.build(
+            entries: entries(),
             policies: sundayStartPolicies(),
             payrollTimeZone: PaydayTestZone.payroll,
             calendar: payrollCalendar()
         )
+        let snapshot = try #require(build.snapshot)
+        let facts = PeriodDetailFacts(
+            snapshot: snapshot,
+            shiftDays: build.shiftDays,
+            paycheckRecords: [],
+            period: period,
+            schedule: schedule,
+            payrollTimeZone: PaydayTestZone.payroll,
+            calendar: payrollCalendar()
+        )
 
-        let rowWages = facts.wagesByShiftID.values.reduce(0, +)
+        let rowWages = facts.shiftDays
+            .compactMap { snapshot.valuation($0.shiftID)?.components.wagesCents }
+            .reduce(0, +)
+        let heroWages = try #require(facts.result).knownComponents.wagesCents
         // 40h regular + 10h at 1.5x, because the POLICY buckets Sunday-start.
         #expect(rowWages == 55_000)
-        #expect(facts.wages?.totalCents == 55_000)
+        #expect(heroWages == 55_000)
         // The invariant: the hero's wage figure IS the sum of the row
         // figures. Before the workweek was unified this read 50000 against
         // 55000 — one screen, two overtime allocations, $50.00 apart.
-        #expect(facts.wages?.totalCents == rowWages)
-        #expect(facts.wages?.totalCents != 50_000, "the superseded grid-weekday allocation")
+        #expect(heroWages == rowWages)
+        #expect(heroWages != 50_000, "the superseded grid-weekday allocation")
     }
 }
