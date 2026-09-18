@@ -257,6 +257,12 @@ final class ShiftRecord {
     /// owner moves real money: on the N4 shape (cash 5000, credit 2000,
     /// gratuity 4200) the credit owner gives cash 5000 / credit 0 and the cash
     /// owner gives cash 800 / credit 2000.
+    ///
+    /// Resolve `metricsOwner` with `ShiftDetails.metricsOwner(of:)?.kind`.
+    /// That is the only spelling that agrees with the server's `metrics_rank`
+    /// on a group holding two rows of one kind, which the agent API's
+    /// `create_tip_entry` and `MigrationRunner.backfillShiftIDs` both
+    /// produce without any data corruption.
     func applyEarnings(
         cashCents: Int,
         creditCents: Int,

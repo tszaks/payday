@@ -92,7 +92,7 @@ insert into auth.users (id, email) values
   ('51000000-0000-4000-8000-000000000004', 'payday-s3-repeat@test.invalid');
 
 -- =============================================================================
--- 1. The named fixtures: N1, N4, N5, L1, L2, N3, P6
+-- 1. The named fixtures: N1, N4, N5, L1, L2, N3, P6, P7
 -- =============================================================================
 
 -- N1: cash 6000 + credit 4000 sharing a shift_id, with tip_out 1000 duplicated
@@ -181,6 +181,55 @@ select pg_temp.legacy_row(
   p_hours => 5.0, p_sales => 120000, p_period => 'dinner',
   p_note => 'Saturday double', p_cua => '2026-07-09 01:05:00+00');
 
+-- P7: TWO rows of each kind in ONE group, which is what every fixture above
+-- this line fails to cover. N1/N3/N4/N5/L1/L2/P6 are all exactly one cash row
+-- plus one credit row, and on that shape "credit ?? cash" and "the first
+-- non-nil in rank order" are the SAME answer, so all seven of them passed
+-- under both rules and none of them could see the divergence.
+--
+-- A four-row group needs no data corruption to exist. Two live paths produce
+-- one: the agent API's create_tip_entry mints row ids as
+-- deterministicUUID('shift:<shift_id>:cash'/':credit'), which never equal a
+-- device row's random UUID and are under no uniqueness constraint on
+-- (shift_id, kind), so an agent adding credit tips to an existing device
+-- shift lands a SECOND credit row in that group; and
+-- MigrationRunner.backfillShiftIDs assigns a day's existing shiftID to every
+-- nil-shift_id row of that day, collapsing a legacy pair and a new pair into
+-- one four-row group.
+--
+-- The tip-out is on the FIRST credit row by id and the v1 receipt is on the
+-- SECOND one, so the two ranks pull in different directions and each of the
+-- two "read the first credit row" spellings misses exactly one fact:
+--   Swift, in id order:            6000 / 5000 /    0 / 1000 / 10000
+--   Swift, receipt row first:      6000 / 2000 / 4200 /    0 / 12200
+--   private.derive_shifts:         6000 / 2000 / 4200 / 1000 / 11200
+-- The fold's answer is the authoritative one, and PaydayTests/
+-- ShiftGroupRankingParityTests.swift now carries these same five numbers as
+-- literals over the real TipBreakdown, in all 24 array orders. Neither side
+-- re-derives; change one ranking and BOTH suites fail.
+--
+-- Conservation cannot substitute for this fixture: both sides of the check
+-- are the fold's own grouping, so the deriver returns source_cents =
+-- shift_cents = 11200 with conflicts = 0 while disagreeing with both shipped
+-- readers. That is why the numbers are pinned, not the equality.
+select pg_temp.legacy_row(
+  '51000000-0000-4000-8000-000000000001', '00000000-0000-0000-0000-000000000902',
+  '00000000-0000-0000-0000-000000000901', '2026-07-01', 5000, 'cash',
+  p_cua => '2026-07-02 02:00:00+00');
+select pg_temp.legacy_row(
+  '51000000-0000-4000-8000-000000000001', '00000000-0000-0000-0000-000000000903',
+  '00000000-0000-0000-0000-000000000901', '2026-07-01', 2000, 'credit',
+  p_tip_out => 1000, p_cua => '2026-07-02 02:01:00+00');
+select pg_temp.legacy_row(
+  '51000000-0000-4000-8000-000000000001', '00000000-0000-0000-0000-000000000904',
+  '00000000-0000-0000-0000-000000000901', '2026-07-01', 1000, 'cash',
+  p_cua => '2026-07-02 02:02:00+00');
+select pg_temp.legacy_row(
+  '51000000-0000-4000-8000-000000000001', '00000000-0000-0000-0000-000000000905',
+  '00000000-0000-0000-0000-000000000901', '2026-07-01', 3000, 'credit',
+  p_receipt => '{"gratuityFeesCents": 4200}'::jsonb,
+  p_cua => '2026-07-02 02:03:00+00');
+
 -- One derive over every fixture key at once, which is also how the trigger
 -- calls it: the touched set is a set, not one group.
 do $$
@@ -194,14 +243,15 @@ begin
           '00000000-0000-0000-0000-000000000601'::uuid,
           '00000000-0000-0000-0000-000000000701'::uuid,
           '00000000-0000-0000-0000-000000000801'::uuid,
+          '00000000-0000-0000-0000-000000000901'::uuid,
           public.payday_legacy_shift_id('2026-09-28')]);
-  perform pg_temp.expect('theFixtureDeriveWroteSevenGroupsAndRaisedNothing',
-    v_out.touched_count = 7 and v_out.wrote_count = 7 and v_out.conflicts = 0,
+  perform pg_temp.expect('theFixtureDeriveWroteEightGroupsAndRaisedNothing',
+    v_out.touched_count = 8 and v_out.wrote_count = 8 and v_out.conflicts = 0,
     'touched=' || v_out.touched_count || ' wrote=' || v_out.wrote_count
       || ' conflicts=' || v_out.conflicts
       || ' in=' || v_out.source_cents || ' out=' || v_out.shift_cents);
   perform pg_temp.expect('aPristineDeriveConservesEveryCent',
-    v_out.source_cents = v_out.shift_cents and v_out.source_cents = 9000 + 8200 + 7000 + 3000 + 9200 + 8000 + 3000,
+    v_out.source_cents = v_out.shift_cents and v_out.source_cents = 9000 + 8200 + 7000 + 3000 + 9200 + 8000 + 3000 + 11200,
     'in=' || v_out.source_cents || ' out=' || v_out.shift_cents);
 end;
 $$;
@@ -445,13 +495,75 @@ select pg_temp.expect('P6_hoursAreResolvedCreditFirstAndNeverSummed',
 from pg_temp.shift_facts('51000000-0000-4000-8000-000000000001',
                          '00000000-0000-0000-0000-000000000801') as f;
 
+-- P7 ---------------------------------------------------------------------------
+select pg_temp.expect('P7_twoRowsPerKindFoldTo6000_2000_4200_1000_11200',
+  (f ->> 'cash_tips_cents')::integer = 6000
+  and (f ->> 'credit_tips_cents')::integer = 2000
+  and (f ->> 'gratuity_fees_cents')::integer = 4200
+  and (f ->> 'tip_out_cents')::integer = 1000
+  and (f ->> 'non_wage_earnings_cents')::integer = 11200,
+  f::text)
+from pg_temp.shift_facts('51000000-0000-4000-8000-000000000001',
+                         '00000000-0000-0000-0000-000000000901') as f;
+
+-- Both answers the order-dependent "first credit row" rule produced, each
+-- asserted as a number this shift does NOT hold. 10000 is the id-order answer
+-- ($12.00 short, and $30.00 off on the split, because the receipt on the
+-- second credit row was invisible); 12200 is the receipt-row-first answer
+-- ($10.00 over, because the tip-out on the non-first credit row was then the
+-- invisible one). The split components are asserted too, because the credit
+-- bucket is what drives the paycheck comparison and a right total with a
+-- wrong split still misreconciles.
+select pg_temp.expect('P7_bothArrayOrderAnswersAreExcluded',
+  (f ->> 'non_wage_earnings_cents')::integer <> 10000
+  and (f ->> 'non_wage_earnings_cents')::integer <> 12200
+  and (f ->> 'credit_tips_cents')::integer <> 5000
+  and (f ->> 'tip_out_cents')::integer <> 0
+  and (f ->> 'gratuity_fees_cents')::integer <> 0,
+  f::text)
+from pg_temp.shift_facts('51000000-0000-4000-8000-000000000001',
+                         '00000000-0000-0000-0000-000000000901') as f;
+
+-- The stored payload is the SECOND credit row's, because object-ness outranks
+-- credit-ness and then id ascending settles it -- and it is relabelled v2, so
+-- a re-fold cannot subtract the 4200 twice.
+select pg_temp.expect('P7_theStoredPayloadIsTheReceiptCarryingRowsRelabelledV2',
+  f -> 'receipt_metrics' = '{"gratuityFeesCents": 4200, "earningsSchemaVersion": 2}'::jsonb,
+  (f -> 'receipt_metrics')::text)
+from pg_temp.shift_facts('51000000-0000-4000-8000-000000000001',
+                         '00000000-0000-0000-0000-000000000901') as f;
+
+select pg_temp.expect('P7_provenanceNamesAllFourLegacyRows',
+  (select legacy_entry_ids from public.shifts
+    where user_id = '51000000-0000-4000-8000-000000000001'
+      and id = '00000000-0000-0000-0000-000000000901')
+  = array['00000000-0000-0000-0000-000000000902'::uuid,
+          '00000000-0000-0000-0000-000000000903'::uuid,
+          '00000000-0000-0000-0000-000000000904'::uuid,
+          '00000000-0000-0000-0000-000000000905'::uuid],
+  (select legacy_entry_ids::text from public.shifts
+    where user_id = '51000000-0000-4000-8000-000000000001'
+      and id = '00000000-0000-0000-0000-000000000901'));
+
+-- Conservation is GREEN on a group both shipped readers get wrong, which is
+-- why this fixture had to exist: source_cents and shift_cents are both the
+-- fold's own grouping, so the check is structurally blind to a Swift-versus-
+-- SQL divergence. Asserted so nobody later mistakes the equality for parity.
+select pg_temp.expect('P7_conservationIsBlindToAReaderDisagreement',
+  (select source_cents = shift_cents and source_cents = 11200 and conflicts = 0
+     from private.derive_shifts('51000000-0000-4000-8000-000000000001',
+       array['00000000-0000-0000-0000-000000000901'::uuid])),
+  (select 'in=' || source_cents || ' out=' || shift_cents || ' conflicts=' || conflicts
+     from private.derive_shifts('51000000-0000-4000-8000-000000000001',
+       array['00000000-0000-0000-0000-000000000901'::uuid])));
+
 -- Every fixture row is one shift and every shift is source 'migration'.
-select pg_temp.expect('theSevenFixtureGroupsAreSevenShiftsAllMarkedMigration',
+select pg_temp.expect('theEightFixtureGroupsAreEightShiftsAllMarkedMigration',
   (select count(*) from public.shifts
-    where user_id = '51000000-0000-4000-8000-000000000001') = 7
+    where user_id = '51000000-0000-4000-8000-000000000001') = 8
   and (select count(*) from public.shifts
         where user_id = '51000000-0000-4000-8000-000000000001'
-          and source = 'migration') = 7,
+          and source = 'migration') = 8,
   (select count(*)::text from public.shifts
     where user_id = '51000000-0000-4000-8000-000000000001'));
 
@@ -1076,8 +1188,8 @@ $$;
 -- and would vanish from the report instead of failing, so the count of the
 -- assertions ahead of this line is pinned.
 select pg_temp.expect('theSuiteRanEveryAssertion',
-  (select count(*) from results) = 68,
-  'ran ' || (select count(*) from results)::text || ' of 68');
+  (select count(*) from results) = 73,
+  'ran ' || (select count(*) from results)::text || ' of 73');
 
 select seq, case when ok then 'PASS' else 'FAIL' end as result, name, detail
 from results order by seq;
