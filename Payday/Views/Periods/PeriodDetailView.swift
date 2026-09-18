@@ -211,6 +211,8 @@ struct PeriodDetailView: View {
     @Environment(PayScheduleStore.self) private var scheduleStore
     @Environment(PolicyStore.self) private var policyStore
     @Query private var allEntries: [TipEntry]
+    /// The other representation. `snapshotBuild()` picks one; never both.
+    @Query private var shiftRecords: [ShiftRecord]
     @Query private var paycheckRecords: [PaycheckRecord]
 
     let period: PayPeriod
@@ -231,6 +233,7 @@ struct PeriodDetailView: View {
         let facts = PeriodDetailFacts(
             snapshot: build.snapshot,
             shiftDays: build.shiftDays,
+            shiftRecordDays: build.shiftRecordDays,
             paycheckRecords: paycheckRecords,
             period: period,
             schedule: scheduleStore.schedule,
@@ -323,6 +326,17 @@ struct PeriodDetailView: View {
            cached.payrollTimeZone == zone {
             return cached.build
         }
+        // The representation switch, at the one place this screen's money and
+        // rows are both produced. `HistoryEarnings.build` keeps the snapshot
+        // and the row list on the SAME representation, which is what stops a
+        // total from one source sitting over rows from another.
+        if PaydaySyncState.shiftsAreAuthoritativeForCurrentAccount {
+            return HistoryEarnings.build(
+                records: shiftRecords,
+                policies: policies,
+                payrollTimeZone: zone
+            )
+        }
         return HistoryEarnings.build(
             entries: allEntries,
             policies: policies,
@@ -363,7 +377,7 @@ struct PeriodDetailView: View {
 
     @ViewBuilder
     private func shiftsSection(_ facts: PeriodDetailFacts) -> some View {
-        if facts.shiftDays.isEmpty {
+        if facts.shiftDays.isEmpty, facts.shiftRecordDays.isEmpty {
             Text("No shifts in this period.")
                 .font(PaydayFont.bodyRegular)
                 .foregroundStyle(PaydayColor.textSecondary)
@@ -375,9 +389,14 @@ struct PeriodDetailView: View {
                     .foregroundStyle(PaydayColor.textSecondary)
                     .padding(.bottom, PaydaySpacing.p8)
 
+                // Exactly one of these is populated, by construction.
                 ForEach(Array(facts.shiftDays.enumerated()), id: \.element.shiftID) { index, group in
                     if index > 0 { Divider() }
                     shiftRow(for: group, facts: facts)
+                }
+                ForEach(Array(facts.shiftRecordDays.enumerated()), id: \.element.id) { index, record in
+                    if index > 0 { Divider() }
+                    shiftRow(for: record, facts: facts)
                 }
             }
         }
@@ -432,6 +451,30 @@ struct PeriodDetailView: View {
         if let hourlyRateCaption = facts.hourlyRateCaption { parts.append(hourlyRateCaption) }
         if let caption = facts.hero.caption { parts.append(caption) }
         return parts.joined(separator: ", ")
+    }
+
+    /// The record row. No `if let anchor` guard, because a record IS the
+    /// shift -- the legacy row has to reach for `items.first` and renders
+    /// nothing at all if the group is somehow empty.
+    private func shiftRow(
+        for record: ShiftRecord,
+        facts: PeriodDetailFacts
+    ) -> some View {
+        Button {
+            sheetTarget = .editShift(record)
+        } label: {
+            ShiftDayRow(facts: ShiftDayRowFacts(
+                snapshot: facts.snapshot,
+                shiftID: record.id,
+                day: record.workDate,
+                period: record.shiftPeriod,
+                dayHasMultipleShifts: facts.multiShiftDays.contains(record.workDate)
+            ))
+            .padding(.vertical, PaydaySpacing.p12)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .shiftContextMenu(record: record, sheetTarget: $sheetTarget, undoState: undoState, context: modelContext)
     }
 
     @ViewBuilder

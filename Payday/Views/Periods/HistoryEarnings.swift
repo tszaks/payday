@@ -47,6 +47,41 @@ enum HistoryEarnings {
     ///     weekday. The engine does the effective dating.
     ///   - calendar: the GRID calendar, for shift grouping and period
     ///     boundaries. Presentation only; it prices nothing.
+    /// The shift-representation build.
+    ///
+    /// This is the single switch point for four consumers -- `PeriodDetailView`,
+    /// `DashboardEarnings`, `InsightsEarnings` and `PeriodsView` all reach
+    /// their money through `HistoryEarnings.build`. Switching HERE rather than
+    /// in each view is what keeps them from disagreeing: one source decision,
+    /// four screens, no possibility of a half-switched surface.
+    ///
+    /// It also keeps the snapshot and the rows on the SAME representation. A
+    /// screen whose total came from the engine while its rows came from the
+    /// legacy store would show one figure over rows summing to something else
+    /// under any bug -- which is criterion 5 broken by construction, on the
+    /// most scrutinised screens in the app.
+    @MainActor
+    static func build(
+        records: [ShiftRecord],
+        policies: CompensationPolicies,
+        payrollTimeZone: TimeZone
+    ) -> Build {
+        let adapted = ShiftInputAdapter.adapt(records, calendars: policies.calendars)
+        let snapshot = try? EarningsSnapshot.build(EarningsInputs(
+            shifts: adapted.inputs,
+            rates: policies.rates,
+            calendars: policies.calendars,
+            // The same no-cutoff decision the legacy build makes below, and
+            // for the same recorded reason: HP-01 and HP-05 both say History
+            // applies no to-date cutoff, and saying it ONCE in the snapshot's
+            // own stamp beats passing `asOf: .distantFuture` at a dozen query
+            // sites.
+            asOf: CivilDay(.distantFuture, in: payrollTimeZone),
+            unreadableReceiptShiftIDs: adapted.unreadableReceiptShiftIDs
+        ))
+        return Build(snapshot: snapshot, shiftDays: [], shiftRecordDays: records)
+    }
+
     static func build(
         entries: [TipEntry],
         policies: CompensationPolicies,
@@ -74,7 +109,8 @@ enum HistoryEarnings {
                 // silent clamp, not an error.
                 asOf: .distantFuture
             ),
-            shiftDays: shiftDays
+            shiftDays: shiftDays,
+            shiftRecordDays: []
         )
     }
 
@@ -86,6 +122,11 @@ enum HistoryEarnings {
         /// Newest day first, lunch before dinner — `ShiftDays`' order, kept
         /// because it is what the rows render in.
         let shiftDays: [(day: Date, shiftID: UUID, items: [TipEntry])]
+        /// The same rows in the shift representation. Exactly one of the two
+        /// is ever populated, because `build` chooses a source rather than
+        /// merging -- a converted shift exists in BOTH representations at
+        /// once, so reading the union would count it twice.
+        let shiftRecordDays: [ShiftRecord]
     }
 
     // MARK: - Queries
