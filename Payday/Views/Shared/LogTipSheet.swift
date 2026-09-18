@@ -222,6 +222,7 @@ struct LogTipSheet: View {
     /// error: claiming a sync is in progress when it is not would be the
     /// same defect pointed the other way.
     @State private var saveFailure: ShiftCommands.Failure?
+
     /// New-entry only: the details group opens collapsed behind a one-line
     /// belief sentence (ShiftBeliefLine) instead of every row at full volume.
     /// Editing never touches this — that flow keeps the card always open.
@@ -758,7 +759,7 @@ struct LogTipSheet: View {
                 // popover that hides the cancel option behind tap-outside.
                 // The centered box shows all three intents explicitly.
                 .alert(
-                    (saveFailure ?? .saveFailed).message,
+                    saveFailure.alertMessage,
                     isPresented: $saveFailed
                 ) {
                     Button("OK", role: .cancel) {}
