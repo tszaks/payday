@@ -2,6 +2,10 @@ import Testing
 import Foundation
 @testable import Payday
 
+/// One stub as entered. Same argument labels the old `PaycheckAudit.Stub`
+/// factory had, so every test body below reads unchanged; the type moved to
+/// `PaycheckReconciler.Observation`, which is where group 2.5 put the stub's
+/// own sums so `PaycheckAudit` could stop performing them.
 private func stub(
     tips: Int? = nil,
     regular: Int? = nil,
@@ -10,23 +14,88 @@ private func stub(
     gross: Int? = nil,
     taxes: Int? = nil,
     net: Int? = nil
-) -> PaycheckAudit.Stub {
-    PaycheckAudit.Stub(tipsCents: tips, regularWagesCents: regular, overtimeWagesCents: overtime, gratuityCents: gratuity, grossCents: gross, taxesCents: taxes, netCents: net)
+) -> PaycheckReconciler.Observation {
+    PaycheckReconciler.Observation(
+        paidTipsCents: tips,
+        regularWagesCents: regular,
+        overtimeWagesCents: overtime,
+        gratuityCents: gratuity,
+        grossCents: gross,
+        taxesCents: taxes,
+        netCents: net
+    )
+}
+
+/// The expected side these copy tests want, expressed as the engine would
+/// produce it.
+///
+/// The audit no longer takes four loose values; it takes one
+/// `PaycheckReconciler.Reconciliation`, which is what closed the split
+/// between the sheet's basis and the period's. So this helper assembles an
+/// `EarningsResult` whose components yield exactly the figures each test
+/// names: credit tips with no tip-out give `auditableTipsLineCents` directly,
+/// and an all-valued `Completeness` is what makes the wage side auditable at
+/// all (`Expectation.hasAuditableWages`).
+private func expectation(
+    loggedCreditTipsCents: Int?,
+    loggedGratuityCents: Int?,
+    computedWages: PeriodIncome.Wages?,
+    computedOvertimeHours: Double?
+) -> PaycheckReconciler.Expectation {
+    // An overtime-hours figure with no wage cents behind it was reachable
+    // through the old five-argument signature and is not reachable now: both
+    // come off the same wage picture. The tests that pass only hours get a
+    // zero-cent wage picture, which is the nearest honest equivalent.
+    let hasWages = computedWages != nil || (computedOvertimeHours ?? 0) > 0
+    let components = EarningsComponents(
+        voluntaryCashCents: 0,
+        voluntaryCreditCents: loggedCreditTipsCents ?? 0,
+        gratuityFeesCents: loggedGratuityCents ?? 0,
+        tipOutCents: 0,
+        regularWagesCents: computedWages?.regularCents ?? 0,
+        overtimeWagesCents: computedWages?.overtimeCents ?? 0
+    )
+    let completeness = Completeness(
+        totalShifts: hasWages ? 1 : 0,
+        shiftsWithHours: hasWages ? 1 : 0,
+        shiftsWageValued: hasWages ? 1 : 0,
+        shiftsWageAssumed: 0,
+        wageFeatureEnabled: hasWages
+    )
+    return PaycheckReconciler.Expectation(
+        result: EarningsResult(
+            metric: .earnedIncome,
+            range: nil,
+            asOf: nil,
+            knownComponents: components,
+            coveredComponents: components,
+            minutes: WorkedMinutes.minutes(fromHours: computedWages?.hours ?? 0),
+            regularMinutes: 0,
+            overtimeMinutes: WorkedMinutes.minutes(fromHours: computedOvertimeHours ?? 0),
+            completeness: completeness,
+            shiftIDs: []
+        ),
+        stamp: nil
+    )
 }
 
 private func findings(
-    _ stub: PaycheckAudit.Stub,
+    _ stub: PaycheckReconciler.Observation,
     loggedCreditTipsCents: Int? = nil,
     loggedGratuityCents: Int? = nil,
     computedWages: PeriodIncome.Wages? = nil,
     computedOvertimeHours: Double? = nil
 ) -> [PaycheckAudit.Finding] {
     PaycheckAudit.run(
-        stub: stub,
-        loggedCreditTipsCents: loggedCreditTipsCents,
-        loggedGratuityCents: loggedGratuityCents,
-        computedWages: computedWages,
-        computedOvertimeHours: computedOvertimeHours
+        PaycheckReconciler.Reconciliation(
+            expectation: expectation(
+                loggedCreditTipsCents: loggedCreditTipsCents,
+                loggedGratuityCents: loggedGratuityCents,
+                computedWages: computedWages,
+                computedOvertimeHours: computedOvertimeHours
+            ),
+            observation: stub
+        )
     )
 }
 
@@ -483,7 +552,7 @@ struct PaycheckOCRTests {
             "Net Pay $1,902.51 $9,651.86",
             "Amount Paid $1,902.51",
             "CHECK FACE $1902.51"
-        ]).correctingSmallGrossMismatch()
+        ])
 
         #expect(parsed.tipsCents == 191_120)
         #expect(parsed.regularWagesCents == 19_569)
@@ -495,8 +564,14 @@ struct PaycheckOCRTests {
         #expect(parsed.filledFieldCount == 7)
     }
 
-    @Test("repairs a small tips OCR error when gross proves the printed amount")
-    func repairsSmallTipsErrorFromGross() {
+    /// The scan-time half of fixture P1. `correctingSmallGrossMismatch()`
+    /// used to rewrite `tipsCents` here, so the person never saw what the
+    /// stub printed — P1 lists `storedPaidTipsCentsAfterScanPrefill: 10000`
+    /// and names this the second producer of the wrong answer. MEASURED on
+    /// the Kooma stub: an 18c OCR slip was replaced silently. The scan now
+    /// reaches the field verbatim and the correction is offered.
+    @Test("a small tips OCR slip reaches the sheet verbatim, as a proposal")
+    func smallTipsSlipIsAProposalNotARewrite() {
         let parsed = PaycheckOCR.ParsedPaycheck(
             tipsCents: 191_102,
             regularWagesCents: 19_569,
@@ -505,12 +580,28 @@ struct PaycheckOCRTests {
             grossPayCents: 228_807,
             taxesCents: 38_556,
             netPayCents: 190_251
-        ).correctingSmallGrossMismatch()
+        )
 
-        #expect(parsed.tipsCents == 191_120)
+        #expect(parsed.tipsCents == 191_102, "the scan is not rewritten on the way in")
+        // What the sheet holds once the scan has filled its fields.
+        let scanned = PaycheckReconciler.Observation(
+            paidTipsCents: parsed.tipsCents,
+            regularWagesCents: parsed.regularWagesCents,
+            overtimeWagesCents: parsed.overtimeWagesCents,
+            gratuityCents: parsed.gratuityCents,
+            grossCents: parsed.grossPayCents,
+            taxesCents: parsed.taxesCents,
+            netCents: parsed.netPayCents
+        )
+        let proposal = PaycheckReconciler.proposal(for: scanned)
+        #expect(proposal?.proposedCents == 191_120)
+        #expect(proposal?.correctionCents == 18)
+        #expect(proposal?.label == "Looks like $1,911.20 (accept?)")
+        #expect(scanned.paidTipsCents == 191_102,
+                "MetricID.observedPaidTips: asking for the proposal does not apply it")
     }
 
-    @Test("does not rewrite a large gross mismatch that may be another earning")
+    @Test("a large gross mismatch proposes nothing: it may be another earning")
     func preservesLargeGrossMismatch() {
         let parsed = PaycheckOCR.ParsedPaycheck(
             tipsCents: 100_000,
@@ -520,12 +611,25 @@ struct PaycheckOCRTests {
             grossPayCents: 125_000,
             taxesCents: nil,
             netPayCents: nil
-        ).correctingSmallGrossMismatch()
+        )
 
         #expect(parsed.tipsCents == 100_000)
+        #expect(PaycheckReconciler.proposal(for: PaycheckReconciler.Observation(
+            paidTipsCents: parsed.tipsCents,
+            regularWagesCents: parsed.regularWagesCents,
+            overtimeWagesCents: parsed.overtimeWagesCents,
+            gratuityCents: parsed.gratuityCents,
+            grossCents: parsed.grossPayCents
+        )) == nil)
     }
 
-    @Test("does not infer a correction when an earnings category was not read")
+    /// An unread earnings category no longer suppresses the proposal by
+    /// itself: the reconciler's rule is the registry's, which needs only a
+    /// regular wage line and a gross. A missing overtime or gratuity line
+    /// counts as zero, and the ±100c bound is what keeps a genuinely
+    /// unaccounted row from being "corrected" away — here the gap is
+    /// $1,683.70, so nothing is proposed.
+    @Test("an unread earnings category leaves the gap too large to propose")
     func doesNotCorrectIncompleteEarnings() {
         let parsed = PaycheckOCR.ParsedPaycheck(
             tipsCents: 191_102,
@@ -535,9 +639,16 @@ struct PaycheckOCRTests {
             grossPayCents: 228_807,
             taxesCents: nil,
             netPayCents: nil
-        ).correctingSmallGrossMismatch()
+        )
 
         #expect(parsed.tipsCents == 191_102)
+        #expect(PaycheckReconciler.proposal(for: PaycheckReconciler.Observation(
+            paidTipsCents: parsed.tipsCents,
+            regularWagesCents: parsed.regularWagesCents,
+            overtimeWagesCents: parsed.overtimeWagesCents,
+            gratuityCents: parsed.gratuityCents,
+            grossCents: parsed.grossPayCents
+        )) == nil)
     }
 
     @Test("decodes AI totals as cents")
