@@ -174,6 +174,15 @@ language sql as $$
     'null'::jsonb);
 $$;
 
+-- Live shift count and summed non_wage_earnings_cents, the only two numbers
+-- that decide whether money was doubled. Deliberately NOT keyed on any shift
+-- id: the stale-claim shapes are about a night existing twice, sometimes on two
+-- different dates, so the assertion has to be over the whole account.
+create function pg_temp.live_money(p_user uuid) returns text language sql as $$
+  select 'shifts=' || count(*) || ' cents=' || coalesce(sum(s.non_wage_earnings_cents), 0)
+  from public.shifts s where s.user_id = p_user and s.deleted_at is null;
+$$;
+
 create function pg_temp.backlog_keys(p_user uuid) returns uuid[] language sql as $$
   select coalesce(array_agg(group_key order by group_key), '{}'::uuid[])
   from private.shift_fold_backlog where user_id = p_user;
@@ -226,12 +235,15 @@ delete from auth.users where id in (
   '56000000-0000-4000-8000-000000000011','56000000-0000-4000-8000-000000000012',
   '56000000-0000-4000-8000-000000000013','56000000-0000-4000-8000-000000000014',
   '56000000-0000-4000-8000-000000000015','56000000-0000-4000-8000-000000000016',
+  '56000000-0000-4000-8000-000000000017','56000000-0000-4000-8000-000000000018',
+  '56000000-0000-4000-8000-000000000019',
   '56000000-0000-4000-8000-000000000021','56000000-0000-4000-8000-000000000022',
   '56000000-0000-4000-8000-000000000031','56000000-0000-4000-8000-000000000032',
   '56000000-0000-4000-8000-000000000033','56000000-0000-4000-8000-000000000041',
   '56000000-0000-4000-8000-000000000051','56000000-0000-4000-8000-000000000052',
   '56000000-0000-4000-8000-000000000061','56000000-0000-4000-8000-000000000071',
-  '56000000-0000-4000-8000-000000000072','56000000-0000-4000-8000-000000000081');
+  '56000000-0000-4000-8000-000000000072','56000000-0000-4000-8000-000000000073',
+  '56000000-0000-4000-8000-000000000081');
 insert into auth.users (id, email) values
   ('56000000-0000-4000-8000-000000000011','payday-s5-arm1@test.invalid'),
   ('56000000-0000-4000-8000-000000000012','payday-s5-arm2@test.invalid'),
@@ -239,6 +251,9 @@ insert into auth.users (id, email) values
   ('56000000-0000-4000-8000-000000000014','payday-s5-arm4@test.invalid'),
   ('56000000-0000-4000-8000-000000000015','payday-s5-arm5@test.invalid'),
   ('56000000-0000-4000-8000-000000000016','payday-s5-clean@test.invalid'),
+  ('56000000-0000-4000-8000-000000000017','payday-s5-stale-shiftid@test.invalid'),
+  ('56000000-0000-4000-8000-000000000018','payday-s5-stale-workdate@test.invalid'),
+  ('56000000-0000-4000-8000-000000000019','payday-s5-stale-bulk@test.invalid'),
   ('56000000-0000-4000-8000-000000000021','payday-s5-dupes@test.invalid'),
   ('56000000-0000-4000-8000-000000000022','payday-s5-forced@test.invalid'),
   ('56000000-0000-4000-8000-000000000031','payday-s5-noflag1@test.invalid'),
@@ -250,6 +265,7 @@ insert into auth.users (id, email) values
   ('56000000-0000-4000-8000-000000000061','payday-s5-dupday@test.invalid'),
   ('56000000-0000-4000-8000-000000000071','payday-s5-rb1@test.invalid'),
   ('56000000-0000-4000-8000-000000000072','payday-s5-rb2@test.invalid'),
+  ('56000000-0000-4000-8000-000000000073','payday-s5-rb3-nostaterow@test.invalid'),
   ('56000000-0000-4000-8000-000000000081','payday-s5-auth@test.invalid');
 
 -- =============================================================================
@@ -512,6 +528,179 @@ select pg_temp.expect('arm5_the_backlogged_group_is_drained_in_the_same_transact
   'backlog=' || pg_temp.backlog_keys('56000000-0000-4000-8000-000000000015')::text);
 
 -- =============================================================================
+-- 2b. THE STALE CLAIM ARM, AND THE PHANTOM MONEY IT CLOSES.
+--
+-- Arms 1 to 4 all return a row's CURRENT group key. Every provenance-release
+-- arm in the deriver is gated on `s.id = any(v_keys)`, so when a legacy row's
+-- group key CHANGES while the fold is not firing -- a bulk legacy rewrite with
+-- the triggers off, a replica-mode load, the disabled-trigger window rollback
+-- itself opens -- the OLD claiming shift was never handed to the deriver. It
+-- kept its money, kept its claim, and stayed LIVE. That is exactly the
+-- trigger-blind population this whole file exists for, and it was the one case
+-- the one-shot could not repair.
+--
+-- MEASURED before the arm existed, on the three shapes below: seven live
+-- shifts and 70000 cents for five real nights and 50000 cents; two live shifts
+-- at $60 each on ONE date for one $60 row; two live shifts at $40 each on TWO
+-- DIFFERENT dates for one $40 row. Three passes of the one-shot and a
+-- repair_shift_migration each reported remaining=2 dupes=2 and changed
+-- nothing, and duplicate_work_date_count read 0 throughout, because its
+-- detector needs one provenance row AND one native row on the date while here
+-- both carry provenance. So no shipped function could clear it and no shipped
+-- counter could see it.
+--
+-- EVERY STALE CLAIMER HERE IS THE REAL THING: open, source='migration', with
+-- provenance and the money. The decoy in section 4 is deliberately harmless;
+-- this is the shape that double-counts.
+--
+-- THE CONTROL IS THE SAME MOVE WITH THE TRIGGERS ON, which always converged,
+-- because the fold unions OLD and NEW keys on UPDATE. It is
+-- theSameMoveWithTheTriggersOnAlwaysConverged, in section 7's account.
+-- =============================================================================
+
+-- A shift_id move: one $60 row on one date acquires a real shift_id, so its
+-- group key changes while the date does not. Folded live FIRST, so the stale
+-- claimer is a genuine artifact holding genuine money.
+select pg_temp.device_upsert('56000000-0000-4000-8000-000000000017',
+  '[{"id":"56000000-0000-0000-0000-000000000171",
+     "work_date":"2026-08-01","amount_cents":6000,"kind":"cash",
+     "client_updated_at":"2026-08-01T23:00:00Z"}]'::jsonb);
+insert into calls (name, n, txt)
+select 'stale_17_truth', 0, pg_temp.live_money('56000000-0000-4000-8000-000000000017');
+alter table public.tip_entries disable trigger tip_entries_fold_update;
+update public.tip_entries set shift_id = '56000000-0000-0000-0000-0000000001a7',
+                              client_updated_at = '2026-08-02T09:00:00Z'
+ where id = '56000000-0000-0000-0000-000000000171';
+alter table public.tip_entries enable trigger tip_entries_fold_update;
+
+-- A work_date move: the same row, the same money, an adjacent civil day. This
+-- is what a relocated 1.0 device re-pushing its own row looks like, and it is
+-- the shape whose duplicate lands on TWO DIFFERENT DATES and is therefore
+-- invisible to a work_date-grouped duplicate detector.
+select pg_temp.device_upsert('56000000-0000-4000-8000-000000000018',
+  '[{"id":"56000000-0000-0000-0000-000000000181",
+     "work_date":"2026-08-03","amount_cents":4000,"kind":"cash",
+     "client_updated_at":"2026-08-03T23:00:00Z"}]'::jsonb);
+insert into calls (name, n, txt)
+select 'stale_18_truth', 0, pg_temp.live_money('56000000-0000-4000-8000-000000000018');
+alter table public.tip_entries disable trigger tip_entries_fold_update;
+update public.tip_entries set work_date = '2026-08-04',
+                              client_updated_at = '2026-08-05T09:00:00Z'
+ where id = '56000000-0000-0000-0000-000000000181';
+alter table public.tip_entries enable trigger tip_entries_fold_update;
+
+-- The headline: five nights at $100 folded live, then a bulk legacy rewrite
+-- re-keys two of them with the triggers off. shift_migration_state carries
+-- bulk_legacy_rewrite_at precisely because this is a contemplated operation,
+-- and rollback_shift_migration disables all three triggers globally.
+select pg_temp.device_upsert('56000000-0000-4000-8000-000000000019', (
+  select jsonb_agg(jsonb_build_object(
+    'id', ('56000000-0000-0000-0000-00000000019' || g)::uuid,
+    'work_date', (date '2026-08-10' + g)::text,
+    'amount_cents', 10000, 'kind', 'cash',
+    'client_updated_at', (timestamptz '2026-08-10 23:00:00Z' + (g || ' days')::interval)))
+  from generate_series(1, 5) g));
+insert into calls (name, n, txt)
+select 'stale_19_truth', 0, pg_temp.live_money('56000000-0000-4000-8000-000000000019');
+alter table public.tip_entries disable trigger tip_entries_fold_update;
+update public.tip_entries
+   set shift_id = ('56000000-0000-0000-0000-0000000001b' ||
+                   right(id::text, 1))::uuid,
+       client_updated_at = '2026-08-20T09:00:00Z'
+ where id in ('56000000-0000-0000-0000-000000000192',
+              '56000000-0000-0000-0000-000000000194');
+alter table public.tip_entries enable trigger tip_entries_fold_update;
+
+-- The truths, pinned as literals as well as captured, so a fixture that
+-- silently stopped folding could not make the convergence assertions vacuous.
+select pg_temp.expect('theStaleClaimFixturesFoldedTheirTruthBeforeTheKeyMoved',
+  pg_temp.called_txt('stale_17_truth') = 'shifts=1 cents=6000'
+  and pg_temp.called_txt('stale_18_truth') = 'shifts=1 cents=4000'
+  and pg_temp.called_txt('stale_19_truth') = 'shifts=5 cents=50000',
+  '17=' || coalesce(pg_temp.called_txt('stale_17_truth'),'null')
+    || ' 18=' || coalesce(pg_temp.called_txt('stale_18_truth'),'null')
+    || ' 19=' || coalesce(pg_temp.called_txt('stale_19_truth'),'null'));
+
+-- The arm returns one row per (entry, key that needs work), so a stale-claimed
+-- row contributes TWO: its current key, which builds the right artifact, and
+-- the stale claimer's id, which releases the wrong one. That is accurate, not
+-- inflated -- there really are two group keys to derive.
+insert into calls (name, n, txt)
+select 'stale_counts_before', 0,
+       pg_temp.ucount('56000000-0000-4000-8000-000000000017') || ' ' ||
+       pg_temp.ucount('56000000-0000-4000-8000-000000000018') || ' ' ||
+       pg_temp.ucount('56000000-0000-4000-8000-000000000019');
+
+select pg_temp.expect('theStaleClaimArmPresentsBothTheNewKeyAndTheStaleClaimer',
+  pg_temp.called_txt('stale_counts_before') = '2 2 4',
+  '17 18 19 = ' || coalesce(pg_temp.called_txt('stale_counts_before'),'null'));
+
+-- One pass each.
+insert into calls (name, n, txt)
+select 'stale_runs', 0,
+       (pg_temp.one_shot('56000000-0000-4000-8000-000000000017') ->> 'conservation_duplicate_claim_count') || ' ' ||
+       (pg_temp.one_shot('56000000-0000-4000-8000-000000000018') ->> 'conservation_duplicate_claim_count') || ' ' ||
+       (pg_temp.one_shot('56000000-0000-4000-8000-000000000019') ->> 'conservation_duplicate_claim_count');
+
+-- THE MONEY ASSERTION. Live shift count and summed non_wage_earnings_cents
+-- equal the pre-move truth, on all three shapes. Before the arm these read
+-- 'shifts=2 cents=12000', 'shifts=2 cents=8000' and 'shifts=7 cents=70000'.
+select pg_temp.expect('aStaleClaimerIsReleasedRatherThanDoublingTheMoney',
+  pg_temp.live_money('56000000-0000-4000-8000-000000000017') = pg_temp.called_txt('stale_17_truth')
+  and pg_temp.live_money('56000000-0000-4000-8000-000000000018') = pg_temp.called_txt('stale_18_truth')
+  and pg_temp.live_money('56000000-0000-4000-8000-000000000019') = pg_temp.called_txt('stale_19_truth'),
+  '17=' || pg_temp.live_money('56000000-0000-4000-8000-000000000017')
+    || ' (truth ' || coalesce(pg_temp.called_txt('stale_17_truth'),'null') || ')'
+    || ' 18=' || pg_temp.live_money('56000000-0000-4000-8000-000000000018')
+    || ' (truth ' || coalesce(pg_temp.called_txt('stale_18_truth'),'null') || ')'
+    || ' 19=' || pg_temp.live_money('56000000-0000-4000-8000-000000000019')
+    || ' (truth ' || coalesce(pg_temp.called_txt('stale_19_truth'),'null') || ')');
+
+-- The night MOVED, it was not merely deduplicated: the work_date shape's one
+-- live shift sits on the NEW date, and the old artifact is a 'converted'
+-- tombstone with no provenance left.
+select pg_temp.expect('theSurvivingShiftIsTheNewKeyAndTheOldArtifactIsATombstoneWithNoClaim',
+  (select work_date::text = '2026-08-04' and non_wage_earnings_cents = 4000
+     from public.shifts where user_id = '56000000-0000-4000-8000-000000000018'
+       and deleted_at is null)
+  and (select deleted_reason = 'converted' and coalesce(array_length(legacy_entry_ids,1),0) = 0
+         from public.shifts
+        where user_id = '56000000-0000-4000-8000-000000000018'
+          and id = public.payday_legacy_shift_id('2026-08-03')),
+  'live=' || (select coalesce(string_agg(work_date || '=' || non_wage_earnings_cents, ' '), 'none')
+                from public.shifts where user_id = '56000000-0000-4000-8000-000000000018'
+                  and deleted_at is null)
+    || ' old=' || pg_temp.shift_facts('56000000-0000-4000-8000-000000000018',
+                                      public.payday_legacy_shift_id('2026-08-03'))::text);
+
+-- ...and the count reaches ZERO, so the client stops re-invoking. Before the
+-- arm it read 2 forever on the single-row shapes and 2 forever on the bulk one,
+-- with conservation_duplicate_claim_count stuck at 1 and 2 respectively.
+insert into calls (name, n, txt)
+select 'stale_counts_after', 0,
+       pg_temp.ucount('56000000-0000-4000-8000-000000000017') || ' ' ||
+       pg_temp.ucount('56000000-0000-4000-8000-000000000018') || ' ' ||
+       pg_temp.ucount('56000000-0000-4000-8000-000000000019');
+
+select pg_temp.expect('theStaleClaimArmTerminatesAndTheDuplicateIsGone',
+  pg_temp.called_txt('stale_counts_after') = '0 0 0'
+  and pg_temp.called_txt('stale_runs') = '0 0 0',
+  'counts after = ' || coalesce(pg_temp.called_txt('stale_counts_after'),'null')
+    || ' dupes during = ' || coalesce(pg_temp.called_txt('stale_runs'),'null'));
+
+-- And a further pass is a no-op rather than a re-derive, which is what makes
+-- the arm safe to leave in the predicate forever.
+insert into calls (name, n, txt)
+select 'stale_19_second_pass', 0,
+  (pg_temp.one_shot('56000000-0000-4000-8000-000000000019') ->> 'conservation_touched_count');
+
+select pg_temp.expect('aSecondPassOverAConvergedStaleClaimAccountTouchesNothing',
+  pg_temp.called_txt('stale_19_second_pass') = '0'
+  and pg_temp.live_money('56000000-0000-4000-8000-000000000019') = pg_temp.called_txt('stale_19_truth'),
+  'touched=' || coalesce(pg_temp.called_txt('stale_19_second_pass'),'null')
+    || ' ' || pg_temp.live_money('56000000-0000-4000-8000-000000000019'));
+
+-- =============================================================================
 -- 3. two_consecutive_no_op_invocations_leave_migrated_at_byte_identical
 --
 -- MEASURED on the first draft: a second call with nothing unmigrated moved
@@ -614,6 +803,18 @@ alter table public.tip_entries enable trigger tip_entries_fold_insert;
 -- CLOSED, which is what a row an agent moved onto a natively edited shift looks
 -- like.
 --
+-- ITS BUDGET IS 1, AND THAT IS NOT DECORATION EITHER. Once the predicate grew
+-- its stale-claim arm (section 2b) the decoy's own id IS presented as a group
+-- key, so at the default budget the deriver releases the rogue claim in the
+-- same invocation that creates the real artifact and there is no duplicate left
+-- to record. That is the correct repair, and it is what section 2b asserts. The
+-- duplicate is therefore pinned in the state that is still genuinely
+-- reachable: a budget that affords the NEW key but not the stale claimer, which
+-- is every partially converged multi-year account mid-convergence. The two keys
+-- tie on min(client_updated_at) and break on group_key, and ...0210 sorts
+-- before ...02ff, so pass 1 deterministically spends its one group on the real
+-- key and leaves the rogue claim standing.
+--
 -- ITS WATERMARK IS NULL, AND THAT IS NOT DECORATION. MEASURED: with the
 -- watermark set to the row's own client_updated_at, the decoy's claim satisfied
 -- the predicate's "named, current" reading and the row looked MIGRATED -- arm 1
@@ -633,7 +834,7 @@ values ('56000000-0000-4000-8000-000000000021','56000000-0000-0000-0000-00000000
         '2026-07-11T23:00:00Z', '2026-07-11T23:00:00Z');
 
 insert into calls (name, n, txt)
-select 'dupes_run', 0, pg_temp.one_shot('56000000-0000-4000-8000-000000000021')::text;
+select 'dupes_run', 0, pg_temp.one_shot('56000000-0000-4000-8000-000000000021', 1)::text;
 
 select pg_temp.expect('a_wrong_partition_is_still_recorded',
   (pg_temp.state('56000000-0000-4000-8000-000000000021') ->> 'conservation_duplicate_claim_count') = '1'
@@ -653,6 +854,47 @@ select pg_temp.expect('a_wrong_partition_commits_rather_than_raising',
   'returned=' || left(coalesce(pg_temp.called_txt('dupes_run'), 'NULL'), 40)
     || ' converted=' || pg_temp.shift_facts('56000000-0000-4000-8000-000000000021',
                                             '56000000-0000-0000-0000-000000000210')::text);
+
+-- ...AND THE NEXT PASS CLEARS IT, which is the half no shipped function could
+-- do before the stale-claim arm existed. The duplicate is a real, reported,
+-- SELF-HEALING state rather than a permanent one: the next pass spends budget
+-- on the rogue claimer's own id, the deriver's arm 2a empties its
+-- legacy_entry_ids, and the predicate reaches 0.
+--
+-- THE CLEARING PASS TAKES THE DEFAULT BUDGET, WHICH IS WHAT THE CLIENT PASSES,
+-- AND THE REASON IS MEASURED. A second budget-1 pass changes nothing: the two
+-- keys tie on min(client_updated_at) -- they are the same entry's timestamp --
+-- so the ordering breaks on group_key and picks ...0210 again, while the
+-- rogue claim's NULL watermark keeps arm 3 regenerating that same key. So a
+-- stale-claim PAIR needs a budget of 2 to converge, and at a budget of exactly
+-- 1 it makes no forward progress. That is an operator-only shape: the client
+-- passes the 200 default, repair_shift_migration passes 1,000,000, and
+-- remaining_group_count stays FLAT rather than rising, so the client's
+-- strictly-decreasing follow-up rule stops calling instead of hot-looping.
+-- Written down rather than papered over, because the alternative -- ordering
+-- the release key ahead of its partner -- would make
+-- conservation_duplicate_claim_count unreachable and silently retire half of
+-- the conservation check.
+insert into calls (name, n, txt)
+select 'dupes_second_pass', 0, pg_temp.one_shot('56000000-0000-4000-8000-000000000021')::text;
+
+select pg_temp.expect('theRogueClaimIsReleasedByTheNextPassAndTheDuplicateClears',
+  (pg_temp.state('56000000-0000-4000-8000-000000000021') ->> 'conservation_duplicate_claim_count') = '0'
+  and pg_temp.ucount('56000000-0000-4000-8000-000000000021') = 0
+  and (pg_temp.shift_facts('56000000-0000-4000-8000-000000000021',
+                           '56000000-0000-0000-0000-0000000002ff') ->> 'prov') = '0'
+  and pg_temp.live_money('56000000-0000-4000-8000-000000000021') = 'shifts=2 cents=7000',
+  'dupes=' || coalesce(pg_temp.state('56000000-0000-4000-8000-000000000021') ->> 'conservation_duplicate_claim_count','NULL')
+    || ' count=' || pg_temp.ucount('56000000-0000-4000-8000-000000000021')
+    || ' decoy=' || pg_temp.shift_facts('56000000-0000-4000-8000-000000000021','56000000-0000-0000-0000-0000000002ff')::text
+    || ' ' || pg_temp.live_money('56000000-0000-4000-8000-000000000021'));
+
+-- conservation_failed_at is a HISTORY and is never cleared, so the flag the
+-- duplicate pass raised is still there after the repair. That is deliberate:
+-- Data health renders it.
+select pg_temp.expect('theConservationFlagSurvivesTheRepairBecauseItIsAHistory',
+  (pg_temp.state('56000000-0000-4000-8000-000000000021') ->> 'conservation_failed_at') is not null,
+  'flagged=' || coalesce(pg_temp.state('56000000-0000-4000-8000-000000000021') ->> 'conservation_failed_at','NULL'));
 
 -- a_wrong_money_split_is_still_recorded.
 --
@@ -1166,6 +1408,29 @@ select pg_temp.device_upsert('56000000-0000-4000-8000-000000000072',
      "client_updated_at":"2026-07-21T23:00:00Z"}]'::jsonb);
 select pg_temp.one_shot('56000000-0000-4000-8000-000000000072');
 
+-- AN ACCOUNT WITH LEGACY ROWS AND NO shift_migration_state ROW AT ALL. This is
+-- the population the kill switch used to be INVISIBLE to, and it is the
+-- majority population at the moment a rollback would actually be ordered: a row
+-- exists only once private.note_legacy_write has fired (a legacy write after S4
+-- deployed) or the one-shot has run, so an account whose 1.0 device has not
+-- written since deploy and whose client has not synced has none. Its rows are
+-- written with the fold suppressed for exactly that reason.
+alter table public.tip_entries disable trigger tip_entries_fold_insert;
+insert into public.tip_entries (id, user_id, work_date, amount_cents, kind, client_updated_at) values
+ ('56000000-0000-0000-0000-000000000751','56000000-0000-4000-8000-000000000073','2026-07-26',5000,'cash','2026-07-26T23:00:00Z'),
+ ('56000000-0000-0000-0000-000000000752','56000000-0000-4000-8000-000000000073','2026-07-27',5500,'cash','2026-07-27T23:00:00Z');
+alter table public.tip_entries enable trigger tip_entries_fold_insert;
+
+insert into calls (name, n, txt)
+select 'no_state_row_before', 0,
+  'rows=' || (select count(*) from public.shift_migration_state
+               where user_id = '56000000-0000-4000-8000-000000000073')
+  || ' stamp=' || coalesce(pg_temp.rollback_stamp('56000000-0000-4000-8000-000000000073')::text, 'NULL');
+
+select pg_temp.expect('theNoStateRowFixtureReallyHasNoStateRow',
+  pg_temp.called_txt('no_state_row_before') = 'rows=0 stamp=NULL',
+  coalesce(pg_temp.called_txt('no_state_row_before'),'null'));
+
 -- A natively authored shift: no legacy representation at all, so rollback HIDES
 -- it from a legacy reader rather than destroying it.
 insert into public.shifts (user_id, id, work_date, cash_tips_cents, source,
@@ -1222,6 +1487,23 @@ select pg_temp.expect('theCompensatingActionsReturnSetEqualsTheRequestedSet',
   pg_temp.called_txt('compensate') = 'true',
   'return set matched request set: ' || coalesce(pg_temp.called_txt('compensate'),'null'));
 
+-- THE MANDATORY PRE-ROLLBACK DUMP, taken here rather than described, because
+-- step 5 of the re-enable runbook CONSUMES it. `native_modified_at is not
+-- null`, never `converted_at < client_updated_at`: the deriver writes
+-- converted_at unconditionally, so that comparison silently omits exactly the
+-- shifts most likely to need recovery.
+create temporary table edit_dump as
+  select user_id, id, non_wage_earnings_cents, deleted_reason from public.shifts
+   where native_modified_at is not null;
+
+select pg_temp.expect('thePreRollbackEditDumpIsNotEmptySoTheRunbookStepIsNotVacuous',
+  (select count(*) > 0 from edit_dump
+    where user_id = '56000000-0000-4000-8000-000000000071'
+      and id = '56000000-0000-0000-0000-000000000710'),
+  'dump rows=' || (select count(*) from edit_dump)
+    || ' edited_artifact_in_dump=' || (select count(*) from edit_dump
+         where id = '56000000-0000-0000-0000-000000000710'));
+
 -- ROLLBACK.
 insert into calls (name, n, txt)
 select 'rollback', public.rollback_shift_migration(), '';
@@ -1248,6 +1530,53 @@ select pg_temp.expect('rollback_stamps_every_shift_migration_state_row',
   'unstamped=' || (select count(*) from public.shift_migration_state where rollback_at is null)
     || ' rb1=' || coalesce(pg_temp.rollback_stamp('56000000-0000-4000-8000-000000000071')::text,'null')
     || ' rb2=' || coalesce(pg_temp.rollback_stamp('56000000-0000-4000-8000-000000000072')::text,'null'));
+
+-- THE STRONGER FORM OF THE SAME CLAIM, and the one that failed. "Every row is
+-- stamped" was true and useless: the guarantee the client depends on is that
+-- every ACCOUNT reads a non-null stamp, and an account with no row read NULL
+-- straight through the rollback. MEASURED before the stamp became an INSERT
+-- over auth.users: rollback_shift_migration() returned 1 and this account's
+-- payday_shift_rollback_at() was NULL both before and after.
+select pg_temp.expect('rollbackStampsAnAccountThatHasNoStateRowYet',
+  pg_temp.rollback_stamp('56000000-0000-4000-8000-000000000073') is not null
+  and (select count(*) = 0 from auth.users u
+        where not exists (select 1 from public.shift_migration_state st
+                           where st.user_id = u.id and st.rollback_at is not null)),
+  'stamp=' || coalesce(pg_temp.rollback_stamp('56000000-0000-4000-8000-000000000073')::text,'NULL')
+    || ' unstamped_accounts=' || (select count(*) from auth.users u
+         where not exists (select 1 from public.shift_migration_state st
+                            where st.user_id = u.id and st.rollback_at is not null)));
+
+-- ...AND THE ONE-SHOT WILL NOT CONVERT IT. Being told is half of it; the other
+-- half is that the client calling the one-shot anyway -- which the shipped
+-- contract permits whenever the count is positive -- creates nothing. MEASURED
+-- before the guard: this account's next sync (count 2, one call to the
+-- one-shot) converted its whole history into two LIVE artifacts fleet-wide
+-- AFTER the kill switch, with remaining_group_count 0 and rollback_at still
+-- NULL, which is the state in which the client's own first-switch rule points
+-- shiftsAreAuthoritativeAt at the new leg DURING a global rollback.
+--
+-- ON READING THE REFUSAL, MEASURED RATHER THAN ASSUMED: `return
+-- null::public.shift_migration_state` from a composite-returning function
+-- called in FROM position does NOT give SQL NULL, it gives ONE ROW OF ALL
+-- NULLS, so to_jsonb of it is an object of nulls and not 'null'. That is the
+-- same shape the deleted-account no-op already returns, so the refusal is
+-- read the same way both are: user_id is null.
+insert into calls (name, n, txt)
+select 'no_state_row_sync', pg_temp.ucount('56000000-0000-4000-8000-000000000073'),
+  coalesce(pg_temp.one_shot('56000000-0000-4000-8000-000000000073') ->> 'user_id', 'NO USER_ID');
+
+select pg_temp.expect('anAccountWithNoStateRowIsNotConvertedByItsNextSyncDuringARollback',
+  pg_temp.called('no_state_row_sync') = 2
+  and pg_temp.called_txt('no_state_row_sync') = 'NO USER_ID'
+  and pg_temp.live_money('56000000-0000-4000-8000-000000000073') = 'shifts=0 cents=0'
+  and (select count(*) = 0 from public.shifts s
+        where s.user_id = '56000000-0000-4000-8000-000000000073'),
+  'count=' || coalesce(pg_temp.called('no_state_row_sync')::text,'null')
+    || ' one_shot_user_id=' || coalesce(pg_temp.called_txt('no_state_row_sync'),'MISSING')
+    || ' ' || pg_temp.live_money('56000000-0000-4000-8000-000000000073')
+    || ' rows_in_shifts=' || (select count(*) from public.shifts s
+         where s.user_id = '56000000-0000-4000-8000-000000000073'));
 
 select pg_temp.expect('rollback_empties_the_backlog',
   (select count(*) = 0 from private.shift_fold_backlog),
@@ -1320,30 +1649,68 @@ select pg_temp.expect('rollback_at_is_never_overwritten_by_a_second_rollback',
     || coalesce((select rollback_at::text from public.shift_migration_state
                   where user_id = '56000000-0000-4000-8000-000000000072'),'null') || ']');
 
--- A PLAIN ONE-SHOT RUN AFTER ROLLBACK DOES NOT RE-CONVERT THE ROLLED-BACK
--- ARTIFACTS, and that is correct, not a bug. MEASURED: rollback leaves
--- legacy_entry_ids and the watermark intact, so for an artifact's own rows
--- every arm of the unmigrated predicate is false -- they are live, named, and
--- at or below their watermark -- and the one-shot has genuinely nothing to
--- catch up on. Re-converting a rolled-back account is RE-DERIVING, not
--- catching up, and only the explicit operator artifact does it.
+-- A PLAIN ONE-SHOT RUN AFTER ROLLBACK CONVERTS NOTHING AT ALL, AND THIS
+-- ASSERTION IS THE INVERSE OF THE ONE IT REPLACES.
 --
--- It DOES convert the row that arrived while the triggers were off, because
--- that row is unmigrated by every reading. So one run, two different and both
--- correct outcomes for the two groups, which is the sharpest form this
--- assertion can take.
+-- Two separate reasons now stop it, and only one of them existed before.
+--
+--   * For the ROLLED-BACK ARTIFACT's own rows the predicate is simply false.
+--     MEASURED: rollback leaves legacy_entry_ids and the watermark intact, so
+--     the rows are live, named, and at or below their watermark, and the
+--     one-shot has genuinely nothing to catch up on. Re-converting a
+--     rolled-back account is RE-DERIVING, not catching up.
+--   * For the row that ARRIVED WHILE THE TRIGGERS WERE OFF the predicate is
+--     TRUE, and the earlier version of this test asserted that the one-shot
+--     converted it. IT DID, AND THAT WAS THE DEFECT. MEASURED: with
+--     rollback_at set, a 1.0 device wrote one new night ($33.00), the trigger
+--     correctly folded nothing, and the client's own documented loop -- count
+--     RPC positive, then one call to the one-shot -- produced a LIVE
+--     source='migration' artifact with rollback_at still set. That is "an
+--     account half rolled back with no record of which half", the exact harm
+--     rule 1 of the migration says the same-transaction trigger disable
+--     prevents, arriving through the second re-converter nobody had disabled.
+--     The one-shot now refuses a JWT-bearing caller whose rollback_at is set
+--     and returns a null row rather than raising.
+--
+-- So: nothing converts, and the returned row is null. The group written while
+-- the triggers were off is converted by the REPAIR step below, which is an
+-- operator action, and theWriteTakenWhileTheTriggersWereOffIsConvertedByTheRepair
+-- is where that is asserted.
 insert into calls (name, n, txt)
-select 'plain_after_rb', 0, pg_temp.one_shot('56000000-0000-4000-8000-000000000072')::text;
+select 'plain_after_rb', 0,
+  coalesce(pg_temp.one_shot('56000000-0000-4000-8000-000000000072') ->> 'user_id', 'NO USER_ID');
 
 select pg_temp.expect('a_plain_one_shot_run_after_rollback_does_not_re_convert_the_artifacts',
   (pg_temp.shift_facts('56000000-0000-4000-8000-000000000072',
                        '56000000-0000-0000-0000-000000000730') ->> 'is_deleted') = 'true'
   and (pg_temp.shift_facts('56000000-0000-4000-8000-000000000072',
                            '56000000-0000-0000-0000-000000000730') ->> 'deleted_reason') = 'converted'
-  and (pg_temp.shift_facts('56000000-0000-4000-8000-000000000072',
-                           '56000000-0000-0000-0000-000000000740') ->> 'cash_tips_cents') = '800',
+  and pg_temp.shift_facts('56000000-0000-4000-8000-000000000072',
+                          '56000000-0000-0000-0000-000000000740') = 'null'::jsonb,
   'rolled_back_group=' || pg_temp.shift_facts('56000000-0000-4000-8000-000000000072','56000000-0000-0000-0000-000000000730')::text
     || ' group_written_while_off=' || pg_temp.shift_facts('56000000-0000-4000-8000-000000000072','56000000-0000-0000-0000-000000000740')::text);
+
+-- The refusal is a NULL ROW, not a raise. Rule 2 of the migration is that
+-- nothing on the RPC path raises: a raise aborts the caller's transaction, and
+-- S4 already paid for that lesson.
+select pg_temp.expect('theRollbackGuardReturnsANullRowRatherThanRaising',
+  pg_temp.called_txt('plain_after_rb') = 'NO USER_ID'
+  and pg_temp.outcome_of(
+        'select pg_temp.one_shot(''56000000-0000-4000-8000-000000000072''::uuid)') = '00000',
+  'user_id=' || coalesce(pg_temp.called_txt('plain_after_rb'),'MISSING')
+    || ' sqlstate=' || pg_temp.outcome_of(
+         'select pg_temp.one_shot(''56000000-0000-4000-8000-000000000072''::uuid)'));
+
+-- And no live conversion artifact exists ANYWHERE in the fleet after the kill
+-- switch, which is the fleet-wide form of the guarantee. MEASURED before the
+-- two fixes: three.
+select pg_temp.expect('noLiveConversionArtifactExistsFleetWideAfterTheKillSwitch',
+  (select count(*) = 0 from public.shifts
+    where source = 'migration' and array_length(legacy_entry_ids, 1) > 0
+      and deleted_at is null),
+  'live_artifacts=' || (select count(*) from public.shifts
+    where source = 'migration' and array_length(legacy_entry_ids, 1) > 0
+      and deleted_at is null));
 
 -- THE FORWARD HALF: re-enable the triggers, then repair per account. Convergence
 -- is asserted against the digest taken before the rollback.
@@ -1411,6 +1778,87 @@ select pg_temp.expect('repair_does_not_clear_rollback_at_so_the_operator_step_st
   pg_temp.rollback_stamp('56000000-0000-4000-8000-000000000072') is not null,
   'rollback_at=' || coalesce(pg_temp.rollback_stamp('56000000-0000-4000-8000-000000000072')::text,'null'));
 
+-- RUNBOOK STEP 5: reopen the edited nights from the pre-rollback dump. This is
+-- the statement the runbook used not to have, and its absence LOST MONEY ON
+-- THE FORWARD PATH, not merely in the old build's display.
+--
+-- MEASURED on the full round trip with the five-statement runbook: an account
+-- with one legacy night ($60) and one the user had natively corrected to $90
+-- came back as the $60 night only. New-build visible money went 15000 to 9300
+-- and the nights went '2026-06-01=6000 2026-06-02=9000' to
+-- '2026-06-01=6000 2026-06-10=3300'. The $90 night was gone from the app on
+-- BOTH legs: the legacy leg shows the pre-edit $70 while rolled back, and after
+-- the last statement the client is back on public.shifts where the row is a
+-- tombstone. The mechanism is honest and documented -- the deriver's un-delete
+-- arm reopens a 'converted' tombstone only on a shift with native_modified_at
+-- null, and an edited shift is closed forever -- but the runbook took the dump
+-- and then never used it.
+--
+-- deleted_reason = 'converted' is the guard that matters: it is what keeps this
+-- statement from resurrecting a night the USER deleted (deleted_reason 'user'),
+-- which is in the same dump because a post-conversion deletion also stamps
+-- native_modified_at.
+update public.shifts s
+   set deleted_at = null, deleted_reason = null
+ where (s.user_id, s.id) in (select d.user_id, d.id from edit_dump d)
+   and s.deleted_reason = 'converted';
+
+select pg_temp.expect('theSixthRunbookStatementRestoresTheEditedNightsMoneyToTheNewBuild',
+  (pg_temp.shift_facts('56000000-0000-4000-8000-000000000071',
+                       '56000000-0000-0000-0000-000000000710') ->> 'is_deleted') = 'false'
+  and (pg_temp.shift_facts('56000000-0000-4000-8000-000000000071',
+                           '56000000-0000-0000-0000-000000000710') ->> 'cash_tips_cents') = '6000',
+  pg_temp.shift_facts('56000000-0000-4000-8000-000000000071','56000000-0000-0000-0000-000000000710')::text);
+
+-- ...and it did NOT resurrect the night the user deleted, which is the whole
+-- reason the statement filters on deleted_reason rather than on the dump alone.
+select pg_temp.expect('theReopenStepLeavesAUserDeletedNightDeleted',
+  (pg_temp.shift_facts('56000000-0000-4000-8000-000000000071',
+                       '56000000-0000-0000-0000-000000000720') ->> 'is_deleted') = 'true'
+  and (pg_temp.shift_facts('56000000-0000-4000-8000-000000000071',
+                           '56000000-0000-0000-0000-000000000720') ->> 'deleted_reason') = 'user',
+  pg_temp.shift_facts('56000000-0000-4000-8000-000000000071','56000000-0000-0000-0000-000000000720')::text);
+
+-- RUNBOOK STEP 6, LAST: let the clients back onto the new leg. Ordered after
+-- step 5 so no client ever reads a history with the edited nights missing.
+update public.shift_migration_state set rollback_at = null;
+
+select pg_temp.expect('afterTheFullSixStatementRunbookTheClientIsBackAndNothingIsMissing',
+  pg_temp.rollback_stamp('56000000-0000-4000-8000-000000000071') is null
+  and pg_temp.rollback_stamp('56000000-0000-4000-8000-000000000072') is null
+  and pg_temp.rollback_stamp('56000000-0000-4000-8000-000000000073') is null
+  and (select count(*) = 0 from edit_dump d
+        join public.shifts s on s.user_id = d.user_id and s.id = d.id
+       where s.deleted_reason = 'converted')
+  and (select count(*) = 0 from edit_dump d
+        join public.shifts s on s.user_id = d.user_id and s.id = d.id
+       where d.deleted_reason is distinct from 'user'
+         and (s.deleted_at is not null
+              or s.non_wage_earnings_cents <> d.non_wage_earnings_cents)),
+  'stamps=' || coalesce(pg_temp.rollback_stamp('56000000-0000-4000-8000-000000000071')::text,'null')
+    || '/' || coalesce(pg_temp.rollback_stamp('56000000-0000-4000-8000-000000000072')::text,'null')
+    || '/' || coalesce(pg_temp.rollback_stamp('56000000-0000-4000-8000-000000000073')::text,'null')
+    || ' still_converted_from_dump=' || (select count(*) from edit_dump d
+         join public.shifts s on s.user_id = d.user_id and s.id = d.id
+        where s.deleted_reason = 'converted')
+    || ' dumped_not_user_deleted=' || (select count(*) from edit_dump
+         where deleted_reason is distinct from 'user')
+    || ' of_those_still_hidden_or_changed=' || (select count(*) from edit_dump d
+         join public.shifts s on s.user_id = d.user_id and s.id = d.id
+        where d.deleted_reason is distinct from 'user'
+          and (s.deleted_at is not null
+               or s.non_wage_earnings_cents <> d.non_wage_earnings_cents)));
+
+-- And the one-shot works again for a JWT-bearing caller, so the guard is a
+-- window and not a one-way door.
+insert into calls (name, n, txt)
+select 'after_clear', 0, coalesce(pg_temp.one_shot('56000000-0000-4000-8000-000000000072')::text, 'null');
+
+select pg_temp.expect('theRollbackGuardLiftsWhenTheOperatorClearsRollbackAt',
+  pg_temp.called_txt('after_clear') <> 'null'
+  and (pg_temp.called_txt('after_clear')::jsonb ->> 'rollback_at') is null,
+  'returned=' || left(coalesce(pg_temp.called_txt('after_clear'),'MISSING'), 60));
+
 -- =============================================================================
 -- Report
 -- =============================================================================
@@ -1418,8 +1866,8 @@ select pg_temp.expect('repair_does_not_clear_rollback_at_so_the_operator_step_st
 -- An assertion whose driving SELECT returns no row never calls pg_temp.expect
 -- and would vanish from the report instead of failing, so the count is pinned.
 select pg_temp.expect('theSuiteRanEveryAssertion',
-  (select count(*) from results) = 65,
-  'ran ' || (select count(*) from results)::text || ' of 65');
+  (select count(*) from results) = 83,
+  'ran ' || (select count(*) from results)::text || ' of 83');
 
 select seq, case when ok then 'PASS' else 'FAIL' end as result, name, detail
 from results order by seq;
@@ -1448,9 +1896,12 @@ delete from auth.users where id in (
   '56000000-0000-4000-8000-000000000011','56000000-0000-4000-8000-000000000012',
   '56000000-0000-4000-8000-000000000013','56000000-0000-4000-8000-000000000014',
   '56000000-0000-4000-8000-000000000015','56000000-0000-4000-8000-000000000016',
+  '56000000-0000-4000-8000-000000000017','56000000-0000-4000-8000-000000000018',
+  '56000000-0000-4000-8000-000000000019',
   '56000000-0000-4000-8000-000000000021','56000000-0000-4000-8000-000000000022',
   '56000000-0000-4000-8000-000000000031','56000000-0000-4000-8000-000000000032',
   '56000000-0000-4000-8000-000000000033','56000000-0000-4000-8000-000000000041',
   '56000000-0000-4000-8000-000000000051','56000000-0000-4000-8000-000000000052',
   '56000000-0000-4000-8000-000000000061','56000000-0000-4000-8000-000000000071',
-  '56000000-0000-4000-8000-000000000072','56000000-0000-4000-8000-000000000081');
+  '56000000-0000-4000-8000-000000000072','56000000-0000-4000-8000-000000000073',
+  '56000000-0000-4000-8000-000000000081');
