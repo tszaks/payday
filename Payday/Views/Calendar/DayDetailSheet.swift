@@ -21,7 +21,7 @@ private struct DayDetailFacts: SnapshotFacts {
     let stamp: SnapshotStamp?
     let totalCents: Int
 
-    init(allEntries: [TipEntry], date: Date, wageCentsPerHour: Int?, payrollTimeZone: TimeZone, workweekStartWeekday: Int) {
+    init(allEntries: [TipEntry], date: Date, policies: CompensationPolicies, payrollTimeZone: TimeZone) {
         var calendar = Calendar.current
         // The same civil day the tile that opened this sheet drew.
         calendar.timeZone = payrollTimeZone
@@ -34,11 +34,15 @@ private struct DayDetailFacts: SnapshotFacts {
             period: \.shiftPeriod,
             calendar: calendar
         )
+        // The USER'S rate and workweek history, effective dates intact.
+        // This used to take `policyStore.latestCalendarPolicy`'s weekday,
+        // which is `calendars.last` and therefore a QUEUED FUTURE policy —
+        // a workweek change scheduled for tomorrow re-bucketed this sheet's
+        // history today while Dashboard and Period detail kept the old one.
         let resolvedSnapshot = LegacySnapshotBridge.snapshot(
             shifts: resolvedShifts,
-            rateCents: wageCentsPerHour,
+            policies: policies,
             payrollTimeZone: payrollTimeZone,
-            workweekStartWeekday: workweekStartWeekday,
             asOf: date
         )
         shifts = resolvedShifts
@@ -69,8 +73,6 @@ private struct DayDetailFacts: SnapshotFacts {
 struct DayDetailSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
-    @Environment(UserPreferencesStore.self) private var preferencesStore
-    @Environment(PayScheduleStore.self) private var scheduleStore
     @Environment(PolicyStore.self) private var policyStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Query private var allEntries: [TipEntry]
@@ -91,11 +93,8 @@ struct DayDetailSheet: View {
         let facts = DayDetailFacts(
             allEntries: allEntries,
             date: date,
-            wageCentsPerHour: preferencesStore.baseHourlyWageCents,
-            payrollTimeZone: policyStore.payrollTimeZone,
-            workweekStartWeekday: policyStore.latestCalendarPolicy?.workweekStartWeekday
-                ?? scheduleStore.schedule?.resolvedFirstWeekday
-                ?? Calendar.current.firstWeekday
+            policies: policyStore.policies,
+            payrollTimeZone: policyStore.payrollTimeZone
         )
         NavigationStack {
             List {

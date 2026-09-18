@@ -78,7 +78,17 @@ final class PolicyStore {
         policies.latestRate?.hourlyRateCents
     }
 
-    /// The calendar policy a new one has to start on a boundary of.
+    /// The calendar policy a new one has to start on a boundary of, and the
+    /// one whose frozen zone is "the payroll time zone".
+    ///
+    /// **Never feed this to a valuation.** It is `calendars.last`, so once
+    /// the user queues a workweek change it is a policy that is not in effect
+    /// yet — reading its weekday re-buckets all of history TODAY. Wave 0's
+    /// first cut did exactly that on two screens. The valuation lookups are
+    /// `calendarPolicyInEffect(today:)` and `policies.calendar(on:)`, and the
+    /// engine does its own effective dating when handed the whole
+    /// `CompensationPolicies` value, which is what every money path should
+    /// pass.
     var latestCalendarPolicy: PayrollCalendarPolicy? {
         policies.latestCalendar
     }

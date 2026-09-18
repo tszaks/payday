@@ -16,6 +16,35 @@ private func at(_ year: Int, _ month: Int, _ day: Int, hour: Int = 17) -> Date {
     payrollCalendar().date(from: DateComponents(year: year, month: month, day: day, hour: hour))!
 }
 
+/// The compensation policies a test STATES as its own history.
+///
+/// `LegacySnapshotBridge` values with `PolicyStore.policies` — the user's
+/// real, effective-dated rate and workweek history — rather than a scalar
+/// rate it re-stamps as `.distantPast`. So a test has to say what that
+/// history is, and this is the plain one: one confirmed rate that has always
+/// been the rate, one Monday-start workweek in the payroll zone. Tests about
+/// rate HISTORY build their own (see `LegacySnapshotBridgeTests`).
+private func testPolicies(rateCents: Int? = 283, workweekStartWeekday: Int = 2) -> CompensationPolicies {
+    let calendar = PayrollCalendarPolicy(
+        id: PolicyMigration.deterministicID("test/calendar/\(workweekStartWeekday)"),
+        effectiveFrom: .distantPast,
+        workweekStartWeekday: workweekStartWeekday,
+        payrollTimeZone: PaydayTestZone.payroll
+    )
+    guard let rateCents, rateCents > 0 else {
+        return CompensationPolicies(rates: [], calendars: [calendar])
+    }
+    return CompensationPolicies(
+        rates: [PayRatePolicy(
+            id: PolicyMigration.deterministicID("test/rate/\(rateCents)"),
+            effectiveFrom: .distantPast,
+            hourlyRateCents: rateCents,
+            provenance: .confirmed
+        )],
+        calendars: [calendar]
+    )
+}
+
 private func shiftID(_ index: Int) -> UUID {
     UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", index))!
 }
@@ -48,9 +77,8 @@ private func w1Entries() -> [TipEntry] {
 private func w1Snapshot(rateCents: Int? = 283) -> EarningsSnapshot {
     let snapshot = LegacySnapshotBridge.snapshot(
         shifts: groups(w1Entries()),
-        rateCents: rateCents,
+        policies: testPolicies(rateCents: rateCents),
         payrollTimeZone: PaydayTestZone.payroll,
-        workweekStartWeekday: 2,
         asOf: at(2026, 9, 30)
     )
     return try! #require(snapshot)
@@ -129,9 +157,8 @@ struct ShiftDayRowSnapshotTests {
         ]
         let snapshot = try #require(LegacySnapshotBridge.snapshot(
             shifts: groups(entries),
-            rateCents: nil,
+            policies: testPolicies(rateCents: nil),
             payrollTimeZone: PaydayTestZone.payroll,
-            workweekStartWeekday: 2,
             asOf: at(2026, 9, 30)
         ))
         let facts = rowFacts(snapshot, shiftID(7))
@@ -156,9 +183,8 @@ struct ShiftDayRowSnapshotTests {
         ]
         let snapshot = try #require(LegacySnapshotBridge.snapshot(
             shifts: groups(entries),
-            rateCents: 283,
+            policies: testPolicies(rateCents: 283),
             payrollTimeZone: PaydayTestZone.payroll,
-            workweekStartWeekday: 2,
             asOf: at(2026, 9, 30)
         ))
         let facts = rowFacts(snapshot, shiftID(3))
@@ -202,9 +228,8 @@ struct HeroBreakdownDrawerSnapshotTests {
         ]
         return try #require(LegacySnapshotBridge.snapshot(
             shifts: groups(entries),
-            rateCents: 283,
+            policies: testPolicies(rateCents: 283),
             payrollTimeZone: PaydayTestZone.payroll,
-            workweekStartWeekday: 2,
             asOf: at(2026, 9, 30)
         ))
     }
@@ -268,9 +293,8 @@ struct HeroBreakdownDrawerSnapshotTests {
         ]
         let snapshot = try #require(LegacySnapshotBridge.snapshot(
             shifts: groups(entries),
-            rateCents: 283,
+            policies: testPolicies(rateCents: 283),
             payrollTimeZone: PaydayTestZone.payroll,
-            workweekStartWeekday: 2,
             asOf: at(2026, 9, 30)
         ))
         let result = snapshot.day(CivilDay(day, in: PaydayTestZone.payroll))
@@ -310,9 +334,8 @@ struct HeroBreakdownDrawerSnapshotTests {
         }
         let snapshot = try #require(LegacySnapshotBridge.snapshot(
             shifts: groups(entries),
-            rateCents: 283,
+            policies: testPolicies(rateCents: 283),
             payrollTimeZone: PaydayTestZone.payroll,
-            workweekStartWeekday: 2,
             asOf: at(2026, 10, 31)
         ))
         let week = snapshot.range(DayRange(
@@ -342,9 +365,8 @@ struct NightlyEarningsChartSnapshotTests {
         }
         return try #require(LegacySnapshotBridge.snapshot(
             shifts: groups(entries),
-            rateCents: 283,
+            policies: testPolicies(rateCents: 283),
             payrollTimeZone: PaydayTestZone.payroll,
-            workweekStartWeekday: 2,
             asOf: at(2026, 10, 31)
         ))
     }
@@ -444,9 +466,8 @@ struct NightlyEarningsChartSnapshotTests {
         ]
         let snapshot = try #require(LegacySnapshotBridge.snapshot(
             shifts: groups(entries),
-            rateCents: 283,
+            policies: testPolicies(rateCents: 283),
             payrollTimeZone: PaydayTestZone.payroll,
-            workweekStartWeekday: 2,
             asOf: at(2026, 9, 30)
         ))
         let facts = EarningsChartFacts(
@@ -528,9 +549,8 @@ struct DuplicateShiftValuationTests {
 
         let snapshot = try #require(LegacySnapshotBridge.snapshot(
             shifts: groups(source + copy),
-            rateCents: 283,
+            policies: testPolicies(rateCents: 283),
             payrollTimeZone: PaydayTestZone.payroll,
-            workweekStartWeekday: 2,
             asOf: at(2026, 9, 30)
         ))
         let original = try #require(snapshot.valuation(shiftID(1)))
@@ -582,9 +602,8 @@ struct DuplicateShiftValuationTests {
         ]
         let snapshot = try #require(LegacySnapshotBridge.snapshot(
             shifts: groups(source + copy),
-            rateCents: 283,
+            policies: testPolicies(rateCents: 283),
             payrollTimeZone: PaydayTestZone.payroll,
-            workweekStartWeekday: 2,
             asOf: at(2026, 9, 30)
         ))
         let original = try #require(snapshot.valuation(shiftID(1)))
@@ -605,9 +624,8 @@ struct UndoDeleteInverseTests {
     private func valuation(of entries: [TipEntry], id: UUID) throws -> ShiftValuation {
         let snapshot = try #require(LegacySnapshotBridge.snapshot(
             shifts: groups(entries),
-            rateCents: 283,
+            policies: testPolicies(rateCents: 283),
             payrollTimeZone: PaydayTestZone.payroll,
-            workweekStartWeekday: 2,
             asOf: at(2026, 9, 30)
         ))
         return try #require(snapshot.valuation(id))
@@ -670,9 +688,8 @@ struct UndoDeleteInverseTests {
         let surviving = entries.filter { $0.shiftID != shiftID(1) }
         let snapshot = try #require(LegacySnapshotBridge.snapshot(
             shifts: groups(surviving),
-            rateCents: 283,
+            policies: testPolicies(rateCents: 283),
             payrollTimeZone: PaydayTestZone.payroll,
-            workweekStartWeekday: 2,
             asOf: at(2026, 9, 30)
         ))
         #expect(snapshot.valuation(shiftID(1)) == nil)
@@ -740,9 +757,8 @@ struct LegacySnapshotBridgeTests {
         #expect(group.items.first?.shiftID == nil)
         let snapshot = try #require(LegacySnapshotBridge.snapshot(
             shifts: shifts,
-            rateCents: 283,
+            policies: testPolicies(rateCents: 283),
             payrollTimeZone: PaydayTestZone.payroll,
-            workweekStartWeekday: 2,
             asOf: at(2026, 9, 30)
         ))
         #expect(snapshot.valuation(group.shiftID) != nil)
@@ -758,13 +774,111 @@ struct LegacySnapshotBridgeTests {
         #expect(EarningsFigure.earnedIncome(day).label == "Tips")
     }
 
+    /// The defect the `policies:` parameter exists to close.
+    ///
+    /// The first cut of the bridge took one scalar `rateCents` and
+    /// `LegacyLedgerBridge.policies` turned it into a single `PayRatePolicy`
+    /// at `effectiveFrom: .distantPast`, so every shift ever worked was
+    /// repriced at today's rate on every migrated surface. `PolicyStore`
+    /// holds real dated history — `PayrollSettingsSection` ships a "Rate
+    /// changed on…" control that writes it — and now the bridge reads it.
+    @Test("a shift worked before a raise is priced at the OLD rate, not today's")
+    func rateHistoryIsHonoured() throws {
+        let march = at(2026, 3, 2)
+        let september = at(2026, 9, 28)
+        let entries = [
+            TipEntry(date: march, amountCents: 0, kind: .credit, hoursWorked: 8, shiftID: shiftID(1)),
+            TipEntry(date: september, amountCents: 0, kind: .credit, hoursWorked: 8, shiftID: shiftID(2))
+        ]
+        let raiseDay = CivilDay(year: 2026, month: 6, day: 1)
+        let policies = CompensationPolicies(
+            rates: [
+                PayRatePolicy(
+                    id: PolicyMigration.deterministicID("test/rate/1000"),
+                    effectiveFrom: .distantPast,
+                    hourlyRateCents: 1000,
+                    provenance: .confirmed
+                ),
+                PayRatePolicy(
+                    id: PolicyMigration.deterministicID("test/rate/2000"),
+                    effectiveFrom: raiseDay,
+                    hourlyRateCents: 2000,
+                    provenance: .confirmed
+                )
+            ],
+            calendars: [PayrollCalendarPolicy(
+                id: PolicyMigration.deterministicID("test/calendar/2"),
+                effectiveFrom: .distantPast,
+                workweekStartWeekday: 2,
+                payrollTimeZone: PaydayTestZone.payroll
+            )]
+        )
+        let snapshot = try #require(LegacySnapshotBridge.snapshot(
+            shifts: groups(entries),
+            policies: policies,
+            payrollTimeZone: PaydayTestZone.payroll,
+            asOf: at(2026, 9, 30)
+        ))
+
+        // 8h at $10/h, because March predates the raise.
+        #expect(snapshot.valuation(shiftID(1))?.components.wagesCents == 8_000)
+        // 8h at $20/h.
+        #expect(snapshot.valuation(shiftID(2))?.components.wagesCents == 16_000)
+
+        // And the range total, which is what a chart and a hero read. The
+        // superseded scalar path answered 32000 here: both shifts at the
+        // latest rate.
+        let year = snapshot.range(DayRange(
+            start: CivilDay(year: 2026, month: 1, day: 1),
+            end: CivilDay(year: 2026, month: 12, day: 31)
+        ))
+        #expect(year.knownComponents.wagesCents == 24_000)
+        #expect(year.knownComponents.wagesCents != 32_000, "the superseded distantPast-scalar answer")
+    }
+
+    /// `.estimated` was unreachable on every wave-0 surface while the bridge
+    /// synthesized a `.confirmed` policy, which made
+    /// `CompletenessCopy.caption(.estimated)` dead code in production even
+    /// though `PolicyStore.runMigrationsIfNeeded` writes exactly this
+    /// provenance for every upgrading Payday 1.0 user.
+    @Test("a legacy-assumed rate reaches the screen as .estimated, with its caption")
+    func assumedRateIsEstimatedNotComplete() throws {
+        let policies = CompensationPolicies(
+            rates: [PayRatePolicy(
+                id: PolicyMigration.deterministicID("test/rate/assumed"),
+                effectiveFrom: .distantPast,
+                hourlyRateCents: 283,
+                provenance: .assumedFromLegacySetting
+            )],
+            calendars: [PayrollCalendarPolicy(
+                id: PolicyMigration.deterministicID("test/calendar/2"),
+                effectiveFrom: .distantPast,
+                workweekStartWeekday: 2,
+                payrollTimeZone: PaydayTestZone.payroll
+            )]
+        )
+        let snapshot = try #require(LegacySnapshotBridge.snapshot(
+            shifts: groups(w1Entries()),
+            policies: policies,
+            payrollTimeZone: PaydayTestZone.payroll,
+            asOf: at(2026, 9, 30)
+        ))
+        let day = snapshot.day(CivilDay(at(2026, 9, 28), in: PaydayTestZone.payroll))
+        #expect(day.completeness.state == .estimated)
+        #expect(CompletenessCopy.caption(day.completeness.state) == "Wages estimated from your current rate")
+
+        // The same shifts under a CONFIRMED rate are complete, so the state
+        // is tracking the provenance and not something else about the day.
+        let confirmed = w1Snapshot().day(CivilDay(at(2026, 9, 28), in: PaydayTestZone.payroll))
+        #expect(confirmed.completeness.state == .complete)
+    }
+
     @Test("an empty shift list is a snapshot with no shifts, not a nil snapshot")
     func emptyIsStillASnapshot() throws {
         let snapshot = try #require(LegacySnapshotBridge.snapshot(
             shifts: [],
-            rateCents: 283,
+            policies: testPolicies(rateCents: 283),
             payrollTimeZone: PaydayTestZone.payroll,
-            workweekStartWeekday: 2,
             asOf: at(2026, 9, 30)
         ))
         #expect(snapshot.shifts.isEmpty)
