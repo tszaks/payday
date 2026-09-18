@@ -84,7 +84,12 @@ final class PolicyStore {
         guard updated != policies else { return }
         policies = updated
         persist()
-        PaydaySettingsSyncClock.touch()
+        // Touched in THIS store's suite, not implicitly in the App Group.
+        // In the app they are the same suite, but a store pointed at another
+        // one would otherwise keep its policies in one place and its
+        // conflict clock in another, and the clock is what decides whether
+        // this device's rate history beats the server's.
+        PaydaySettingsSyncClock.touch(defaults: defaults)
         #if !WIDGET_EXTENSION
         PaydayWidgetRefresh.request()
         #endif
