@@ -146,6 +146,16 @@ targets:
       # whole class of bug this PR exists to remove.
       - path: Payday/Models/LegacyShiftRow.swift
       - path: Payday/Models/ShiftProjection.swift
+      # The widget must consult the SAME shiftsAreAuthoritative the app does,
+      # or the Lock Screen renders pre-conversion numbers while the app shows
+      # post-conversion ones. design-lint pins that accessor to one
+      # definition, so the honest way to reach it here is to compile the file
+      # rather than grow a second copy on a standalone AppGroup key --
+      # AppGroup.swift IS already in this target, so such a copy would compile
+      # and no test would cover the divergence.
+      - path: Payday/Sync/PaydaySyncState.swift
+      # PaydaySyncState parses checkpoint timestamps with PaydayRemoteDate.
+      - path: Payday/Sync/PaydayRemoteDate.swift
       - path: Payday/Models/PayScheduleStore.swift
       # The widget values shifts too, so it reads the same compensation
       # policies — and therefore the same frozen payroll time zone — the app
