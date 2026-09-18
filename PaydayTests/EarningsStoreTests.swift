@@ -616,7 +616,7 @@ struct ModelContextEarningsInputSourceTests {
     }
 
     @Test("a closed store is a refusal, not an empty snapshot")
-    func closedStoreRefuses() throws {
+    func closedStoreRefuses() async throws {
         let container = try container()
         let source = ModelContextEarningsInputSource(
             context: ModelContext(container),
@@ -624,8 +624,17 @@ struct ModelContextEarningsInputSourceTests {
             schedule: { nil },
             storeOpened: false
         )
-        #expect(throws: ModelContextEarningsInputSource.StoreUnavailable.self) {
+        #expect(throws: EarningsUnavailable.storeUnavailable) {
             try source.fetchInputs()
+        }
+
+        // And the store publishes THAT reason, not a generic fetch failure,
+        // so the message a screen shows matches what actually happened.
+        let store = EarningsStore(source: source, debounceNanoseconds: 0, observesTriggers: false)
+        await store.rebuildNow()
+        #expect(store.state == .unavailable(.storeUnavailable, last: nil))
+        if case .unavailable(let reason, _) = store.state {
+            #expect(reason.message == "Payday couldn't open your shifts.")
         }
     }
 

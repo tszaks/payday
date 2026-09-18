@@ -47,9 +47,22 @@ struct EarningsFetch: Sendable {
 
 /// Where the store reads its inputs. A protocol so the tests can fail a
 /// fetch, stall a fetch, or hand over fixtures without a store file.
+///
+/// A source that already knows WHICH kind of unavailability it hit throws
+/// `EarningsUnavailable` and the store publishes it verbatim; anything else
+/// becomes `.fetchFailed`. That is what keeps `.storeUnavailable` from
+/// being a case nothing can produce.
 @MainActor
 protocol EarningsInputSource: AnyObject {
     func fetchInputs() throws -> EarningsFetch
+}
+
+extension EarningsUnavailable {
+    /// This error as a published reason: a source's own
+    /// `EarningsUnavailable` verbatim, anything else as `.fetchFailed`.
+    static func reason(for error: Error) -> EarningsUnavailable {
+        (error as? EarningsUnavailable) ?? .fetchFailed(detail: "\(error)")
+    }
 }
 
 /// Owns the current `EarningsSnapshot` for this process and rebuilds it when
@@ -260,7 +273,7 @@ final class EarningsStore {
         do {
             fetch = try source.fetchInputs()
         } catch {
-            publish(.unavailable(.fetchFailed(detail: "\(error)"), last: snapshot), generation: g)
+            publish(.unavailable(.reason(for: error), last: snapshot), generation: g)
             return
         }
 
@@ -359,7 +372,7 @@ final class EarningsStore {
         do {
             fetch = try source.fetchInputs()
         } catch {
-            return .failure(.fetchFailed(detail: "\(error)"))
+            return .failure(.reason(for: error))
         }
         if shiftsAreAuthoritative, fetch.inputs.shifts.isEmpty, fetch.legacyTipEntryCount > 0 {
             return .failure(.shiftCacheWiped)
@@ -441,12 +454,11 @@ final class ModelContextEarningsInputSource: EarningsInputSource {
         self.storeOpened = storeOpened
     }
 
-    struct StoreUnavailable: Error, CustomStringConvertible {
-        var description: String { "The shared shift store is not open in this process." }
-    }
-
     func fetchInputs() throws -> EarningsFetch {
-        guard storeOpened else { throw StoreUnavailable() }
+        // The shared store fell back to memory, so this process cannot read
+        // shifts at all. Named rather than generic, because the app shows
+        // its own recovery screen for it.
+        guard storeOpened else { throw EarningsUnavailable.storeUnavailable }
 
         let policies = policies()
         // The FROZEN payroll zone. `TimeZone.current` appears nowhere in
