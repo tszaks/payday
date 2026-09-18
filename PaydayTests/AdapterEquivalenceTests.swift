@@ -184,13 +184,26 @@ struct AdapterEquivalenceTests {
     /// yields a different digest through the two paths. That matters for
     /// snapshot-upload acceptance and for the store's skip-if-unchanged check.
     ///
-    /// And the bridge's own comment ("nil rather than 0 when nothing was
-    /// tipped out ... 'not entered' and 'entered as zero' are different facts
-    /// that only nil keeps apart") does not describe what it achieves. On the
-    /// legacy representation that distinction was ALREADY lost: an explicit
-    /// zero and an absent value both sum to a breakdown of 0, so the bridge
-    /// maps both to nil. The adapter, reading the optional off the record, is
-    /// the strictly more faithful of the two.
+    /// The divergence is INTRINSIC to the two representations, not a bug in
+    /// either side, and `theLegacyRepresentationCannotTellZeroFromUnentered`
+    /// below proves it.
+    ///
+    /// `TipBreakdown.tipOutCents` is non-optional and accumulates
+    /// `details.tipOutCents ?? 0`, so the nil-versus-zero distinction is
+    /// destroyed by the breakdown TYPE before the bridge ever sees it. Given
+    /// a breakdown of 0 the bridge cannot know which case it had, and `nil`
+    /// -- "unknown" -- is the honest answer. Passing `0` through instead would
+    /// assert "entered as zero" on data that cannot support the claim.
+    ///
+    /// So the adapter is more faithful only because its INPUT carries more:
+    /// `ShiftRecord.tipOutCents` is an `Int?` that survives the write. Each
+    /// side is correct for the input it has.
+    ///
+    /// Consequence for the bridge-to-store swap: a shift with an explicit
+    /// zero tip-out legitimately digests differently before and after
+    /// conversion, because the stored data genuinely gained information. So
+    /// nothing may DEPEND on digest equality across the flip -- that is the
+    /// thing to check, rather than "fixing" either adapter.
     @Test("an explicit zero tip-out is 0 via the adapter and nil via the bridge")
     func explicitZeroTipOutDivergesAndIsMoneyNeutral() throws {
         let record = ShiftRecord(
@@ -217,6 +230,60 @@ struct AdapterEquivalenceTests {
         #expect(viaAdapter.voluntaryCreditCents == viaBridge.voluntaryCreditCents)
         #expect(viaAdapter.gratuityFeesCents == viaBridge.gratuityFeesCents)
         #expect(viaAdapter.minutesWorked == viaBridge.minutesWorked)
+    }
+
+    /// Why the divergence above is intrinsic rather than a defect.
+    ///
+    /// Two shifts, identical except that one had NO tip-out entered and the
+    /// other had an explicit zero. Through the adapter they stay distinct.
+    /// Through the bridge they become the same `ShiftInput`, because
+    /// `TipBreakdown` accumulates `tipOutCents ?? 0` into a non-optional Int
+    /// and the difference is gone before the bridge runs.
+    ///
+    /// This is the test that stopped me "fixing" the bridge to pass `0`
+    /// through: that change would have made it claim a fact its input does not
+    /// contain.
+    @Test("the legacy representation cannot tell an explicit zero from unentered")
+    func theLegacyRepresentationCannotTellZeroFromUnentered() throws {
+        let cals = Self.policies().calendars
+        let unentered = ShiftRecord(
+            workDate: Self.day(2), cashTipsCents: 5_600, creditTipsCents: 9_900,
+            tipOutCents: nil, hoursWorked: 5.5, recordedAt: Self.day(2)
+        )
+        let explicitZero = ShiftRecord(
+            workDate: Self.day(2), cashTipsCents: 5_600, creditTipsCents: 9_900,
+            tipOutCents: 0, hoursWorked: 5.5, recordedAt: Self.day(2)
+        )
+
+        // The adapter keeps them apart.
+        let aUnentered = try #require(ShiftInputAdapter.adapt([unentered], calendars: cals).inputs.first)
+        let aZero = try #require(ShiftInputAdapter.adapt([explicitZero], calendars: cals).inputs.first)
+        #expect(aUnentered.tipOutCents == nil)
+        #expect(aZero.tipOutCents == 0)
+        #expect(aUnentered.tipOutCents != aZero.tipOutCents)
+
+        // The bridge cannot, and that is the representation's limit, not the
+        // bridge's mistake.
+        let bUneneteredRaw = LegacySnapshotBridge.shiftInput(
+            for: (day: unentered.workDate, shiftID: unentered.id,
+                  items: ShiftProjection.rows(for: unentered)),
+            payrollTimeZone: Self.zone
+        )
+        let bZeroRaw = LegacySnapshotBridge.shiftInput(
+            for: (day: explicitZero.workDate, shiftID: explicitZero.id,
+                  items: ShiftProjection.rows(for: explicitZero)),
+            payrollTimeZone: Self.zone
+        )
+        let bUnentered = try #require(bUneneteredRaw)
+        let bZero = try #require(bZeroRaw)
+        #expect(bUnentered.tipOutCents == nil)
+        #expect(bZero.tipOutCents == nil)
+        #expect(bUnentered.tipOutCents == bZero.tipOutCents)
+
+        // Money is the same either way, which is why this is safe rather than
+        // merely tolerable.
+        #expect(aUnentered.voluntaryCashCents == bUnentered.voluntaryCashCents)
+        #expect(aZero.voluntaryCashCents == bZero.voluntaryCashCents)
     }
 
     /// And the whole snapshot, to the cent and the minute, because per-shift
