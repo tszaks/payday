@@ -102,6 +102,28 @@ public struct ShiftValuation: Hashable, Codable, Sendable, Identifiable {
     public var workweekStart: CivilDay?
     /// Copied from the input: nil means hours were never logged.
     public var minutesWorked: Int?
+    /// `minutesWorked` under the workweek overtime threshold, and the rest.
+    ///
+    /// This is a CALENDAR fact, not a wage: it is the split the threshold
+    /// produced for this shift's position in its workweek, and it survives
+    /// a shift the engine cannot price. A shift with 300 logged minutes and
+    /// no rate policy in effect reports `regularMinutes == 300` with
+    /// `wage == .unavailable(.rateNotSet)` and zero cents, because the
+    /// hours ARE known and only their value is not (fixture H1, which
+    /// asserts `minutes 300, regularMinutes 300` for exactly that shift).
+    ///
+    /// Nil when there is nothing to split: no hours logged, or no calendar
+    /// policy in effect to define a workweek.
+    ///
+    /// For a `.valued` wage these equal `wage.components.regularMinutes` and
+    /// `.overtimeMinutes` — the ledger writes both from the same two locals
+    /// in one place, and `thresholdSplitAgreesWithTheValuedWageSplit` pins
+    /// it across every fixture. They are the same number for different
+    /// reasons: this pair is "minutes under the threshold", that pair is
+    /// "minutes priced at straight time", and only the first one exists
+    /// when no rate does.
+    public var regularMinutes: Int?
+    public var overtimeMinutes: Int?
     public var wage: WageValuation
     /// Non-wage components plus the valued wage. The one number source for
     /// every day, month, period and range aggregate.
@@ -114,6 +136,8 @@ public struct ShiftValuation: Hashable, Codable, Sendable, Identifiable {
         calendarPolicyID: UUID?,
         workweekStart: CivilDay?,
         minutesWorked: Int?,
+        regularMinutes: Int? = nil,
+        overtimeMinutes: Int? = nil,
         wage: WageValuation,
         components: EarningsComponents
     ) {
@@ -123,6 +147,8 @@ public struct ShiftValuation: Hashable, Codable, Sendable, Identifiable {
         self.calendarPolicyID = calendarPolicyID
         self.workweekStart = workweekStart
         self.minutesWorked = minutesWorked
+        self.regularMinutes = regularMinutes
+        self.overtimeMinutes = overtimeMinutes
         self.wage = wage
         self.components = components
     }
