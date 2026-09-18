@@ -685,6 +685,38 @@ else
   echo "[PASS] No deletion is queued from inside a transaction"
 fi
 
+# 22. Rule 20 proves itself against the WHOLE queue-symbol family.
+#
+#     "A guard narrower than the family it guards" happened three times in one
+#     day: rule 20 knew only `record|cancelTipDeletions` and was blind to the
+#     shift, legacy-entry and paycheck queues, which is how a fourth site in
+#     `PaycheckEntrySheet` survived; rule 21 nearly caught only
+#     `TimeZone.current` and would have missed the bare `.current` that
+#     motivated it; and a release-gate grep searched a directory the mechanism
+#     does not live in. So the standing fix is a discipline rather than another
+#     widening: a lint that has never been shown to catch every shape it claims
+#     to is a lint trusted on faith.
+#
+#     `lint-selftest-queue.sh` plants one instance of each of the 14
+#     `PaydaySyncState` queue mutators inside a `commit` body and asserts rule
+#     20 reports every one. It also plants each of them AFTER the commit and
+#     asserts none is reported, so the rule is shown to discriminate on
+#     POSITION rather than on mere presence -- a rule that fires on everything
+#     is as useless as one that fires on nothing.
+#
+#     Proven to work: narrowing the checker back to its original tip-only form
+#     makes the self-test report 12 misses and fail.
+QUEUE_SELFTEST=$(bash scripts/lint-selftest-queue.sh 2>&1)
+QUEUE_SELFTEST_STATUS=$?
+if [ "$QUEUE_SELFTEST_STATUS" -ne 0 ]; then
+  FAIL=1
+  echo "[FAIL] rule 20 does not catch every queue symbol it claims to"
+  printf '%s\n' "$QUEUE_SELFTEST" | sed 's/^/   /'
+  echo ""
+else
+  echo "[PASS] rule 20 proves itself against all 14 queue symbols, positive and negative"
+fi
+
 echo ""
 if [ "$FAIL" -eq 1 ]; then
   echo "=== Design lint FAILED — see docs/DESIGN.md ==="
