@@ -170,6 +170,30 @@ create function pg_temp.failures(p_user uuid) returns text language sql as $$
   from private.shift_fold_failures where user_id = p_user;
 $$;
 
+-- The same shape as batch_rows below, except that ONE group's amount is
+-- raised while its client_updated_at stays exactly where it was. That is not
+-- a contrived payload: TipEntry.touch() is the only thing that advances
+-- client_updated_at, and the shipped model's own documentation says
+-- under-calling it is survivable precisely because "the upload set is chosen
+-- by a content fingerprint, not by this clock, so a missed bump still
+-- uploads". So it is the shape that decides whether scoping the backlog queue
+-- can lose money.
+create function pg_temp.batch_rows_bumped(
+  p_seed integer, p_groups integer, p_bump integer)
+returns jsonb language sql as $$
+  select jsonb_agg(r order by r ->> 'id')
+  from (
+    select jsonb_build_object(
+      'id', ('53000000-0000-4000-8000-' || lpad((p_seed * 100000 + g * 10 + k)::text, 12, '0'))::uuid,
+      'shift_id', ('53000000-0000-4000-9000-' || lpad((p_seed * 100000 + g)::text, 12, '0'))::uuid,
+      'work_date', (date '2026-01-01' + g)::text,
+      'amount_cents', 1000 + g + case when g = p_bump then 500 else 0 end,
+      'kind', case k when 0 then 'cash' else 'credit' end,
+      'client_updated_at', '2026-06-01T00:00:00Z') as r
+    from generate_series(1, p_groups) g, generate_series(0, 1) k
+  ) x;
+$$;
+
 -- 500 rows over N groups, in the shape PaydayRemoteRepository sends
 -- (batchSize = 500): two rows per group, one cash and one credit.
 create function pg_temp.batch_rows(p_seed integer, p_groups integer)
@@ -195,14 +219,18 @@ delete from auth.users where id in (
   '53000000-0000-4000-8000-000000000003',
   '53000000-0000-4000-8000-000000000004',
   '53000000-0000-4000-8000-000000000005',
-  '53000000-0000-4000-8000-000000000006');
+  '53000000-0000-4000-8000-000000000006',
+  '53000000-0000-4000-8000-000000000007',
+  '53000000-0000-4000-8000-000000000008');
 insert into auth.users (id, email) values
   ('53000000-0000-4000-8000-000000000001', 'payday-s4-arms@test.invalid'),
   ('53000000-0000-4000-8000-000000000002', 'payday-s4-aborts@test.invalid'),
   ('53000000-0000-4000-8000-000000000003', 'payday-s4-budget@test.invalid'),
   ('53000000-0000-4000-8000-000000000004', 'payday-s4-deletion@test.invalid'),
   ('53000000-0000-4000-8000-000000000005', 'payday-s4-agent-a@test.invalid'),
-  ('53000000-0000-4000-8000-000000000006', 'payday-s4-agent-b@test.invalid');
+  ('53000000-0000-4000-8000-000000000006', 'payday-s4-agent-b@test.invalid'),
+  ('53000000-0000-4000-8000-000000000007', 'payday-s4-steady@test.invalid'),
+  ('53000000-0000-4000-8000-000000000008', 'payday-s4-guc@test.invalid');
 
 -- =============================================================================
 -- 1. The triggers exist in the one shape that works
@@ -1068,6 +1096,26 @@ select pg_temp.expect('aFiveHundredRowBatchDrainsAtLeastTenBacklogGroups',
   'drained=' || drained || ' backlog=' || backlog || ' written=' || written || ' ms=' || ms)
 from timing where name like 'batch 2%';
 
+-- THE RE-PUSH BUDGET, as a number, because the whole file rests on "timeout-
+-- proneness IS a rejected write" and the scoped backlog queue is the one
+-- thing in it that reads the account rather than the statement.
+--
+-- A 500-row page of UPDATEs is the most expensive statement PaydaySyncService
+-- can send (batchSize = 500), and it is the statement whose overflow is
+-- largest, so it pays for private.unconverged_group_keys in full. MEASURED on
+-- PG 17.11: 11 ms before the queue was scoped, 41 ms after, and FLAT in
+-- account size -- a 2000-row account re-pushed as four 500-row pages measures
+-- 36 to 37 ms per page. The one shape that is NOT flat is the reason
+-- private.fold_keys_to_queue says `as materialized`: inlined, the same
+-- statement measured 370 ms, because PostgreSQL put a 1.4 ms query inside a
+-- 200-key per-row predicate. The ceiling is set at 25x the measurement so
+-- that it catches that class of regression and never a slow CI runner.
+select pg_temp.expect('aFiveHundredRowRePushStaysWellInsideAnyStatementTimeout',
+  ms < 1000,
+  'ms=' || ms || ' (measured 41 ms; ceiling 1000 ms; the inlined-CTE '
+        || 'regression measured 370 ms on a 2000-row account)')
+from timing where name like 'batch 2%';
+
 -- A SATURATING statement -- 40 or more touched groups, so the touched share is
 -- fully spent -- still drains its reserved 10. "The 10 roll into the touched
 -- keys only when the backlog is empty" is the whole rule.
@@ -1115,6 +1163,176 @@ from public.shift_migration_state where user_id = '53000000-0000-4000-8000-00000
 select pg_temp.expect('theWholeBudgetExerciseRecordedZeroFailures',
   pg_temp.failures('53000000-0000-4000-8000-000000000003') = '',
   'failures=[' || pg_temp.failures('53000000-0000-4000-8000-000000000003') || ']');
+
+-- =============================================================================
+-- 7b. THE STEADY STATE IS EXACTLY 0, which is a measurement and not a slogan
+-- =============================================================================
+
+-- The claim printed at the foot of the migration -- "with these triggers
+-- installed the steady state is exactly 0" -- is what
+-- payday_unmigrated_tip_row_count()'s alert (§4.8, §6.2) and the reader's
+-- first switch both rest on, and it was FALSE. MEASURED on Postgres 17.11
+-- against the unmodified previous version of the migration: 30 identical
+-- 500-row / 250-group upsert_tip_entries statements, each its own
+-- transaction. By pass 21 all 250 groups were converted, the money was exact
+-- to the cent (300000 = 300000) and no legacy row was unnamed -- and the
+-- backlog sat at exactly 200 on every pass from 1 to 30.
+--
+-- The mechanism was arithmetic, not a race. A statement touching 250 sorted
+-- keys spends 40 on the first 40 and 10 on the oldest backlog entries, and
+-- then queued keys 41..250 -- which INCLUDES the 10 it had just drained. The
+-- delete removed them; the overflow put them straight back. Net progress per
+-- statement: zero, forever. The queue is now scoped by
+-- private.fold_keys_to_queue and the overflow is computed by subtracting what
+-- was actually derived, and the same 30 passes now reach 0 at pass 21.
+--
+-- THE LOOP BELOW IS ONE TRANSACTION, which is not the same measurement and is
+-- a strictly worse outcome, so both numbers are recorded rather than one
+-- standing in for the other. queued_at defaults to now(), which is the
+-- TRANSACTION timestamp, so inside one transaction every backlog row carries
+-- the same queued_at and the drain's (queued_at, group_key) tie-break keeps
+-- selecting the same ten lowest keys -- the same ten the unconditional
+-- overflow keeps putting back. MEASURED here on the unmodified previous
+-- migration: 40 passes, backlog pinned at 200, and only 60 of the 250 groups
+-- ever written, with 380 legacy rows unnamed and 123660 of 562750 cents
+-- present. That is $4,390.90 of the account's money absent from the
+-- authoritative surface permanently, not transiently. Across 30 SEPARATE
+-- transactions the same code pins the backlog at 200 while the shifts do
+-- converge by pass 21; the defect is one defect either way.
+--
+-- Nothing else in this suite could see it: the two budget assertions above
+-- check `drained >= 10` and `drained >= 1`, and a backlog with a permanent
+-- floor satisfies both.
+create temporary table steady (pass integer, backlog integer, shifts integer,
+                              orphans integer, shift_cents bigint, legacy_cents bigint);
+
+do $$
+declare i integer; v_backlog integer;
+begin
+  for i in 1..40 loop
+    perform pg_temp.device_upsert('53000000-0000-4000-8000-000000000007',
+                                  pg_temp.batch_rows(4, 250));
+    select count(*) into v_backlog from private.shift_fold_backlog
+     where user_id = '53000000-0000-4000-8000-000000000007';
+    insert into steady
+    select i, v_backlog,
+           (select count(*) from public.shifts
+             where user_id = '53000000-0000-4000-8000-000000000007' and deleted_at is null),
+           (select count(*) from public.tip_entries e
+             where e.user_id = '53000000-0000-4000-8000-000000000007' and e.deleted_at is null
+               and not exists (select 1 from public.shifts x
+                                where x.user_id = e.user_id and e.id = any(x.legacy_entry_ids))),
+           (select coalesce(sum(non_wage_earnings_cents), 0) from public.shifts
+             where user_id = '53000000-0000-4000-8000-000000000007' and deleted_at is null),
+           (select coalesce(sum(amount_cents), 0) from public.tip_entries
+             where user_id = '53000000-0000-4000-8000-000000000007' and deleted_at is null);
+    exit when v_backlog = 0;
+  end loop;
+end;
+$$;
+
+select pg_temp.expect('theBacklogReachesZeroUnderRepeatedIdenticalFiveHundredRowBatches',
+  (select backlog = 0 and shifts = 250 and orphans = 0 and shift_cents = legacy_cents
+   from steady order by pass desc limit 1),
+  'passes=' || (select max(pass) from steady)
+  || ' backlog=' || (select backlog from steady order by pass desc limit 1)
+  || ' shifts=' || (select shifts from steady order by pass desc limit 1)
+  || ' orphans=' || (select orphans from steady order by pass desc limit 1)
+  || ' money=' || (select shift_cents || '/' || legacy_cents from steady order by pass desc limit 1));
+
+-- Once converged, a further identical batch queues NOTHING. This is the
+-- assertion that would fail the day any insert into the backlog stops going
+-- through private.fold_keys_to_queue, and also the day the jsonb round-trip of
+-- legacy_source_max_updated_at through the deriver's v_grouped stops being
+-- lossless -- a rounded watermark makes every key permanently unconverged.
+select pg_temp.device_upsert('53000000-0000-4000-8000-000000000007',
+                             pg_temp.batch_rows(4, 250));
+
+select pg_temp.expect('aConvergedAccountQueuesNothingOnAnotherIdenticalBatch',
+  (select count(*) from private.shift_fold_backlog
+    where user_id = '53000000-0000-4000-8000-000000000007') = 0
+  and pg_temp.failures('53000000-0000-4000-8000-000000000007') = '',
+  'backlog=' || (select count(*)::text from private.shift_fold_backlog
+                  where user_id = '53000000-0000-4000-8000-000000000007')
+  || ' failures=[' || pg_temp.failures('53000000-0000-4000-8000-000000000007') || ']');
+
+-- THE MONEY GUARD ON THE SCOPING. Group 250 sorts last, so it is never in the
+-- 40-key fresh window of a 250-group statement: if the queue were scoped on
+-- provenance alone it would be silently dropped, because a re-pushed row with
+-- a raised amount still carries the same id and -- when touch() was missed --
+-- the same client_updated_at. private.fold_keys_to_queue's first arm reads the
+-- transition tables instead, so the change is seen whatever the clock says.
+--
+-- This pair is a REGRESSION guard, not a before/after gate: the unconditional
+-- queue it replaced passed it trivially. It fails the day the transition-table
+-- arm is dropped and the queue is scoped on provenance alone, which is the
+-- tempting simplification and the one that loses money.
+select pg_temp.device_upsert('53000000-0000-4000-8000-000000000007',
+                             pg_temp.batch_rows_bumped(4, 250, 250));
+
+select pg_temp.expect('aChangedAmountWithAnUnadvancedClientClockIsStillQueued',
+  (select count(*) from private.shift_fold_backlog
+    where user_id = '53000000-0000-4000-8000-000000000007'
+      and group_key = '53000000-0000-4000-9000-000000400250') = 1,
+  'backlog=' || pg_temp.backlog_keys('53000000-0000-4000-8000-000000000007')::text);
+
+-- ... and it converges, which is the fact that matters: if that key had been
+-- dropped the shift would keep the old amount and no surface would ever say so.
+do $$
+declare i integer; v_backlog integer;
+begin
+  for i in 1..10 loop
+    perform pg_temp.device_upsert('53000000-0000-4000-8000-000000000007',
+                                  pg_temp.batch_rows_bumped(4, 250, 250));
+    select count(*) into v_backlog from private.shift_fold_backlog
+     where user_id = '53000000-0000-4000-8000-000000000007';
+    exit when v_backlog = 0;
+  end loop;
+end;
+$$;
+
+select pg_temp.expect('theMoneyConvergesAfterAChangeTheClockDidNotAnnounce',
+  (select coalesce(sum(non_wage_earnings_cents), 0) from public.shifts
+    where user_id = '53000000-0000-4000-8000-000000000007' and deleted_at is null)
+  = (select coalesce(sum(amount_cents), 0) from public.tip_entries
+      where user_id = '53000000-0000-4000-8000-000000000007' and deleted_at is null)
+  and (select count(*) from private.shift_fold_backlog
+        where user_id = '53000000-0000-4000-8000-000000000007') = 0,
+  'shifts=' || (select coalesce(sum(non_wage_earnings_cents), 0)::text from public.shifts
+                 where user_id = '53000000-0000-4000-8000-000000000007' and deleted_at is null)
+  || ' legacy=' || (select coalesce(sum(amount_cents), 0)::text from public.tip_entries
+                     where user_id = '53000000-0000-4000-8000-000000000007' and deleted_at is null)
+  || ' backlog=' || (select count(*)::text from private.shift_fold_backlog
+                      where user_id = '53000000-0000-4000-8000-000000000007'));
+
+-- =============================================================================
+-- 7c. The handler gives the caller's lock_timeout back
+-- =============================================================================
+
+-- private.record_fold_abort narrows lock_timeout to 50 ms so it can never
+-- hang on another 1.0 statement's uncommitted duplicate. A narrowed
+-- lock_timeout left behind would reject one of the SAME 1.0 transaction's
+-- later statements, which is the exact failure the whole file exists to
+-- avoid, so the restore is asserted rather than assumed. Read inside ONE
+-- top-level statement, because set_config(..., is_local => true) reverts at
+-- the end of the enclosing transaction and a later statement could not tell
+-- a restore from a rollback.
+create temporary table gucs (name text primary key, value text);
+
+do $$
+begin
+  perform set_config('lock_timeout', '1234ms', true);
+  perform pg_temp.device_upsert('53000000-0000-4000-8000-000000000008',
+                                pg_temp.batch_rows(9, 1), 'assert');
+  insert into gucs values ('lock_timeout_after_abort', current_setting('lock_timeout', true));
+end;
+$$;
+
+select pg_temp.expect('theHandlerGivesTheCallersLockTimeoutBack',
+  (select value from gucs where name = 'lock_timeout_after_abort') = '1234ms'
+  and pg_temp.failures('53000000-0000-4000-8000-000000000008') like '%P0004%',
+  'lock_timeout=' || coalesce((select value from gucs where name = 'lock_timeout_after_abort'), 'null')
+  || ' failures=[' || pg_temp.failures('53000000-0000-4000-8000-000000000008') || ']');
 
 -- =============================================================================
 -- 8. service_role, and more than one account in one statement
@@ -1259,8 +1477,8 @@ select name, rows, written, backlog, drained, failures, ms from timing order by 
 -- An assertion whose driving SELECT returns no row never calls pg_temp.expect
 -- and would vanish from the report instead of failing, so the count is pinned.
 select pg_temp.expect('theSuiteRanEveryAssertion',
-  (select count(*) from results) = 46,
-  'ran ' || (select count(*) from results)::text || ' of 46');
+  (select count(*) from results) = 52,
+  'ran ' || (select count(*) from results)::text || ' of 52');
 
 select seq, case when ok then 'PASS' else 'FAIL' end as result, name, detail
 from results order by seq;
@@ -1285,4 +1503,6 @@ delete from auth.users where id in (
   '53000000-0000-4000-8000-000000000003',
   '53000000-0000-4000-8000-000000000004',
   '53000000-0000-4000-8000-000000000005',
-  '53000000-0000-4000-8000-000000000006');
+  '53000000-0000-4000-8000-000000000006',
+  '53000000-0000-4000-8000-000000000007',
+  '53000000-0000-4000-8000-000000000008');
