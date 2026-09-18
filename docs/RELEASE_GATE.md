@@ -8,6 +8,44 @@ Status legend: `[ ]` not yet, `[x]` green with evidence recorded below it, `[H]`
 
 ---
 
+## Branch protection on `production` -- PULLED OUT OF PR 8, ready to run
+
+`gh api repos/tszaks/payday/branches/production/protection` returns
+**404 Branch not protected**. So "merge each PR as CI goes green" has been a
+CONVENTION enforced by whoever merged choosing to look, and never an
+enforcement, for every merge in this project to date. On 2026-09-18 that cost
+a merge: #65 landed while its checks were still `in_progress`, because
+`gh pr merge --auto` means "do not block on a human", not "wait for green",
+and with no required checks those requirements are met vacuously.
+
+**This was scoped inside PR 8 and that is a sequencing error.** PR 8 is
+blocked behind its entry condition (the records arm must reach legacy's
+mutation catch count before the deletions land). Branch protection has no
+dependency on that whatsoever, so the one change that prevents this entire
+class was sitting behind a gate unrelated to it.
+
+The failure mode when enabling is that a MISNAMED required check blocks every
+merge forever, which is worse than the problem being fixed. So the names
+below are copied verbatim from
+`gh api repos/tszaks/payday/commits/<sha>/check-runs`, not from the workflow
+file and not from memory:
+
+```
+Design lint
+Payday app + widget (xcodebuild test)
+PaydayCore (swift test)
+Supabase migrations (db reset)
+payday-api (deno test)
+```
+
+Not enabled yet, and the reason is specific rather than caution: two PRs
+(#66, #67) have runs in flight, and turning on required checks mid-run is a
+change to the rule those runs are being judged against. Enable once they
+land, then verify BOTH directions before trusting it -- a green PR still
+merges, and a PR with a deliberately failing job is blocked. One direction
+is not a test.
+
+
 ## Candidate
 
 - Commit: _fill in at candidate time_
