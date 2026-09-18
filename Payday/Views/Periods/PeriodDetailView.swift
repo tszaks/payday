@@ -32,6 +32,13 @@ struct PeriodDetailFacts: SnapshotFacts {
     /// include it. Reading the selection back off the result makes the rows
     /// and the hero the same set by construction.
     let shiftDays: [(day: Date, shiftID: UUID, items: [TipEntry])]
+    /// The same rows in the shift representation, selected by the same engine
+    /// ids. Empty unless the caller passed records, so the two lists are never
+    /// both populated and a screen cannot render both representations.
+    ///
+    /// `[ShiftRecord]` and not a projection because these rows are the edit
+    /// and delete targets: `ProjectedShiftRow` is deliberately un-persistable.
+    let shiftRecordDays: [ShiftRecord]
     let multiShiftDays: Set<Date>
     /// The civil days this screen asked about, so a caller can see the scope
     /// as well as the cents.
@@ -100,6 +107,9 @@ struct PeriodDetailFacts: SnapshotFacts {
     init(
         snapshot: EarningsSnapshot?,
         shiftDays: [(day: Date, shiftID: UUID, items: [TipEntry])],
+        /// Defaulted, so every existing caller is unchanged. The writer flip
+        /// passes records here instead of entries above.
+        shiftRecordDays: [ShiftRecord] = [],
         paycheckRecords: [PaycheckRecord],
         period: PayPeriod,
         schedule: PaySchedule?,
@@ -122,8 +132,13 @@ struct PeriodDetailFacts: SnapshotFacts {
         let selected = Set(periodResult?.shiftIDs ?? [])
         let rows = shiftDays.filter { selected.contains($0.shiftID) }
         self.shiftDays = rows
+        // Selected by the SAME engine ids, so the record rows and the hero are
+        // one set by construction exactly as the legacy rows are.
+        let recordRows = shiftRecordDays.filter { selected.contains($0.id) }
+        self.shiftRecordDays = recordRows
         var shiftCounts: [Date: Int] = [:]
         for shift in rows { shiftCounts[shift.day, default: 0] += 1 }
+        for record in recordRows { shiftCounts[record.workDate, default: 0] += 1 }
         multiShiftDays = Set(shiftCounts.filter { $0.value >= 2 }.keys)
 
         if let periodResult {
