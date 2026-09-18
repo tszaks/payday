@@ -82,10 +82,23 @@ enum ShiftCommands {
     /// replaced silently stops persisting logged shifts, paychecks and live
     /// field edits — and stops firing `ModelContext.didSave`, which is what
     /// queues a sync, so nothing would sync either.
-    private static func perform<T>(in context: ModelContext, _ body: () throws -> T) throws -> T {
+    /// The save is injectable so the FAILURE branch is reachable from a test.
+    ///
+    /// Defaulted, so every production call is unchanged. It exists because the
+    /// ordering this file depends on -- mutate the store, and only then write
+    /// the App Group queues -- is money-critical and was wrong in four places,
+    /// each under a comment asserting it was safe. `design-lint.sh` rule 20
+    /// keeps the shape cheaply; the seam is what lets a test assert the
+    /// behaviour, which is the standard this project settled on when the same
+    /// question came up for `UndoDeleteToast`.
+    private static func perform<T>(
+        in context: ModelContext,
+        saving: (ModelContext) throws -> Void = { try $0.save() },
+        _ body: () throws -> T
+    ) throws -> T {
         do {
             let result = try body()
-            try context.save()
+            try saving(context)
             PaydayWidgetRefresh.request()
             return result
         } catch {
@@ -227,7 +240,8 @@ enum ShiftCommands {
     static func delete(
         _ record: ShiftRecord,
         in context: ModelContext,
-        at date: Date = .now
+        at date: Date = .now,
+        saving: (ModelContext) throws -> Void = { try $0.save() }
     ) throws -> DeletedShift {
         guard mayMutate(record) else { throw Failure.conversionPending }
 
@@ -251,19 +265,33 @@ enum ShiftCommands {
             deletedAt: date
         )
 
-        return try perform(in: context) {
-            // All three inside the same command, so a crash between them
-            // cannot leave the server holding a live shift the device thinks
-            // it deleted, or vice versa.
-            PaydaySyncState.recordShiftDeletion(captured.id, at: date)
-            if !captured.legacyEntryIDs.isEmpty {
-                // Tombstoning the sources is what makes the deletion visible
-                // to a 1.0 build, which reads them and not shifts.
-                PaydaySyncState.recordLegacyEntryDeletions(captured.legacyEntryIDs, at: date)
-            }
+        // The row first, alone; the queues only once it is really gone.
+        //
+        // The previous shape put all three inside `perform`, under the comment
+        // "all three inside the same command, so a crash between them cannot
+        // leave the server holding a live shift the device thinks it deleted".
+        // Co-locating them does not achieve that and cannot: the queues are
+        // App Group `UserDefaults` and take effect at once, the row is
+        // SwiftData, and `rollback()` reaches only the latter.
+        //
+        // Worse here than on the tip path, because `recordShiftDeletion` also
+        // writes a durable tombstone that is "cleared only by a restore, never
+        // pruned by time and never by a sync". A failed save therefore left the
+        // shift ALIVE on the device, a permanent tombstone saying it was
+        // deleted, and the legacy sources tombstoned so a 1.0 build would hide
+        // them too. Asserted in `ShiftQueueOrderingTests`.
+        let removed = try perform(in: context, saving: saving) {
             context.delete(record)
             return captured
         }
+
+        PaydaySyncState.recordShiftDeletion(removed.id, at: date)
+        if !removed.legacyEntryIDs.isEmpty {
+            // Tombstoning the sources is what makes the deletion visible to a
+            // 1.0 build, which reads them and not shifts.
+            PaydaySyncState.recordLegacyEntryDeletions(removed.legacyEntryIDs, at: date)
+        }
+        return removed
     }
 
     /// The exact inverse of `delete`, down to the id.
@@ -271,9 +299,10 @@ enum ShiftCommands {
     static func restore(
         _ deleted: DeletedShift,
         in context: ModelContext,
-        at date: Date = .now
+        at date: Date = .now,
+        saving: (ModelContext) throws -> Void = { try $0.save() }
     ) throws -> ShiftRecord {
-        try perform(in: context) {
+        let record = try perform(in: context, saving: saving) {
             let record = ShiftRecord(
                 id: deleted.id,
                 workDate: deleted.workDate,
@@ -293,20 +322,27 @@ enum ShiftCommands {
                 legacyEntryIDs: deleted.legacyEntryIDs
             )
             context.insert(record)
-
-            if let userID = PaydaySyncState.registeredUserID {
-                // Un-queue the deletion if it never left, and queue the
-                // restore so the server is told either way.
-                PaydaySyncState.clearShiftDeletions([deleted.id], for: userID)
-                PaydaySyncState.recordShiftRestore(deleted.id, at: date)
-                PaydaySyncState.clearShiftTombstones([deleted.id], for: userID)
-                // The legacy sources come back too, or a 1.0 build has
-                // permanently lost a night the user un-deleted.
-                if !deleted.legacyEntryIDs.isEmpty {
-                    PaydaySyncState.cancelLegacyEntryDeletions(deleted.legacyEntryIDs)
-                }
-            }
             return record
         }
+
+        // Same ordering rule as `delete`, and FIVE queue writes rather than
+        // one, so the stakes are higher. The previous shape cleared the
+        // deletion, queued the restore, cleared the tombstone and cancelled
+        // the legacy deletions all inside the transaction: a failed insert
+        // then left the shift absent from the device while every durable
+        // record of its deletion had been erased.
+        if let userID = PaydaySyncState.registeredUserID {
+            // Un-queue the deletion if it never left, and queue the restore so
+            // the server is told either way. Only now: the row is back.
+            PaydaySyncState.clearShiftDeletions([deleted.id], for: userID)
+            PaydaySyncState.recordShiftRestore(deleted.id, at: date)
+            PaydaySyncState.clearShiftTombstones([deleted.id], for: userID)
+            // The legacy sources come back too, or a 1.0 build has permanently
+            // lost a night the user un-deleted.
+            if !deleted.legacyEntryIDs.isEmpty {
+                PaydaySyncState.cancelLegacyEntryDeletions(deleted.legacyEntryIDs)
+            }
+        }
+        return record
     }
 }
