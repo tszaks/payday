@@ -214,12 +214,26 @@ struct RenderFactsPerformanceTests {
             end: date(2026, 7, 19, calendar: calendar)
         )
 
+        // PR 5 group 2.4: both History surfaces now read ONE snapshot over
+        // the whole history, so the cost splits in two. The BUILD is the
+        // expensive half (the ledger plus a canonical SHA-256 over every
+        // input) and is cached per write; the facts are 24 `range(_:)`
+        // queries over a binary-searched index and run on every pass. Both
+        // are budgeted, because the second one is the one inside a scroll.
+        let buildStartedAt = Date.timeIntervalSinceReferenceDate
+        let build = HistoryEarnings.build(
+            entries: entries,
+            policies: policies(rateCents: nil, zone: PaydayTestZone.payroll),
+            payrollTimeZone: PaydayTestZone.payroll,
+            calendar: calendar
+        )
+        let buildElapsed = Date.timeIntervalSinceReferenceDate - buildStartedAt
+
         let listStartedAt = Date.timeIntervalSinceReferenceDate
         let listFacts = PeriodsPageFacts(
-            allEntries: entries,
+            snapshot: build.snapshot,
             paycheckRecords: [],
             schedule: schedule,
-            wageCentsPerHour: nil,
             payrollTimeZone: PaydayTestZone.payroll,
             now: now,
             calendar: calendar
@@ -228,21 +242,21 @@ struct RenderFactsPerformanceTests {
 
         let detailStartedAt = Date.timeIntervalSinceReferenceDate
         let detailFacts = PeriodDetailFacts(
-            allEntries: entries,
+            snapshot: build.snapshot,
+            shiftDays: build.shiftDays,
             paycheckRecords: [],
             period: period,
             schedule: schedule,
-            wageCentsPerHour: nil,
-            policies: policies(rateCents: nil, zone: PaydayTestZone.payroll),
             payrollTimeZone: PaydayTestZone.payroll,
             calendar: calendar
         )
         let detailElapsed = Date.timeIntervalSinceReferenceDate - detailStartedAt
 
         #expect(listFacts.rows.count == 24)
-        #expect(listFacts.rows.first?.breakdown.netTotalCents == 1_400)
+        #expect(listFacts.rows.first?.earned.cents == 1_400)
         #expect(detailFacts.shiftDays.count == 14)
-        #expect(detailFacts.heroTotalCents == 1_400)
+        #expect(detailFacts.hero.cents == 1_400)
+        #expect(buildElapsed < Self.budget(0.5), "History snapshot build took \(buildElapsed) seconds against a 0.5s budget scaled x\(Self.budgetScale)")
         #expect(listElapsed < Self.budget(0.5), "History list facts took \(listElapsed) seconds against a 0.5s budget scaled x\(Self.budgetScale)")
         #expect(detailElapsed < Self.budget(0.5), "Period detail facts took \(detailElapsed) seconds against a 0.5s budget scaled x\(Self.budgetScale)")
     }
