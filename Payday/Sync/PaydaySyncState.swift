@@ -34,12 +34,37 @@ enum PaydaySyncState {
         }
     }
 
+    /// What a per-row version in a checkpoint MEANS. Stamped into every
+    /// checkpoint so an upgrade never has to guess.
+    ///
+    /// `0` is the shipped scheme: the version was the row's `modifiedAt`
+    /// rendered as `client_updated_at`. It could not detect an edit, because
+    /// nothing advanced `modifiedAt` (see `TipEntry.touch(at:)`).
+    /// `1` is the content fingerprint, see `PaydayRowFingerprint`.
+    static let currentVersioningScheme = 1
+
     struct Snapshot: Codable, Equatable {
         var tipEntryIDs: Set<UUID>
         var paycheckIDs: Set<UUID>
         var migrationVerified: Bool
         var tipClientUpdatedAt: [UUID: String]
         var paycheckClientUpdatedAt: [UUID: String]
+        /// The acknowledged content fingerprints — the versions change
+        /// detection actually compares. `tipClientUpdatedAt` is still written
+        /// beside them, unused for change detection, so a build rolled back
+        /// to the timestamp scheme still finds a checkpoint it understands
+        /// instead of re-uploading everything.
+        ///
+        /// Four per-row dictionaries is the cost of that rollback safety net,
+        /// re-encoded into the app-group defaults on every sync. Kept rather
+        /// than trimmed to two because the deployed `upsert_tip_entries`
+        /// carries no clock predicate, so the full re-upload a rolled-back
+        /// build would perform could overwrite a newer edit from another
+        /// device. The size is paid for on the fingerprint side instead:
+        /// `PaydayMigrationHash.fingerprint` stores 16 hex characters, not 64.
+        var tipContentFingerprint: [UUID: String]
+        var paycheckContentFingerprint: [UUID: String]
+        var versioningScheme: Int
         var settingsClientUpdatedAt: String?
         var tipServerCursor: ServerCursor?
         var paycheckServerCursor: ServerCursor?
@@ -51,6 +76,9 @@ enum PaydaySyncState {
             migrationVerified: Bool = false,
             tipClientUpdatedAt: [UUID: String] = [:],
             paycheckClientUpdatedAt: [UUID: String] = [:],
+            tipContentFingerprint: [UUID: String] = [:],
+            paycheckContentFingerprint: [UUID: String] = [:],
+            versioningScheme: Int = PaydaySyncState.currentVersioningScheme,
             settingsClientUpdatedAt: String? = nil,
             tipServerCursor: ServerCursor? = nil,
             paycheckServerCursor: ServerCursor? = nil,
@@ -61,6 +89,9 @@ enum PaydaySyncState {
             self.migrationVerified = migrationVerified
             self.tipClientUpdatedAt = tipClientUpdatedAt
             self.paycheckClientUpdatedAt = paycheckClientUpdatedAt
+            self.tipContentFingerprint = tipContentFingerprint
+            self.paycheckContentFingerprint = paycheckContentFingerprint
+            self.versioningScheme = versioningScheme
             self.settingsClientUpdatedAt = settingsClientUpdatedAt
             self.tipServerCursor = tipServerCursor
             self.paycheckServerCursor = paycheckServerCursor
@@ -73,12 +104,21 @@ enum PaydaySyncState {
             case migrationVerified
             case tipClientUpdatedAt
             case paycheckClientUpdatedAt
+            case tipContentFingerprint
+            case paycheckContentFingerprint
+            case versioningScheme
             case settingsClientUpdatedAt
             case tipServerCursor
             case paycheckServerCursor
             case settingsServerUpdatedAt
         }
 
+        /// Hand-written so a checkpoint persisted by any earlier build still
+        /// decodes: every key is optional with a default, and an absent
+        /// `versioningScheme` means the shipped timestamp scheme rather than
+        /// this one. Dropping a checkpoint on a decode failure would discard
+        /// pending deletions and force a full baseline, so no field added
+        /// here may ever be required.
         init(from decoder: Decoder) throws {
             let values = try decoder.container(keyedBy: CodingKeys.self)
             tipEntryIDs = try values.decodeIfPresent(Set<UUID>.self, forKey: .tipEntryIDs) ?? []
@@ -86,6 +126,9 @@ enum PaydaySyncState {
             migrationVerified = try values.decodeIfPresent(Bool.self, forKey: .migrationVerified) ?? false
             tipClientUpdatedAt = try values.decodeIfPresent([UUID: String].self, forKey: .tipClientUpdatedAt) ?? [:]
             paycheckClientUpdatedAt = try values.decodeIfPresent([UUID: String].self, forKey: .paycheckClientUpdatedAt) ?? [:]
+            tipContentFingerprint = try values.decodeIfPresent([UUID: String].self, forKey: .tipContentFingerprint) ?? [:]
+            paycheckContentFingerprint = try values.decodeIfPresent([UUID: String].self, forKey: .paycheckContentFingerprint) ?? [:]
+            versioningScheme = try values.decodeIfPresent(Int.self, forKey: .versioningScheme) ?? 0
             settingsClientUpdatedAt = try values.decodeIfPresent(String.self, forKey: .settingsClientUpdatedAt)
             tipServerCursor = try values.decodeIfPresent(ServerCursor.self, forKey: .tipServerCursor)
             paycheckServerCursor = try values.decodeIfPresent(ServerCursor.self, forKey: .paycheckServerCursor)
@@ -210,6 +253,114 @@ enum PaydaySyncState {
         })
     }
 
+    /// True for exactly one sync per install: the checkpoint acknowledges rows
+    /// under the shipped timestamp scheme and therefore records no content
+    /// fingerprints to compare against. `save` stamps the current scheme, so
+    /// this never fires twice.
+    ///
+    /// A fresh install has nothing acknowledged and needs no seeding — every
+    /// local row is simply missing a fingerprint and uploads, which is what
+    /// already happened for a new account.
+    static func requiresFingerprintSeeding(checkpoint: Snapshot) -> Bool {
+        checkpoint.versioningScheme < currentVersioningScheme
+            && !(checkpoint.tipEntryIDs.isEmpty && checkpoint.paycheckIDs.isEmpty)
+    }
+
+    /// One server row as the seeding comparison has to see it: its content,
+    /// plus the two clocks that answer "has this device seen this content?".
+    struct SeedingServerRow: Equatable, Sendable {
+        let id: UUID
+        let contentFingerprint: String
+        /// The writing client's clock, as stored by the server.
+        let clientUpdatedAt: String
+        /// The server's own row clock — the same value the delta cursor is
+        /// built from.
+        let serverUpdatedAt: String?
+        let isDeleted: Bool
+    }
+
+    /// The acknowledged fingerprints to use on that one seeding sync.
+    ///
+    /// Neither obvious shortcut is acceptable. Seeding from the LOCAL rows
+    /// would declare every correction the timestamp bug already dropped to be
+    /// acknowledged, losing it for good. Seeding from nothing would make every
+    /// row look changed and re-upload the entire history. So a live server row
+    /// the device has already pulled acknowledges ITS OWN content: a local row
+    /// that differs from it is exactly the correction that never got sent, and
+    /// it uploads on this sync and never again, while an identical row uploads
+    /// nothing.
+    ///
+    /// That reasoning holds only where the server has not moved since this
+    /// device last looked. Where it HAS moved, "local differs from server" is
+    /// equally the signature of a newer edit made elsewhere — by a second
+    /// device that upgraded first, or by the agent API, which stamps
+    /// `client_updated_at = now()` on every update — and uploading the local
+    /// side would overwrite it permanently, because the deployed
+    /// `upsert_tip_entries` carries no clock predicate at all. So a row this
+    /// device has NOT seen acknowledges the LOCAL content: it does not upload,
+    /// and the delta pull in this same sync delivers the newer row normally.
+    ///
+    /// A row the server has tombstoned acknowledges the LOCAL content for the
+    /// same reason, so this one-time seeding can never resurrect a row another
+    /// device deleted. A row the server has never seen has no entry at all, so
+    /// it uploads as the insert it is.
+    static func seededVersions(
+        local: [UUID: String],
+        localClientUpdatedAt: [UUID: String],
+        serverRows: [SeedingServerRow],
+        pulledThrough: ServerCursor?
+    ) -> [UUID: String] {
+        let pulledThroughInstant = pulledThrough.flatMap { PaydayRemoteDate.parseInstant($0.updatedAt) }
+        var result: [UUID: String] = [:]
+        for row in serverRows {
+            let acknowledgeLocal = row.isDeleted || serverRowIsUnseen(
+                row,
+                pulledThrough: pulledThroughInstant,
+                localClientUpdatedAt: localClientUpdatedAt[row.id]
+            )
+            if acknowledgeLocal {
+                if let localVersion = local[row.id] { result[row.id] = localVersion }
+            } else {
+                result[row.id] = row.contentFingerprint
+            }
+        }
+        return result
+    }
+
+    /// Whether the server's current copy of a row is content this device has
+    /// never pulled, which is the case where a difference from local must NOT
+    /// be read as an unsent local correction.
+    ///
+    /// Two independent signals, either one sufficient, because the cost of a
+    /// false "seen" is permanent data loss and the cost of a false "unseen" is
+    /// only that one lost correction stays lost:
+    ///
+    /// 1. The server's own clock. If the row's `updated_at` is past the delta
+    ///    cursor this device last pulled through, the device has not read this
+    ///    version. Anything unknowable here — no cursor at all, an
+    ///    unparseable stamp — counts as unseen; with no cursor this sync is a
+    ///    full baseline anyway, so the pull heals local without the upload.
+    /// 2. The writing client's clock. A row last written by `reconcileTips`
+    ///    carries `modifiedAt` == the server's `client_updated_at` at that
+    ///    time, and the shipped bug froze that clock, so a server
+    ///    `client_updated_at` STRICTLY newer than local `modifiedAt` means
+    ///    someone else wrote after this device last read. This is the signal
+    ///    that still works when the cursor cannot be trusted.
+    private static func serverRowIsUnseen(
+        _ row: SeedingServerRow,
+        pulledThrough: Date?,
+        localClientUpdatedAt: String?
+    ) -> Bool {
+        guard let pulledThrough,
+              let serverUpdatedAt = row.serverUpdatedAt.flatMap(PaydayRemoteDate.parseInstant)
+        else { return true }
+        if serverUpdatedAt > pulledThrough { return true }
+        guard let serverWrote = PaydayRemoteDate.parseInstant(row.clientUpdatedAt),
+              let localWrote = localClientUpdatedAt.flatMap(PaydayRemoteDate.parseInstant)
+        else { return false }
+        return serverWrote > localWrote
+    }
+
     /// Durable cursors must never outlive the replaceable SwiftData cache they
     /// describe. If a previously populated cache disappears, force a complete
     /// server baseline instead of starting after the old high-water marks.
@@ -226,12 +377,14 @@ enum PaydaySyncState {
             || !expectedPaycheckIDs.isSubset(of: localPaycheckIDs)
     }
 
+    /// Versions here are content fingerprints, never timestamps — a device
+    /// clock must not decide whether a row was edited mid-sync.
     static func localRowChangedDuringSync(
         id: UUID,
-        currentClientUpdatedAt: String,
-        capturedClientUpdatedAt: [UUID: String]
+        currentVersion: String,
+        capturedVersions: [UUID: String]
     ) -> Bool {
-        capturedClientUpdatedAt[id] != currentClientUpdatedAt
+        capturedVersions[id] != currentVersion
     }
 
     static func IDsChangedDuringSync(
@@ -268,6 +421,8 @@ enum PaydaySyncState {
         migrationVerified: Bool,
         tipClientUpdatedAt: [UUID: String] = [:],
         paycheckClientUpdatedAt: [UUID: String] = [:],
+        tipContentFingerprint: [UUID: String] = [:],
+        paycheckContentFingerprint: [UUID: String] = [:],
         settingsClientUpdatedAt: String? = nil,
         tipServerCursor: ServerCursor? = nil,
         paycheckServerCursor: ServerCursor? = nil,
@@ -279,6 +434,9 @@ enum PaydaySyncState {
             migrationVerified: migrationVerified,
             tipClientUpdatedAt: tipClientUpdatedAt,
             paycheckClientUpdatedAt: paycheckClientUpdatedAt,
+            tipContentFingerprint: tipContentFingerprint,
+            paycheckContentFingerprint: paycheckContentFingerprint,
+            versioningScheme: currentVersioningScheme,
             settingsClientUpdatedAt: settingsClientUpdatedAt,
             tipServerCursor: tipServerCursor,
             paycheckServerCursor: paycheckServerCursor,

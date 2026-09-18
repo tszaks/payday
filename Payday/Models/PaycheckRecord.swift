@@ -6,13 +6,14 @@ final class PaycheckRecord {
     // Same CloudKit-driven default-value pass as TipEntry — every attribute
     // needs a default since CloudKit's record model has no required fields.
     var id: UUID = UUID()
-    var periodStart: Date = Date.now { didSet { modifiedAt = .now } }
-    var periodEnd: Date = Date.now { didSet { modifiedAt = .now } }
-    var paidTipsCents: Int = 0 { didSet { modifiedAt = .now } }
+    var periodStart: Date = Date.now
+    var periodEnd: Date = Date.now
+    var paidTipsCents: Int = 0
     /// Local mutation timestamp used to order offline writes while existing
-    /// device data is imported into Supabase.
+    /// device data is imported into Supabase. Advanced by `init` and by
+    /// `touch()` — never by a property observer.
     var modifiedAt: Date = Date.now
-    var note: String? { didSet { modifiedAt = .now } }
+    var note: String?
 
     // Capture-only for now, same treatment as TipEntry's serverCount — on
     // record, exportable someday, no engine analysis yet. Plain optionals
@@ -25,32 +26,32 @@ final class PaycheckRecord {
     /// gross/net audit fields below) but kept on the model — a deployed
     /// CloudKit record type can't drop a field, and legacy records still
     /// carry this.
-    var hourlyRateCents: Int? { didSet { modifiedAt = .now } }
+    var hourlyRateCents: Int?
 
     /// Tips the employer still owes / held back, not on this check. Retired
     /// from the entry sheet's UI (2026-07-27) for the same CloudKit-schema-
     /// stability reason as hourlyRateCents.
-    var owedTipsCents: Int? { didSet { modifiedAt = .now } }
+    var owedTipsCents: Int?
 
     /// Stub gross.
-    var grossPayCents: Int? { didSet { modifiedAt = .now } }
+    var grossPayCents: Int?
 
     /// What actually hit the account.
-    var netPayCents: Int? { didSet { modifiedAt = .now } }
+    var netPayCents: Int?
 
     /// Base pay for the period, as printed on the stub — the audit's
     /// ground truth is PeriodIncome's computed wages, this is what the
     /// employer actually paid.
-    var regularWagesCents: Int? { didSet { modifiedAt = .now } }
+    var regularWagesCents: Int?
 
     /// Overtime pay for the period, as printed on the stub.
-    var overtimeWagesCents: Int? { didSet { modifiedAt = .now } }
+    var overtimeWagesCents: Int?
 
     /// Gratuity owed on the stub, separate from tips.
-    var gratuityCents: Int? { didSet { modifiedAt = .now } }
+    var gratuityCents: Int?
 
     /// Taxes withheld, as printed on the stub.
-    var taxesCents: Int? { didSet { modifiedAt = .now } }
+    var taxesCents: Int?
 
     /// Repairs only cent-level OCR drift that the complete earnings equation
     /// can prove. The stored value remains reviewable; opening and saving the
@@ -113,5 +114,18 @@ final class PaycheckRecord {
         self.overtimeWagesCents = overtimeWagesCents
         self.gratuityCents = gratuityCents
         self.taxesCents = taxesCents
+    }
+
+    /// Advances `modifiedAt`, the clock the sync layer uploads as
+    /// `client_updated_at`. Call it from every write path that changes a
+    /// synced field on an existing record.
+    ///
+    /// This replaced twelve `didSet { modifiedAt = .now }` observers on this
+    /// model that never ran, for the reason measured and written up on
+    /// `TipEntry.touch(at:)`: SwiftData's `@Model` macro rewrites a stored
+    /// property into computed accessors, so a `didSet` on one is dead code.
+    /// Do not restore them.
+    func touch(at date: Date = .now) {
+        modifiedAt = date
     }
 }
