@@ -9,6 +9,15 @@
 --   tip_entries, paycheck_records, user_settings, migration_receipts,
 --   payday_agent_api_keys, payday_agent_audit_log, payday_agent_idempotency
 --       -> direct cascading user_id
+--   shifts, shift_legacy_conflicts, shift_migration_state,
+--   private.shift_fold_backlog, private.shift_fold_failures
+--       -> direct cascading user_id, added by the shift representation
+--          (20260917190000). The two private tables are unreachable by the
+--          authenticated role, which is not the same thing as unowned: a
+--          foreign key does not require reachability, and without it these
+--          rows survive account deletion. shift_fold_failures.message holds
+--          SQLERRM text that for 22P02 and 22003 embeds the offending value
+--          out of the user's receipt payload.
 --   payday_agent_rate_limits
 --       -> cascades transitively through payday_agent_api_keys(key_id)
 --   payday_agent_rejected_requests
