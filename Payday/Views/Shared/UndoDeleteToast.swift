@@ -105,7 +105,57 @@ final class UndoDeleteToastState {
         self.commitWrite = commitWrite
     }
 
+    /// The shift-representation undo, beside the legacy one rather than
+    /// replacing it.
+    ///
+    /// Both are needed at once during the conversion window: a shipped 1.0
+    /// build writes `TipEntry` and an account that has not converted still
+    /// reads it, while a converted account deletes a `ShiftRecord`. Only one
+    /// can be pending at a time, because the toast shows one undo.
+    private(set) var deletedShift: ShiftCommands.DeletedShift?
+
     var snapshot: DeletedTipSnapshot? { snapshots.first }
+
+    /// One signal for the view layer, so the toast does not have to know which
+    /// representation it is undoing.
+    var hasPendingUndo: Bool { snapshot != nil || deletedShift != nil }
+
+    // MARK: - The shift representation
+
+    /// Deletes one `ShiftRecord`.
+    ///
+    /// Singular, where the legacy path takes an array, and that is the point:
+    /// the array exists only because a merged cash+credit closeout is TWO
+    /// `TipEntry` rows. One shift is one `ShiftRecord`, so the plural
+    /// disappears with the two-row model.
+    ///
+    /// `ShiftCommands.delete` owns the ordering -- it removes the row, saves,
+    /// and only then writes the deletion queue and the tombstone (#51). So
+    /// this must NOT wrap it in `commitWrite`: that would nest one transaction
+    /// inside another and give the set two saves rather than one.
+    ///
+    /// A refusal is expected rather than exceptional. `mayMutate` declines a
+    /// record with unconfirmed `legacyEntryIDs` while shifts are not yet
+    /// authoritative, because editing an unconfirmed fold result could clobber
+    /// a refold. On refusal nothing is deleted and no toast appears, so the
+    /// row simply stays -- which is the truth.
+    func delete(_ record: ShiftRecord, in context: ModelContext) {
+        let captured: ShiftCommands.DeletedShift
+        do {
+            captured = try ShiftCommands.delete(record, in: context)
+        } catch {
+            return
+        }
+
+        dismissTask?.cancel()
+        deletedShift = captured
+        PaydayHaptics.medium()
+        dismissTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(4))
+            guard !Task.isCancelled else { return }
+            self?.deletedShift = nil
+        }
+    }
 
     /// Deletes through the atomic boundary, and queues the server-side
     /// deletion only once the local delete has actually persisted.
@@ -160,6 +210,21 @@ final class UndoDeleteToastState {
     /// successful save means a failure leaves the deletion still queued and
     /// the toast still up, so Undo can simply be tapped again.
     func undo(in context: ModelContext) {
+        if let captured = deletedShift {
+            do {
+                _ = try ShiftCommands.restore(captured, in: context)
+            } catch {
+                // Rolled back, and deliberately NOT dismissed: the deletion is
+                // still queued and the tombstone still stands (#51), so the one
+                // affordance that can recover this shift is still on screen.
+                return
+            }
+            dismissTask?.cancel()
+            deletedShift = nil
+            PaydayHaptics.success()
+            return
+        }
+
         guard !snapshots.isEmpty else { return }
         let restoring = snapshots
 
@@ -188,7 +253,7 @@ private struct UndoDeleteToastModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         content.overlay(alignment: .bottom) {
-            if state.snapshot != nil {
+            if state.hasPendingUndo {
                 toast
                     .padding(.horizontal, PaydaySpacing.md)
                     .padding(.bottom, PaydaySpacing.md)
@@ -198,7 +263,7 @@ private struct UndoDeleteToastModifier: ViewModifier {
                     }
             }
         }
-        .animation(reduceMotion ? nil : PaydayAnimation.premiumSpring, value: state.snapshot != nil)
+        .animation(reduceMotion ? nil : PaydayAnimation.premiumSpring, value: state.hasPendingUndo)
     }
 
     private var toast: some View {
