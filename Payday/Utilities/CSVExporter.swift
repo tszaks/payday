@@ -162,12 +162,17 @@ enum CSVExporter {
         /// what a shift earned -- reads the field unguarded, so a reader that
         /// folded first would be a second definition of a record's money.
         ///
-        /// It is safe because a v1 payload cannot reach a `ShiftRecord`,
-        /// enforced at both write points: the server deriver's sanitizer
+        /// Correct whether or not a v1 payload is reachable, which is the
+        /// point: ONE definition of a record's money beats two that agree.
+        ///
+        /// It also happens to be unreachable. The server deriver's sanitizer
         /// stamps `earningsSchemaVersion` to 2 with `create_missing = true`,
-        /// and on device the `receiptMetrics` setter asserts `>= 2` while
-        /// `design-lint` makes `applyEarnings` the only writer. Both halves
-        /// are needed; neither alone would do it.
+        /// unconditionally. On device it is `design-lint` that enforces it --
+        /// failing the build on `.receiptMetrics =` outside
+        /// `ShiftRecord.swift`, so `applyEarnings` is the only writer and it
+        /// folds first. NOT the setter's `assert`, which Swift compiles out
+        /// under `-O` and which therefore guarantees nothing in a shipped
+        /// build.
         @MainActor
         init(record: ShiftRecord) {
             day = record.workDate

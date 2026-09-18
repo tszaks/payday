@@ -22,6 +22,24 @@ import Foundation
 /// rows per shift and a value on both rows is a value counted twice.
 @MainActor
 enum StatsRecordAdapter {
+    /// **The one entry point.** Both representations in, one row list out.
+    ///
+    /// Same shape as the combined earnings builders, and for the same reason:
+    /// `InsightsEarnings` and the widget's pace baseline both feed a
+    /// `StatsEngine`, and a caller that picks its own representation is a
+    /// caller that can forget to. The widget DID forget -- it fetched
+    /// `TipEntry` directly, so post-flip its pace delta would have compared
+    /// against a history that silently lost every post-conversion shift.
+    static func tipRecords(
+        entries: [TipEntry],
+        records: [ShiftRecord],
+        representation: ShiftRepresentation = .automatic
+    ) -> [TipRecord] {
+        representation.usesRecords
+            ? tipRecords(from: records)
+            : entries.map(TipRecord.init)
+    }
+
     /// Newest-first is not imposed here; `StatsEngine` orders what it needs.
     static func tipRecords(from records: [ShiftRecord]) -> [TipRecord] {
         var out: [TipRecord] = []
@@ -44,21 +62,32 @@ enum StatsRecordAdapter {
         // The reasoning about those two functions is correct. The conclusion
         // was wrong, for two reasons.
         //
-        // **A v1 payload cannot reach a `ShiftRecord`**, enforced at both
-        // write points rather than asserted:
+        // **A v1 payload cannot reach a `ShiftRecord`**, and it is worth
+        // being exact about what enforces that in a SHIPPED build:
         //
-        // 1. The server deriver stamps the version. `derive_shifts`'
-        //    sanitizer does `jsonb_set(..., '{earningsSchemaVersion}',
-        //    '2'::jsonb, true)` with `create_missing = true`, so every
-        //    derived payload is v2 whether or not the legacy row said so.
-        // 2. On device, `ShiftRecord.receiptMetrics`' setter asserts
-        //    `(earningsSchemaVersion ?? 2) >= 2`, and `design-lint` fails the
-        //    build on `.receiptMetrics =` outside `ShiftRecord.swift` -- so
-        //    the only writer is `applyEarnings`, which folds through
-        //    `normalizedToV2` before assigning.
+        // 1. On the server, unconditionally. `derive_shifts`' sanitizer does
+        //    `jsonb_set(..., '{earningsSchemaVersion}', '2'::jsonb, true)`
+        //    with `create_missing = true`, so every derived payload is v2
+        //    whether or not the legacy row said so.
+        // 2. On device, by `design-lint`, NOT by the assert. The
+        //    `receiptMetrics` setter does `assert((version ?? 2) >= 2)`, and
+        //    Swift compiles `assert` OUT under `-O` -- so that check holds in
+        //    Debug and vanishes in Release. What actually enforces it in a
+        //    shipped build is the lint rule failing the build on
+        //    `.receiptMetrics =` outside `ShiftRecord.swift`, which makes
+        //    `applyEarnings` the only writer and it folds through
+        //    `normalizedToV2` before assigning. That is compile-time and
+        //    always on. The assert is a Debug convenience, not the guarantee.
+        //
+        // Not "hardened" to `precondition`, deliberately: that would crash a
+        // shipped build on a payload it can already read correctly, which is
+        // a worse outcome than the one being guarded against.
         //
         // So the fold was a no-op on every reachable record. That alone would
-        // make it harmless dead code; the second reason is why it had to go.
+        // make it harmless dead code; the second reason is why it had to go --
+        // and note the second reason does NOT depend on reachability at all.
+        // The measurement above only told us WHICH of the two readers to
+        // change.
         //
         // **`ShiftRecord.nonWageEarningsCents` is the model's own definition
         // of a record's money, and it reads `employeeGratuityFeesCents`

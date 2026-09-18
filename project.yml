@@ -164,6 +164,15 @@ targets:
       # copy of the predicate reachable from AppGroup.swift, which is already
       # in this target) is exactly the divergence the comment above warns
       # about: it would compile, and no test would cover it.
+      # The pace baseline feeds a StatsEngine, and which representation it
+      # reads has to be the same decision the money figure above it makes.
+      # `StatsRecordAdapter` owns that conversion and `ShiftRepresentation`
+      # owns the one read of the predicate, so both compile here rather than
+      # the widget spelling the switch a second time -- a second spelling is
+      # how the Lock Screen and the app come to disagree, which is the whole
+      # reason this target's file list is explicit in the first place.
+      - path: Payday/Earnings/StatsRecordAdapter.swift
+      - path: Payday/Earnings/ShiftRepresentation.swift
       - path: Payday/Sync/ShiftReadAuthority.swift
       # `LegacyEditSheetPresence` is process-local and always empty in the
       # widget process, which is correct rather than a limitation: no sheet
