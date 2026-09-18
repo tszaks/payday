@@ -14,7 +14,67 @@ Status legend: `[ ]` not yet, `[x]` green with evidence recorded below it, `[H]`
 - Build number: _MDDYY+seq_
 - Date: _fill in_
 
-## Evidence recorded 2026-09-18, against `production` at 5a5db7e
+## Evidence recorded 2026-09-18 (later), against `paydaycore/s15-sync-leg` at 5755771
+
+Superseding the numbers in the section below, which were taken at `5a5db7e`
+before PR 2 slices S14 and S15. Added as a NEW dated block rather than edited
+over the old one, because rule 4 makes every line re-runnable against the
+final candidate and the earlier measurement is evidence of what was true when
+it was taken.
+
+```
+$ swift test --package-path Packages/PaydayCore
+Test run with 250 tests in 32 suites passed
+
+$ PAYDAYCORE_RELEASE_GATE=1 swift test --package-path Packages/PaydayCore
+Test run with 250 tests in 32 suites passed
+✔ Test "knownIssueCountIsZero" passed
+
+$ cat Packages/PaydayCore/Tests/PaydayCoreTests/Fixtures/KnownIssues.json
+[]
+
+$ xcodebuild test -scheme Payday -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
+Test run with 1127 tests in 197 suites passed          # Swift Testing total, not "Executed N"
+
+$ ./scripts/design-lint.sh
+=== Design lint passed ===        # 30 [PASS], 0 [FAIL]
+
+$ ls Packages/PaydayCore/Tests/PaydayCoreTests/Fixtures/*.json | grep -v KnownIssues | wc -l
+14
+```
+
+**The release gate is proven in BOTH directions, which a green run alone does
+not establish.** Planting `["W1"]` in `KnownIssues.json` makes the armed run
+fail with `Release blocked: known issues pending ["W1"]`, and the unarmed run
+still fails its shrink guarantee. So the green above is green because the
+list is empty, not because the gate is inert.
+
+**The 14 fixtures now GATE their money, which they did not before.** Measured
+by mutation: bump every `*Cents` value under a fixture's `expected` block and
+re-run.
+
+| | Before | After |
+|---|---|---|
+| Fixtures whose money is gated | **8 of 14** | **14 of 14** |
+
+The six that gated nothing were W3, M1, H1, P1, S2 and C1 -- 141 money values
+that could be changed with the suite still passing. `FixtureMoneyGateTests`
+closed them, and found a wrong number in `C1.json` on its first run (an
+hours-missing shift declaring `regularMinutes: 0` beside its own
+`minutesWorked: null`).
+
+**Never a test helper, verified rather than asserted.** The fixture gates call
+`CompensationLedger.evaluate` (x4), `PaycheckReconciler.proposal` (x2) and
+`HoursFormatting.{minutes,decimalHours,clockHours}` -- all production types
+from `PaydayCore`. A grep for a test-local cents function, `* 100`, `/ 60` or
+`roundCents` in those files returns nothing.
+
+**What this block does NOT establish**, so no one reads it as more than it is:
+criterion 1 (PR 2 has slices remaining; PRs 3-8 are not merged) and criterion
+6's deletion half (the legacy helpers survive as the legacy arm until PR 8).
+Criterion 6's LINT half is green, at 30 rules.
+
+## Evidence recorded 2026-09-18 (earlier), against `production` at 5a5db7e
 
 Filled in per rule 1 of this document: the command and its output, not the
 word "verified". This is an interim record against `production` rather than a
