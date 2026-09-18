@@ -1787,7 +1787,7 @@ progress number remain unbuilt.
 | Slice | Assumes legacy dead or dying? | Holds | Destination | State |
 |---|---|---|---|---|
 | S10 fence | **YES** — "TipEntry is read-only in this build" | **NO** | **PR 8**, behind the RELEASE_GATE entry condition | reclassified |
-| S11 Agent API | No — resolves pre-conversion ids via provenance | Yes | PR 2, now | code in, tests absent |
+| S11 Agent API | No — resolves pre-conversion ids via provenance | Yes | PR 2, now | money COVERED (5 tests); query layer untested |
 | S12 bridge parity | No — a bridge needs both representations | Yes | PR 2, now | 2 tests, none specified |
 | S13 data health | No — surfaces conversion in progress | Yes | PR 2, now | not started |
 
