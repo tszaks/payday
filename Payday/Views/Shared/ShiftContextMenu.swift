@@ -68,25 +68,37 @@ private func duplicateShift(_ entries: [TipEntry], into context: ModelContext) {
     // the canonical rule: only the row that held hours/tip-out/sales/period/
     // clock times/server-count in the source still holds them in the copy.
     let shiftID = UUID()
-    for entry in entries {
-        let copy = TipEntry(
-            date: entry.date,
-            amountCents: entry.amountCents,
-            kind: entry.kind,
-            note: entry.note,
-            recordedAt: .now,
-            hoursWorked: entry.hoursWorked,
-            tipOutCents: entry.tipOutCents,
-            salesCents: entry.salesCents,
-            shiftPeriod: entry.shiftPeriod,
-            shiftID: shiftID,
-            clockIn: entry.clockIn,
-            clockOut: entry.clockOut,
-            serverCount: entry.serverCount,
-            receiptMetrics: entry.receiptMetrics
-        )
-        context.insert(copy)
+
+    // Through the atomic boundary, and the haptic only on success. With
+    // `autosaveEnabled = false` a `try?` here meant a failed save duplicated
+    // nothing at all while still firing the haptic, so the gesture reported
+    // that it had worked and the copy was simply absent. The inserts sit
+    // INSIDE the boundary because these rows are one closeout sharing one
+    // fresh shiftID, and half of them is not a shift.
+    do {
+        try ShiftCommands.commit(in: context) {
+            for entry in entries {
+                let copy = TipEntry(
+                    date: entry.date,
+                    amountCents: entry.amountCents,
+                    kind: entry.kind,
+                    note: entry.note,
+                    recordedAt: .now,
+                    hoursWorked: entry.hoursWorked,
+                    tipOutCents: entry.tipOutCents,
+                    salesCents: entry.salesCents,
+                    shiftPeriod: entry.shiftPeriod,
+                    shiftID: shiftID,
+                    clockIn: entry.clockIn,
+                    clockOut: entry.clockOut,
+                    serverCount: entry.serverCount,
+                    receiptMetrics: entry.receiptMetrics
+                )
+                context.insert(copy)
+            }
+        }
+    } catch {
+        return
     }
-    try? context.save()
     PaydayHaptics.medium()
 }
