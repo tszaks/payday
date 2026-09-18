@@ -1,4 +1,3 @@
-import Combine
 import SwiftUI
 import SwiftData
 
@@ -7,70 +6,192 @@ private struct DaySelection: Identifiable {
     var id: Date { date }
 }
 
-/// One immutable render pass for Calendar. SwiftUI may ask a computed
-/// property again for every grid cell; collecting the month once avoids
-/// repeatedly filtering and grouping the full history during scrolling.
-struct CalendarMonthFacts {
-    let dailyTotals: [Date: Int]
-    let monthDailyTotals: [(day: Date, cents: Int)]
-    let monthTotalCents: Int
-    let displayedMonthMaxCents: Int
-    let daysWorkedCount: Int
-    let monthLoggedHours: Double
-    let gridDays: [Date]
+/// The ONE snapshot both Calendar surfaces read, built the same way from the
+/// same rows.
+///
+/// ## Why it is the WHOLE dataset and not the month
+///
+/// This is the fix for the audit's original confirmed bug. `CalendarView`
+/// used to hand `WageEstimate.centsSummedPerShift` one `Dictionary(grouping:
+/// by: \.day)` bucket at a time (CalendarView.swift:49 on `production`) while
+/// the month headline went through `PeriodIncome.wages` over the month's
+/// entries. The overtime threshold belongs to a WORKWEEK, so a day handed to
+/// the ledger alone can never carry the week's overtime and a month made of
+/// month-fragment weeks carries a different amount of it than the days do.
+/// MEASURED on W2's 48-hour week: headline 19716, tiles 18585, 1131c apart on
+/// one screen.
+///
+/// A whole-dataset snapshot removes the premise. Every week is allocated once,
+/// as a week, and then `range(_:)` and `days(in:)` only SELECT out of the same
+/// valuations — so `Σ tiles == headline` is arithmetic rather than hope, and a
+/// week that straddles the month edge keeps the overtime it earned.
+///
+/// ## Why the bridge and not `earningsStore`
+///
+/// Nothing writes `ShiftRecord` on a device yet (PR 2 slices S6-S13 are open),
+/// so `earningsStore.snapshot` is EMPTY in production and a screen switched
+/// onto it today would show a person with years of shifts a blank grid. See
+/// `LegacySnapshotBridge`'s header. When the shift sync leg lands this enum is
+/// the one place either Calendar surface has to change.
+enum CalendarEarnings {
+    /// The grouping calendar, which is NOT the grid's calendar: the grid needs
+    /// the user's week start for its layout, and a shift grouping must not.
+    /// The payroll zone is frozen here for the same reason the engine freezes
+    /// it — a device that travels must not re-date a shift.
+    static func groupingCalendar(payrollTimeZone: TimeZone) -> Calendar {
+        var calendar = Calendar.current
+        calendar.timeZone = payrollTimeZone
+        return calendar
+    }
 
-    init(
-        allEntries: [TipEntry],
-        displayedMonth: Date,
-        calendar: Calendar,
-        wageCentsPerHour: Int?,
-        firstWeekday: Int?,
+    /// Every shift in the dataset, grouped by the app's one grouping rule.
+    static func shiftGroups(
+        entries: [TipEntry],
         payrollTimeZone: TimeZone
-    ) {
-        let monthEntries = allEntries.filter {
-            calendar.isDate($0.date, equalTo: displayedMonth, toGranularity: .month)
-        }
-        let tipsByDay = Dictionary(grouping: monthEntries) {
-            calendar.startOfDay(for: $0.date)
-        }.mapValues { entries in
-            entries.reduce(0) { $0 + $1.netCents }
-        }
-        let monthShiftGroups = ShiftDays.groupedByShift(
-            monthEntries,
+    ) -> [(day: Date, shiftID: UUID, items: [TipEntry])] {
+        ShiftDays.groupedByShift(
+            entries,
             shiftID: \.shiftID,
             date: \.date,
             period: \.shiftPeriod,
-            calendar: calendar
+            calendar: groupingCalendar(payrollTimeZone: payrollTimeZone)
         )
+    }
 
-        if let wageCentsPerHour {
-            let shiftsByDay = Dictionary(grouping: monthShiftGroups, by: \.day)
-            let wagesByDay = shiftsByDay.mapValues {
-                WageEstimate.centsSummedPerShift(
-                    payrollTimeZone: payrollTimeZone,
-                    workweekStartWeekday: firstWeekday ?? calendar.firstWeekday,
-                    shiftGroups: $0.map(\.items),
-                    wageCentsPerHour: wageCentsPerHour
+    /// One snapshot over every shift, valued with the user's OWN rate and
+    /// workweek history, effective dates intact.
+    ///
+    /// `asOf` is `.distantFuture` deliberately, and it is the only cutoff
+    /// decision this screen makes. The calendar has never applied a to-date
+    /// clamp ([CA-01], [CA-04]: "no asOf — future-dated days render"), and it
+    /// must not start: a person who logs tomorrow's shift expects to see it on
+    /// tomorrow's tile. Opting out in the STAMP rather than per query is what
+    /// keeps `range(_:)` and `days(in:)` clamping identically, which is the
+    /// whole `Σ tiles == headline` guarantee — `day(_:)` is unclamped in the
+    /// engine and a half-clamped screen would disagree with itself.
+    static func snapshot(
+        shifts: [(day: Date, shiftID: UUID, items: [TipEntry])],
+        policies: CompensationPolicies,
+        payrollTimeZone: TimeZone
+    ) -> EarningsSnapshot? {
+        LegacySnapshotBridge.snapshot(
+            shifts: shifts,
+            policies: policies,
+            payrollTimeZone: payrollTimeZone,
+            asOf: .distantFuture
+        )
+    }
+}
+
+/// One tile of the month grid.
+///
+/// The tile holds an `EarningsFigure`, never cents: a day the engine could not
+/// answer renders no currency instead of `$0.00`, and `hasShifts` is what
+/// separates "nothing was worked" from "nothing is known".
+struct CalendarDayTile: Identifiable, Equatable {
+    /// The civil day this tile is, in the payroll zone.
+    let civilDay: CivilDay
+    /// The same day as a `Date`, for the grid's own lookups and labels.
+    let day: Date
+    /// That day's earnings as the engine answered, labelled by its own
+    /// completeness.
+    let figure: EarningsFigure
+    /// Whether any shift at all falls on this day. A day with a logged shift
+    /// worth $0 is a different fact from a day nobody worked, and only this
+    /// flag keeps them apart (the [CA-03] VoiceOver lie).
+    let hasShifts: Bool
+
+    var id: Int { civilDay.dayNumber }
+}
+
+/// One immutable render pass for Calendar: the grid's geometry, one figure per
+/// day of the displayed month, and the month's own figure.
+///
+/// The PR 5 adapter contract (`Payday/Earnings/SnapshotFacts.swift`), rule for
+/// rule:
+///
+/// 1. **Presentation only.** Grid days, which day a tile is, the month title's
+///    inputs, the heat normalizer, the counts. Every cents figure arrived from
+///    an `EarningsSnapshot` query and nothing here adds, subtracts, scales or
+///    rounds one.
+/// 2. **It takes a snapshot plus its own presentational inputs.** Not
+///    `[TipEntry]`, not `wageCentsPerHour`, not `firstWeekday`. The `Calendar`
+///    it does take is the grid's own geometry — the user's week start decides
+///    the column order and nothing else — and its `timeZone` is the frozen
+///    payroll zone the snapshot was built in, so a cell and the shift on it
+///    cannot disagree about which day it was.
+/// 3. **No `Key`, no `dataRevision`.** It carries the snapshot's `stamp`.
+/// 4. **`EarningsFigure`, never cents.** A `.partial` month reads "Known so
+///    far" and never "Total"; an unbacked read renders no currency at all.
+struct CalendarMonthFacts: SnapshotFacts {
+    // MARK: Presentation
+
+    /// Every cell the grid draws, including the leading and trailing days of
+    /// the neighbouring months.
+    let gridDays: [Date]
+    /// The displayed month's days, in order, one per tile.
+    let tiles: [CalendarDayTile]
+    /// Days with at least one shift on them.
+    let daysWorkedCount: Int
+    /// "Xh Ym" over the month's covered minutes, straight off the engine's
+    /// own minute count rather than a second pass over the rows.
+    let monthHoursLabel: String
+    /// The month's best day, which is the heat ramp's normalizer. A `max` is a
+    /// selection, not arithmetic: it is one of the tiles' own figures, the
+    /// same shape as `EarningsChartFacts.maxCents`.
+    let brightestTileCents: Int
+
+    // MARK: Money, from the engine
+
+    /// The displayed month, as `snapshot.range(month)` answered it.
+    ///
+    /// `Σ tiles == this`, by construction: both come from the same valuations
+    /// under the same cutoff, and the engine's `days(in:)` is documented to
+    /// partition exactly what `range(_:)` selects.
+    let monthFigure: EarningsFigure
+
+    let stamp: SnapshotStamp?
+
+    /// The payroll zone the snapshot was built in, for the grid's day lookup.
+    private let payrollTimeZone: TimeZone
+    private let tilesByDay: [Int: CalendarDayTile]
+
+    init(snapshot: EarningsSnapshot?, displayedMonth: Date, calendar: Calendar) {
+        let zone = calendar.timeZone
+        payrollTimeZone = zone
+        stamp = snapshot?.stamp
+
+        let month = YearMonth(CivilDay(displayedMonth, in: zone))
+        if let snapshot {
+            let monthResult = snapshot.range(month.range)
+            monthFigure = .earnedIncome(monthResult)
+            monthHoursLabel = WorkedMinutes.hoursLabel(minutes: monthResult.minutes)
+            // One result per civil day of the month, from the query whose
+            // contract is that it partitions the range above. Paired by each
+            // result's OWN range rather than by index, so a cutoff that
+            // shortened the series can never shift a figure onto the wrong
+            // tile.
+            tiles = snapshot.days(in: month.range).compactMap { result in
+                guard let civilDay = result.range?.start else { return nil }
+                return CalendarDayTile(
+                    civilDay: civilDay,
+                    day: civilDay.date(in: zone),
+                    figure: .earnedIncome(result),
+                    hasShifts: !result.shiftIDs.isEmpty
                 )
             }
-            dailyTotals = tipsByDay.merging(wagesByDay, uniquingKeysWith: +)
         } else {
-            dailyTotals = tipsByDay
+            // Rule 4: no snapshot is a failed read, not an empty month. Every
+            // figure on the screen renders a placeholder and the grid draws no
+            // amounts at all.
+            monthFigure = .unavailable()
+            monthHoursLabel = WorkedMinutes.hoursLabel(minutes: 0)
+            tiles = []
         }
 
-        monthDailyTotals = dailyTotals.map { (day: $0.key, cents: $0.value) }
-        displayedMonthMaxCents = monthDailyTotals.map(\.cents).max() ?? 0
-        daysWorkedCount = monthDailyTotals.count
-        monthLoggedHours = WageEstimate.loggedHours(shiftGroups: monthShiftGroups.map(\.items))
-
-        let tipsCents = monthEntries.reduce(0) { $0 + $1.netCents }
-        let wages = PeriodIncome.wages(
-            payrollTimeZone: payrollTimeZone,
-            entries: monthEntries,
-            wageCentsPerHour: wageCentsPerHour,
-            firstWeekday: firstWeekday
-        )
-        monthTotalCents = tipsCents + (wages?.totalCents ?? 0)
+        tilesByDay = Dictionary(tiles.map { ($0.civilDay.dayNumber, $0) }, uniquingKeysWith: { first, _ in first })
+        daysWorkedCount = tiles.filter(\.hasShifts).count
+        brightestTileCents = tiles.compactMap(\.figure.cents).max() ?? 0
 
         guard let monthInterval = calendar.dateInterval(of: .month, for: displayedMonth) else {
             gridDays = []
@@ -90,35 +211,56 @@ struct CalendarMonthFacts {
             calendar.date(byAdding: .day, value: $0, to: gridStart)
         }
     }
-}
 
-private struct CalendarMonthFactsKey: Equatable {
-    let entriesRevision: Int
-    let displayedMonth: Date
-    let wageCentsPerHour: Int?
-    let firstWeekday: Int
-    let timeZoneIdentifier: String
-}
+    /// The tile for one grid cell, or nil when that cell is a neighbouring
+    /// month's day (or when there is no dataset behind the grid at all).
+    ///
+    /// Keyed by civil day rather than by `Date` so a DST boundary, where a
+    /// day's midnight is not 86,400 seconds after the previous one, cannot
+    /// miss.
+    func tile(on day: Date) -> CalendarDayTile? {
+        tilesByDay[CivilDay(day, in: payrollTimeZone).dayNumber]
+    }
 
-private struct CalendarMonthFactsCache {
-    let key: CalendarMonthFactsKey
-    let facts: CalendarMonthFacts
+    /// Whether the month has anything to summarize. False for a month nobody
+    /// worked AND for a read that failed — the two render different things,
+    /// which is why `isUnbacked` is checked separately.
+    var hasAnythingLogged: Bool { !tiles.isEmpty && daysWorkedCount > 0 }
+
+    /// The line under the month's number.
+    ///
+    /// `"this month"` alone whenever the figure may be called a total. When it
+    /// may not, the figure's own label leads: a month holding a shift with no
+    /// hours logged reads "known so far this month", never a bare total that
+    /// quietly excludes it. The rule is `EarningsFigure`'s, not this screen's.
+    var monthCaption: String {
+        // An unavailable figure is not "known so far" about anything; it is
+        // the absence of an answer, and the placeholder next to it already
+        // says that.
+        if monthFigure.isUnavailable || monthFigure.mayBeCalledATotal { return "this month" }
+        return "\(monthFigure.label.lowercased()) this month"
+    }
 }
 
 struct CalendarView: View {
     @Environment(PayScheduleStore.self) private var scheduleStore
-    @Environment(UserPreferencesStore.self) private var preferencesStore
     @Environment(PolicyStore.self) private var policyStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Query private var allEntries: [TipEntry]
 
     @State private var displayedMonth: Date = Calendar.current.startOfDay(for: .now)
     @State private var daySelection: DaySelection?
-    @State private var factsCache: CalendarMonthFactsCache?
-    @State private var dataRevision = 0
 
     /// Honors the user's chosen week-start; the grid layout and weekday header
     /// both key off calendar.firstWeekday, so setting it here is enough.
+    ///
+    /// This weekday is the pay-period GRID's, and it is a LAYOUT input only.
+    /// PR 3 severed it from the workweek that owns overtime, which lives on
+    /// `PayrollCalendarPolicy` — and the snapshot below is handed
+    /// `policyStore.policies` whole so the engine does its own effective
+    /// dating. Feeding this weekday onto a money path is what made Dashboard
+    /// and Insights allocate overtime across different weeks over the same
+    /// days.
     private var calendar: Calendar {
         var c = Calendar.current
         c.firstWeekday = scheduleStore.schedule?.resolvedFirstWeekday ?? c.firstWeekday
@@ -134,17 +276,16 @@ struct CalendarView: View {
     }
 
     var body: some View {
+        // No `Key` and no `dataRevision` (contract rule 3): the snapshot's
+        // `stamp` is the complete dependency list, and it is complete because
+        // it is computed rather than hand-listed. Nor is there a facts cache
+        // keyed on it — a cache key has to exist BEFORE the value it guards,
+        // and the stamp only exists after the snapshot is built. Measured
+        // instead: `RenderFactsPerformanceTests.calendarFactsStayFastForLargeHistory`
+        // covers the snapshot build AND the month's queries over a 10,000-row
+        // history inside the interactive budget.
         let resolvedCalendar = calendar
-        let key = CalendarMonthFactsKey(
-            entriesRevision: dataRevision,
-            displayedMonth: displayedMonth,
-            wageCentsPerHour: preferencesStore.baseHourlyWageCents,
-            firstWeekday: resolvedCalendar.firstWeekday,
-            timeZoneIdentifier: resolvedCalendar.timeZone.identifier
-        )
-        let facts = factsCache?.key == key
-            ? factsCache!.facts
-            : makeFacts(calendar: resolvedCalendar)
+        let facts = makeFacts(calendar: resolvedCalendar)
         ScrollView {
             VStack(spacing: PaydaySpacing.p16) {
                 monthNavRow
@@ -162,10 +303,10 @@ struct CalendarView: View {
                         } label: {
                             DayCell(
                                 day: day,
-                                totalCents: facts.dailyTotals[day],
-                                monthMaxCents: facts.displayedMonthMaxCents,
-                                isCurrentMonth: calendar.isDate(day, equalTo: displayedMonth, toGranularity: .month),
-                                isToday: calendar.isDateInToday(day)
+                                tile: facts.tile(on: day),
+                                monthMaxCents: facts.brightestTileCents,
+                                isCurrentMonth: resolvedCalendar.isDate(day, equalTo: displayedMonth, toGranularity: .month),
+                                isToday: resolvedCalendar.isDateInToday(day)
                             )
                         }
                         .buttonStyle(PressableButtonStyle())
@@ -185,13 +326,6 @@ struct CalendarView: View {
         .sheet(item: $daySelection) { selection in
             DayDetailSheet(date: selection.date).paydayAppearance()
         }
-        .task(id: key) {
-            guard factsCache?.key != key else { return }
-            factsCache = CalendarMonthFactsCache(key: key, facts: facts)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: ModelContext.didSave)) { _ in
-            dataRevision &+= 1
-        }
         #if DEBUG
         .onAppear {
             if ProcessInfo.processInfo.arguments.contains("-OpenDaySheet") {
@@ -202,13 +336,15 @@ struct CalendarView: View {
     }
 
     private func makeFacts(calendar: Calendar) -> CalendarMonthFacts {
-        CalendarMonthFacts(
-            allEntries: allEntries,
+        let zone = policyStore.payrollTimeZone
+        return CalendarMonthFacts(
+            snapshot: CalendarEarnings.snapshot(
+                shifts: CalendarEarnings.shiftGroups(entries: allEntries, payrollTimeZone: zone),
+                policies: policyStore.policies,
+                payrollTimeZone: zone
+            ),
             displayedMonth: displayedMonth,
-            calendar: calendar,
-            wageCentsPerHour: preferencesStore.baseHourlyWageCents,
-            firstWeekday: scheduleStore.schedule?.firstWeekday,
-            payrollTimeZone: policyStore.payrollTimeZone
+            calendar: calendar
         )
     }
 
@@ -272,7 +408,24 @@ struct CalendarView: View {
     /// zeroed-out stats.
     @ViewBuilder
     private func monthSummarySection(_ facts: CalendarMonthFacts) -> some View {
-        if facts.monthDailyTotals.isEmpty {
+        if facts.isUnbacked {
+            // A failed read. Not "nothing logged this month", which would be a
+            // claim about the person's history, and not `$0.00`.
+            VStack(spacing: PaydaySpacing.p12) {
+                Divider()
+                VStack(spacing: 2) {
+                    Text(ShiftDayRow.unavailablePlaceholder)
+                        .font(PaydayFont.displayMedium)
+                        .monospacedDigit()
+                        .foregroundStyle(PaydayColor.textSecondary)
+                    Text(facts.monthCaption)
+                        .font(PaydayFont.caption)
+                        .foregroundStyle(PaydayColor.textSecondary)
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Amount unavailable for this month.")
+            }
+        } else if !facts.hasAnythingLogged {
             Text("Nothing logged this month.")
                 .font(PaydayFont.footnote)
                 .foregroundStyle(PaydayColor.textSecondary)
@@ -283,22 +436,31 @@ struct CalendarView: View {
                 Divider()
 
                 VStack(spacing: 2) {
-                    Text(Money.string(fromCents: facts.monthTotalCents))
+                    Text(facts.monthFigure.text ?? ShiftDayRow.unavailablePlaceholder)
                         .font(PaydayFont.displayMedium)
                         .monospacedDigit()
                         .foregroundStyle(PaydayColor.textPrimary)
                         .contentTransition(.numericText())
                         .animation(
                             reduceMotion ? nil : PaydayAnimation.premiumSpring,
-                            value: facts.monthTotalCents
+                            value: facts.monthFigure.cents
                         )
-                    Text("this month")
+                    Text(facts.monthCaption)
                         .font(PaydayFont.caption)
                         .foregroundStyle(PaydayColor.textSecondary)
+                    // `.estimated` carries its caption, per the completeness
+                    // presentation rules: a wage priced off an assumed rate
+                    // says so on the surface that shows it.
+                    if let caption = facts.monthFigure.caption {
+                        Text(caption)
+                            .font(PaydayFont.caption2)
+                            .foregroundStyle(PaydayColor.textTertiary)
+                            .multilineTextAlignment(.center)
+                    }
                 }
 
                 VStack(spacing: 4) {
-                    Text("\(facts.daysWorkedCount) day\(facts.daysWorkedCount == 1 ? "" : "s") worked · \(WageEstimate.hoursLabel(facts.monthLoggedHours))")
+                    Text("\(facts.daysWorkedCount) day\(facts.daysWorkedCount == 1 ? "" : "s") worked · \(facts.monthHoursLabel)")
                         .font(PaydayFont.subheadline)
                         .foregroundStyle(PaydayColor.textPrimary)
                         .monospacedDigit()
@@ -321,7 +483,8 @@ struct CalendarView: View {
 
 private struct DayCell: View {
     let day: Date
-    let totalCents: Int?
+    /// This day's tile, or nil for a neighbouring month's day.
+    let tile: CalendarDayTile?
     /// The best day of the displayed month — full heat. Each month
     /// self-normalizes so its own hottest day always reads at full intensity.
     let monthMaxCents: Int
@@ -334,20 +497,28 @@ private struct DayCell: View {
         Calendar.current.component(.day, from: day)
     }
 
-    private var hasTips: Bool {
-        isCurrentMonth && (totalCents ?? 0) > 0
+    /// The day's own figure, only for a day of the displayed month.
+    private var figure: EarningsFigure? {
+        isCurrentMonth ? tile?.figure : nil
     }
 
+    private var hasTips: Bool {
+        (figure?.cents ?? 0) > 0
+    }
+
+    /// The heat ramp's position. A magnitude encoding, not a figure: it prints
+    /// no currency and it is why the tile's own `EarningsFigure` keeps its
+    /// cents available. Nothing downstream of this is money.
     private var heatFraction: Double {
-        guard hasTips, let totalCents else { return 0 }
-        return monthMaxCents > 0 ? min(1.0, Double(totalCents) / Double(monthMaxCents)) : 1.0
+        guard hasTips, let cents = figure?.cents else { return 0 }
+        return monthMaxCents > 0 ? min(1.0, Double(cents) / Double(monthMaxCents)) : 1.0
     }
 
     var body: some View {
         VStack(spacing: 2) {
             dayNumberLabel
-            if hasTips, let totalCents {
-                Text(Money.wholeDollarString(fromCents: totalCents))
+            if hasTips, let amount = figure?.wholeDollarText {
+                Text(amount)
                     .font(PaydayFont.caption2)
                     .fontWeight(.medium)
                     .monospacedDigit()
@@ -386,10 +557,18 @@ private struct DayCell: View {
             )
     }
 
+    /// Three different facts, said differently, where the old label said "no
+    /// shifts" for all three: a day with money on it, a day somebody worked
+    /// for nothing, and a day the engine could not answer for.
     private var accessibilityLabel: String {
         let dateText = day.formatted(.dateTime.month(.wide).day())
-        guard hasTips, let totalCents else { return "\(dateText), no shifts" }
-        return "\(dateText), \(Money.string(fromCents: totalCents)) logged"
+        guard let figure, isCurrentMonth, tile?.hasShifts == true else {
+            return "\(dateText), no shifts"
+        }
+        guard let amount = figure.text else {
+            return "\(dateText), amount unavailable"
+        }
+        return "\(dateText), \(amount) logged"
     }
 
     /// One-hue green ramp (Tyler, 2026-07-28), reversing the temperature-walk

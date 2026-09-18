@@ -19,11 +19,55 @@ private func shiftID(_ index: Int) -> UUID {
     UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", index))!
 }
 
+/// Σ of the figures the rows actually rendered. A row whose figure is
+/// `.unavailable` contributes nothing and is visible as a `nil` in the array,
+/// so a hero that matched a silently-zeroed row would still fail the count
+/// assertions next to this one.
+private func rowSum(_ rows: [Int?]) -> Int {
+    rows.compactMap { $0 }.reduce(0, +)
+}
+
+/// The compensation policies these suites value with, as `PolicyStore` would
+/// hold them: a real effective-dated history, never a scalar rate and never a
+/// scalar weekday. A scalar rate becomes a `.distantPast` `.confirmed` policy
+/// that reprices every pre-raise shift at today's rate, and a scalar weekday
+/// re-buckets overtime into a week the engine never chose.
+private func parityPolicies(
+    rateCents: Int?,
+    workweekStartWeekday: Int = 2,
+    rateEffectiveFrom: CivilDay = .distantPast
+) -> CompensationPolicies {
+    let calendar = PayrollCalendarPolicy(
+        id: PolicyMigration.deterministicID("parity/calendar/\(workweekStartWeekday)"),
+        effectiveFrom: .distantPast,
+        workweekStartWeekday: workweekStartWeekday,
+        payrollTimeZone: PaydayTestZone.payroll
+    )
+    guard let rateCents else { return CompensationPolicies(rates: [], calendars: [calendar]) }
+    return CompensationPolicies(
+        rates: [PayRatePolicy(
+            id: PolicyMigration.deterministicID("parity/rate/\(rateCents)"),
+            effectiveFrom: rateEffectiveFrom,
+            hourlyRateCents: rateCents,
+            provenance: .confirmed
+        )],
+        calendars: [calendar]
+    )
+}
+
 /// Definition of Done #5, first clause: **a day equals the sum of that day's
-/// shifts.** Measured on the exact arithmetic `DayDetailSheet` performs —
-/// the hero is `TipBreakdown` net plus `WageEstimate.centsByShiftID`, and
-/// every `ShiftDayRow` under it prints its own slice out of that same
-/// dictionary.
+/// shifts.**
+///
+/// Measured on the REAL adapter. Until PR 5 wave 1 these tests re-implemented
+/// `DayDetailFacts`'s arithmetic in a local helper ("exactly what
+/// DayDetailFacts does, in the same order"), which pins the helper and not the
+/// screen — the failure mode the whole plan exists to remove. `DayDetailFacts`
+/// is now internal and these suites construct it.
+///
+/// The invariant is no longer an equality the screen has to maintain; it is an
+/// identity. `DayDetailFacts.total` is `snapshot.day(thatDay)` and
+/// `DayDetailFacts.shifts` is that same result's `shiftIDs`, so the hero and
+/// the rows name one selection of one allocation.
 ///
 /// This is the invariant PR 3's first cut broke: the hero moved onto the
 /// ledger's cumulative per-week allocation while each row kept calling
@@ -33,29 +77,27 @@ private func shiftID(_ index: Int) -> UUID {
 /// apart from itself.
 @Suite("A day's hero equals the sum of the shift rows it lists")
 struct DayHeroEqualsItsRowsTests {
-    /// Exactly what `DayDetailFacts` does, in the same order.
+    /// The real screen adapter, plus what the rows under it render.
     private func dayFacts(
         entries: [TipEntry],
-        wageCentsPerHour: Int?,
+        date: Date,
+        rateCents: Int?,
         workweekStartWeekday: Int = 2
-    ) -> (heroCents: Int, rowCents: [Int], wagesByShiftID: [UUID: Int]) {
-        let calendar = payrollCalendar(firstWeekday: workweekStartWeekday)
-        let shifts = ShiftDays.groupedByShift(
-            entries, shiftID: \.shiftID, date: \.date, period: \.shiftPeriod, calendar: calendar
+    ) -> (facts: DayDetailFacts, heroCents: Int?, rowCents: [Int?], wagesByShiftID: [UUID: Int]) {
+        let facts = DayDetailFacts(
+            allEntries: entries,
+            date: date,
+            policies: parityPolicies(rateCents: rateCents, workweekStartWeekday: workweekStartWeekday),
+            payrollTimeZone: PaydayTestZone.payroll
         )
-        let wagesByShiftID = WageEstimate.centsByShiftID(
-            payrollTimeZone: PaydayTestZone.payroll,
-            workweekStartWeekday: workweekStartWeekday,
-            shifts: shifts,
-            wageCentsPerHour: wageCentsPerHour
-        )
-        let hero = TipBreakdown.total(of: entries).netTotalCents
-            + shifts.reduce(0) { $0 + (wagesByShiftID[$1.shiftID] ?? 0) }
-        // What ShiftDayRow renders: that shift's net tips plus its slice.
-        let rows = shifts.map { group in
-            TipBreakdown.total(of: group.items).netTotalCents + (wagesByShiftID[group.shiftID] ?? 0)
+        let rows = facts.shifts.map { group in
+            facts.rowFacts(for: group, shiftCount: facts.shifts.count, note: nil).amount.cents
         }
-        return (hero, rows, wagesByShiftID)
+        let wages = Dictionary(
+            facts.shifts.map { ($0.shiftID, facts.snapshot?.valuation($0.shiftID)?.components.wagesCents ?? 0) },
+            uniquingKeysWith: +
+        )
+        return (facts, facts.total.cents, rows, wages)
     }
 
     @Test("W1's two shifts on one day: the rows are 1203 and 1556, and 2759 is both the hero and their sum")
@@ -67,7 +109,7 @@ struct DayHeroEqualsItsRowsTests {
             TipEntry(date: day.addingTimeInterval(3600), amountCents: 6000, kind: .credit, hoursWorked: 5.5,
                      shiftPeriod: .dinner, shiftID: shiftID(2))
         ]
-        let facts = dayFacts(entries: entries, wageCentsPerHour: 283)
+        let facts = dayFacts(entries: entries, date: day, rateCents: 283)
 
         // The wage halves, pinned by number: lunch takes the threshold first.
         #expect(facts.wagesByShiftID[shiftID(1)] == 1203)
@@ -82,14 +124,16 @@ struct DayHeroEqualsItsRowsTests {
 
         // And the invariant: hero == Σ rows, to the cent.
         #expect(facts.rowCents == [5000 + 1203, 6000 + 1556])
-        #expect(facts.heroCents == facts.rowCents.reduce(0, +))
+        #expect(facts.heroCents == rowSum(facts.rowCents))
         #expect(facts.heroCents == 5000 + 6000 + 2759)
+        // A complete day may be called a total. The label is the figure's.
+        #expect(facts.facts.total.label == "Total")
     }
 
-    @Test("a day whose shifts straddle the weekly threshold still reconciles, overtime and all")
+    @Test("a day whose shifts straddle the weekly threshold now CARRIES the week's overtime")
     func straddlingDayReconciles() {
         // Mon-Wed 10h each puts 30 hours on the clock; Thursday's lunch and
-        // dinner then split the last 10 regular hours and 4 hours of overtime.
+        // dinner then split the last 10 regular hours and 2 hours of overtime.
         var entries = (0..<3).map { index in
             TipEntry(date: at(2026, 10, 5 + index), amountCents: 1000, kind: .credit,
                      hoursWorked: 10, shiftPeriod: .dinner, shiftID: shiftID(index + 1))
@@ -100,23 +144,24 @@ struct DayHeroEqualsItsRowsTests {
         entries.append(TipEntry(date: thursday.addingTimeInterval(3600), amountCents: 3000, kind: .credit,
                                 hoursWorked: 8, shiftPeriod: .dinner, shiftID: shiftID(5)))
 
-        // The sheet only ever sees ONE day's entries.
-        let thursdayEntries = entries.filter { payrollCalendar().isDate($0.date, inSameDayAs: thursday) }
-        let facts = dayFacts(entries: thursdayEntries, wageCentsPerHour: 283)
-
-        #expect(facts.heroCents == facts.rowCents.reduce(0, +))
+        // THE FIX. The sheet is handed the whole dataset and asks the engine
+        // for one DAY out of it, so the week is allocated as a week: the
+        // dinner shift carries 2 hours at 1.5x. Before PR 5 wave 1 this sheet
+        // built a snapshot from one day's entries, the threshold was split
+        // over Thursday's 12 hours alone, and no overtime appeared at all.
+        let facts = dayFacts(entries: entries, date: thursday, rateCents: 283)
         #expect(facts.rowCents.count == 2)
-
-        // CAVEAT, and it is why PR 5 exists: the sheet hands the ledger one
-        // DAY, so the threshold is split over Thursday's 12 hours alone and
-        // no overtime appears at all. 12h at 283c is 3396c straight time.
-        #expect(facts.wagesByShiftID.values.reduce(0, +) == 3396)
         #expect(facts.wagesByShiftID[shiftID(4)] == 1132)
-        #expect(facts.wagesByShiftID[shiftID(5)] == 2264)
+        #expect(facts.wagesByShiftID[shiftID(5)] == 2547)
+        #expect(facts.wagesByShiftID.values.reduce(0, +) == 3679)
+        #expect(facts.wagesByShiftID.values.reduce(0, +) != 3396, "the superseded day-scoped allocation")
 
-        // Handed the whole week, the same Thursday pair is 1132 + 2547: the
-        // dinner shift carries 2 hours at 1.5x. The day sheet is 283c short
-        // of the truth, and that gap is PR 5's, not a rounding disagreement.
+        #expect(facts.rowCents == [2000 + 1132, 3000 + 2547])
+        #expect(facts.heroCents == rowSum(facts.rowCents))
+        #expect(facts.heroCents == 2000 + 3000 + 3679)
+
+        // The same numbers the pre-PR-5 helper produced for the whole week,
+        // which is the point: the sheet is no longer 283c short of the truth.
         let weekShifts = ShiftDays.groupedByShift(
             entries, shiftID: \.shiftID, date: \.date, period: \.shiftPeriod, calendar: payrollCalendar()
         )
@@ -139,13 +184,18 @@ struct DayHeroEqualsItsRowsTests {
             TipEntry(date: day.addingTimeInterval(3600), amountCents: 4000, kind: .credit, hoursWorked: 5,
                      shiftID: shiftID(2))
         ]
-        let facts = dayFacts(entries: entries, wageCentsPerHour: nil)
+        let facts = dayFacts(entries: entries, date: day, rateCents: nil)
         #expect(facts.wagesByShiftID.values.allSatisfy { $0 == 0 })
-        #expect(facts.heroCents == facts.rowCents.reduce(0, +))
+        #expect(facts.heroCents == rowSum(facts.rowCents))
         #expect(facts.heroCents == 9000)
+        // Wages off means the figure IS non-wage earnings, so it takes a
+        // non-wage label. "Total" here would name a different metric from the
+        // number under it.
+        #expect(facts.facts.total.label == "Tips")
+        #expect(facts.facts.total.metric == .nonWageEarnings)
     }
 
-    @Test("a shift with no hours logged contributes nothing, and the day still reconciles")
+    @Test("a shift with no hours logged contributes nothing, the day still reconciles, and it is never called a total")
     func missingHoursReconciles() {
         let day = at(2026, 9, 28)
         let entries = [
@@ -154,39 +204,42 @@ struct DayHeroEqualsItsRowsTests {
             TipEntry(date: day.addingTimeInterval(3600), amountCents: 6000, kind: .credit,
                      shiftPeriod: .dinner, shiftID: shiftID(2))
         ]
-        let facts = dayFacts(entries: entries, wageCentsPerHour: 283)
+        let facts = dayFacts(entries: entries, date: day, rateCents: 283)
         #expect(facts.wagesByShiftID[shiftID(1)] == 1203)
         #expect(facts.wagesByShiftID[shiftID(2)] == 0)
-        #expect(facts.heroCents == facts.rowCents.reduce(0, +))
+        #expect(facts.heroCents == rowSum(facts.rowCents))
+        // The audit's headline defect, now unspellable: a day whose wage
+        // picture has a hole says so instead of printing a total.
+        #expect(facts.facts.total.label == "Known so far")
+        #expect(facts.facts.total.mayBeCalledATotal == false)
+        #expect(facts.facts.total.caption == "wages missing for 1 shift")
     }
 }
 
-/// Definition of Done #5, last clause: **a month equals the sum of its
-/// days.** It does NOT hold yet, and this suite is where that debt is
-/// measured rather than assumed.
+/// Definition of Done #5, last clause: **a month equals the sum of its days.**
 ///
-/// `CalendarMonthFacts` computes its header from `PeriodIncome.wages` over
-/// the whole month and its tiles from `WageEstimate.centsSummedPerShift`
-/// called once per day (`CalendarView.swift:49`, one `Dictionary(grouping:
-/// by: \.day)` bucket at a time). The ledger always splits the overtime
-/// threshold over the COMPLETE workweek of the shifts it is handed, so a
-/// month gets the overtime and a single day never can. The divergence is
-/// pre-existing on `production` and consumer migration is explicitly PR 5;
-/// what PR 3 owed was the measurement, which is here.
+/// CLOSED by PR 5 wave 1, group 2.2 (2026-09-18). The `withKnownIssue` wrapper
+/// that used to live in this suite is deleted, and `monthEqualsSumOfItsDays`
+/// asserts for real.
 ///
-/// The parity assertion itself is wrapped in `withKnownIssue`, so it is
-/// recorded as a known issue today and FAILS the build the moment PR 5 makes
-/// it true — `withKnownIssue` reports `knownIssueNotRecorded` when its body
-/// passes. Delete the wrapper in the PR that closes it.
-@Suite("A month equals the sum of its days — open, PR 5")
+/// What it took: `CalendarMonthFacts` no longer computes anything. It takes one
+/// whole-dataset `EarningsSnapshot` and asks it twice — `range(month)` for the
+/// headline, `days(in: month)` for the tiles — so both sides select out of the
+/// same per-shift valuations, each allocated over its COMPLETE workweek. The
+/// old shape sliced the ledger per day for the tiles
+/// (`WageEstimate.centsSummedPerShift`, one `Dictionary(grouping: by: \.day)`
+/// bucket at a time) while the headline went through `PeriodIncome.wages` over
+/// the month's entries, so a month got the week's overtime and a single day
+/// never could: 19716 against 18585, 1131c apart on one screen.
+@Suite("A month equals the sum of its days")
 struct MonthEqualsSumOfItsDaysTests {
     /// W2's 48-hour week, moved wholly inside October 2026 (Mon 2026-10-05
     /// through Fri 2026-10-09) so nothing is lost to the month boundary and
     /// the only thing left to lose is the per-day slicing itself.
-    private func octoberFacts() -> CalendarMonthFacts {
-        let calendar = payrollCalendar()
-        let minutes = [615.0, 585, 630, 690, 360]
-        let entries = minutes.enumerated().map { index, m in
+    static let w2Minutes: [Double] = [615, 585, 630, 690, 360]
+
+    static func w2Entries() -> [TipEntry] {
+        w2Minutes.enumerated().map { index, m in
             TipEntry(
                 date: at(2026, 10, 5 + index),
                 amountCents: 1000,
@@ -196,61 +249,119 @@ struct MonthEqualsSumOfItsDaysTests {
                 shiftID: shiftID(index + 1)
             )
         }
+    }
+
+    /// The real adapter, fed the way `CalendarView` feeds it.
+    static func monthFacts(
+        entries: [TipEntry],
+        month: (year: Int, month: Int),
+        rateCents: Int?,
+        workweekStartWeekday: Int = 2,
+        rateEffectiveFrom: CivilDay = .distantPast
+    ) -> CalendarMonthFacts {
+        let calendar = payrollCalendar(firstWeekday: workweekStartWeekday)
         return CalendarMonthFacts(
-            allEntries: entries,
-            displayedMonth: calendar.date(from: DateComponents(year: 2026, month: 10, day: 1))!,
-            calendar: calendar,
-            wageCentsPerHour: 283,
-            firstWeekday: 2,
-            payrollTimeZone: PaydayTestZone.payroll
+            snapshot: CalendarEarnings.snapshot(
+                shifts: CalendarEarnings.shiftGroups(
+                    entries: entries,
+                    payrollTimeZone: PaydayTestZone.payroll
+                ),
+                policies: parityPolicies(
+                    rateCents: rateCents,
+                    workweekStartWeekday: workweekStartWeekday,
+                    rateEffectiveFrom: rateEffectiveFrom
+                ),
+                payrollTimeZone: PaydayTestZone.payroll
+            ),
+            displayedMonth: calendar.date(from: DateComponents(year: month.year, month: month.month, day: 1))!,
+            calendar: calendar
         )
     }
 
-    @Test("MEASURED: the month header carries W2's 14716 of wages while its five tiles carry 13585")
-    func headerAndTilesDisagreeByTheOvertime() {
+    private func octoberFacts() -> CalendarMonthFacts {
+        Self.monthFacts(entries: Self.w2Entries(), month: (2026, 10), rateCents: 283)
+    }
+
+    @Test("MEASURED: the month header and its five tiles are now one answer, 19716, and the 1131c gap is gone")
+    func headerAndTilesAgree() {
         let facts = octoberFacts()
         let tips = 5 * 1000
 
-        // The header: one ledger pass over the whole month, so the week's
+        // The header: one ledger pass over the whole dataset, so the week's
         // 8 hours past 40 pay 1.5x. 11320 regular + 3396 overtime.
-        #expect(facts.monthTotalCents == tips + 14716)
+        #expect(facts.monthFigure.cents == tips + 14716)
 
-        // The tiles: five independent one-day passes, every hour at the base
-        // rate. 2901 + 2759 + 2972 + 3255 + 1698.
-        let tileTotal = facts.monthDailyTotals.reduce(0) { $0 + $1.cents }
-        #expect(tileTotal == tips + 13585)
-        #expect(facts.monthDailyTotals.map(\.cents).sorted() == [1000 + 1698, 1000 + 2759, 1000 + 2901, 1000 + 2972, 1000 + 3255])
+        // The tiles: the same allocation, selected per day. They now carry
+        // the overtime they always earned.
+        let tileTotal: Int = facts.tiles.compactMap(\.figure.cents).reduce(0, +)
+        #expect(tileTotal == tips + 14716)
+        #expect(tileTotal != tips + 13585, "the superseded per-day ledger slicing")
+        #expect(facts.monthFigure.cents == tileTotal)
 
-        // 1131c apart on one screen, which is exactly W2's lost overtime.
-        #expect(facts.monthTotalCents - tileTotal == 1131)
-
-        // The chart bars and the y-axis maximum are built from the same
-        // per-day values, so they disagree with the header too.
-        #expect(facts.displayedMonthMaxCents == 1000 + 3255)
-        #expect(facts.displayedMonthMaxCents < facts.monthTotalCents)
+        // The heat ramp's normalizer is one of the tiles' own figures, so the
+        // grid's brightest day is a day the header agrees with.
+        let brightest: Int? = facts.tiles.compactMap(\.figure.cents).max()
+        #expect(facts.brightestTileCents == brightest)
     }
 
     @Test("a month equals the sum of its days")
     func monthEqualsSumOfItsDays() {
-        withKnownIssue("Definition of Done #5: CalendarView slices the ledger per day (CalendarView.swift:49), so a week's overtime never reaches a tile. Closes in PR 5, when every consumer reads EarningsSnapshot over the whole dataset. Delete this wrapper then.") {
-            let facts = octoberFacts()
-            let tileTotal = facts.monthDailyTotals.reduce(0) { $0 + $1.cents }
-            #expect(facts.monthTotalCents == tileTotal)
-        }
+        let facts = octoberFacts()
+        let tileTotal: Int = facts.tiles.compactMap(\.figure.cents).reduce(0, +)
+        #expect(facts.monthFigure.cents == tileTotal)
     }
 
-    /// The single-shift-per-day case, which is what the calendar usually
-    /// shows, is byte-identical to the old behaviour: with one shift in the
-    /// bucket there is nothing for a cumulative allocation to do. Stated as a
-    /// test so nobody claims the tiles changed for every day.
-    @Test("a one-shift day's tile is unchanged by the ledger: one shift is its own naive rounding")
-    func singleShiftTilesAreUnchanged() {
+    @Test("MEASURED: the per-day tiles, and the naive per-shift rounding they replaced")
+    func perDayTilesCarryTheWeeksOvertime() {
         let facts = octoberFacts()
-        let naive = [615.0, 585, 630, 690, 360].map {
-            WageEstimate.cents(wageCentsPerHour: 283, hours: $0 / 60) ?? 0
-        }
+        let naive: [Int] = Self.w2Minutes.map { WageEstimate.cents(wageCentsPerHour: 283, hours: $0 / 60) ?? 0 }
         #expect(naive == [2901, 2759, 2972, 3255, 1698])
-        #expect(facts.monthDailyTotals.map(\.cents).sorted() == naive.map { $0 + 1000 }.sorted())
+        let tiles: [Int] = facts.tiles.compactMap(\.figure.cents).filter { $0 > 0 }.sorted()
+        // MEASURED 2026-09-18 on the real adapter. Each tile is 1000 of tips
+        // plus that day's slice of the week's allocation:
+        //   Mon 615m  2901  (cumulative 615m,  all regular)
+        //   Tue 585m  2759  (cumulative 1200m, all regular)
+        //   Wed 630m  2972  (cumulative 1830m, all regular)
+        //   Thu 690m  3537  (crosses 2400m: 570m regular + 120m at 1.5x)
+        //   Fri 360m  2547  (cumulative 2880m, all overtime)
+        #expect(tiles == [3547, 3759, 3901, 3972, 4537])
+        // And it lands on the DAYS that earned it, which a spread-evenly
+        // allocation would also sum correctly and still be wrong about.
+        let calendar = payrollCalendar()
+        let byDay = (5...9).map { facts.tile(on: calendar.date(from: DateComponents(year: 2026, month: 10, day: $0))!)?.figure.cents }
+        #expect(byDay == [3901, 3759, 3972, 4537, 3547])
+        // Every tile is a day's whole earnings, so the difference from the
+        // naive base-rate sum is exactly the week's overtime.
+        let tileSum: Int = tiles.reduce(0, +)
+        let naiveSum: Int = naive.reduce(0, +) + 5000
+        #expect(tileSum - naiveSum == 1131)
+    }
+
+    @Test("a month nobody worked is an empty month, and a month nothing is known about is not")
+    func emptyAndUnbackedMonthsDiffer() {
+        let empty = Self.monthFacts(entries: [], month: (2026, 10), rateCents: 283)
+        #expect(empty.isUnbacked == false)
+        #expect(empty.daysWorkedCount == 0)
+        #expect(empty.hasAnythingLogged == false)
+        #expect(empty.monthFigure.cents == 0)
+        #expect(empty.tiles.count == 31)
+
+        // Rule 4: a read that produced no dataset renders no currency at all,
+        // and it must not be mistaken for a month nobody worked.
+        let unbacked = CalendarMonthFacts(
+            snapshot: nil,
+            displayedMonth: payrollCalendar().date(from: DateComponents(year: 2026, month: 10, day: 1))!,
+            calendar: payrollCalendar()
+        )
+        #expect(unbacked.isUnbacked)
+        #expect(unbacked.monthFigure.isUnavailable)
+        #expect(unbacked.monthFigure.text == nil)
+        #expect(unbacked.monthFigure.cents == nil)
+        #expect(unbacked.tiles.isEmpty)
+        #expect(unbacked.hasAnythingLogged == false)
+        #expect(unbacked.monthCaption == "this month")
+        // The grid still draws: a failed money read is not a missing month.
+        #expect(unbacked.gridDays.count == 35)
     }
 }
 
