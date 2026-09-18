@@ -30,9 +30,17 @@
 # what the database itself believes.
 set -euo pipefail
 
+# psql: the Homebrew 17 build locally, whatever is on PATH on CI (the
+# supabase/setup-cli runner has postgresql-client but no /opt/homebrew).
 PG_BIN_DEFAULT=/opt/homebrew/opt/postgresql@17/bin
 [ -x "$PG_BIN_DEFAULT/psql" ] || PG_BIN_DEFAULT=/usr/lib/postgresql/17/bin
 PG_BIN="${PG_BIN:-$PG_BIN_DEFAULT}"
+if [ -x "$PG_BIN/psql" ]; then
+  PSQL_BIN="$PG_BIN/psql"
+else
+  PSQL_BIN="$(command -v psql)"
+fi
+if [ -z "$PSQL_BIN" ]; then echo "no psql on PATH and none at $PG_BIN" >&2; exit 1; fi
 
 WORK="$(mktemp -d /tmp/payday-race.XXXXXX)"
 OWN_CLUSTER=0
@@ -40,7 +48,7 @@ FAILED=0
 
 if [ "${1:-}" != "" ]; then
   DSN="$1"
-  PSQL=("$PG_BIN/psql" "$DSN")
+  PSQL=("$PSQL_BIN" "$DSN")
 else
   # shellcheck source=scripts/db-test-cluster.sh
   source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/db-test-cluster.sh"
