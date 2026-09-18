@@ -552,3 +552,268 @@ enum PaydayMigrationHash {
         String(try Self.value(value).prefix(16))
     }
 }
+
+// MARK: - Shifts (PR 2 slice S6)
+
+/// One `public.shifts` row on the wire.
+///
+/// The encode side names ONLY the columns `private.write_shifts` reads, and
+/// that omission is load-bearing rather than tidiness. Four columns on this
+/// table are server-authored and a client must never be able to set them:
+///
+/// - `source` and `legacy_entry_ids` are the rollback query. `source =
+///   'migration'` plus provenance is how an operator finds every row a
+///   conversion derived, so a client that could write `source` could make
+///   rollback either miss a conversion artifact or tombstone a shift the user
+///   authored.
+/// - `native_modified_at` is the fold's precedence rule
+///   (`private.shift_is_open_to_fold` reads exactly it). A client that could
+///   write it could reopen a shift a human edited to being repriced by a
+///   conversion, or freeze one that should still convert.
+/// - `deleted_at` is one-way on the write path. A write never resurrects a
+///   tombstone; only `restore_shifts` does, and only one it did not create as
+///   `'converted'`. Omitting it here enforces that in the client too, so the
+///   rule holds even if someone later hands a tombstoned row to `upsertShifts`.
+///
+/// `public.shifts` grants no direct INSERT or UPDATE for the same reason, so
+/// these are refused at two layers, not one.
+struct RemoteShift: Codable, Equatable, Sendable {
+    let id: UUID
+    let userID: UUID
+    let workDate: String
+    let shiftPeriod: String?
+    let cashTipsCents: Int
+    let creditTipsCents: Int
+    let tipOutCents: Int?
+    let salesCents: Int?
+    let hoursWorked: Double?
+    let clockIn: String?
+    let clockOut: String?
+    let serverCount: Int?
+    let receiptMetrics: ShiftReceiptMetrics?
+    let note: String?
+    let recordedAt: String?
+    let clientUpdatedAt: String
+
+    // Server-authored. Decoded, never encoded. See the type's documentation.
+    let source: String?
+    let legacyEntryIDs: [UUID]?
+    let nativeModifiedAt: String?
+    let deletedAt: String?
+    let deletedReason: String?
+    let gratuityFeesCents: Int?
+    let nonWageEarningsCents: Int?
+    let version: Int?
+    let serverUpdatedAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case userID = "user_id"
+        case workDate = "work_date"
+        case shiftPeriod = "shift_period"
+        case cashTipsCents = "cash_tips_cents"
+        case creditTipsCents = "credit_tips_cents"
+        case tipOutCents = "tip_out_cents"
+        case salesCents = "sales_cents"
+        case hoursWorked = "hours_worked"
+        case clockIn = "clock_in"
+        case clockOut = "clock_out"
+        case serverCount = "server_count"
+        case receiptMetrics = "receipt_metrics"
+        case note
+        case recordedAt = "recorded_at"
+        case clientUpdatedAt = "client_updated_at"
+        case source
+        case legacyEntryIDs = "legacy_entry_ids"
+        case nativeModifiedAt = "native_modified_at"
+        case deletedAt = "deleted_at"
+        case deletedReason = "deleted_reason"
+        case gratuityFeesCents = "gratuity_fees_cents"
+        case nonWageEarningsCents = "non_wage_earnings_cents"
+        case version
+        case serverUpdatedAt = "updated_at"
+    }
+
+    /// Exactly the keys `private.write_shifts` reads. Anything else it ignores
+    /// by construction, but sending a server-authored column would still be a
+    /// lie about intent, so none is encoded.
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(workDate, forKey: .workDate)
+        try container.encode(shiftPeriod, forKey: .shiftPeriod)
+        try container.encode(cashTipsCents, forKey: .cashTipsCents)
+        try container.encode(creditTipsCents, forKey: .creditTipsCents)
+        try container.encode(tipOutCents, forKey: .tipOutCents)
+        try container.encode(salesCents, forKey: .salesCents)
+        try container.encode(hoursWorked, forKey: .hoursWorked)
+        try container.encode(clockIn, forKey: .clockIn)
+        try container.encode(clockOut, forKey: .clockOut)
+        try container.encode(serverCount, forKey: .serverCount)
+        try container.encode(receiptMetrics, forKey: .receiptMetrics)
+        try container.encode(note, forKey: .note)
+        try container.encode(recordedAt, forKey: .recordedAt)
+        try container.encode(clientUpdatedAt, forKey: .clientUpdatedAt)
+    }
+
+    /// True when a conversion derived this row and a human has since edited it.
+    /// This is the set a rollback would silently discard, because rollback
+    /// reads `public.tip_entries` again and a PR-2 build's edit never writes
+    /// back there. Surfaced so it can be counted before anyone pulls that
+    /// lever, not discovered afterwards.
+    var isEditedConversionArtifact: Bool {
+        source == "migration" && nativeModifiedAt != nil
+    }
+}
+
+/// What the server did with one requested shift.
+///
+/// `unknown` exists so a server that grows a new status cannot make an older
+/// client throw while decoding its own successful write. The same reason
+/// `kindRaw` is a raw string on the local models.
+enum ShiftWriteStatus: Equatable, Sendable {
+    /// Written. `storedClientUpdatedAt` says what the server actually kept,
+    /// which is not necessarily what was sent: a future-dated timestamp is
+    /// clamped to the server's clock rather than rejected.
+    case stored
+    /// Validated but not written. Unreachable against today's schema and kept
+    /// so a future trigger that skips a row reports it instead of letting the
+    /// client believe the write landed.
+    case refused
+    /// One row was unusable — no readable id, no work date, or money the
+    /// column cannot hold — and only that row was dropped. Never the batch.
+    case invalid
+    case unknown(String)
+
+    init(raw: String) {
+        switch raw {
+        case "stored": self = .stored
+        case "refused": self = .refused
+        case "invalid": self = .invalid
+        default: self = .unknown(raw)
+        }
+    }
+
+    var raw: String {
+        switch self {
+        case .stored: "stored"
+        case .refused: "refused"
+        case .invalid: "invalid"
+        case .unknown(let value): value
+        }
+    }
+
+    /// Whether the client may treat the row as synced.
+    var isPersisted: Bool { self == .stored }
+}
+
+struct ShiftWriteOutcome: Decodable, Equatable, Sendable {
+    /// Nil only when the id itself was unreadable, which is the one case the
+    /// server cannot name back.
+    let shiftID: UUID?
+    let status: ShiftWriteStatus
+    let storedClientUpdatedAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case shiftID = "shift_id"
+        case status
+        case storedClientUpdatedAt = "stored_client_updated_at"
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        shiftID = try container.decodeIfPresent(UUID.self, forKey: .shiftID)
+        status = ShiftWriteStatus(raw: try container.decode(String.self, forKey: .status))
+        storedClientUpdatedAt = try container.decodeIfPresent(String.self, forKey: .storedClientUpdatedAt)
+    }
+
+    init(shiftID: UUID?, status: ShiftWriteStatus, storedClientUpdatedAt: String?) {
+        self.shiftID = shiftID
+        self.status = status
+        self.storedClientUpdatedAt = storedClientUpdatedAt
+    }
+}
+
+/// Deletion and restoration share one outcome shape. Deletion answers
+/// `deleted | absent | invalid`; restoration answers
+/// `restored | absent | notDeleted | refused`.
+enum ShiftLifecycleStatus: Equatable, Sendable {
+    case deleted
+    case restored
+    /// The caller has no shift with that id. Never another account's row:
+    /// every RPC here is scoped to `auth.uid()`.
+    case absent
+    /// The shift exists and was not tombstoned, so there was nothing to undo.
+    case notDeleted
+    /// A `'converted'` tombstone. It belongs to the fold's own un-delete arm,
+    /// and reopening it here would resurrect a shift whose legacy source rows
+    /// are gone.
+    case refused
+    case invalid
+    case unknown(String)
+
+    init(raw: String) {
+        switch raw {
+        case "deleted": self = .deleted
+        case "restored": self = .restored
+        case "absent": self = .absent
+        case "not_deleted": self = .notDeleted
+        case "refused": self = .refused
+        case "invalid": self = .invalid
+        default: self = .unknown(raw)
+        }
+    }
+
+    var raw: String {
+        switch self {
+        case .deleted: "deleted"
+        case .restored: "restored"
+        case .absent: "absent"
+        case .notDeleted: "not_deleted"
+        case .refused: "refused"
+        case .invalid: "invalid"
+        case .unknown(let value): value
+        }
+    }
+}
+
+struct ShiftLifecycleOutcome: Decodable, Equatable, Sendable {
+    let shiftID: UUID?
+    let status: ShiftLifecycleStatus
+
+    enum CodingKeys: String, CodingKey {
+        case shiftID = "shift_id"
+        case status
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        shiftID = try container.decodeIfPresent(UUID.self, forKey: .shiftID)
+        status = ShiftLifecycleStatus(raw: try container.decode(String.self, forKey: .status))
+    }
+
+    init(shiftID: UUID?, status: ShiftLifecycleStatus) {
+        self.shiftID = shiftID
+        self.status = status
+    }
+}
+
+struct PaydayRestoreParameters: Encodable {
+    let ids: [UUID]
+
+    enum CodingKeys: String, CodingKey {
+        case ids = "p_ids"
+    }
+}
+
+/// One `{id, deleted_at}` element of `soft_delete_shifts`' payload. A distinct
+/// type rather than a dictionary so the key names are checked at compile time.
+struct ShiftDeletionRow: Encodable, Equatable, Sendable {
+    let id: UUID
+    let deletedAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case deletedAt = "deleted_at"
+    }
+}
