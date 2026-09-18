@@ -13,22 +13,44 @@
 # step as "grep found nothing, therefore untested": an empty observation is
 # not a positive fact.
 #
-# Usage: scripts/wait-for-ci.sh <pr-number> [expected-head-sha]
+# Usage:
+#   scripts/wait-for-ci.sh <pr-number> [expected-head-sha]   # a pull request
+#   scripts/wait-for-ci.sh --commit <sha>                    # any commit
+#
+# The --commit mode exists because the thing that actually ships is the MERGE
+# COMMIT, not the PR head, and a PR-only watcher cannot see it. Two sessions
+# independently needed it on 2026-09-18 and both fell back to reading the API
+# by hand -- which is how a conclusion gets missed: the peer's watcher logged
+# one merge commit twice and never logged the other's verdict at all.
+#
 # Exit 0 = every check concluded SUCCESS (or NEUTRAL/SKIPPED).
 # Exit 1 = at least one check concluded in a failure class.
 # Exit 2 = timed out still incomplete, or the head SHA moved.
 set -uo pipefail
 
-PR="${1:?usage: wait-for-ci.sh <pr-number> [expected-head-sha]}"
+MODE=pr
+if [[ "${1:-}" == "--commit" ]]; then MODE=commit; shift; fi
+PR="${1:?usage: wait-for-ci.sh <pr-number> [sha] | --commit <sha>}"
 EXPECTED_SHA="${2:-}"
 INTERVAL="${CI_WAIT_INTERVAL:-30}"
 MAX_TICKS="${CI_WAIT_TICKS:-80}"
 
 for ((tick = 1; tick <= MAX_TICKS; tick++)); do
-  json=$(gh pr view "$PR" --json headRefOid,statusCheckRollup 2>/dev/null) || json=""
+  if [[ "$MODE" == commit ]]; then
+    # Normalised into the same shape as a PR rollup so ONE set of predicates
+    # judges both. Two copies of "is this terminal?" is two chances to get it
+    # wrong, and getting it wrong is the entire subject of this script.
+    repo=$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null)
+    json=$(gh api "repos/$repo/commits/$PR/check-runs" 2>/dev/null \
+      | jq --arg sha "$PR" '{headRefOid: $sha, statusCheckRollup:
+          [.check_runs[]? | {name, status: (.status|ascii_upcase),
+                             conclusion: (.conclusion // "" |ascii_upcase)}]}') || json=""
+  else
+    json=$(gh pr view "$PR" --json headRefOid,statusCheckRollup 2>/dev/null) || json=""
+  fi
 
   if [[ -z "$json" ]]; then
-    echo "tick $tick: PR not readable (NOT treated as done)"
+    echo "tick $tick: target not readable (NOT treated as done)"
     sleep "$INTERVAL"; continue
   fi
 
