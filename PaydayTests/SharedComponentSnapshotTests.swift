@@ -875,8 +875,11 @@ struct LegacySnapshotBridgeTests {
 
     @Test("an empty shift list is a snapshot with no shifts, not a nil snapshot")
     func emptyIsStillASnapshot() throws {
+        // The row type is spelled out because the bridge is generic over
+        // `LegacyShiftRow` now, and an empty literal gives inference nothing
+        // to work from. The assertion is unchanged.
         let snapshot = try #require(LegacySnapshotBridge.snapshot(
-            shifts: [],
+            shifts: [(day: Date, shiftID: UUID, items: [TipEntry])](),
             policies: testPolicies(rateCents: 283),
             payrollTimeZone: PaydayTestZone.payroll,
             asOf: at(2026, 9, 30)

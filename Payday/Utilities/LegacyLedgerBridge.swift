@@ -69,14 +69,14 @@ enum LegacyLedgerBridge {
     /// shift's hours count once however many rows its closeout took), and its
     /// work day is the earliest row's civil day in the PAYROLL zone, never
     /// the device's.
-    static func shiftInputs(from shiftGroups: [[TipEntry]], payrollTimeZone: TimeZone) -> [ShiftInput] {
+    static func shiftInputs<Row: LegacyShiftRow>(from shiftGroups: [[Row]], payrollTimeZone: TimeZone) -> [ShiftInput] {
         shiftGroups.compactMap { shiftInput(from: $0, payrollTimeZone: payrollTimeZone) }
     }
 
     /// One group's `ShiftInput`, or nil for an empty group (nothing to date
     /// it by). Split out of `shiftInputs(from:)` so a caller can keep its own
     /// per-group alignment — see `wagesCentsPerShift`.
-    static func shiftInput(from group: [TipEntry], payrollTimeZone: TimeZone) -> ShiftInput? {
+    static func shiftInput<Row: LegacyShiftRow>(from group: [Row], payrollTimeZone: TimeZone) -> ShiftInput? {
         guard let earliest = group.map(\.date).min() else { return nil }
         let details = ShiftDetails.resolve(from: group)
         let day = CivilDay(earliest, in: payrollTimeZone)
@@ -95,8 +95,8 @@ enum LegacyLedgerBridge {
     }
 
     /// Values `shiftGroups` through the real ledger.
-    static func valuations(
-        shiftGroups: [[TipEntry]],
+    static func valuations<Row: LegacyShiftRow>(
+        shiftGroups: [[Row]],
         rateCents: Int?,
         payrollTimeZone: TimeZone,
         workweekStartWeekday: Int
@@ -127,8 +127,8 @@ enum LegacyLedgerBridge {
     ///
     /// A group the ledger cannot value (no entries, no hours, no rate)
     /// contributes 0, which is what the row already showed for those cases.
-    static func wagesCentsPerShift(
-        shiftGroups: [[TipEntry]],
+    static func wagesCentsPerShift<Row: LegacyShiftRow>(
+        shiftGroups: [[Row]],
         rateCents: Int?,
         payrollTimeZone: TimeZone,
         workweekStartWeekday: Int
