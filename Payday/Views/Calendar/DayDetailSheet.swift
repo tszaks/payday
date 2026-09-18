@@ -27,6 +27,14 @@ import SwiftData
 struct DayDetailFacts: SnapshotFacts {
     /// Exactly the shifts the day result selected, in the engine's order.
     let shifts: [(day: Date, shiftID: UUID, items: [TipEntry])]
+    /// The same, in the shift representation. Populated by
+    /// `init(shiftRecords:...)` and empty from the legacy initializer, so the
+    /// two never both hold rows and a screen cannot accidentally render both.
+    ///
+    /// A live `[ShiftRecord]` rather than a projection, because these rows ARE
+    /// the edit and delete targets: `ProjectedShiftRow` is deliberately
+    /// un-persistable, so `context.delete` and the edit sheet cannot take it.
+    let shiftRecords: [ShiftRecord]
     /// The whole-dataset snapshot, so a row can ask for its own valuation.
     let snapshot: EarningsSnapshot?
     let stamp: SnapshotStamp?
@@ -69,20 +77,111 @@ struct DayDetailFacts: SnapshotFacts {
             total = .unavailable()
             shifts = allShifts.filter { calendar.isDate($0.day, inSameDayAs: date) }
         }
+        shiftRecords = []
     }
 
+    /// The same day, from the shift representation.
+    ///
+    /// Additive: nothing calls this until the writer flip. It exists now so
+    /// the equivalence can be asserted against the legacy initializer before
+    /// anything depends on it -- `DayDetailShiftFactsTests` pins that both
+    /// produce the same total, the same stamp and the same shift ids for
+    /// equivalent data.
+    ///
+    /// Deliberately mirrors the legacy initializer's structure line for line,
+    /// including the no-snapshot branch: a failed read is a failed read, not
+    /// an empty day, so the rows are still listed and every amount renders
+    /// unavailable rather than as `$0`.
+    /// `@MainActor` because `ShiftInputAdapter.adapt` is: SwiftData models
+    /// must not cross an isolation domain, and that rule does not relax for a
+    /// facts initializer. Views build these on the main actor already.
+    @MainActor
+    init(shiftRecords records: [ShiftRecord], date: Date, policies: CompensationPolicies, payrollTimeZone: TimeZone) {
+        let calendar = CalendarEarnings.groupingCalendar(payrollTimeZone: payrollTimeZone)
+        let civilDay = CivilDay(date, in: payrollTimeZone)
+
+        let adapted = ShiftInputAdapter.adapt(records, calendars: policies.calendars)
+        let resolvedSnapshot = try? EarningsSnapshot.build(EarningsInputs(
+            shifts: adapted.inputs,
+            rates: policies.rates,
+            calendars: policies.calendars,
+            // `.distantFuture`, the same opt-out the calendar makes: a person
+            // who logs tomorrow's shift expects to see it on tomorrow's tile,
+            // and opting out in the STAMP rather than per query is what keeps
+            // `Σ tiles == headline` true.
+            asOf: CivilDay(.distantFuture, in: payrollTimeZone),
+            unreadableReceiptShiftIDs: adapted.unreadableReceiptShiftIDs
+        ))
+        snapshot = resolvedSnapshot
+        stamp = resolvedSnapshot?.stamp
+
+        let byID = Dictionary(records.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        if let dayResult = resolvedSnapshot?.day(civilDay) {
+            total = .earnedIncome(dayResult)
+            shiftRecords = dayResult.shiftIDs.compactMap { byID[$0] }
+        } else {
+            total = .unavailable()
+            shiftRecords = records.filter { calendar.isDate($0.workDate, inSameDayAs: date) }
+        }
+        shifts = []
+    }
+
+    /// The row's facts need three scalars, not a representation.
+    ///
+    /// This is the decision that was generating the complexity, and naming it
+    /// dissolves it. The row facts looked representation-bound because the
+    /// signature took the legacy tuple, but the body only ever used
+    /// `shiftID`, `day` and the shift's period. All three sit directly on a
+    /// `ShiftRecord`, so no enum over the two representations and no generic
+    /// over `LegacyShiftRow` is needed here at all -- each caller supplies the
+    /// three from its own shape, the legacy one via `ShiftDetails.resolve` and
+    /// the record one by reading its own canonical fields.
+    func rowFacts(
+        shiftID: UUID,
+        day: Date,
+        period: ShiftPeriod?,
+        shiftCount: Int,
+        note: String?
+    ) -> ShiftDayRowFacts {
+        ShiftDayRowFacts(
+            valuation: snapshot?.valuation(shiftID),
+            wageFeatureEnabled: snapshot?.wageFeatureEnabled ?? false,
+            stamp: stamp,
+            day: day,
+            period: period,
+            dayHasMultipleShifts: shiftCount >= 2,
+            note: note
+        )
+    }
+
+    /// The legacy shape, delegating, so this change moves no behaviour.
     func rowFacts(
         for group: (day: Date, shiftID: UUID, items: [TipEntry]),
         shiftCount: Int,
         note: String?
     ) -> ShiftDayRowFacts {
-        ShiftDayRowFacts(
-            valuation: snapshot?.valuation(group.shiftID),
-            wageFeatureEnabled: snapshot?.wageFeatureEnabled ?? false,
-            stamp: stamp,
+        rowFacts(
+            shiftID: group.shiftID,
             day: group.day,
             period: ShiftDetails.resolve(from: group.items).shiftPeriod,
-            dayHasMultipleShifts: shiftCount >= 2,
+            shiftCount: shiftCount,
+            note: note
+        )
+    }
+
+    /// The record shape. One record already holds the canonical period, so
+    /// there is nothing to resolve -- which is the two-row model's cost
+    /// disappearing rather than being ported.
+    func rowFacts(
+        for record: ShiftRecord,
+        shiftCount: Int,
+        note: String?
+    ) -> ShiftDayRowFacts {
+        rowFacts(
+            shiftID: record.id,
+            day: record.workDate,
+            period: record.shiftPeriod,
+            shiftCount: shiftCount,
             note: note
         )
     }
