@@ -578,14 +578,40 @@ struct InsightsView: View {
 /// screen is diffable: same digest means same dataset, by construction. A nil
 /// stamp means no dataset stands behind the page at all, and then `basis` is
 /// `.unavailable` and every figure below refuses rather than reading zero.
-private struct InsightsPageFacts: SnapshotFacts {
+///
+/// **Internal, not private**, for the reason `DashboardFacts`,
+/// `PeriodsPageFacts`, `PeriodDetailFacts`, `DayDetailFacts` and
+/// `LogShiftFacts` are: the plan's completion rule 2 is "its parity test
+/// passes against the real adapter, not a helper." While this was private the
+/// suite could not reach it, restated the construction in a helper of its
+/// own, and therefore did not gate the screen at all — with
+/// `valuedShiftCents` patched to nil here, reverting the whole page to
+/// tips-only under wage-inclusive headers, the full app suite still reported
+/// `Test run with 855 tests in 154 suites passed`.
+struct InsightsPageFacts: SnapshotFacts {
     let stamp: SnapshotStamp?
     /// What every money figure on this page is, in one value. Rendered as a
     /// sentence above the figures by `resultList`.
     let basis: InsightsBasis
     /// `MetricID.hourlyRate` over the same recent window the grid covers,
     /// with its coverage. Nil when the engine cannot answer — never a
-    /// fabricated `$0/hr`.
+    /// fabricated `$0/hr` — **and nil whenever the page is not on a
+    /// wage-inclusive basis**, because `hourlyRate` is `earnedIncome` over
+    /// minutes by registry definition (`EarningsResult.hourlyRateCents`
+    /// divides `coveredComponents.earnedIncomeCents`) and there is no
+    /// tips-only rate in the registry to fall back to. A $/hr tile under
+    /// "Every figure below is tips only" would be the one wage-inclusive
+    /// number left on a tips-only page.
+    ///
+    /// The consequence, stated rather than hidden: a wage-inclusive basis
+    /// means every shift in the dataset is wage-valued, which means every
+    /// shift has hours, so `HourlyRate.coverage`'s "across 5 of 6 shifts"
+    /// fraction is now unreachable FROM THIS SCREEN. It stays because
+    /// `docs/METRICS.md`'s presentation rules require it of the metric and
+    /// History's caption for the same metric still reaches it. Whether
+    /// Insights should instead show a tips-only $/hr — which needs a
+    /// registry metric, not a division here — is a decision for Tyler,
+    /// flagged the same way the whole-history completeness gate is.
     let hourly: InsightsEarnings.HourlyRate?
     let facts: InsightsFacts?
     let moves: [Move]
@@ -602,6 +628,17 @@ private struct InsightsPageFacts: SnapshotFacts {
     /// their own completeness, each bar rendering an `EarningsFigure`. Wave 2
     /// put everything ELSE on this screen on the same basis, via
     /// `StatsEngine`'s pricing.
+    ///
+    /// And then the bars follow the PAGE basis rather than being
+    /// wage-inclusive by construction. Wave 2's first cut hard-coded
+    /// `EarningsFigure.earnedIncome` in `EarningsChartPoint`, so on a
+    /// `.partial` dataset — the ordinary case, since every shift added through
+    /// "Add Past Shifts" is hours-less — the bars read 26,500c / 24,000c /
+    /// 7,500c / 25,800c / 25,500c over the same five days the tiles, the
+    /// typical range, the plan and the day totals read 10,500c / 9,000c /
+    /// 7,500c / 9,800c / 10,500c, under a note saying every figure below was
+    /// tips only and a bar label saying "Total". `basis.chartMetric` is what
+    /// closes that.
     let chartFacts: EarningsChartFacts
     /// What unlocks next, and how close — see UnlockProgress.
     let unlocks: [Unlock]
@@ -637,31 +674,42 @@ private struct InsightsPageFacts: SnapshotFacts {
         let snapshot = dataset.snapshot
         stamp = snapshot?.stamp
         // ONE decision, from the dataset's own `Completeness`, before any
-        // figure is computed.
+        // figure is computed — and then every money surface below reads it.
+        // Group 2.6 first shipped with only `StatsEngine` governed by it,
+        // which left the chart and the HOURLY tile wage-inclusive under a
+        // note reading "Every figure below is tips only": one day was
+        // $265.00 on the chart and $105.00 in the tiles beside it.
         let basis = InsightsEarnings.basis(for: snapshot)
         self.basis = basis
         let records = dataset.shiftDays.flatMap(\.items).map(TipRecord.init)
-        let statsEngine = StatsEngine(
+        // The engine is built by `InsightsEarnings.engine`, not here, so the
+        // parity suite gates this wiring instead of restating it. See that
+        // function's header for the measurement that made it a function.
+        let statsEngine = InsightsEarnings.engine(
+            for: dataset,
             payrollTimeZone: payrollTimeZone,
-            records: records,
-            calendar: calendar,
-            // The ledger's `earnedIncome` per shift, or nil to leave every
-            // figure on tips. Never a scalar `wageCentsPerHour`: that prices
-            // a shift in isolation, so it rounds per shift and carries no
-            // workweek overtime. This is the whole of group 2.6's fix — one
-            // argument, and every fact, range, trend, forecast and Move below
-            // moves onto the same basis as the chart above them.
-            valuedShiftCents: InsightsEarnings.pricing(basis, dataset)
+            calendar: calendar
         )
         facts = statsEngine.insightsFacts(referenceDate: now)
-        hourly = InsightsEarnings.hourlyRate(
-            snapshot,
-            referenceDate: now,
-            in: payrollTimeZone
-        )
+        // `hourlyRate` is `earnedIncome` over minutes by registry definition,
+        // so it is only askable on a wage-inclusive page. See the property.
+        hourly = basis.isWageInclusive
+            ? InsightsEarnings.hourlyRate(
+                snapshot,
+                referenceDate: now,
+                in: payrollTimeZone
+            )
+            : nil
         moves = statsEngine.moves(referenceDate: now)
         followUps = statsEngine.followUps(ledger: ledger, referenceDate: now)
-        chartFacts = EarningsChartFacts(wholeOf: snapshot, timeZone: payrollTimeZone)
+        chartFacts = EarningsChartFacts(
+            wholeOf: snapshot,
+            timeZone: payrollTimeZone,
+            // The bars name the metric the page declared, so the peak
+            // callout, the scrub readout and the bar label are the same
+            // cents and the same noun as everything under the note.
+            metric: basis.chartMetric
+        )
         // Use the same rotation PLAN names as "your usual nights."
         unlocks = UnlockProgress.nextUnlocks(
             records: records,

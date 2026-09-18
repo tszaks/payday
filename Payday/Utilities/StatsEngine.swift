@@ -1574,9 +1574,36 @@ struct StatsEngine {
     /// and are gone ([ID-02] to [ID-04], [ID-12], [ID-13], [ID-15]). The page
     /// has rendered no prose section and no narration since it became
     /// deterministic.
+    /// **The one definition of the recent window**, as a half-open interval
+    /// of instants in the frozen payroll zone: the 180 civil days before
+    /// today, plus today.
+    ///
+    /// `InsightsEarnings.recentRange(referenceDate:in:)` is the same window
+    /// as the `DayRange` the snapshot selects by, and the HOURLY tile is
+    /// `snapshot.range(thatRange).hourlyRateCents`. Both bounds are stated in
+    /// whole civil days for that reason, and both were once wrong here: the
+    /// filter read `$0.date >= referenceDate - 180 days`, an instant cutoff
+    /// with no `startOfDay` and **no upper bound at all**, so a future-dated
+    /// shift was in the engine's sample and outside the tile's, and a shift
+    /// on the boundary day earlier in the clock than `referenceDate` was in
+    /// the tile's and outside the engine's. The tile's caption is a coverage
+    /// claim about the shifts its neighbours count, so the two have to be the
+    /// same shifts. `InsightsWindowAgreementTests` measures both edges.
+    ///
+    /// The upper bound is deliberately "the end of today" and not "now":
+    /// every other window in this file is civil-day-bounded, and a shift
+    /// logged at 11pm must not drop out of the sample because the facts were
+    /// computed at 9am.
+    func recentWindow(referenceDate: Date = .now) -> Range<Date> {
+        let today = calendar.startOfDay(for: referenceDate)
+        let start = calendar.date(byAdding: .day, value: -Self.insightsRecentWindowDays, to: today) ?? .distantPast
+        let end = calendar.date(byAdding: .day, value: 1, to: today) ?? .distantFuture
+        return start..<end
+    }
+
     func insightsFacts(referenceDate: Date = .now) -> InsightsFacts? {
-        let cutoff = calendar.date(byAdding: .day, value: -Self.insightsRecentWindowDays, to: referenceDate) ?? .distantPast
-        let recent = records.filter { $0.date >= cutoff }
+        let window = recentWindow(referenceDate: referenceDate)
+        let recent = records.filter { window.contains($0.date) }
         let shifts = shiftFacts(from: recent)
 
         guard shifts.count >= Self.minimumShiftsForInsights else { return nil }
@@ -2293,6 +2320,24 @@ struct StatsEngine {
     /// The best-paying weekday by $/hr against the overall $/hr average -
     /// a genuinely different fact from weekdaySwapMove, which compares
     /// $/night.
+    ///
+    /// **Its "overall" clause NAMES its scope**, and that is a fix rather
+    /// than a flourish. Both sides of this comparison come from
+    /// `nightlyRates()`, which is ALL history (every Move in this file is,
+    /// deliberately — see `startTimeLeaderMove`'s header), while the HOURLY
+    /// tile that renders on the same Insights page is
+    /// `EarningsResult.hourlyRateCents` over the 180-day
+    /// `InsightsEarnings.recentRange`. `InsightsPresentation
+    /// .redundantMetricIDs(for:)` only ever excludes the `startTimes` tile,
+    /// so for anyone with more than 180 days of history the Move and the tile
+    /// render together and differ, both naming the person's hourly rate.
+    /// Saying "across all your history" is what makes them two answers to two
+    /// questions instead of two answers to one.
+    ///
+    /// The scope is not narrowed to the tile's window instead, because
+    /// `best.rate` — the other side of this very sentence — is all-history
+    /// too. Moving one side would put a scope seam inside the comparison,
+    /// which is worse than a scope difference between two labelled figures.
     private func rateLeaderMove() -> MoveCandidate? {
         guard let best = bestDollarsPerHourWeekday(), let overallRate = averageDollarsPerHour() else { return nil }
         let deltaPerHourCents = Int(((best.rate - overallRate) * 100).rounded())
@@ -2326,7 +2371,7 @@ struct StatsEngine {
         let move = Move(
             id: "rateLeader",
             title: "\(weekdayName)s Lead Per Hour",
-            body: "\(weekdayName)s average \(Money.wholeDollarString(fromCents: Int((best.rate * 100).rounded())))/hr across \(countPhrase(weekdayRates.count, singular: "shift", plural: "shifts")), against \(Money.wholeDollarString(fromCents: Int((overallRate * 100).rounded())))/hr overall. \(closingClause)",
+            body: "\(weekdayName)s average \(Money.wholeDollarString(fromCents: Int((best.rate * 100).rounded())))/hr across \(countPhrase(weekdayRates.count, singular: "shift", plural: "shifts")), against \(Money.wholeDollarString(fromCents: Int((overallRate * 100).rounded())))/hr across all your history. \(closingClause)",
             effectSize: effectSize(delta: Double(deltaPerHourCents), pooledStandardDeviation: pooledSD, countA: weekdayRates.count, countB: otherRates.count),
             supportingShiftCount: min(weekdayRates.count, otherRates.count)
         )
