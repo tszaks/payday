@@ -157,6 +157,11 @@ targets:
       # are extension-safe: neither touches UIApplication.
       - path: Payday/Earnings/ShiftInputAdapter.swift
       - path: Payday/Earnings/EarningsStore.swift
+      # The ONE path the widget and Siri both take to a pay-period figure.
+      # Compiled into this target precisely so the widget cannot drift onto a
+      # copy: there is one implementation of which query, which asOf and which
+      # label, and both surfaces call it.
+      - path: Payday/Earnings/AmbientPeriodFigure.swift
       - path: Payday/Utilities/PayPeriod.swift
       - path: Payday/Utilities/TipBreakdown.swift
       - path: Payday/Utilities/StatsEngine.swift
