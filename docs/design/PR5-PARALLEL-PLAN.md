@@ -10,6 +10,53 @@ Each surface group touches a disjoint set of files. The shared pieces are exactl
 
 Wave 0 also lands the adapter contract itself: each screen's `Facts` struct keeps only presentation and takes `EarningsSnapshot` plus its own presentational inputs, with the `Key`/`dataRevision` pattern deleted in favour of the snapshot's stamp. Write that shape once, in the shared components, so five workers do not invent five shapes.
 
+### Wave 0 is DONE (2026-09-18). Read this before starting a wave 1 screen.
+
+**The contract lives in [`Payday/Earnings/SnapshotFacts.swift`](../../Payday/Earnings/SnapshotFacts.swift).** Its header is the four rules, spelled out with the reason each one was paid for. Read that file first; everything below is a summary of it.
+
+1. A `Facts` struct keeps only presentation. Money is not presentation.
+2. It takes `EarningsSnapshot?` plus its own presentational inputs. Not `[TipEntry]`, not `wageCentsPerHour`, not `firstWeekday`, not a `TimeZone`.
+3. No per-screen `Key` struct and no `dataRevision`. Conform to `SnapshotFacts` and cache on `(stamp, this screen's own selection)`.
+4. Views render `EarningsFigure`, never cents. `.partial` never renders "Total"; `.unavailable` renders no currency at all.
+
+New shared machinery, with the file to copy from:
+
+| What | Where | What it replaces |
+|---|---|---|
+| `EarningsFigure` + `CompletenessCopy` | `Packages/PaydayCore/Sources/PaydayCore/Copy/CompletenessCopy.swift` | every screen's own `tipOut > 0 ? "You kept" : "Total"`, and every `$0.00` that meant "unknown" |
+| `SnapshotFacts` protocol + the contract header | `Payday/Earnings/SnapshotFacts.swift` | the hand-maintained `XFactsKey` dependency lists |
+| `ShiftDayRowFacts` | `Payday/Views/Shared/ShiftDayRow.swift` | `ShiftDayRow(entries:wageCents:)` |
+| `BreakdownRow.ledgerRows(_:)` / `.total(_:)` / `.lipText(_:)` / `.hasBreakdown(_:)` | `Payday/Views/Shared/HeroBreakdownDrawer.swift` | Dashboard's and Period detail's two hand-composed copies of the same drawer, one of which back-derived its tip-out |
+| `EarningsChartFacts(snapshot:range:timeZone:asOf:)` and `(wholeOf:timeZone:)` | `Payday/Views/Shared/NightlyEarningsChart.swift` | `EarningsChartFacts(nights:period:)` over `StatsEngine.nightlyTotals` |
+| `EarningsComponents.grossBeforeTipOutCents` | `PaydayCore/Ledger/EarningsComponents.swift` | the four-term "Earned" subtotal both hero screens added by hand |
+| `CivilDay.date(in:)` | `PaydayCore/Values/CivilDay.swift` | nothing; it is the inverse the chart's x-axis needed |
+
+### The blocker wave 1 inherits: nothing writes `ShiftRecord` locally yet
+
+`EarningsStore` reads `FetchDescriptor<ShiftRecord>`, and outside `PaydayTests/` nothing in the app constructs a `ShiftRecord`. PR 2 slices S5 through S8 (the one-shot conversion and the shift sync leg) are open, so **`earningsStore.snapshot` on a real device is an empty snapshot.** A screen that switches to it before S7 lands shows a person with years of shifts a blank page, and every test would still pass, because tests construct their own `ShiftRecord`s.
+
+So wave 0 feeds the shared components a real snapshot built from the legacy rows: `LegacySnapshotBridge.snapshot(shifts:rateCents:payrollTimeZone:workweekStartWeekday:asOf:)`. It is the same `CompensationLedger`, the same `SnapshotStamp`, the same queries — only the input table differs, and `LegacySnapshotBridgeTests` proves its wages equal `WageEstimate.centsByShiftID`'s and its tips equal `TipBreakdown`'s, per shift.
+
+**A wave 1 screen should use `LegacySnapshotBridge` too, and not `earningsStore`.** When S7 lands, the swap is one line per screen and nothing below it changes. That is what wave 0 was for. Put the swap in its own PR so a single revert undoes it.
+
+### Call sites wave 0 already touched, and what it deliberately left
+
+Changed to the minimum needed to compile and stay correct:
+
+- `DashboardView.swift` — `DashboardFacts` gains `shiftSnapshot`; `wagesByShiftID` now reads off it instead of calling the ledger a second time; `shiftRow` builds a `ShiftDayRowFacts`.
+- `PeriodDetailView.swift` — `PeriodDetailFacts` gains `shiftSnapshot` and `chartFacts`; `nightsInPeriod` is gone; the chart takes `EarningsChartFacts`.
+- `DayDetailSheet.swift` — `DayDetailFacts` gains `snapshot`; `wagesByShiftID` is gone.
+- `InsightsView.swift` — `InsightsPageFacts` gains `chartFacts` and takes `rateCents` / `workweekStartWeekday`; `recentNights` is gone; the key gains those two fields (it cannot become a stamp yet, because it also covers the `StatsEngine` facts this screen still computes).
+- `RenderFactsPerformanceTests.swift`, `InsightsNumbersGridTests.swift` — rewritten for the new chart API. The granularity thresholds now count INCLUSIVE days, so a 22-day range is the first weekly one (was 23). A real 14-day period is `.day` either way.
+
+Left alone on purpose, and therefore owed by the wave that owns the file:
+
+- **Dashboard's hero drawer still composes its own rows** (group 2.1, wave 1). `BreakdownRow.ledgerRows(_:)`/`.total(_:)` exist for it; the swap needs the hero PERIOD's `EarningsResult`, which is the hero migration itself. Until then Dashboard's drawer can still print "Total" over a partial period.
+- **Period detail's hero, $/hr caption, breakdown rows and paycheck section** (group 2.4, wave 1). Same, and its tip-out is still back-derived.
+- **DayDetailSheet's hero** (group 2.2, wave 1). It is still `TipBreakdown` net plus Σ wages. Replacing it with `snapshot.day(_:)` is what finally closes the `withKnownIssue` in `EarningsParityTests`.
+- **The `.partial` hollow bar.** `EarningsChartPoint.isPartial` is exposed and the chart's COPY rules are enforced, but the bar is not re-shaded: the fill opacity is already a magnitude encoding whose floor constants are a stated 3:1 accessibility contract ([SC-09]), and a second opacity term stacked on it breaks that. A real hollow bar is a stroked mark, which is a visual decision for the screens that own the chart (wave 2).
+- **`WageState.noShifts` still renders `$0.00`.** Design 2 says `.noShifts` renders no currency figure, but Dashboard's empty period shows `$0.00` today and changing that is a hero decision, not a shared-component one. `CompletenessCopy` labels `.noShifts` "Total" and documents the deferral.
+
 ## Waves 1 and 2, parallel worktrees, one worker each
 
 | Wave | Group | Rows | Files | Notes |

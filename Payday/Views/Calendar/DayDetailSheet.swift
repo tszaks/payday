@@ -1,12 +1,24 @@
 import SwiftUI
 import SwiftData
 
-private struct DayDetailFacts {
+private struct DayDetailFacts: SnapshotFacts {
     let shifts: [(day: Date, shiftID: UUID, items: [TipEntry])]
-    /// Each shift's ledger-allocated wages, keyed by the id of the grouping
-    /// `shifts` is built from. The hero is the sum of exactly these, so the
-    /// sheet cannot print a total its own rows do not add up to.
-    let wagesByShiftID: [UUID: Int]
+    /// The engine's valuation of exactly the shifts `shifts` lists, so each
+    /// row prints its own slice of the ledger's allocation and the hero is
+    /// the sum of exactly those slices.
+    ///
+    /// PR 5 wave 0 changed where this comes from, not what it says: the
+    /// wages are the same `CompensationLedger` allocation `WageEstimate
+    /// .centsByShiftID` was already returning, now reached through a whole
+    /// `EarningsSnapshot` so a row can take a `ShiftValuation` instead of a
+    /// loose `Int` that cannot tell zero from unknown.
+    ///
+    /// Group 2.2 (Calendar + day detail) is WAVE 1. The hero below is
+    /// deliberately still composed the old way; wave 1 replaces it with
+    /// `snapshot.day(_:)`, which is also what finally closes the known
+    /// issue in `EarningsParityTests`.
+    let snapshot: EarningsSnapshot?
+    let stamp: SnapshotStamp?
     let totalCents: Int
 
     init(allEntries: [TipEntry], date: Date, wageCentsPerHour: Int?, payrollTimeZone: TimeZone, workweekStartWeekday: Int) {
@@ -22,17 +34,35 @@ private struct DayDetailFacts {
             period: \.shiftPeriod,
             calendar: calendar
         )
-        let wagesByShiftID = WageEstimate.centsByShiftID(
+        let resolvedSnapshot = LegacySnapshotBridge.snapshot(
+            shifts: resolvedShifts,
+            rateCents: wageCentsPerHour,
             payrollTimeZone: payrollTimeZone,
             workweekStartWeekday: workweekStartWeekday,
-            shifts: resolvedShifts,
-            wageCentsPerHour: wageCentsPerHour
+            asOf: date
         )
         shifts = resolvedShifts
-        self.wagesByShiftID = wagesByShiftID
+        snapshot = resolvedSnapshot
+        stamp = resolvedSnapshot?.stamp
         // Σ of the rows' own figures, never a separately-computed total.
         totalCents = TipBreakdown.total(of: entries).netTotalCents
-            + resolvedShifts.reduce(0) { $0 + (wagesByShiftID[$1.shiftID] ?? 0) }
+            + resolvedShifts.reduce(0) { $0 + (resolvedSnapshot?.valuation($1.shiftID)?.components.wagesCents ?? 0) }
+    }
+
+    func rowFacts(
+        for group: (day: Date, shiftID: UUID, items: [TipEntry]),
+        shiftCount: Int,
+        note: String?
+    ) -> ShiftDayRowFacts {
+        ShiftDayRowFacts(
+            valuation: snapshot?.valuation(group.shiftID),
+            wageFeatureEnabled: snapshot?.wageFeatureEnabled ?? false,
+            stamp: stamp,
+            day: group.day,
+            period: ShiftDetails.resolve(from: group.items).shiftPeriod,
+            dayHasMultipleShifts: shiftCount >= 2,
+            note: note
+        )
     }
 }
 
@@ -85,8 +115,11 @@ struct DayDetailSheet: View {
                         ForEach(facts.shifts, id: \.shiftID) { group in
                             shiftRow(
                                 for: group,
-                                shiftCount: facts.shifts.count,
-                                wageCents: facts.wagesByShiftID[group.shiftID] ?? 0
+                                rowFacts: facts.rowFacts(
+                                    for: group,
+                                    shiftCount: facts.shifts.count,
+                                    note: Self.shiftNote(from: group.items)
+                                )
                             )
                         }
                     }
@@ -152,15 +185,13 @@ struct DayDetailSheet: View {
     @ViewBuilder
     private func shiftRow(
         for group: (day: Date, shiftID: UUID, items: [TipEntry]),
-        shiftCount: Int,
-        wageCents: Int
+        rowFacts: ShiftDayRowFacts
     ) -> some View {
-        let period = ShiftDetails.resolve(from: group.items).shiftPeriod
         if let anchor = group.items.first {
             Button {
                 sheetTarget = .edit(anchor)
             } label: {
-                ShiftDayRow(day: group.day, period: period, dayHasMultipleShifts: shiftCount >= 2, entries: group.items, wageCents: wageCents, note: Self.shiftNote(from: group.items))
+                ShiftDayRow(facts: rowFacts)
             }
             .buttonStyle(.plain)
             .swipeActions(edge: .trailing) {

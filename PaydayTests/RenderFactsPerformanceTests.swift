@@ -58,29 +58,36 @@ struct RenderFactsPerformanceTests {
         #expect(elapsed < Self.budget(0.5), "Calendar render facts took \(elapsed) seconds against a 0.5s budget scaled x\(Self.budgetScale)")
     }
 
-    @Test("chart aggregates 20,000 rows once within an interactive budget")
-    func chartFactsStayFastForLargeHistory() {
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
-        let start = date(2026, 7, 1, calendar: calendar)
-        let end = date(2026, 7, 14, calendar: calendar)
-        let nights = (0..<20_000).map { index in
-            (
-                date: calendar.date(byAdding: .day, value: index % 14, to: start)!,
-                cents: 100
-            )
-        }
+    @Test("chart queries 20,000 shifts into 14 bars within an interactive budget")
+    func chartFactsStayFastForLargeHistory() throws {
+        // PR 5 wave 0: the chart no longer aggregates a caller's tuples, it
+        // asks `EarningsSnapshot` once per bar. The budget therefore covers
+        // 14 engine queries over a 20,000-shift index rather than one
+        // dictionary grouping, and it is the number that matters, because
+        // this runs inside a drag.
+        let zone = TimeZone(secondsFromGMT: 0)!
+        let start = CivilDay(year: 2026, month: 7, day: 1)
+        let range = DayRange(start: start, end: CivilDay(year: 2026, month: 7, day: 14))
+        let snapshot = try EarningsSnapshot.build(EarningsInputs(
+            shifts: (0..<20_000).map { index in
+                ShiftInput(
+                    id: UUID(),
+                    workDay: start.adding(days: index % 14),
+                    voluntaryCashCents: 100
+                )
+            },
+            asOf: CivilDay(year: 2026, month: 7, day: 14)
+        ))
 
         let startedAt = Date.timeIntervalSinceReferenceDate
-        let facts = EarningsChartFacts(
-            nights: nights,
-            period: PayPeriod(start: start, end: end),
-            calendar: calendar
-        )
+        let facts = EarningsChartFacts(snapshot: snapshot, range: range, timeZone: zone)
         let elapsed = Date.timeIntervalSinceReferenceDate - startedAt
 
         #expect(facts.points.count == 14)
         #expect(facts.points.reduce(0) { $0 + $1.cents } == 2_000_000)
+        // Every bar came out of a query, so the bars and the whole-range
+        // answer are the same engine at two scopes rather than two additions.
+        #expect(facts.whole?.knownComponents.earnedIncomeCents == 2_000_000)
         #expect(elapsed < Self.budget(0.5), "Chart render facts took \(elapsed) seconds against a 0.5s budget scaled x\(Self.budgetScale)")
     }
 
