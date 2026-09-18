@@ -56,7 +56,13 @@ enum AmbientPeriodFigure {
             policyStore: policyStore,
             scheduleStore: scheduleStore
         )
-        guard case .success(let snapshot) = EarningsStore.buildOnce(source: source) else {
+        // Same rule as the app, not a smaller one. A Lock Screen or a spoken
+        // answer reading $0 off a purged cache is the same lie in a smaller
+        // font, which is why this is a parameter rather than an omission.
+        guard case .success(let snapshot) = EarningsStore.buildOnce(
+            source: source,
+            shiftsAreAuthoritative: PaydaySyncState.shiftsAreAuthoritativeForCurrentAccount
+        ) else {
             return .failure(.unavailable)
         }
 
