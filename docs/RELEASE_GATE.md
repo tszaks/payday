@@ -167,8 +167,21 @@ Measured against `production` at `c77bb57`:
 1. **PR 6 group 2.14**, the snapshot upload. The largest buildable piece:
    `earnings_snapshots`, `upsert_earnings_snapshot` with the
    server-revision acceptance rule, `SnapshotUploader`, and `/v1/summary`
-   reading the stored payload with `stale`. `dataset_revision` exists; the
-   rest does not.
+   reading the stored payload with `stale`. **Nothing of it exists**, including
+   `dataset_revision` itself.
+
+   Corrected within the hour: an earlier line here said "`dataset_revision`
+   exists". It does not. `grep -rl dataset_revision supabase/migrations/`
+   returns one file, and the match is a COMMENT in the S8 change-feed
+   migration explaining that the keyset cursor "is not interchangeable with
+   the snapshot design's `dataset_revision` watermark -- they solve
+   different problems. This is the missing half."
+
+   Fourth instance of the same instrument error in one session, and the
+   first caught inside an hour of committing it, by drilling into the match
+   instead of counting files. `grep -l` answers "does this string appear",
+   which is not "does this thing exist" -- the same invalid inference as
+   "no match, therefore untested", pointed the other way.
 2. **PR 7**, lifecycle hardening.
 3. **PR 8**, the deletions, behind the catch-count condition.
 4. **S13's view**, which the slice gates on "a design review on renders
