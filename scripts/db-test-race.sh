@@ -19,6 +19,8 @@
 #   9. a DEVICE shift write (S6) meeting the one-shot, in BOTH orders: the
 #      blocking lock is really taken, and the device's number survives either
 #      way, because a shift a human authored is closed to conversion
+#  10. the CURSOR FENCE: a shift folded by a long 1.0 transaction is still
+#      delivered, with the unclamped cursor shown to lose it permanently
 #
 # Both of 1 and 2 are recorded verbatim because the design's own table records
 # both, and because the shipping (try-) variant leaves the authoritative read
@@ -996,6 +998,107 @@ check "theDisagreementIsRecordedRatherThanSwallowed" \
           and s.id = '54000000-0000-0000-0000-000000000130'")"
 
 q "delete from auth.users where id in ('$U5','$U6')" >/dev/null
+
+# ===========================================================================
+# 10. THE CURSOR FENCE. A shift folded by a LONG 1.0 transaction is still
+#     delivered, and the unclamped cursor is shown to lose it.
+#
+# This is the case that S6 shipped without and S8 adds. `updated_at` is
+# written as `now()`, the TRANSACTION timestamp, and the fold runs in an
+# after-statement trigger at the end of a 1.0 device's batch. So a shift can
+# be stamped seconds before it becomes visible:
+#
+#   t0  T1 begins, writes a legacy row, the fold stamps shift S at t0.
+#       T1 STAYS OPEN.
+#   t1  An unrelated shift U is written and committed.
+#   t2  The client pulls. S is invisible. It sees only U, at t1.
+#   t3  T1 commits. S is now visible, still stamped t0 < t1.
+#
+# A client that advanced its cursor to max(updated_at) = t1 filters
+# `updated_at > t1` forever after, and S is NEVER returned again, on any
+# device. Fatal here specifically: shifts are the only read surface on this
+# leg, the writer is a third party so the post-push readback cannot cover it,
+# and the cache check compares ID SETS so a present-but-stale shift never
+# forces a re-baseline.
+#
+# Both arms are asserted, because the fix is only meaningful against the
+# failure: the UNCLAMPED cursor must MISS the shift, and the clamped one must
+# find it.
+# ===========================================================================
+
+U7=54000000-0000-4000-8000-000000000007
+setup_account "$U7"
+
+# The pre-existing unrelated shift, committed, so max(updated_at) has
+# something later than T1's start to advance to.
+q "$(shift_upsert_sql "$U7" '[{"id":"54000000-0000-0000-0000-000000000170","work_date":"2026-08-10","cash_tips_cents":111}]')" >/dev/null
+
+# T1: a 1.0 build's legacy write, held open. Its fold stamps the new shift
+# with T1's transaction timestamp, which is EARLIER than anything committed
+# after it.
+open_session e 7
+send 7 "begin;"
+wait_state e "idle in transaction"
+send 7 "$(device_upsert_sql "$U7" '[{"id":"54000000-0000-0000-0000-000000000181","shift_id":"54000000-0000-0000-0000-000000000180","work_date":"2026-08-11","amount_cents":4200,"kind":"cash","client_updated_at":"2026-08-11T23:00:00Z"}]')"
+wait_state e "idle in transaction"
+
+# A later committed write, so the visible maximum moves past T1's stamp.
+q "$(shift_upsert_sql "$U7" '[{"id":"54000000-0000-0000-0000-000000000171","work_date":"2026-08-12","cash_tips_cents":222}]')" >/dev/null
+
+# The client's pull, while T1 is still open. Capture BOTH cursors from the
+# one response: what an unclamped client would take, and what the fence gives.
+CURSORS=$(q "
+  with feed as (
+    select public.fetch_shift_changes(null::timestamptz, null::uuid, 1000) as v
+  )
+  select
+    coalesce((select max((e ->> 'updated_at')::timestamptz)
+              from jsonb_array_elements((select v -> 'rows' from feed)) e)::text, 'none')
+    || '|' ||
+    least(
+      (select max((e ->> 'updated_at')::timestamptz)
+       from jsonb_array_elements((select v -> 'rows' from feed)) e),
+      ((select v ->> 'server_now' from feed)::timestamptz - interval '300 seconds')
+    )::text
+    || '|' || (select jsonb_array_length(v -> 'rows') from feed)")
+UNCLAMPED="$(printf '%s' "$CURSORS" | cut -d'|' -f1)"
+CLAMPED="$(printf '%s' "$CURSORS" | cut -d'|' -f2)"
+PULLED="$(printf '%s' "$CURSORS" | cut -d'|' -f3)"
+
+check "theClientPullCannotSeeTheUncommittedFold" "2" "$PULLED"
+
+# T1 commits. The folded shift becomes visible, still stamped at T1's start.
+send 7 "commit;"
+wait_state e "idle"
+close_session 7
+wait || true
+
+check "theFoldedShiftIsStampedEarlierThanTheVisibleMaximum" "t" \
+  "$(q "select (select updated_at from public.shifts
+                 where user_id = '$U7' and id = '54000000-0000-0000-0000-000000000180')
+              < '$UNCLAMPED'::timestamptz")"
+
+# THE NEGATIVE CONTROL. Without the clamp the shift is gone for good.
+check "anUnclampedCursorPermanentlyMissesTheFoldedShift" "0" \
+  "$(q "select count(*) from jsonb_array_elements(
+          (public.fetch_shift_changes('$UNCLAMPED'::timestamptz, null::uuid, 1000)) -> 'rows') e
+         where e ->> 'id' = '54000000-0000-0000-0000-000000000180'")"
+
+# THE FIX. The fence keeps the cursor behind the in-flight window, so the next
+# pass delivers it.
+check "theClampedCursorStillDeliversTheFoldedShift" "1" \
+  "$(q "select count(*) from jsonb_array_elements(
+          (public.fetch_shift_changes('$CLAMPED'::timestamptz, null::uuid, 1000)) -> 'rows') e
+         where e ->> 'id' = '54000000-0000-0000-0000-000000000180'")"
+
+# And the money is right, so this is delivery of a correct row rather than of
+# an empty placeholder.
+check "theDeliveredFoldedShiftCarriesItsMoney" "cash=4200 source=migration" \
+  "$(q "select 'cash=' || cash_tips_cents || ' source=' || source
+         from public.shifts where user_id = '$U7'
+          and id = '54000000-0000-0000-0000-000000000180'")"
+
+q "delete from auth.users where id = '$U7'" >/dev/null
 
 q "delete from auth.users where id in ('$U','$U2')" >/dev/null
 
