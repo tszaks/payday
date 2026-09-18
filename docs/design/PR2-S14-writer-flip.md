@@ -115,19 +115,45 @@ today" immediately after they logged.
    sheet session satisfies the nudge check, the day total and the row list,
    before `@Query` has refreshed. Absent this, the flip reintroduces the exact
    "you haven't logged today" bug #40 switched the scheduler to prevent.
-2. **A day with a total drops no rows.** Already written
+
+2. **Reachability, with a WITNESS per command.** This is the gate that closes
+   the hazard rather than documenting it. The danger is precise: every
+   read-side test can pass while the writer still silently runs the legacy
+   `LogTipSheet.saveNew` path, because a correct read of a correctly-written
+   legacy row is indistinguishable from a correct read of a new one. So each
+   command asserts the witness of the new path, not merely that the operation
+   appeared to work. On an authoritative account:
+   - `create` writes a `ShiftRecord` **and writes no `tip_entries` row**
+   - `update` mutates the `ShiftRecord` **in place** (same id, no second row)
+   - `delete` removes the `ShiftRecord` **and enqueues its deletion**
+   - `restore` brings the `ShiftRecord` back **and resurrects no `TipEntry`**
+
+   `restore` is the fourth zero-caller command and is exercised by
+   `UndoDeleteToast`'s `ShiftRecord` path, so it gets its own gate rather than
+   shipping unreached behind the same wiring risk as the other three.
+
+3. **A day with a total drops no rows.** Already written
    (`FlipJoinGateTests`), re-run here over the flipped path.
-3. **Digest identity across the flip.** The same dataset fingerprints
+
+4. **Digest identity across the flip.** The same dataset fingerprints
    identically before and after, which is only assertable because the
-   canonicalization landed first.
-4. **Cross-surface, one fixture, one natively-logged shift**: it appears in
+   canonicalization landed first (#45).
+
+5. **Cross-surface, one fixture, one natively-logged shift**: it appears in
    the calendar tile, the day detail, history, the dashboard, the nudge check
    and the delete count. Per-surface tests cannot catch this; each stays
-   internally consistent with whatever source it reads.
-5. **Edit and delete still work on a flipped row.** The whole reason the
-   class-B readers could not move early.
-6. **A non-authoritative account is byte-identical.** Every shipped account
-   today, so this PR must ship no behaviour change to anyone.
+   internally consistent with whatever source it reads. This is also where
+   gate 2's `create` witness lives -- the fixture asserts the `ShiftRecord`
+   exists and that no `TipEntry` was written.
+
+6. **Edit and delete still work on a flipped row**, which is the whole reason
+   the class-B readers could not move early. Including the parity case that
+   pins `pruneZeroedRows`' removal as intended: on an authoritative account,
+   editing a shift to zero persists **exactly one zeroed `ShiftRecord`** --
+   not deleted, not duplicated.
+
+7. **A non-authoritative account is byte-identical.** Every shipped account
+   today, so this PR ships no behaviour change to anyone.
 
 ## Hazards carried forward
 
@@ -139,7 +165,23 @@ today" immediately after they logged.
 - `tip_entries` remains the legacy write surface for shipped 1.0 builds and is
   never rewritten. The flip changes what THIS build writes, not what the
   server accepts.
-- `pruneZeroedRows` disappearing is a behaviour change on its own: today a
-  zeroed sibling row is swept on dismissal. Under one record per shift there is
-  no sibling, so the sweep has nothing to do. Worth stating so its absence
-  reads as intended rather than forgotten.
+- `pruneZeroedRows` disappears, and it is safe, established by reading the
+  code rather than by arguing from the model. It is guarded by
+  `guard rows.count > 1 else { return }`, so it only ever acts when one shift
+  has multiple `TipEntry` rows -- precisely the two-row model that ceases to
+  exist under one record per shift. It is already a no-op there. And the
+  behaviour a reader might fear losing, "the user zeroes a shift", is
+  preserved for free: the old code's "every row is zero" branch KEPT the
+  anchor rather than deleting the shift, and editing the one `ShiftRecord` to
+  zero simply persists one zeroed record. Same outcome. Gate 6 pins it so the
+  absence reads as designed.
+
+- **The queue-ordering bug was in four places, and the flip makes two of them
+  reachable.** `ShiftCommands.delete` and `.restore` wrote their App Group
+  queues inside `perform`, so a failed save left a live shift with a permanent
+  tombstone saying it was deleted (#51). Those two commands have zero
+  production callers today, so the bug is latent and the flip is what would
+  have activated it. Fixed ahead of the flip, with the injectable `saving`
+  seam and `ShiftQueueOrderingTests`, and rule 20 widened to every queue
+  symbol -- which then found a fourth site in `PaycheckEntrySheet`. The flip
+  inherits the rule, so a new write path cannot reintroduce it.
