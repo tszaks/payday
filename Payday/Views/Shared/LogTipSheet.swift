@@ -173,8 +173,23 @@ struct LogTipSheet: View {
     @State private var note: String
     @State private var showDeleteConfirmation = false
     @State private var revealResult: RevealResult?
-    /// Whether revealResult.cents contains any non-tip employee income —
-    /// wages or Toast mandatory gratuity. Set alongside revealResult so an
+    /// The shift's own figure as the ledger valued it, which is what the
+    /// reveal HEADLINE renders (row [LS-13]).
+    ///
+    /// It is the same `EarningsFigure` the header showed a beat earlier and
+    /// the same one `ShiftDayRow` will show on Dashboard, so "one shift speaks
+    /// one number" holds across the save.
+    ///
+    /// `RevealResult.cents` is not rendered, but it is no longer a DIFFERENT
+    /// number: `saveNew` hands `reveal(...)` this figure's own cents and seeds
+    /// the engine's history with `valuedShiftCents`, so the sentence under the
+    /// headline is computed on the same ledger basis the headline prints. The
+    /// two used to differ, and `RevealCopy.comparison` says its figure out
+    /// loud, so the card could print "$250.00 this shift." over "topping your
+    /// previous record of $260.00."
+    @State private var revealFigure: EarningsFigure?
+    /// Whether the reveal figure contains any non-tip employee income —
+    /// wages or Toast mandatory gratuity. Set alongside revealFigure so an
     /// all-in number is never mislabeled as "tips."
     @State private var revealIncludesNonTipIncome = false
     /// Set once, at appearance, when LiveShiftEndModeResolver decides this
@@ -215,6 +230,21 @@ struct LogTipSheet: View {
     /// analysis without turning closeout into a long questionnaire.
     @State private var receiptMetrics: ShiftReceiptMetrics?
 
+    /// The id the draft is substituted into the preview snapshot under
+    /// (`ShiftDraftPreview`). For an edit it is the id the HISTORY snapshot
+    /// keys that shift under — the stored `shiftID`, or
+    /// `ShiftDays.deterministicShiftID(for:)` for a legacy row that never got
+    /// one — so the draft REPLACES the stored shift in its own workweek
+    /// instead of doubling it; for a new shift it is a stable id minted once,
+    /// so the draft is appended and the header does not change answer between
+    /// two body passes.
+    @State private var draftShiftID: UUID
+    /// The recording time the save will stamp. It is a tiebreaker in the
+    /// ledger's within-workweek ordering, so the preview has to use the same
+    /// one the save will or the cumulative rounding could land differently on
+    /// the two sides of a save. An edit keeps the stored shift's own time.
+    @State private var draftRecordedAt: Date
+
     init(target: TipEntrySheetTarget) {
         self.target = target
         switch target {
@@ -234,6 +264,8 @@ struct LogTipSheet: View {
             if let seedClockIn, let seedClockOut {
                 _hoursWorked = State(initialValue: ShiftTimes.hours(clockIn: seedClockIn, clockOut: seedClockOut))
             }
+            _draftShiftID = State(initialValue: UUID())
+            _draftRecordedAt = State(initialValue: .now)
         case .edit(let entry):
             // A synchronous fallback seeded from the anchor entry alone —
             // always available immediately, unlike the @Query-backed
@@ -258,6 +290,33 @@ struct LogTipSheet: View {
             _clockOut = State(initialValue: entry.clockOut)
             _serverCount = State(initialValue: entry.serverCount)
             _receiptMetrics = State(initialValue: entry.receiptMetrics)
+            // A legacy row logged before shift grouping existed has no
+            // shiftID, and substituting the draft under the wrong id APPENDS a
+            // duplicate of the shift being edited into its own workweek: the
+            // week's hours double and the draft is handed overtime it did not
+            // earn while the person was only changing a tip amount. MEASURED
+            // on a Wednesday 10-hour legacy shift inside a 36-hour Sunday-start
+            // week: 5 shifts instead of 4, header $230.00 / "10h · $150.00
+            // wages" against the correct $180.00 / "10h · $100.00 wages".
+            //
+            // So the id is seeded to the one the history snapshot actually
+            // keys that group under, SYNCHRONOUSLY, on the first body pass:
+            // `ShiftDays.groupedByShift`'s nil-shiftID fallback is
+            // `deterministicShiftID(for: date)`, a pure function of the
+            // calendar day (`ShiftDays.swift`), which `LegacySnapshotBridge`
+            // and `MigrationRunner.backfillShiftIDs` already agree on. It is
+            // not "a content hash the sheet cannot reproduce" — that is
+            // `LegacyLedgerBridge.shiftInput`'s id, which
+            // `LegacySnapshotBridge.shiftInput` overwrites with the group's.
+            //
+            // `seedShiftDetailDefaults` still assigns the group's id in
+            // onAppear, but it can no longer be load-bearing, and that matters
+            // twice: the first body pass renders BEFORE onAppear, and its own
+            // guard early-returns while the @Query-backed `allEntries` is
+            // momentarily empty — onAppear fires once, so a wrong id seeded
+            // here could otherwise survive for the sheet's whole lifetime.
+            _draftShiftID = State(initialValue: ShiftDraftPreview.editDraftShiftID(for: entry))
+            _draftRecordedAt = State(initialValue: entry.recordedAt ?? .now)
         }
     }
 
@@ -270,13 +329,109 @@ struct LogTipSheet: View {
         cashCents > 0 || creditCents > 0
     }
 
-    /// The header figure: voluntary cash + credit tips, plus Toast employee
-    /// gratuity/fees, net of tip-out, plus this shift's base-rate wages. The
-    /// gratuity line is non-tip income, but it is still money earned on this
-    /// shift and therefore belongs in the all-in total.
-    private var shiftTotalCents: Int {
-        WageEstimate.shiftTotalCents(cashCents: cashCents, creditCents: creditCents, tipOutCents: tipOutCents, wageCentsPerHour: preferencesStore.baseHourlyWageCents, hoursWorked: hoursWorked)
-            + (receiptMetrics?.separatedGratuityFeesCents ?? 0)
+    /// The draft written as the `TipEntry` rows the save will write, so the
+    /// header is valued off exactly what is about to be persisted. See
+    /// `ShiftDraftPreview`.
+    private var draftRows: [TipEntry] {
+        ShiftDraftPreview.rows(
+            date: date,
+            cashCents: cashCents,
+            creditCents: creditCents,
+            note: note.isEmpty ? nil : note,
+            recordedAt: draftRecordedAt,
+            shiftID: draftShiftID,
+            hoursWorked: hoursWorked,
+            tipOutCents: tipOutCents,
+            salesCents: salesCents,
+            shiftPeriod: shiftPeriod,
+            clockIn: clockIn,
+            clockOut: clockOut,
+            serverCount: serverCount,
+            receiptMetrics: receiptMetrics
+        )
+    }
+
+    /// The app's real history with this draft substituted in, valued by the
+    /// one ledger under the user's own effective-dated policies.
+    ///
+    /// `policyStore.policies` whole, never a scalar rate or a scalar weekday:
+    /// wave 0 MEASURED a synthesized `.distantPast` `.confirmed` policy
+    /// repricing every pre-raise shift at today's rate ($520.00 against the
+    /// correct $440.00) and making `.estimated` unreachable.
+    private var previewSnapshot: EarningsSnapshot? {
+        ShiftDraftPreview.snapshot(
+            draft: ShiftDraftPreview.draftInput(
+                rows: draftRows,
+                shiftID: draftShiftID,
+                payrollTimeZone: policyStore.payrollTimeZone
+            ),
+            entries: allEntries,
+            policies: policyStore.policies,
+            payrollTimeZone: policyStore.payrollTimeZone
+        )
+    }
+
+    /// The WHOLE history with this draft substituted in, unwindowed — the
+    /// reveal comparison's dataset.
+    ///
+    /// `previewSnapshot` above is deliberately windowed to the draft's own
+    /// workweek, because it runs on every keystroke. That window is correct
+    /// for the draft's own figure (`LogShiftPreviewWindowTests` proves the
+    /// windowed and whole-history previews produce the identical figure) but
+    /// it is useless for the reveal, whose whole job is to compare tonight
+    /// against every prior shift — an all-time record lives outside this week
+    /// almost by definition. A window here would have left most of the history
+    /// on `StatsEngine`'s scalar fallback, which is the defect, mixed into one
+    /// comparison set rather than removed from it.
+    ///
+    /// So this is built ONCE PER SAVE rather than per keystroke. MEASURED at
+    /// **0.2335s over a 10,000-row history** (the same order as the 0.245s the
+    /// windowed header used to cost before its window), which is exactly why
+    /// the header does not use it and the save does. Bounded by *"the reveal's
+    /// whole-history snapshot stays inside a per-save budget"* in
+    /// `LogShiftPreviewPerformanceTests`, so a future change cannot quietly
+    /// move this cost onto a keystroke.
+    private func revealHistorySnapshot() -> EarningsSnapshot? {
+        ShiftDraftPreview.snapshot(
+            draft: ShiftDraftPreview.draftInput(
+                rows: draftRows,
+                shiftID: draftShiftID,
+                payrollTimeZone: policyStore.payrollTimeZone
+            ),
+            entries: allEntries,
+            policies: policyStore.policies,
+            payrollTimeZone: policyStore.payrollTimeZone,
+            windowed: false
+        )
+    }
+
+    /// Every shift's `earnedIncome`, for `StatsEngine`'s reveal comparison.
+    /// Nil without a snapshot, which leaves the engine on its own fallback
+    /// rather than on a dictionary of zeros.
+    ///
+    /// Deliberately the same construction Dashboard's `valuedCents(in:)` uses,
+    /// over the same `LegacySnapshotBridge`-shaped dataset, because the two
+    /// have to produce the same comparison sentence for the same shift.
+    private static func valuedCents(in snapshot: EarningsSnapshot?) -> [UUID: Int]? {
+        guard let snapshot else { return nil }
+        return Dictionary(
+            snapshot.shifts.map { ($0.id, $0.components.earnedIncomeCents) },
+            uniquingKeysWith: { first, _ in first }
+        )
+    }
+
+    /// The screen adapter. Expensive enough that `body` binds it ONCE and
+    /// hands it down: every read runs the ledger over the draft's workweek.
+    private var facts: LogShiftFacts {
+        LogShiftFacts(
+            snapshot: previewSnapshot,
+            draftID: draftShiftID,
+            date: date,
+            shiftPeriod: shiftPeriod,
+            clockIn: clockIn,
+            clockOut: clockOut,
+            hoursWorked: hoursWorked
+        )
     }
 
     /// A server who's never once logged cash and has enough credit history
@@ -336,6 +491,23 @@ struct LogTipSheet: View {
             // correct value init already seeded from `entry` directly.
             let shift = sameShiftEntries(around: entry)
             guard shift.contains(where: { $0.id == entry.id }) else { return }
+            // The id the HISTORY snapshot keys this shift under, read off the
+            // same grouping `LegacySnapshotBridge` performs. `init` already
+            // seeded the identical id from `entry.shiftID ??
+            // ShiftDays.deterministicShiftID(for: entry.date)` — which is
+            // exactly this grouping's own fallback — so this is a
+            // CONFIRMATION, not the repair it used to be. It stays because it
+            // is the grouping's answer rather than a restatement of its rule,
+            // so a future change to the grouping is caught here.
+            if let group = ShiftDays.groupedByShift(
+                allEntries,
+                shiftID: \.shiftID,
+                date: \.date,
+                period: \.shiftPeriod
+            ).first(where: { $0.items.contains(where: { $0.id == entry.id }) }) {
+                draftShiftID = group.shiftID
+            }
+            draftRecordedAt = shift.compactMap(\.recordedAt).min() ?? draftRecordedAt
             cashCents = shift.filter { $0.kind == .cash }.reduce(0) { $0 + $1.amountCents }
             creditCents = shift.filter { $0.kind == .credit }.reduce(0) { $0 + $1.amountCents }
             let resolved = ShiftDetails.resolve(from: shift)
@@ -376,7 +548,12 @@ struct LogTipSheet: View {
     /// the whole sheet), and destructive last (Delete Shift, edit only).
     /// Every row below money is optional; nothing here is ever nagged for.
     var body: some View {
-        NavigationStack {
+        // Bound ONCE per body pass. Every figure on this sheet comes off this
+        // one value, which is both why they cannot disagree with each other
+        // and why it must not be re-read per subview: each read builds a
+        // preview snapshot and runs the ledger.
+        let facts = facts
+        return NavigationStack {
             // The system's own keyboard avoidance keeps the LAST-focused
             // field roughly on screen, but Next can hop straight from Cash
             // to Tip-out/Sales/Servers — rows that were never near the
@@ -388,7 +565,7 @@ struct LogTipSheet: View {
             ScrollViewReader { proxy in
                 Group {
                     if let revealResult {
-                        RevealCardView(result: revealResult, period: shiftPeriod, includesNonTipIncome: revealIncludesNonTipIncome, onDismiss: { dismiss() })
+                        RevealCardView(result: revealResult, figure: revealFigure ?? .unavailable(), period: shiftPeriod, includesNonTipIncome: revealIncludesNonTipIncome, onDismiss: { dismiss() })
                     } else {
                         // Scrollable rather than a fixed VStack: expanding the
                         // details group used to compress every row toward zero
@@ -401,9 +578,9 @@ struct LogTipSheet: View {
                         // keyboard automatically.
                         ScrollView {
                             VStack(spacing: 24) {
-                                shiftAmountContent
+                                shiftAmountContent(facts)
 
-                                shiftDetailsGroup
+                                shiftDetailsGroup(facts)
                                 noteCard
 
                                 if isEditing {
@@ -616,40 +793,53 @@ struct LogTipSheet: View {
 
     // MARK: Shift total — cash + credit together, new or edit alike
 
-    private var shiftAmountContent: some View {
+    private func shiftAmountContent(_ facts: LogShiftFacts) -> some View {
         VStack(spacing: 16) {
             VStack(spacing: 4) {
-                Text("Shift total")
+                // The label is the engine's, not a constant. "Shift total" was
+                // never one of `MetricID.earnedIncome.allowedLabels`, and it
+                // said "total" over a figure that silently excluded the wage
+                // of a shift whose hours were not logged yet. Now a draft with
+                // no hours reads "Known so far", a draft with a tip-out reads
+                // "You kept", and wages-off reads "Tips" — one vocabulary with
+                // Dashboard, Period detail and the day sheet.
+                Text(facts.total.label)
                     .font(PaydayFont.subheadline)
                     .foregroundStyle(PaydayColor.textSecondary)
-                Text(Money.string(fromCents: shiftTotalCents))
+                Text(facts.total.text ?? ShiftDayRow.unavailablePlaceholder)
                     .font(PaydayFont.displayXL)
                     .monospacedDigit()
-                    .foregroundStyle(shiftTotalCents == 0 ? PaydayColor.textSecondary : PaydayColor.textPrimary)
+                    .foregroundStyle(facts.total.cents == 0 || facts.total.isUnavailable ? PaydayColor.textSecondary : PaydayColor.textPrimary)
                     .contentTransition(.numericText())
-                    .animation(reduceMotion ? nil : PaydayAnimation.premiumSpring, value: shiftTotalCents)
+                    .animation(reduceMotion ? nil : PaydayAnimation.premiumSpring, value: facts.total.cents)
                     .lineLimit(1)
                     .minimumScaleFactor(0.5)
+                // "Wages estimated from your current rate" when the rate
+                // history was never confirmed, or what is missing and for how
+                // many shifts when the draft is partial. The sheet showed
+                // neither before, so an estimate read exactly like a fact.
+                if let caption = facts.total.caption {
+                    Text(caption)
+                        .font(PaydayFont.caption2)
+                        .foregroundStyle(PaydayColor.textSecondary)
+                        .multilineTextAlignment(.center)
+                }
 
                 receiptScanSlot
                 // The hero total and the fields below it ARE the
                 // decomposition (Tyler's money-language law, 2026-07-27): no
                 // restated amount in another dialect sits under the headline.
-                // Live $/hr, computed as the fields change, off the same
-                // all-in numerator as the total above (net of tip-out, plus
-                // wages) — a tip-out is recorded because it's an important
-                // fact, but it is never income; wages are income, so they
-                // belong in the rate same as they belong in the total. This
-                // is the sheet's one secondary line. Only appears once the
-                // shift has a length (times set, or legacy hours).
-                if let hoursWorked, hoursWorked > 0 {
-                    if shiftTotalCents > 0 {
-                        let rateCentsPerHour = Int((Double(shiftTotalCents) / hoursWorked).rounded())
-                        Text("\(Money.wholeDollarString(fromCents: rateCentsPerHour))/hr")
-                            .font(PaydayFont.caption)
-                            .monospacedDigit()
-                            .foregroundStyle(PaydayColor.textSecondary)
-                    }
+                // Live $/hr, off the ENGINE's `MetricID.hourlyRate` rather
+                // than the view's own `Double(total) / hours` — same
+                // wage-inclusive, net-of-tip-out basis, asked of the one thing
+                // allowed to answer it. This is the sheet's one secondary
+                // line. Only appears once the shift has a length (times set,
+                // or legacy hours) and the engine has a figure to rate.
+                if let hourlyRateText = facts.hourlyRateText {
+                    Text(hourlyRateText)
+                        .font(PaydayFont.caption)
+                        .monospacedDigit()
+                        .foregroundStyle(PaydayColor.textSecondary)
                 }
             }
 
@@ -713,12 +903,12 @@ struct LogTipSheet: View {
     /// (expanded). Editing bypasses this entirely — the card is always
     /// visible, exactly as it always was, no belief row to speak of.
     @ViewBuilder
-    private var shiftDetailsGroup: some View {
+    private func shiftDetailsGroup(_ facts: LogShiftFacts) -> some View {
         if isEditing || isDetailsExpanded {
-            shiftDetailsCard
+            shiftDetailsCard(facts)
         } else {
             VStack(alignment: .leading, spacing: 4) {
-                beliefRow
+                beliefRow(facts)
             }
             .padding(.horizontal)
         }
@@ -726,12 +916,12 @@ struct LogTipSheet: View {
 
     /// The collapsed details group's single row: one sentence of what's
     /// already known (ShiftBeliefLine), tap to expand into the full card.
-    private var beliefRow: some View {
+    private func beliefRow(_ facts: LogShiftFacts) -> some View {
         Button {
             toggleDetailsExpanded()
         } label: {
             HStack {
-                Text(ShiftBeliefLine.compose(date: date, shiftPeriod: shiftPeriod, clockIn: clockIn, clockOut: clockOut, tipOutCents: tipOutCents))
+                Text(facts.beliefLine)
                     .font(PaydayFont.subheadline)
                     .foregroundStyle(PaydayColor.textSecondary)
                     .monospacedDigit()
@@ -768,7 +958,7 @@ struct LogTipSheet: View {
     /// every row at its default logs exactly what the app always logged.
     /// Date answers "which day"; Shift period drives the Started/Ended
     /// "Set" buttons' time defaults right below it.
-    private var shiftDetailsCard: some View {
+    private func shiftDetailsCard(_ facts: LogShiftFacts) -> some View {
         card {
             VStack(spacing: 0) {
                 HStack {
@@ -819,21 +1009,19 @@ struct LogTipSheet: View {
                     }
                 }
                 .padding(.vertical, 14)
-                if let hoursWorked {
-                    // Base rate only — overtime is a weekly calculation that
-                    // can't be attributed to a single shift, so this caption
-                    // never claims OT.
-                    if let wageCents = WageEstimate.cents(wageCentsPerHour: preferencesStore.baseHourlyWageCents, hours: hoursWorked) {
-                        Text("\(WageEstimate.hoursLabel(hoursWorked)) · \(Money.string(fromCents: wageCents)) wages")
-                            .font(PaydayFont.caption)
-                            .foregroundStyle(PaydayColor.textSecondary)
-                            .padding(.top, 8)
-                    } else {
-                        Text(WageEstimate.hoursLabel(hoursWorked))
-                            .font(PaydayFont.caption)
-                            .foregroundStyle(PaydayColor.textSecondary)
-                            .padding(.top, 8)
-                    }
+                // "6h 23m · $18.06 wages", or the hours alone when the engine
+                // priced no wage for this shift. The wages term is the
+                // ledger's slice of the WORKWEEK allocation, so it carries
+                // this shift's own overtime and sums to the header — the old
+                // caption was base rate only and carried a comment saying
+                // overtime "can't be attributed to a single shift". The ledger
+                // attributes it, per shift, and the slices telescope to the
+                // week total.
+                if let hoursCaption = facts.hoursCaption {
+                    Text(hoursCaption)
+                        .font(PaydayFont.caption)
+                        .foregroundStyle(PaydayColor.textSecondary)
+                        .padding(.top, 8)
                 }
                 Divider().padding(.top, 14)
                 HStack {
@@ -1412,33 +1600,69 @@ struct LogTipSheet: View {
         let normalizedDate = Calendar.current.startOfDay(for: min(date, .now))
         let trimmedNote = note.isEmpty ? nil : note
         let recordedAt = Date.now
-        let tipsCents = cashCents + creditCents
-        let gratuityFeesCents = receiptMetrics?.separatedGratuityFeesCents ?? 0
         let effectiveTipOutCents = tipOutCents > 0 ? tipOutCents : nil
         let effectiveSalesCents = salesCents > 0 ? salesCents : nil
-        let netTotalCents = tipsCents + gratuityFeesCents - (effectiveTipOutCents ?? 0)
-        // A shift speaks ONE number (Tyler's ruling, 2026-07-27): the
-        // reveal's total is non-wage earnings plus this shift's own wages, the same
-        // figure the Shifts row already shows — never a tips-only number
-        // shown next to a wage-aware history.
-        let wageCentsPerHour = preferencesStore.baseHourlyWageCents
-        let wageCents = hoursWorked.flatMap { WageEstimate.cents(wageCentsPerHour: wageCentsPerHour, hours: $0) }
-        let revealCents = netTotalCents + (wageCents ?? 0)
+        // A shift speaks ONE number (Tyler's ruling, 2026-07-27), and since
+        // wave 0 that number is the LEDGER's: the reveal headline is the same
+        // `EarningsFigure` the header above it just showed and the same one
+        // `ShiftDayRow` renders on Dashboard a second later. Captured before
+        // the insert so it is the draft's valuation, not a re-read that would
+        // depend on @Query having refreshed.
+        let draftFigure = facts.total
+        let draftIncludesNonTipIncome = facts.includesNonTipIncome
 
-        // A stand-in id for the reveal's own exclusion check below — the
-        // freshly-inserted rows get their own id from ShiftWriter, but since
-        // neither id exists among allEntries yet, either one excludes
-        // nothing and the comparison comes out identical.
-        let shiftID = UUID()
-
-        let statsEngine = StatsEngine(payrollTimeZone: policyStore.payrollTimeZone, records: allEntries.map(TipRecord.init), wageCentsPerHour: wageCentsPerHour)
         let calculator = PayPeriodCalculator(payrollTimeZone: policyStore.payrollTimeZone, schedule: scheduleStore.schedule ?? .fallback)
         let period = calculator.period(containing: normalizedDate)
-        // The engine and the cents passed here share one basis — see
-        // StatsEngine.reveal's doc. Passing this shift's id lets the
-        // reveal compare it against the day's other shift (if any) rather
-        // than excluding the whole day.
-        let reveal = statsEngine.reveal(forNightAt: normalizedDate, cents: revealCents, period: period, hoursWorked: hoursWorked, shiftID: shiftID)
+        // ONE basis for the whole reveal card, both lines of it.
+        //
+        // The headline is the ledger's figure ([LS-13]) and until now the
+        // COMPARISON underneath it was still `netTotal + WageEstimate.cents`
+        // over a `StatsEngine` pricing every prior shift the same scalar way.
+        // Two bases, and `RevealCopy.comparison` prints its own cents out loud
+        // ("topping your previous record of $X", "$Y above your Friday
+        // average"), so both were on screen at once. MEASURED: a 10-hour March
+        // shift with $150 of credit backfilled under a $10/hr -> $30/hr raise,
+        // against a $260.00 previous best, rendered "$250.00 this shift."
+        // directly above "Best dinner ever, topping your previous record of
+        // $260.00." — a number BELOW the record it claimed to beat, because the
+        // record was decided on $450.00: today's rate applied to a pre-raise
+        // shift. The rate-history direction has the opposite sign from the
+        // overtime one, so it is a visible self-contradiction and not a skew.
+        //
+        // The fix is not to re-price the headline. It is to let the engine read
+        // the LEDGER's per-shift `earnedIncome` for its history too, which is
+        // what `valuedShiftCents` is for and what [DB-25] asks for. Dashboard's
+        // tonight echo seeds the identical parameter from its own snapshot, so
+        // the two surfaces now produce byte-identical comparison copy for one
+        // shift — pinned by `RevealComparisonParityTests`. Before this they
+        // disagreed about both the delta and the rank one screen apart.
+        let revealSnapshot = revealHistorySnapshot()
+        let statsEngine = StatsEngine(
+            payrollTimeZone: policyStore.payrollTimeZone,
+            records: allEntries.map(TipRecord.init),
+            valuedShiftCents: Self.valuedCents(in: revealSnapshot)
+        )
+        // The draft's own id, not a stand-in UUID: it is the id the draft was
+        // valued under and the key it holds in the dictionary above, and for a
+        // `.new` sheet it appears nowhere in `allEntries`, so it still excludes
+        // nothing from the history. Passing an id at all (rather than nil) is
+        // what lets the reveal compare this shift against the day's OTHER
+        // shift instead of excluding the whole day.
+        //
+        // `draftFigure.cents` is the number the header showed a beat earlier,
+        // by construction the same `EarningsFigure`. Nil only when the engine
+        // could not value the draft at all, and rule 4 says that renders no
+        // currency — so there is no comparison to make either, and the card
+        // shows the headline's completeness label alone.
+        let reveal = draftFigure.cents.map { cents in
+            statsEngine.reveal(
+                forNightAt: normalizedDate,
+                cents: cents,
+                period: period,
+                hoursWorked: hoursWorked,
+                shiftID: draftShiftID
+            )
+        }
 
         let newEntries = ShiftWriter.insertShift(
             into: modelContext,
@@ -1458,7 +1682,12 @@ struct LogTipSheet: View {
         )
 
         revealResult = reveal
-        revealIncludesNonTipIncome = wageCents != nil || gratuityFeesCents > 0
+        revealFigure = draftFigure
+        revealIncludesNonTipIncome = draftIncludesNonTipIncome
+        // The reveal is the only thing holding this sheet open after a save.
+        // With no figure there is no card to show — the shift is written
+        // either way, so close rather than sit on a form that looks unsaved.
+        if reveal == nil { dismiss() }
         // Tonight is logged — cancel tonight's nudge and queue the next
         // usual night's instead. allEntries' @Query hasn't necessarily
         // refreshed within this same call, so the just-inserted entries
@@ -1751,11 +1980,19 @@ private struct CompactCountField: View {
 /// get the single earned flourish — the amount sweeps to green, once, paired
 /// with the save's success haptic. No confetti, no looping animation.
 private struct RevealCardView: View {
+    /// The comparison clause and the record flag. Its own `cents` is not
+    /// rendered — `figure` below is — but it is the same ledger cents `figure`
+    /// carries, and the history it was compared against is ledger-valued too.
+    /// See `LogTipSheet.revealFigure`.
     let result: RevealResult
+    /// The shift's earnings as the LEDGER valued it (row [LS-13]). The same
+    /// figure the sheet's header showed and the same one `ShiftDayRow` will
+    /// show, so the save does not change the number.
+    let figure: EarningsFigure
     /// The shift's lunch/dinner, when captured — lets the comparison below
     /// name it instead of falling back to the generic "shift".
     let period: ShiftPeriod?
-    /// Whether result.cents includes wages or mandatory gratuity — picks an
+    /// Whether the figure includes wages or mandatory gratuity — picks an
     /// honest headline unit for the all-in shift amount.
     let includesNonTipIncome: Bool
     let onDismiss: () -> Void
@@ -1765,7 +2002,7 @@ private struct RevealCardView: View {
 
     var body: some View {
         VStack(spacing: 12) {
-            Text(RevealCopy.headline(cents: result.cents, includesNonTipIncome: includesNonTipIncome))
+            Text(headline)
                 .font(PaydayFont.displayXL)
                 .monospacedDigit()
                 .foregroundStyle(result.isRecord && isRevealed ? PaydayColor.primary : PaydayColor.textPrimary)
@@ -1780,7 +2017,7 @@ private struct RevealCardView: View {
         .onTapGesture { onDismiss() }
         .onAppear {
             let comparison = RevealCopy.comparison(for: result.comparison, period: period)
-            UIAccessibility.post(notification: .announcement, argument: "\(RevealCopy.headline(cents: result.cents, includesNonTipIncome: includesNonTipIncome)) \(comparison)")
+            UIAccessibility.post(notification: .announcement, argument: "\(headline) \(comparison)")
         }
         .task {
             PaydayHaptics.success()
@@ -1794,5 +2031,13 @@ private struct RevealCardView: View {
             try? await Task.sleep(for: .seconds(2))
             onDismiss()
         }
+    }
+
+    /// The reveal's one sentence about the amount, or the shift's completeness
+    /// label when the engine could not value it. Rule 4: an unavailable read
+    /// renders NO currency, so this never becomes "$0.00 this shift."
+    private var headline: String {
+        guard let cents = figure.cents else { return figure.label }
+        return RevealCopy.headline(cents: cents, includesNonTipIncome: includesNonTipIncome)
     }
 }
