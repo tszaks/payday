@@ -13,20 +13,38 @@ import Foundation
 /// data) still reports one number here, matching every other reader in the
 /// app, rather than double-counting it.
 enum CSVExporter {
-    static let header = "Date,Shift,Cash,Credit,Gratuity-Fees,Tip-Out,Net,Hours,Start,End,Sales,Servers,Double,Note,Period,Paycheck"
+    /// New columns are APPENDED, never inserted, and that is a deliberate
+    /// cost. `Hours-Clock` reads better next to `Hours`, but inserting it
+    /// would shift every later column and break a formula in whatever
+    /// spreadsheet someone already built on an earlier export. Readability
+    /// loses to not breaking a file that is already on someone's computer.
+    /// Fixture E1 requires cells to be located by HEADER NAME and never by
+    /// index, which is the same rule from the reader's side.
+    static let header = "Date,Shift,Cash,Credit,Gratuity-Fees,Tip-Out,Net,Hours,Start,End,Sales,Servers,Double,Note,Period,Paycheck,Hours-Clock,Non-Wage-Earnings,Regular-Wages,Overtime-Wages,Earned-Income,Completeness"
 
-    static func export(entries: [TipEntry], paycheckRecords: [PaycheckRecord], calculator: PayPeriodCalculator, calendar: Calendar = .current) -> String {
+    /// `valuations` carries the engine's answer for each shift, keyed by shift
+    /// id. When a shift has none the five engine columns are EMPTY rather than
+    /// zero: a blank says "not computed", a zero says "the engine says you
+    /// earned nothing", and in a file someone may take to a payroll dispute
+    /// those are not interchangeable.
+    static func export(
+        entries: [TipEntry],
+        paycheckRecords: [PaycheckRecord],
+        calculator: PayPeriodCalculator,
+        calendar: Calendar = .current,
+        valuations: [UUID: ShiftValuation] = [:]
+    ) -> String {
         let shifts = ShiftDays.groupedByShift(entries, shiftID: \.shiftID, date: \.date, period: \.shiftPeriod, calendar: calendar)
             .sorted { $0.day < $1.day }
         var dayShiftCounts: [Date: Int] = [:]
         for shift in shifts { dayShiftCounts[shift.day, default: 0] += 1 }
         let rows = shifts.map { group -> String in
-            row(for: group.items, day: group.day, dayHasMultipleShifts: (dayShiftCounts[group.day] ?? 0) >= 2, paycheckRecords: paycheckRecords, calculator: calculator, calendar: calendar)
+            row(for: group.items, day: group.day, dayHasMultipleShifts: (dayShiftCounts[group.day] ?? 0) >= 2, paycheckRecords: paycheckRecords, calculator: calculator, calendar: calendar, valuation: valuations[group.shiftID])
         }
         return ([header] + rows).joined(separator: "\n")
     }
 
-    private static func row(for items: [TipEntry], day: Date, dayHasMultipleShifts: Bool, paycheckRecords: [PaycheckRecord], calculator: PayPeriodCalculator, calendar: Calendar) -> String {
+    private static func row(for items: [TipEntry], day: Date, dayHasMultipleShifts: Bool, paycheckRecords: [PaycheckRecord], calculator: PayPeriodCalculator, calendar: Calendar, valuation: ShiftValuation?) -> String {
         let breakdown = TipBreakdown.total(of: items)
         let cashCents = breakdown.cashCents
         let creditCents = breakdown.creditCents
@@ -43,7 +61,16 @@ enum CSVExporter {
         // that many chained `.map(...) ?? ""` expressions in one array
         // literal was slow enough to trip the type checker's time budget.
         let tipOutField: String = shiftDetails.tipOutCents.map(dollars) ?? ""
-        let hoursField: String = shiftDetails.hoursWorked.map(trimmedHours) ?? ""
+        // THE ENGINE'S FORMATTER, not a local one. The previous line here was
+        // `shiftDetails.hoursWorked.map(trimmedHours)`, and `trimmedHours`
+        // rounded to the quarter hour: a 6h23m shift exported as "6.5". That
+        // contradicted PRODUCT.md's punches-are-literal ruling and is what
+        // fixture E1 exists to prevent, since a payroll dispute is argued from
+        // this file. Minutes come from the engine's conversion so the export
+        // and the wage math cannot disagree about what the shift was.
+        let minutesWorked: Int? = shiftDetails.hoursWorked.map(HoursFormatting.minutes(fromHours:))
+        let hoursField: String = minutesWorked.map(HoursFormatting.decimalHours(minutes:)) ?? ""
+        let clockHoursField: String = minutesWorked.map(HoursFormatting.clockHours(minutes:)) ?? ""
         let startField: String = shiftDetails.clockIn.map { time24($0, calendar: calendar) } ?? ""
         let endField: String = shiftDetails.clockOut.map { time24($0, calendar: calendar) } ?? ""
         let salesField: String = shiftDetails.salesCents.map(dollars) ?? ""
@@ -67,7 +94,14 @@ enum CSVExporter {
             dayHasMultipleShifts ? "Y" : "N",
             escape(note),
             periodField,
-            paycheckField
+            paycheckField,
+            clockHoursField,
+            // Empty, not zero, when the engine has no answer for this shift.
+            valuation.map { dollars($0.components.nonWageEarningsCents) } ?? "",
+            valuation.map { dollars($0.components.regularWagesCents) } ?? "",
+            valuation.map { dollars($0.components.overtimeWagesCents) } ?? "",
+            valuation.map { dollars($0.components.earnedIncomeCents) } ?? "",
+            valuation.map(completeness) ?? ""
         ]
         return fields.joined(separator: ",")
     }
@@ -80,11 +114,20 @@ enum CSVExporter {
         String(format: "%.2f", Double(cents) / 100)
     }
 
-    private static func trimmedHours(_ hours: Double) -> String {
-        var formatted = String(format: "%.2f", (hours * 4).rounded() / 4)
-        while formatted.hasSuffix("0") { formatted.removeLast() }
-        if formatted.hasSuffix(".") { formatted.removeLast() }
-        return formatted
+    /// Why this row's wage is what it is, in one word per state.
+    ///
+    /// A blank `Earned-Income` with no explanation is a support ticket. This
+    /// column is what turns "the engine had no answer" into a reason, and the
+    /// distinction between `estimated` and `complete` is the one that matters
+    /// for a dispute: an estimated wage came from a rate the user has not yet
+    /// confirmed.
+    private static func completeness(_ valuation: ShiftValuation) -> String {
+        switch valuation.wage {
+        case .valued(_, let assumed): return assumed ? "estimated" : "complete"
+        case .unavailable(.rateNotSet): return "no rate set"
+        case .unavailable(.hoursMissing): return "hours missing"
+        case .unavailable(.noCalendarPolicy): return "no payroll calendar"
+        }
     }
 
     /// Fixed 24-hour "HH:mm" — deliberately locale-independent, unlike the
