@@ -51,6 +51,18 @@ public struct EarningsComponents: AdditiveArithmetic, Hashable, Codable, Sendabl
     /// `MetricID.earnedIncome`: nonWageEarnings + wages.
     public var earnedIncomeCents: Int { nonWageEarningsCents + wagesCents }
 
+    /// Everything that ADDS, before the tip-out is taken back out: cash +
+    /// credit + gratuityFees + wages, i.e. `earnedIncomeCents + tipOutCents`.
+    ///
+    /// The hero drawer's "Earned" subtotal row, and the same figure its
+    /// collapsed lip quotes. It lives here rather than in the two screens
+    /// that show it because both of them were composing it by hand from
+    /// their own four-term addition, which is two chances to leave a term
+    /// out; Period detail was additionally BACK-DERIVING its tip-out from
+    /// the difference between this figure and its net, so a rounding
+    /// disagreement anywhere upstream became a phantom tip-out row.
+    public var grossBeforeTipOutCents: Int { earnedIncomeCents + tipOutCents }
+
     // MARK: AdditiveArithmetic
 
     public static let zero = EarningsComponents()

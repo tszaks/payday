@@ -13,9 +13,19 @@ struct PeriodDetailFacts {
     /// `wages` below is the sum of exactly these, so the hero and the rows
     /// under it are one allocation rather than two roundings.
     let wagesByShiftID: [UUID: Int]
+    /// The engine's valuation of exactly the shifts `shiftDays` lists, and
+    /// the source of both the rows' figures and the chart's bars.
+    ///
+    /// Same ledger and the same cents as `wagesByShiftID`: PR 5 wave 0
+    /// changed where a shared component reads its figure from, not what the
+    /// figure is. The hero, the $/hr caption, the breakdown rows and the
+    /// paycheck section above are group 2.4, WAVE 1, and still compose their
+    /// own.
+    let shiftSnapshot: EarningsSnapshot?
+    /// One engine query per bar, over this period's days.
+    let chartFacts: EarningsChartFacts
     let multiShiftDays: Set<Date>
     let breakdown: TipBreakdown
-    let nightsInPeriod: [(date: Date, cents: Int)]
     let wages: PeriodIncome.Wages?
     let heroTotalCents: Int
     let heroRateCaption: String?
@@ -32,6 +42,7 @@ struct PeriodDetailFacts {
         period: PayPeriod,
         schedule: PaySchedule?,
         wageCentsPerHour: Int?,
+        policies: CompensationPolicies,
         payrollTimeZone: TimeZone,
         calendar: Calendar = .current
     ) {
@@ -59,20 +70,57 @@ struct PeriodDetailFacts {
             calendar: calendar
         ).nightlyTotals()
         let nonWageEarningsCents = resolvedNights.reduce(0) { $0 + $1.cents }
+        // ONE workweek for this screen: the calendar POLICY in effect, the
+        // same one the snapshot below buckets by. `PeriodIncome` is a
+        // pre-policy helper that can only take a scalar, and handing it
+        // `schedule?.firstWeekday` (the pay-period GRID's weekday, which PR 3
+        // severed from the workweek) put this hero on a different week than
+        // the shift rows under it. Falls back to the grid weekday only before
+        // the first calendar policy exists, which is what shipped before.
+        let workweekStartWeekday = policies.calendar(on: CivilDay(period.end, in: payrollTimeZone))?.workweekStartWeekday
+            ?? schedule?.firstWeekday
         let resolvedWages = PeriodIncome.wages(
             payrollTimeZone: payrollTimeZone,
             entries: resolvedEntries,
             wageCentsPerHour: wageCentsPerHour,
-            firstWeekday: schedule?.firstWeekday,
+            firstWeekday: workweekStartWeekday,
             calendar: calendar
         )
         let resolvedHeroTotalCents = nonWageEarningsCents + (resolvedWages?.totalCents ?? 0)
 
-        let resolvedWagesByShiftID = WageEstimate.centsByShiftID(
-            payrollTimeZone: payrollTimeZone,
-            workweekStartWeekday: schedule?.firstWeekday ?? calendar.firstWeekday,
+        // The USER'S rate and workweek history, effective dates intact.
+        // `schedule?.firstWeekday` is the pay-period GRID's weekday and is
+        // no longer a workweek source: PR 3 severed the two, and feeding it
+        // here let this screen allocate overtime across different weeks than
+        // Insights did over the same days.
+        let resolvedShiftSnapshot = LegacySnapshotBridge.snapshot(
             shifts: resolvedShiftDays,
-            wageCentsPerHour: wageCentsPerHour
+            policies: policies,
+            payrollTimeZone: payrollTimeZone,
+            asOf: period.end
+        )
+        // Off the snapshot rather than a second `CompensationLedger` run
+        // over the same shifts for the same answer.
+        let resolvedWagesByShiftID = Dictionary(
+            resolvedShiftDays.map {
+                ($0.shiftID, resolvedShiftSnapshot?.valuation($0.shiftID)?.components.wagesCents ?? 0)
+            },
+            uniquingKeysWith: +
+        )
+        // Every bar is `snapshot.day(thatDay)`, so the chart and any total
+        // above it are one engine answering at two scopes. `.distantFuture`
+        // keeps today's behaviour: this screen's entries were already
+        // filtered to the period and it has never applied a to-date cutoff,
+        // so a future day of the CURRENT period still renders as its own
+        // labelled slot.
+        let resolvedChartFacts = EarningsChartFacts(
+            snapshot: resolvedShiftSnapshot,
+            range: DayRange(
+                start: CivilDay(period.start, in: payrollTimeZone),
+                end: CivilDay(period.end, in: payrollTimeZone)
+            ),
+            timeZone: payrollTimeZone,
+            asOf: .distantFuture
         )
 
         let loggedHours = WageEstimate.loggedHours(shiftGroups: resolvedShiftDays.map(\.items))
@@ -137,9 +185,10 @@ struct PeriodDetailFacts {
         entries = resolvedEntries
         shiftDays = resolvedShiftDays
         wagesByShiftID = resolvedWagesByShiftID
+        shiftSnapshot = resolvedShiftSnapshot
+        chartFacts = resolvedChartFacts
         multiShiftDays = resolvedMultiShiftDays
         breakdown = resolvedBreakdown
-        nightsInPeriod = resolvedNights
         wages = resolvedWages
         heroTotalCents = resolvedHeroTotalCents
         heroRateCaption = resolvedHeroRateCaption
@@ -161,6 +210,9 @@ private struct PeriodDetailFactsKey: Equatable {
     let payDelayDays: Int?
     let firstWeekday: Int?
     let wageCentsPerHour: Int?
+    /// The whole policy value: a dated raise or a queued workweek change
+    /// moves this screen's cents without moving `wageCentsPerHour`.
+    let policies: CompensationPolicies
 }
 
 private struct PeriodDetailFactsCache {
@@ -196,7 +248,8 @@ struct PeriodDetailView: View {
             anchorPeriodEnd: schedule?.anchorPeriodEnd,
             payDelayDays: schedule?.payDelayDays,
             firstWeekday: schedule?.firstWeekday,
-            wageCentsPerHour: preferencesStore.baseHourlyWageCents
+            wageCentsPerHour: preferencesStore.baseHourlyWageCents,
+            policies: policyStore.policies
         )
         let facts = factsCache?.key == key
             ? factsCache!.facts
@@ -228,8 +281,8 @@ struct PeriodDetailView: View {
                 // the scrub readout), so no separate flat header goes above
                 // it — this is this screen's only other flat section without
                 // a kicker.
-                if !facts.nightsInPeriod.isEmpty {
-                    NightlyEarningsChart(nights: facts.nightsInPeriod, period: period)
+                if !facts.shiftDays.isEmpty {
+                    NightlyEarningsChart(facts: facts.chartFacts)
                 }
 
                 paycheckSection(facts)
@@ -276,6 +329,7 @@ struct PeriodDetailView: View {
             period: period,
             schedule: scheduleStore.schedule,
             wageCentsPerHour: preferencesStore.baseHourlyWageCents,
+            policies: policyStore.policies,
             payrollTimeZone: policyStore.payrollTimeZone
         )
     }
@@ -328,11 +382,7 @@ struct PeriodDetailView: View {
 
                 ForEach(Array(facts.shiftDays.enumerated()), id: \.element.shiftID) { index, group in
                     if index > 0 { Divider() }
-                    shiftRow(
-                        for: group,
-                        multiShiftDays: facts.multiShiftDays,
-                        wageCents: facts.wagesByShiftID[group.shiftID] ?? 0
-                    )
+                    shiftRow(for: group, facts: facts)
                 }
             }
         }
@@ -370,18 +420,22 @@ struct PeriodDetailView: View {
     @ViewBuilder
     private func shiftRow(
         for group: (day: Date, shiftID: UUID, items: [TipEntry]),
-        multiShiftDays: Set<Date>,
-        wageCents: Int
+        facts: PeriodDetailFacts
     ) -> some View {
-        let period = ShiftDetails.resolve(from: group.items).shiftPeriod
-        let dayHasMultiple = multiShiftDays.contains(group.day)
         if let anchor = group.items.first {
             Button {
                 sheetTarget = .edit(anchor)
             } label: {
-                ShiftDayRow(day: group.day, period: period, dayHasMultipleShifts: dayHasMultiple, entries: group.items, wageCents: wageCents)
-                    .padding(.vertical, PaydaySpacing.p12)
-                    .contentShape(Rectangle())
+                ShiftDayRow(facts: ShiftDayRowFacts(
+                    valuation: facts.shiftSnapshot?.valuation(group.shiftID),
+                    wageFeatureEnabled: facts.shiftSnapshot?.wageFeatureEnabled ?? false,
+                    stamp: facts.shiftSnapshot?.stamp,
+                    day: group.day,
+                    period: ShiftDetails.resolve(from: group.items).shiftPeriod,
+                    dayHasMultipleShifts: facts.multiShiftDays.contains(group.day)
+                ))
+                .padding(.vertical, PaydaySpacing.p12)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             // Swipe-to-delete was List-only and went with the List

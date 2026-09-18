@@ -5,6 +5,36 @@ import SwiftData
 /// wherever shifts are listed (Dashboard, day detail, period detail).
 /// Scoped to the whole shift now, not one entry: duplicating or deleting a
 /// merged cash+credit closeout acts on both rows together.
+///
+/// ## Why this file is in PR 5's shared-component slice (METRICS [SC-08])
+///
+/// It shows no figure, and that is exactly the point: Duplicate is the third
+/// live on-device PRODUCER of stored money and hours figures (after the scan
+/// prefill and the launch-time hours rewrite), and the only one that writes
+/// them with no user-entered value. One tap moves every consumer of those
+/// fields at once.
+///
+/// Its contract is that it copies verbatim. No arithmetic, no
+/// normalization, no re-derivation of the shift-level fields — every stored
+/// field is copied per row, with exactly two substitutions: one fresh
+/// `shiftID` shared by the whole copy, and `recordedAt: .now`. Copying per
+/// row rather than re-deriving automatically preserves the canonical rule
+/// that only the row which held hours/tip-out/sales/period/clock-times/
+/// server-count in the source still holds them in the copy.
+///
+/// **Wave 0 changed nothing here, and pinned it instead.**
+/// `SharedComponentSnapshotTests.duplicateIsValuedIdenticallyByTheEngine`
+/// duplicates a shift, values both through `CompensationLedger`, and asserts
+/// the copy's non-wage components and minutes are identical to the source's.
+/// That test fails if any future edit normalizes a stored amount, drops a
+/// receipt payload, or re-derives hours — which is the whole class of bug a
+/// verbatim-copy contract exists to prevent.
+///
+/// Note the one thing the copy may legitimately change: its WAGE. A
+/// duplicate adds hours to the workweek, so a copy that pushes the week past
+/// the overtime threshold is priced differently from its source, by rule
+/// (Design 1, step 4). The test asserts on the non-wage side for exactly
+/// that reason.
 extension View {
     func shiftContextMenu(_ entries: [TipEntry], sheetTarget: Binding<TipEntrySheetTarget?>, undoState: UndoDeleteToastState, context: ModelContext) -> some View {
         contextMenu {
