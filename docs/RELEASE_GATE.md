@@ -324,7 +324,12 @@ Measured on `DashboardEarnings`:
 |---|---|---|
 | legacy arm clamps  | 5 | 32 |
 | records arm clamps, before | 1 | 3 |
-| records arm clamps, after `DashboardRecordsArmParityTests` | 2 | 12 |
+| records arm clamps, after `DashboardRecordsArmParityTests` | 2 | **14** |
+
+**Current gap: 5 suites / 32 tests on legacy against 2 / 14 on records.**
+That is the number PR 8 must close, and it is a measurement rather than an
+estimate — re-run the mutation, do not re-read this table, because the whole
+point of the condition is that counts drift.
 
 And on `CalendarEarnings`:
 

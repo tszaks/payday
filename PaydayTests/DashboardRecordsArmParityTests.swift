@@ -19,7 +19,13 @@ import Testing
 /// | Mutation | Suites catching | Failing tests |
 /// |---|---|---|
 /// | **legacy** arm clamps | 5 | 32 |
-/// | **records** arm clamps | 1 | 3 |
+/// | **records** arm clamps, before this file | 1 | 3 |
+/// | **records** arm clamps, after it | 2 | 14 |
+///
+/// The remaining gap — 5/32 against 2/14 — is PR 8's entry condition,
+/// recorded in `docs/RELEASE_GATE.md`: PR 8 may not delete the legacy arm
+/// until the records arm's catch count reaches what the legacy arm's was,
+/// because deleting legacy deletes the 32 with it.
 ///
 /// The legacy arm is deeply gated: `DashboardPeriodParityTests`
 /// ("Dashboard period income equals the History row and period detail" —
@@ -248,5 +254,113 @@ struct DashboardRecordsArmParityTests {
         #expect(chartCents == tileCents, "the chart point must be the same day total")
         // And the day really does hold BOTH shifts, so the sum is a sum.
         #expect(calendar.day(civil).shiftIDs.count == 2)
+    }
+
+    // MARK: - The Dashboard sub-claims the legacy arm gates and records did not
+
+    /// Builds the facts the way `DashboardView.body` does, from records.
+    private func facts(
+        _ records: [ShiftRecord],
+        now: Date,
+        schedule: PaySchedule,
+        forcedPaydayPhase: PaydayMoment.Phase? = nil
+    ) -> DashboardFacts {
+        let comp = Self.policies(rateCents: 1_800)
+        let dataset = DashboardEarnings.build(
+            records: records, policies: comp, payrollTimeZone: Self.zone
+        )
+        return DashboardFacts(
+            snapshot: dataset.snapshot,
+            allShifts: dataset.shiftDays,
+            allShiftRecords: dataset.shiftRecordDays,
+            schedule: schedule,
+            now: now,
+            forcedPaydayPhase: forcedPaydayPhase,
+            dismissedClosedEnd: nil,
+            dismissedCheckEnd: nil,
+            payrollTimeZone: Self.zone
+        )
+    }
+
+    private static func schedule() -> PaySchedule {
+        PaySchedule(
+            frequency: .biweekly, anchorPeriodEnd: at(2026, 10, 11, hour: 0),
+            payDelayDays: 5, firstWeekday: 2
+        )
+    }
+
+    /// **"The drawer's rows reconcile to the bottom line it prints them
+    /// under."** The legacy arm gates this
+    /// (`DashboardPeriodParityTests.drawerRowsReconcile`, which failed under
+    /// the mutation); the records arm did not.
+    ///
+    /// Criterion 5 at its smallest scale: a total printed directly above the
+    /// rows it is made of. If those disagree the screen contradicts itself
+    /// without needing a second surface.
+    @Test("the drawer's rows reconcile to their bottom line, on records")
+    func drawerRowsReconcileOnRecords() throws {
+        let facts = facts(Self.records(), now: Self.at(2026, 10, 7, hour: 12),
+                          schedule: Self.schedule())
+        let snapshot = try #require(facts.snapshot)
+        let result = snapshot.payPeriod(
+            DayRange(start: CivilDay(facts.heroPeriod.start, in: Self.zone),
+                     end: CivilDay(facts.heroPeriod.end, in: Self.zone)),
+            asOf: CivilDay(Self.at(2026, 10, 7, hour: 12), in: Self.zone)
+        )
+        let c = result.knownComponents
+
+        // Bound to locals first: the same expression inline trips the type
+        // checker's time budget, which is a compiler error rather than a
+        // test failure and reads as something else entirely.
+        let tips = c.voluntaryCashCents + c.voluntaryCreditCents
+        let gross = tips + c.gratuityFeesCents - c.tipOutCents
+        let wages = c.regularWagesCents + c.overtimeWagesCents
+
+        #expect(gross + wages == c.earnedIncomeCents,
+                "the drawer's rows must sum to the bottom line above them")
+        #expect(c.earnedIncomeCents > 0, "a zero drawer reconciles trivially")
+        #expect(c.tipOutCents > 0, "the fixture must exercise a tip-out, or the sign is untested")
+    }
+
+    /// **"The check is the tips line plus gratuity plus wages, and the gap
+    /// from the hero is exactly the cash."** The legacy arm gates this
+    /// (`DashboardPaydayCardTests.checkReconcilesAgainstTheHero`); the
+    /// records arm did not.
+    ///
+    /// The claim matters because the payday card and the hero sit on ONE
+    /// screen showing different numbers ON PURPOSE — the check excludes cash
+    /// the person already has. "Different on purpose" is only defensible if
+    /// the difference is exactly the cash, and this is what makes that
+    /// checkable rather than assertable.
+    ///
+    /// Asserted against the screen's OWN three figures rather than
+    /// arithmetic rebuilt here, so a test cannot agree with itself while
+    /// disagreeing with the screen.
+    @Test("the payday card's check differs from the hero by exactly the cash, on records")
+    func checkReconcilesAgainstTheHeroOnRecords() throws {
+        // Both cash and credit, or the gap below is zero and proves nothing.
+        let day = Self.at(2026, 10, 5)
+        let records = [
+            ShiftRecord(workDate: day, shiftPeriod: .dinner,
+                        cashTipsCents: 7_000, creditTipsCents: 20_000,
+                        tipOutCents: 2_000, hoursWorked: 8, recordedAt: day),
+        ]
+        // `.periodClosed` is what puts the payday card on screen at all --
+        // the card is about the period whose CHECK is due, not the period in
+        // progress. Without it `predictedPaycheck` is `.unavailable` over
+        // zero shifts and the assertion below compares against nil, which is
+        // a fixture mistake rather than a defect. The legacy test forces the
+        // same phase for the same reason.
+        let facts = facts(records, now: Self.at(2026, 10, 7, hour: 12),
+                          schedule: Self.schedule(), forcedPaydayPhase: .periodClosed)
+
+        let hero = try #require(facts.hero.cents)
+        let check = try #require(facts.predictedPaycheck.cents)
+        let cash = try #require(facts.paydayCash.cents)
+
+        #expect(hero - check == cash,
+                "the gap between the hero and the check must be exactly the cash")
+        #expect(cash > 0, "the fixture must carry cash, or the gap is zero")
+        #expect(check > 0)
     }
 }
