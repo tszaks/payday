@@ -34,12 +34,20 @@ import Foundation
 /// wages alike (fixture S2). Pass an explicit `asOf` to override, or
 /// `CivilDay.distantFuture` to opt out.
 ///
-/// `day(_:)` and `shift(_:)` are deliberately NOT clamped: a single day and
-/// a single shift are facts someone can open, not period-to-date totals, so
-/// DayDetail on a future-dated shift shows that shift instead of `$0`. That
-/// asymmetry is pinned by test, and it is why every result carries `scope`:
-/// `day(d)` and `days(in:)` share a metric and can still legitimately
-/// differ.
+/// `day(_:)`, `shift(_:)` and the paycheck scope are deliberately NOT
+/// clamped: a single day and a single shift are facts someone can open, not
+/// period-to-date totals, so DayDetail on a future-dated shift shows that
+/// shift instead of `$0`; and a recorded paycheck covers a period the payer
+/// already settled (METRICS.md `expectedPaycheckTipsLine`: "no `asOf`").
+/// That asymmetry is pinned by test, and it is why every result carries
+/// `scope`: `day(d)` and `days(in:)` share a metric and can still
+/// legitimately differ, as can `payPeriod(p)` and the paycheck for `p`.
+///
+/// The clamped and unclamped paths are two separate private functions,
+/// `toDate` and `settled`, rather than one function with an optional
+/// cutoff, because `asOf: nil` reads as "no cutoff" and means "use the
+/// stamp's cutoff" — which is how the paycheck scope was silently narrowed
+/// (PR 4 review, P1).
 public struct EarningsSnapshot: Codable, Sendable, Equatable {
     /// Which inputs, which engine, as of when.
     public let stamp: SnapshotStamp
@@ -171,7 +179,7 @@ public struct EarningsSnapshot: Codable, Sendable, Equatable {
 
     /// One calendar month, clamped to `asOf`.
     public func month(_ month: YearMonth, asOf: CivilDay? = nil) -> EarningsResult {
-        ranged(scope: .month(month), requested: month.range, asOf: asOf)
+        toDate(scope: .month(month), requested: month.range, asOf: asOf)
     }
 
     /// One pay period, clamped to `asOf`. The period arrives as the civil
@@ -179,7 +187,7 @@ public struct EarningsSnapshot: Codable, Sendable, Equatable {
     /// changes which shifts this selects — and `stamp.manifest
     /// .scheduleDigest` is how a consumer knows that is what changed.
     public func payPeriod(_ period: DayRange, asOf: CivilDay? = nil) -> EarningsResult {
-        ranged(scope: .payPeriod(period), requested: period, asOf: asOf)
+        toDate(scope: .payPeriod(period), requested: period, asOf: asOf)
     }
 
     /// January 1 through December 31 of `year`, clamped to `asOf`. A pay
@@ -190,12 +198,12 @@ public struct EarningsSnapshot: Codable, Sendable, Equatable {
             start: CivilDay(year: year, month: 1, day: 1),
             end: CivilDay(year: year, month: 12, day: 31)
         )
-        return ranged(scope: .yearToDate(year: year), requested: range, asOf: asOf)
+        return toDate(scope: .yearToDate(year: year), requested: range, asOf: asOf)
     }
 
     /// An arbitrary span, clamped to `asOf`.
     public func range(_ range: DayRange, asOf: CivilDay? = nil) -> EarningsResult {
-        ranged(scope: .range(range), requested: range, asOf: asOf)
+        toDate(scope: .range(range), requested: range, asOf: asOf)
     }
 
     /// One result per day of `range` after the `asOf` clamp, in order,
@@ -209,7 +217,13 @@ public struct EarningsSnapshot: Codable, Sendable, Equatable {
     }
 
     /// The recorded paycheck whose period ends on `periodEnd`, paired with
-    /// what the engine expected for that period.
+    /// what the engine expected for the paycheck's WHOLE period, with no
+    /// `asOf` clamp — including when `periodEnd` is still in the future,
+    /// which the ungated "Add paycheck" button on an open period makes a
+    /// normal user action. Clamping here would hand PR 5's
+    /// `PaycheckReconciler` a period-to-date expectation to compare a
+    /// whole-period stub against, and it would report a shortfall equal to
+    /// the period's remaining days.
     ///
     /// Nil when no paycheck was recorded for that period end. With two
     /// paychecks sharing a period end (nothing forbids it), this returns the
@@ -220,23 +234,22 @@ public struct EarningsSnapshot: Codable, Sendable, Equatable {
         guard let paycheck = index.paycheckByPeriodEnd[periodEnd.dayNumber] else { return nil }
         return PaycheckReconciliation(
             paycheck: paycheck,
-            expected: ranged(
+            expected: settled(
                 scope: .paycheck(periodEnd: periodEnd),
-                requested: paycheck.period,
-                asOf: nil
+                requested: paycheck.period
             )
         )
     }
 
-    /// Every recorded paycheck with its expected figures, in canonical order.
+    /// Every recorded paycheck with its expected figures, in canonical
+    /// order. Unclamped, exactly as `paycheck(periodEnd:)`.
     public var paycheckReconciliations: [PaycheckReconciliation] {
         paychecks.map { paycheck in
             PaycheckReconciliation(
                 paycheck: paycheck,
-                expected: ranged(
+                expected: settled(
                     scope: .paycheck(periodEnd: paycheck.periodEnd),
-                    requested: paycheck.period,
-                    asOf: nil
+                    requested: paycheck.period
                 )
             )
         }
@@ -275,7 +288,12 @@ public struct EarningsSnapshot: Codable, Sendable, Equatable {
         return range.clamped(to: cutoff)
     }
 
-    private func ranged(scope: EarningsScope, requested: DayRange, asOf: CivilDay?) -> EarningsResult {
+    /// A period-TO-DATE span: the END is clamped to `asOf ?? stamp.asOf`,
+    /// and `nil` therefore means "use the stamp's cutoff", never "no
+    /// cutoff". A scope that must not be clamped calls `settled` instead —
+    /// the two are separate functions precisely so that omitting an
+    /// argument cannot silently narrow a span (PR 4 review, P1).
+    private func toDate(scope: EarningsScope, requested: DayRange, asOf: CivilDay?) -> EarningsResult {
         let cutoff = asOf ?? stamp.asOf
         let clamped = clamp(requested, asOf: asOf)
         return result(
@@ -283,6 +301,20 @@ public struct EarningsSnapshot: Codable, Sendable, Equatable {
             requested: clamped,
             asOf: cutoff,
             selected: valuations(in: clamped)
+        )
+    }
+
+    /// A SETTLED span: the whole range, with no cutoff at all, and
+    /// `EarningsResult.asOf` nil because no clamp was applied. This is the
+    /// paycheck scope: a stub in hand covers a period that already closed
+    /// from the payer's side, so comparing it against a period-to-date
+    /// figure would report a shortfall equal to the period's remaining days.
+    private func settled(scope: EarningsScope, requested: DayRange) -> EarningsResult {
+        result(
+            scope: scope,
+            requested: requested,
+            asOf: nil,
+            selected: valuations(in: requested)
         )
     }
 

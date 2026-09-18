@@ -704,7 +704,12 @@ struct EarningsSnapshotShiftAndPaycheckTests
         }
         #expect(stub.paidTipsCents == 10000, "P1.observedPaidTipsCents")
 
-        var built = try inputs(fixture, asOf: fixture.asOf ?? day("2026-10-02"))
+        // NOT fixture.asOf: P1 declares 2026-10-04, which EQUALS its
+        // paycheck's periodEnd, so the "not clamped" expectation below
+        // could not fail no matter what the query did. 2026-09-30 sits
+        // strictly inside 2026-09-21...2026-10-04, so the assertion is now
+        // capable of failing (PR 4 review, P1).
+        var built = try inputs(fixture, asOf: day("2026-09-30"))
         built.paychecks = paychecks
         let snap = try EarningsSnapshot.build(built)
 
@@ -716,6 +721,46 @@ struct EarningsSnapshotShiftAndPaycheckTests
                 "a stub in hand is a settled period, so it is not clamped")
         #expect(snap.paycheck(periodEnd: day("2001-01-01")) == nil)
         #expect(snap.paycheckReconciliations.count == paychecks.count)
+    }
+
+    /// The clamp regression the P1 test above could not catch, because
+    /// P1's own `asOf` (2026-10-04) EQUALS its paycheck's `periodEnd`, so
+    /// clamping and not clamping return the same answer there.
+    ///
+    /// W2's five shifts total 14716 over 2026-09-28...2026-10-02. Hang a
+    /// paycheck for the whole biweekly period 2026-09-21...2026-10-04 off
+    /// them and take the snapshot as of 2026-09-30, i.e. with the period
+    /// still open. `expected` has to be the WHOLE period (14716 over
+    /// 2026-09-21...2026-10-04), not the period to date (8632 over
+    /// 2026-09-21...2026-09-30): PR 5's reconciler compares a whole-period
+    /// stub against this figure, and a period-to-date expectation reports a
+    /// shortfall equal to the period's remaining days.
+    @Test("a paycheck's expected side is the whole period even mid-period, not period-to-date")
+    func paycheckExpectedIsNotClampedToAsOf() throws {
+        let period = range("2026-09-21", "2026-10-04")
+        var built = try inputs(try FixtureLoader.load("W2"), asOf: day("2026-09-30"))
+        built.paychecks = [PaycheckInput(
+            id: UUID(uuidString: "DDDDDDDD-0000-4000-8000-000000000002")!,
+            periodStart: period.start,
+            periodEnd: period.end,
+            paidTipsCents: 10000,
+            grossPayCents: 40000
+        )]
+        let snap = try EarningsSnapshot.build(built)
+
+        // The to-date queries still clamp: that is the contrast this pins.
+        #expect(snap.payPeriod(period).knownComponents.earnedIncomeCents == 8632,
+                "payPeriod IS period-to-date, so it clamps to 2026-09-30")
+        #expect(snap.payPeriod(period).range == range("2026-09-21", "2026-09-30"))
+
+        for reconciliation in [snap.paycheck(periodEnd: period.end),
+                               snap.paycheckReconciliations.first] {
+            #expect(reconciliation?.expected.knownComponents.earnedIncomeCents == 14716,
+                    "a stub in hand is a settled period, so its expected side is the whole period")
+            #expect(reconciliation?.expected.range == period,
+                    "the reported range must be the paycheck's own period, unnarrowed")
+            #expect(reconciliation?.expected.completeness.totalShifts == 5)
+        }
     }
 
     /// Encode, shuffle the encoded shifts, decode: every query must answer
