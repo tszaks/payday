@@ -1,14 +1,23 @@
 import Foundation
 
+/// One labeled block of the narration Insights used to render.
+///
+/// It lived next to the OpenAI-calling code in `InsightsService.swift` until
+/// PR 5 group 2.7 deleted that file: `InsightsService.narrate` had no live
+/// caller and its prompt carried sixteen money figures off-device on a
+/// tips-only basis under wage-inclusive headlines (`docs/METRICS.md` [ID-12]
+/// through [ID-27]). This type survives ONLY as the shape of what is already
+/// sitting in `UserDefaults`, so a stored payload from the narrated era can
+/// still decode and be discarded. Nothing writes one any more.
+struct InsightSection: Codable, Identifiable, Equatable, Sendable {
+    let title: String
+    let body: String
+    var id: String { title }
+}
+
 struct InsightsSnapshot: Codable {
     let sections: [InsightSection]
     let generatedAt: Date
-    /// The facts this narration was generated from — lets the caller
-    /// detect "the underlying numbers changed since last time" and
-    /// regenerate, instead of a time-based schedule. Optional so a
-    /// pre-existing persisted snapshot (from before this field existed)
-    /// still decodes; it just always looks stale once, which self-heals.
-    let facts: InsightsFacts?
 }
 
 /// Caches the last Insights analysis so it survives app relaunch. The
@@ -113,7 +122,7 @@ final class InsightsStore {
             return !(title.contains("cash") && title.contains("credit"))
         }
         guard cleaned.count != snapshot.sections.count else { return snapshot }
-        return InsightsSnapshot(sections: cleaned, generatedAt: snapshot.generatedAt, facts: snapshot.facts)
+        return InsightsSnapshot(sections: cleaned, generatedAt: snapshot.generatedAt)
     }
 
     private func persistSnapshot() {
