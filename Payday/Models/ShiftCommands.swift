@@ -198,11 +198,11 @@ enum ShiftCommands {
     static func update(
         _ record: ShiftRecord,
         in context: ModelContext,
-        _ edits: (ShiftRecord) -> Void
+        _ edits: (ShiftRecord) throws -> Void
     ) throws {
         guard mayMutate(record) else { throw Failure.conversionPending }
         try perform(in: context) {
-            edits(record)
+            try edits(record)
             // `didSet` never fires on a SwiftData model, so nothing advances
             // this on its own and an edited row would never enter the upload
             // set. Measured on 2026-09-17; it is why edits silently stopped
