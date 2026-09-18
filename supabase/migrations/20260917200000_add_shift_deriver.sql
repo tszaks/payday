@@ -161,9 +161,51 @@ begin
   -- object payload from storing a scalar and violating
   -- shifts_receipt_is_object.
   --
-  -- detail_rank is credit-first then id, matching ShiftDetails.resolve,
-  -- which is credit ?? cash and NEVER a sum. Every scalar is resolved by
-  -- rank: a tip-out duplicated onto both rows of a group must subtract once.
+  -- detail_rank is credit-first then id. Every scalar is resolved as the
+  -- first NON-NULL in that order across ALL of a group's rows: a tip-out
+  -- duplicated onto both rows of a group must subtract once, and a value
+  -- sitting on a group's SECOND credit row must not be invisible.
+  --
+  -- On the scope of the claim "this is a port of ShiftDetails.resolve".
+  -- When this file was first written it was NOT a port; it was the correct
+  -- rule next to a different one. ShiftDetails.resolve was
+  -- `first{kind == .credit} ?? first{kind == .cash}` PER FIELD, with no rank
+  -- and no visibility of a second row of either kind, and for a group of
+  -- exactly one cash row plus one credit row the two rules agree to the cent
+  -- -- which is why N1/N3/N4/N5/L1/L2/P6 all passed under both and none of
+  -- them could see it. MEASURED on the real shipped TipBreakdown over a
+  -- four-row group (fixture P7: cash 5000 a1, credit 2000 tip-out 1000 b1,
+  -- cash 1000 c1, credit 3000 carrying a v1 receipt with gratuity 4200 d1),
+  -- Swift returned TWO different answers for identical data depending on
+  -- array order -- 6000/5000/0/1000/10000 in 12 of the 24 orderings and
+  -- 6000/2000/4200/0/12200 in the other 12 -- and this fold agreed with
+  -- neither: it folds that group to 6000/2000/4200/1000/11200.
+  --
+  -- Conservation cannot catch that class of disagreement at all. Both sides
+  -- of the check are THIS fold's own grouping, so P7 returns
+  -- source_cents = shift_cents = 11200 with conflicts = 0 while both shipped
+  -- readers are wrong. Only a pinned fixture catches it, which is what P7 is.
+  --
+  -- The ranking was therefore ported INTO Swift rather than the reverse,
+  -- because the fold's answer is the correct one: ShiftDetails now carries
+  -- detailRanked / metricsRanked / metricsOwner, resolves every scalar as the
+  -- first non-null in detail-rank order across all rows, and writes onto
+  -- detail rank 1. The same five numbers are literals in
+  -- supabase/tests/shift_deriver_test.sql (P7) and in
+  -- PaydayTests/ShiftGroupRankingParityTests.swift, so neither side can move
+  -- alone. One asymmetry remains and is deliberate: this file ranks on
+  -- `jsonb_typeof(...) = 'object'`, while Swift can only see a payload that
+  -- DECODES as ShiftReceiptMetrics, so an object-but-undecodable payload
+  -- outranks on this side and is nil on that one. The sanitizer below is what
+  -- confines it to un-folded legacy rows, and
+  -- ShiftRecord.receiptPayloadIsUnreadable is the surface that reports it.
+  --
+  -- The agent API's groupShifts (supabase/functions/payday-api/index.ts) is
+  -- still a THIRD reader of the legacy rows with the old first-credit rule
+  -- and a max(work_date) that correction D1 already names as wrong. It is
+  -- deliberately NOT patched here: its slice replaces that function with a
+  -- read of public.shifts, and porting a ranking into code scheduled for
+  -- deletion would be the fourth copy of a money rule, not the second.
   --
   -- min(work_date), never max: ShiftDays and StatsEngine use min, and the
   -- agent API's groupShifts reduced to the largest, which is correction D1.
