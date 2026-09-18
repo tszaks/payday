@@ -1719,8 +1719,42 @@ struct LogTipSheet: View {
         // here, a logged shift is gone on relaunch. Everything after it --
         // the reveal, the nudge reschedule, the dismissal -- is a claim that
         // the shift was saved, so none of it may run if it was not.
+        // THE WRITER FLIP. One decision, and the two paths are mutually
+        // exclusive: exactly one of `newEntries` / `newRecords` is non-empty,
+        // so the just-written append below cannot double-count.
+        //
+        // `date` is passed raw to both, deliberately and verified: both
+        // writers clamp internally with the identical rule --
+        // `ShiftWriter.insertShift`'s "clamp to today" and
+        // `ShiftCommands.create`'s `startOfDay(for: min(workDate, .now))` --
+        // so the day a shift lands on does not move across the flip. That was
+        // measured rather than assumed, because a silent day shift would move
+        // a shift between pay periods.
+        //
+        // `create` is NOT wrapped in `commit`: it owns its own single save
+        // and rollback, and wrapping would nest two transactions.
         let newEntries: [TipEntry]
+        let newRecords: [ShiftRecord]
         do {
+            if PaydaySyncState.shiftsAreAuthoritativeForCurrentAccount {
+                newRecords = [try ShiftCommands.create(
+                    in: modelContext,
+                    workDate: date,
+                    shiftPeriod: shiftPeriod,
+                    cashTipsCents: cashCents,
+                    creditTipsCents: creditCents,
+                    tipOutCents: effectiveTipOutCents,
+                    salesCents: effectiveSalesCents,
+                    hoursWorked: hoursWorked,
+                    clockIn: clockIn,
+                    clockOut: clockOut,
+                    serverCount: serverCount,
+                    receiptMetrics: receiptMetrics,
+                    note: trimmedNote,
+                    recordedAt: recordedAt
+                )]
+                newEntries = []
+            } else {
             newEntries = try ShiftCommands.commit(in: modelContext) {
                 ShiftWriter.insertShift(
                     into: modelContext,
@@ -1738,6 +1772,8 @@ struct LogTipSheet: View {
                     serverCount: serverCount,
                     receiptMetrics: receiptMetrics
                 )
+            }
+                newRecords = []
             }
         } catch {
             // Rolled back, so the form still holds the night's figures and
@@ -1758,7 +1794,14 @@ struct LogTipSheet: View {
         // usual night's instead. allEntries' @Query hasn't necessarily
         // refreshed within this same call, so the just-inserted entries
         // are appended explicitly rather than relied on to already be in it.
-        SmartNudgeScheduler.reschedule(preferencesStore: preferencesStore, allEntries: allEntries + newEntries, shiftRecords: shiftRecords)
+        // FLIP GATE 1's call site. `@Query` has not refreshed within this
+        // call, so the just-written thing is appended EXPLICITLY on whichever
+        // representation it was written to. Forgetting the `newRecords` half
+        // is what tells a user "you haven't logged today" immediately after
+        // they logged -- proven landable ahead of the flip by
+        // `FlipGate1SessionLoggedTests`, whose counterexample test asserts
+        // exactly this omission.
+        SmartNudgeScheduler.reschedule(preferencesStore: preferencesStore, allEntries: allEntries + newEntries, shiftRecords: shiftRecords + newRecords)
         PaydayPushScheduler.reschedule(preferencesStore: preferencesStore, schedule: scheduleStore.schedule, allEntries: allEntries + newEntries, paycheckRecords: paycheckRecords)
         if isFirstShiftEver {
             Task { await SmartNudgeScheduler.requestAuthorizationIfNeeded() }
