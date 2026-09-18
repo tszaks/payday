@@ -1723,12 +1723,80 @@ Gate: B green with the 609 count intact (read from the `Test run with N tests` l
 
 **S10. The fence.** Its own commit, after S8 **and** S9. Files: the two `@available(*, unavailable)` annotations plus the two replacements. Tests: the two 7.6 deletion-queue tests. Gate: B and D, where D is the real gate — **zero references to `recordTipDeletions` or `cancelTipDeletions` outside `PaydaySyncState.swift`**, enforced by `design-lint.sh`. Not a count of compile errors: S9 has already converted all five (8.4).
 
-**S11. Agent API.** Files: `index.ts` (`listShifts`, `getShift` with the step-2 lookup, `payday_agent_summary` on `shifts`, `CHANGE_TABLES`, the `createShift` corrections), `sql_corrections.ts`, `agent_shifts_test.ts`, `docs/PAYDAY_API.md`.
+**S11. Agent API. PREMISE HOLDS — PR 2 work, partly done.** Audited
+2026-09-18 against the one question that expired S10: *does this slice
+assume legacy is dead or dying?* **No, the opposite.** It specifies
+`get_shift` resolving "a pre-conversion nil-`shift_id` id via provenance"
+and `anAgentMovingARowBetweenShiftsRefoldsBothGroups`, both of which require
+legacy rows and a live fold trigger. Shape 3 keeping legacy alive is the
+condition this slice was written for.
+State, and the first version of this line was WRONG in a way worth keeping.
+It said the shift paths were "served without test coverage". That came from
+grepping `index_test.ts` for the strings `listShifts` and `getShift`, which
+returns nothing -- because the tests exercise BEHAVIOUR rather than naming
+internals. `index_test.ts` has five shift tests going through
+`testing.shiftResponse`, the real response-shaping path: the derived money
+is read and never recomputed, the gross comes from the stored net, the
+owning account does not leak, provenance replaces the embedded rows, and
+absent optionals report null rather than vanishing. Same instrument error as
+searching for a test SUITE by filename when it is a struct.
+
+Corrected, the two halves differ:
+
+- **Response shaping and the money: COVERED**, five tests, through the
+  production path.
+- **The query layer: NOT covered.** `getShift`'s step-2 lookup,
+  `coalesce(shift_id, id)` selection, and `get_shift` resolving a
+  pre-conversion nil-`shift_id` id via provenance have no test on either
+  side -- `agent_shifts_test.ts` does not exist and no SQL test in
+  `supabase/tests/` references `get_shift` or `list_shifts`.
+
+That narrower gap is the real S11 remainder, and it is the half where a
+defect is a shift the agent cannot find rather than a number it reports
+wrongly.
+
+**S11 (original).** Files: `index.ts` (`listShifts`, `getShift` with the step-2 lookup, `payday_agent_summary` on `shifts`, `CHANGE_TABLES`, the `createShift` corrections), `sql_corrections.ts`, `agent_shifts_test.ts`, `docs/PAYDAY_API.md`.
 Tests (C, plus E for the SQL side): the six corrections with fixtures; `tipOutIsResolvedOnceByBothImplementations`; `differentialAgainstGroupShifts` both directions; the identity vectors; the forced-stale replay; `anAgentMovingARowBetweenShiftsRefoldsBothGroups`; `get_shift` by a pre-conversion nil-`shift_id` id resolves via provenance. Gate: C and E. **Depends on S3.**
 
-**S12. The bridge parity suite.** Files: the shared fixture JSONs, `BridgeParityTests.swift`, the job E fold assertion, the `PaydayCoreTests` N4 assertion, the Deno twin. Tests: the 16 `ScreenNumbers` fields, the 5-entry delta table with P6 at zero, the three mutation cases that must fail, `apiShiftArrivesOnce`. Gate: A, B, C, E. **Depends on S3 and S9.**
+**S12. The bridge parity suite. PREMISE HOLDS — PR 2 work, barely started.**
+Same audit. **No** -- a BRIDGE parity suite compares the two
+representations, so it requires legacy alive by definition.
+State: `BridgeRepresentationParityTests.swift` exists with **2 tests** and
+implements none of the specified content -- no `ScreenNumbers` fields, no
+delta table, no `apiShiftArrivesOnce`. The name matches; the slice does not.
 
-**S13. Data health and user-facing surfaces.** Files: the Data health screen (the conflicts list with **[Keep mine] / [Use theirs]** per row, 4.5; the duplicate-day list with a merge action; rows in closed shifts; `remaining_group_count` as a progress number; the unreadable-receipt line; the bulk-rewrite banner; the conservation-flagged line), the `PaydayCloudState` conversion banner copy, the `[Try again]` / `[Show details]` retry surface. Tests: `PaydayCopyTests`, a snapshot per state, `aConflictResolvedWithUseTheirsMatchesTheLegacyNumbersAndStaysClosed`, `aPermanentlyUnfoldableGroupDoesNotMakeTheAppReadOnly`. Gate: B and D, plus a design review on renders before "done". **Depends on S5 and S8.**
+**S12 (original).** Files: the shared fixture JSONs, `BridgeParityTests.swift`, the job E fold assertion, the `PaydayCoreTests` N4 assertion, the Deno twin. Tests: the 16 `ScreenNumbers` fields, the 5-entry delta table with P6 at zero, the three mutation cases that must fail, `apiShiftArrivesOnce`. Gate: A, B, C, E. **Depends on S3 and S9.**
+
+**S13. Data health and user-facing surfaces. PREMISE HOLDS — PR 2 work,
+not started.** Same audit. **No, emphatically** -- the whole slice exists to
+surface a conversion IN PROGRESS, which requires legacy alive and
+converting.
+State: not started. `conversionPending` reaches `ShiftCommands`,
+`LogTipsIntent`, `PaydayCloudGate` and `PaydayMigrationService`, but **no
+view references it**, so a shift the server is mid-conversion on is refused
+by `mayMutate` with nothing on screen explaining why. Partially mitigated
+2026-09-18: `LogTipSheet`'s failure alert now renders the specific
+`Failure.message` instead of the generic one, so the refusal at least says
+"Payday is still syncing this shift." The banner, the conflicts list and the
+progress number remain unbuilt.
+
+**S13 (original).** Files: the Data health screen (the conflicts list with **[Keep mine] / [Use theirs]** per row, 4.5; the duplicate-day list with a merge action; rows in closed shifts; `remaining_group_count` as a progress number; the unreadable-receipt line; the bulk-rewrite banner; the conservation-flagged line), the `PaydayCloudState` conversion banner copy, the `[Try again]` / `[Show details]` retry surface. Tests: `PaydayCopyTests`, a snapshot per state, `aConflictResolvedWithUseTheirsMatchesTheLegacyNumbersAndStaysClosed`, `aPermanentlyUnfoldableGroupDoesNotMakeTheAppReadOnly`. Gate: B and D, plus a design review on renders before "done". **Depends on S5 and S8.**
+
+### Audit result, 2026-09-18: S10 was the only slice shape 3 expired
+
+| Slice | Assumes legacy dead or dying? | Holds | Destination | State |
+|---|---|---|---|---|
+| S10 fence | **YES** — "TipEntry is read-only in this build" | **NO** | **PR 8**, behind the RELEASE_GATE entry condition | reclassified |
+| S11 Agent API | No — resolves pre-conversion ids via provenance | Yes | PR 2, now | money COVERED (5 tests); query layer untested |
+| S12 bridge parity | No — a bridge needs both representations | Yes | PR 2, now | 2 tests, none specified |
+| S13 data health | No — surfaces conversion in progress | Yes | PR 2, now | not started |
+
+**The consequence is larger than the hygiene.** If the remaining slices had
+been deletion-phase work like S10, criterion 1's remainder would collapse
+onto criterion 6's dependency -- the records arm out-gating legacy -- and
+neither could finish before the other. They did not. S11, S12 and S13 are
+all TRANSITION-phase work that requires legacy alive, so **criterion 1's
+remainder is independently completable now** and does not wait on PR 8.
 
 **Merge order rule.** No SQL slice merges until job E is green from a clean `supabase db reset --local`, and no client slice merges until job B has built **both** targets. A local `TEST SUCCEEDED` is not evidence.
 
