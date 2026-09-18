@@ -22,7 +22,7 @@ private func weekday(_ year: Int, _ month: Int, _ day: Int) -> Int {
 struct PlanForwardTests {
     @Test("plan forward is nil without any work rhythm yet")
     func nilWithoutRhythm() {
-        let engine = StatsEngine(records: [])
+        let engine = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: [])
         #expect(engine.planForward(referenceDate: date(2026, 7, 26)) == nil)
     }
 
@@ -37,7 +37,7 @@ struct PlanForwardTests {
             records.append(record(2026, 7, 8 + week * 7, cents: 5000))   // Wednesday
             records.append(record(2026, 7, 10 + week * 7, cents: 8000))  // Friday
         }
-        let engine = StatsEngine(records: records)
+        let engine = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: records)
         let plan = engine.planForward(referenceDate: date(2026, 7, 26))
         #expect(plan?.nights.count == 3)
         #expect(plan?.nights[0] == PlanForward.Night(weekday: weekday(2026, 7, 6), averageNetCents: 15000, nightCount: 3))
@@ -56,7 +56,7 @@ struct PlanForwardTests {
         // own 2-night/50% floor) but too thin to trust its own average.
         records.append(record(2026, 7, 7, cents: 4000))
         records.append(record(2026, 7, 14, cents: 4000))
-        let engine = StatsEngine(records: records)
+        let engine = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: records)
         let plan = engine.planForward(referenceDate: date(2026, 7, 26))
         // Overall per-shift average: (3*10000 + 2*4000) / 5 = 7600.
         #expect(plan?.nights.count == 2)
@@ -71,7 +71,7 @@ struct PlanForwardTests {
             records.append(record(2026, 7, 6 + week * 7, cents: 10000))  // Monday, $100
             records.append(record(2026, 7, 10 + week * 7, cents: 20000)) // Friday, $200
         }
-        let engine = StatsEngine(records: records)
+        let engine = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: records)
         let plan = engine.planForward(referenceDate: date(2026, 7, 26))
         #expect(plan?.projectedTotalCents == 30000)
         #expect(plan?.projectedTotalCents == plan?.nights.reduce(0) { $0 + $1.averageNetCents })
@@ -97,7 +97,7 @@ struct PlanForwardTests {
             let (y, m, d) = thursdayDates[i]
             records.append(record(y, m, d, cents: cents))
         }
-        return StatsEngine(records: records)
+        return StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: records)
     }
 
     @Test("pickup fires when a non-usual weekday clearly beats the lowest-priced usual night")
@@ -152,7 +152,7 @@ struct PlanForwardTests {
         for (y, m, d) in [(2026, 7, 9), (2026, 7, 16), (2026, 7, 23)] {
             records.append(record(y, m, d, cents: 9500))
         }
-        let engine = StatsEngine(records: records)
+        let engine = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: records)
         let plan = engine.planForward(referenceDate: date(2026, 9, 7))
         #expect(plan?.pickup == PlanForward.Pickup(weekday: weekday(2026, 7, 9), averageNetCents: 9500, nightCount: 3))
     }

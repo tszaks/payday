@@ -74,9 +74,9 @@ private struct DashboardFacts {
     let paydayCashCents: Int
     let tonightLine: String?
 
-    init(allEntries: [TipEntry], schedule: PaySchedule?, now: Date, forcedPaydayPhase: PaydayMoment.Phase?, dismissedClosedEnd: Date?, dismissedCheckEnd: Date?, wageCentsPerHour: Int?) {
+    init(allEntries: [TipEntry], schedule: PaySchedule?, now: Date, forcedPaydayPhase: PaydayMoment.Phase?, dismissedClosedEnd: Date?, dismissedCheckEnd: Date?, wageCentsPerHour: Int?, payrollTimeZone: TimeZone) {
         let calendar = Calendar.current
-        calculator = PayPeriodCalculator(schedule: schedule ?? .fallback)
+        calculator = PayPeriodCalculator(payrollTimeZone: payrollTimeZone, schedule: schedule ?? .fallback)
         let period = calculator.period(containing: now)
         currentPeriod = period
         periodEntries = allEntries.filter { $0.date >= period.start && $0.date <= period.end }
@@ -90,7 +90,7 @@ private struct DashboardFacts {
         for shift in shiftDays { dayCounts[shift.day, default: 0] += 1 }
         multiShiftDays = Set(dayCounts.filter { $0.value >= 2 }.keys)
         let tipRecords = allEntries.map(TipRecord.init)
-        let statsEngine = StatsEngine(records: tipRecords)
+        let statsEngine = StatsEngine(payrollTimeZone: payrollTimeZone, records: tipRecords)
         // Net of any tip-out, same rule as every other analytical total —
         // breakdown above stays gross, purely for the cash/credit subtitle.
         totalCents = statsEngine.periodToDateTotal(period: period, asOf: now)
@@ -237,7 +237,7 @@ private struct DashboardFacts {
             // include any employee gratuity captured for the shift.
             let shiftWageCents = details.hoursWorked.flatMap { WageEstimate.cents(wageCentsPerHour: wageCentsPerHour, hours: $0) }
             let revealCents = netCents + (shiftWageCents ?? 0)
-            let revealEngine = StatsEngine(records: tipRecords, wageCentsPerHour: wageCentsPerHour)
+            let revealEngine = StatsEngine(payrollTimeZone: payrollTimeZone, records: tipRecords, wageCentsPerHour: wageCentsPerHour)
             let result = revealEngine.reveal(forNightAt: today, cents: revealCents, period: period, shiftID: latest.shiftID)
             tonightRevealText = "\(RevealCopy.headline(cents: revealCents, includesNonTipIncome: shiftWageCents != nil || TipBreakdown.total(of: latest.items).gratuityFeesCents > 0)) \(RevealCopy.comparison(for: result.comparison, period: details.shiftPeriod))"
         }
@@ -259,6 +259,9 @@ private struct DashboardFactsKey: Hashable {
     let dismissedClosedEndRaw: Double
     let dismissedCheckEndRaw: Double
     let wageCentsPerHour: Int?
+    /// An input to every bucketed figure below, so a new calendar policy has
+    /// to invalidate the cache rather than wait for the entries to change.
+    let payrollTimeZone: String
 }
 
 private struct DashboardFactsCache {
@@ -268,6 +271,7 @@ private struct DashboardFactsCache {
 
 struct DashboardView: View {
     @Environment(PayScheduleStore.self) private var scheduleStore
+    @Environment(PolicyStore.self) private var policyStore
     @Environment(TabRouter.self) private var tabRouter
     @Environment(UserPreferencesStore.self) private var preferencesStore
     @Environment(\.modelContext) private var modelContext
@@ -339,7 +343,8 @@ struct DashboardView: View {
             forcedPhase: forcedPaydayPhase?.rawValue,
             dismissedClosedEndRaw: dismissedClosedEndRaw,
             dismissedCheckEndRaw: dismissedCheckEndRaw,
-            wageCentsPerHour: preferencesStore.baseHourlyWageCents
+            wageCentsPerHour: preferencesStore.baseHourlyWageCents,
+            payrollTimeZone: policyStore.payrollTimeZone.identifier
         )
         let facts = factsCache?.key == key
             ? factsCache!.facts
@@ -350,7 +355,8 @@ struct DashboardView: View {
                 forcedPaydayPhase: forcedPaydayPhase,
                 dismissedClosedEnd: dismissedClosedEnd,
                 dismissedCheckEnd: dismissedCheckEnd,
-                wageCentsPerHour: preferencesStore.baseHourlyWageCents
+                wageCentsPerHour: preferencesStore.baseHourlyWageCents,
+                payrollTimeZone: policyStore.payrollTimeZone
             )
         NavigationStack {
             // A ScrollView, deliberately NOT a List: the hero's drawer changes

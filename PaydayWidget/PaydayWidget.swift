@@ -65,7 +65,7 @@ struct PaydayWidgetProvider: TimelineProvider {
         // complete shared history for each entry.
         let context = ModelContext(SharedModelContainer.shared)
         let allEntries = (try? context.fetch(FetchDescriptor<TipEntry>())) ?? []
-        let engine = StatsEngine(records: allEntries.map(TipRecord.init))
+        let engine = StatsEngine(payrollTimeZone: PolicyStore.storedPayrollTimeZone(), records: allEntries.map(TipRecord.init))
         return dates.map {
             buildEntry(at: $0, schedule: schedule, allEntries: allEntries, engine: engine)
         }
@@ -73,7 +73,7 @@ struct PaydayWidgetProvider: TimelineProvider {
 
     private func buildEntry(at date: Date, schedule: PaySchedule, allEntries: [TipEntry], engine: StatsEngine) -> PaydayWidgetEntry {
         let calendar = Calendar.current
-        let calculator = PayPeriodCalculator(schedule: schedule)
+        let calculator = PayPeriodCalculator(payrollTimeZone: PolicyStore.storedPayrollTimeZone(), schedule: schedule)
         let period = calculator.period(containing: date)
         let tipsTotal = engine.periodToDateTotal(period: period, asOf: date)
 

@@ -57,7 +57,7 @@ enum DebugSeeder {
             firstWeekday: 2
         )
         scheduleStore.schedule = schedule
-        let calculator = PayPeriodCalculator(schedule: schedule)
+        let calculator = PayPeriodCalculator(payrollTimeZone: PolicyStore.storedPayrollTimeZone(), schedule: schedule)
 
         // Deterministic pseudo-random: same screenshots every run.
         var seed: UInt64 = 0x5EED_0DAD
@@ -341,7 +341,7 @@ enum DebugSeeder {
             firstWeekday: 2 // Monday, matching a Mon–Sun pay period
         )
         scheduleStore.schedule = schedule
-        let calculator = PayPeriodCalculator(schedule: schedule)
+        let calculator = PayPeriodCalculator(payrollTimeZone: PolicyStore.storedPayrollTimeZone(), schedule: schedule)
 
         // hour = when the tip was recorded; dinner shifts (higher hours) tend
         // to earn more than lunch here so the time-of-day analysis has a signal.

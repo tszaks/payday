@@ -40,7 +40,7 @@ enum SmartNudgeScheduler {
     /// The learned typical-hour heuristic keeps reminders useful without
     /// reading or connecting to the user's calendar.
     private static func rhythmFireDate(allEntries: [TipEntry]) -> Date? {
-        let engine = StatsEngine(records: allEntries.map(TipRecord.init))
+        let engine = StatsEngine(payrollTimeZone: PolicyStore.storedPayrollTimeZone(), records: allEntries.map(TipRecord.init))
         let rhythm = engine.workRhythm()
         guard !rhythm.usualWeekdays.isEmpty, let typicalLogHour = rhythm.typicalLogHour else { return nil }
         return nextFireDate(usualWeekdays: rhythm.usualWeekdays, typicalLogHour: typicalLogHour, allEntries: allEntries)

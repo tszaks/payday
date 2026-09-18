@@ -20,6 +20,7 @@ import SwiftData
 struct InsightsView: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(MoveLedgerStore.self) private var moveLedgerStore
+    @Environment(PolicyStore.self) private var policyStore
     @Query(sort: \TipEntry.date, order: .reverse) private var allEntries: [TipEntry]
 
     @State private var isShowingBackfillSheet = false
@@ -31,11 +32,16 @@ struct InsightsView: View {
         let key = InsightsPageFactsKey(
             entriesRevision: dataRevision,
             ledgerRevision: moveLedgerStore.revision,
-            currentDay: currentDay
+            currentDay: currentDay,
+            // In the key because it is an INPUT to every number below it. A
+            // new calendar policy changes which civil day a late shift lands
+            // on; without this the cache would keep serving figures computed
+            // under the old zone until the entries happened to change.
+            payrollTimeZone: policyStore.payrollTimeZone.identifier
         )
         let pageFacts = pageFactsCache?.key == key
             ? pageFactsCache!.facts
-            : InsightsPageFacts(allEntries: allEntries, ledger: moveLedgerStore.firstShownAt, now: currentDay)
+            : InsightsPageFacts(allEntries: allEntries, ledger: moveLedgerStore.firstShownAt, payrollTimeZone: policyStore.payrollTimeZone, now: currentDay)
         NavigationStack {
             Group {
                 if let facts = pageFacts.facts {
@@ -496,9 +502,9 @@ private struct InsightsPageFacts {
     /// facts and never in a view body.
     let forecastAccuracy: StatsEngine.ForecastAccuracy?
 
-    init(allEntries: [TipEntry], ledger: [String: Date], now: Date = .now) {
+    init(allEntries: [TipEntry], ledger: [String: Date], payrollTimeZone: TimeZone, now: Date = .now) {
         let records = allEntries.map(TipRecord.init)
-        let statsEngine = StatsEngine(records: records)
+        let statsEngine = StatsEngine(payrollTimeZone: payrollTimeZone, records: records)
         facts = statsEngine.insightsFacts(referenceDate: now)
         moves = statsEngine.moves(referenceDate: now)
         followUps = statsEngine.followUps(ledger: ledger, referenceDate: now)
@@ -520,6 +526,7 @@ private struct InsightsPageFactsKey: Hashable {
     let entriesRevision: Int
     let ledgerRevision: Int
     let currentDay: Date
+    let payrollTimeZone: String
 }
 
 private struct InsightsPageFactsCache {
