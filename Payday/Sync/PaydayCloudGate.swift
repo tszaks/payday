@@ -517,6 +517,11 @@ struct PaydayCloudGate<Content: View>: View {
                 moveLedgerStore: moveLedgerStore,
                 policyStore: policyStore
             )
+            // And again afterwards. `restore` syncs, and a download can set
+            // `baseHourlyWageCents` from a device that knows nothing about
+            // policies; without this the wage line would be missing from
+            // every total until the next sync happened to fire.
+            adoptPolicyInputs()
         }
         .onChange(of: cloudState.phase) { _, newPhase in
             // The quiz answers exist only to reach a session. Once there is
