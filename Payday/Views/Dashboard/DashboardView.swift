@@ -138,7 +138,7 @@ private struct DashboardFacts {
             // PeriodIncome — the same function the hero total uses — so the
             // check figure and the hero can never disagree about a week that
             // crossed 40 hours, which is what WageEstimate used to do here.
-            let payWages = PeriodIncome.wages(entries: payEntries, wageCentsPerHour: wageCentsPerHour, firstWeekday: schedule?.firstWeekday)
+            let payWages = PeriodIncome.wages(payrollTimeZone: payrollTimeZone, entries: payEntries, wageCentsPerHour: wageCentsPerHour, firstWeekday: schedule?.firstWeekday)
             predictedPaycheckCents = PredictedPaycheck.cents(from: payBreakdown, wagesCents: payWages?.totalCents ?? 0)
             predictedPayDate = calculator.payDate(for: pay)
             paydayCashCents = payBreakdown.cashCents
@@ -190,7 +190,7 @@ private struct DashboardFacts {
             }
         } else {
             isBestPeriodEver = false
-            let currentWages = PeriodIncome.wages(entries: periodEntries, wageCentsPerHour: wageCentsPerHour, firstWeekday: schedule?.firstWeekday)
+            let currentWages = PeriodIncome.wages(payrollTimeZone: payrollTimeZone, entries: periodEntries, wageCentsPerHour: wageCentsPerHour, firstWeekday: schedule?.firstWeekday)
             predictedPaycheckCents = PredictedPaycheck.cents(from: breakdown, wagesCents: currentWages?.totalCents ?? 0)
             predictedPayDate = calculator.payDate(for: period)
             paydayCashCents = breakdown.cashCents
@@ -214,7 +214,7 @@ private struct DashboardFacts {
         let heroPeriodStart = heroPeriod.start
         let heroPeriodEnd = heroPeriod.end
         let heroEntries = allEntries.filter { $0.date >= heroPeriodStart && $0.date <= heroPeriodEnd }
-        heroWages = PeriodIncome.wages(entries: heroEntries, wageCentsPerHour: wageCentsPerHour, firstWeekday: schedule?.firstWeekday)
+        heroWages = PeriodIncome.wages(payrollTimeZone: payrollTimeZone, entries: heroEntries, wageCentsPerHour: wageCentsPerHour, firstWeekday: schedule?.firstWeekday)
         heroTotalCents = heroTipsNetCents + (heroWages?.totalCents ?? 0)
 
         // Echo of tonight's reveal verdict, for the most recently logged

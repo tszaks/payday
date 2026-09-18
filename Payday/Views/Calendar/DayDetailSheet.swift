@@ -5,8 +5,10 @@ private struct DayDetailFacts {
     let shifts: [(day: Date, shiftID: UUID, items: [TipEntry])]
     let totalCents: Int
 
-    init(allEntries: [TipEntry], date: Date, wageCentsPerHour: Int?) {
-        let calendar = Calendar.current
+    init(allEntries: [TipEntry], date: Date, wageCentsPerHour: Int?, payrollTimeZone: TimeZone, workweekStartWeekday: Int) {
+        var calendar = Calendar.current
+        // The same civil day the tile that opened this sheet drew.
+        calendar.timeZone = payrollTimeZone
         let day = calendar.startOfDay(for: date)
         let entries = allEntries.filter { calendar.isDate($0.date, inSameDayAs: day) }
         let resolvedShifts = ShiftDays.groupedByShift(
@@ -17,6 +19,8 @@ private struct DayDetailFacts {
             calendar: calendar
         )
         let wages = WageEstimate.centsSummedPerShift(
+            payrollTimeZone: payrollTimeZone,
+            workweekStartWeekday: workweekStartWeekday,
             shiftGroups: resolvedShifts.map(\.items),
             wageCentsPerHour: wageCentsPerHour
         )
@@ -29,6 +33,8 @@ struct DayDetailSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
     @Environment(UserPreferencesStore.self) private var preferencesStore
+    @Environment(PayScheduleStore.self) private var scheduleStore
+    @Environment(PolicyStore.self) private var policyStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Query private var allEntries: [TipEntry]
 
@@ -48,7 +54,11 @@ struct DayDetailSheet: View {
         let facts = DayDetailFacts(
             allEntries: allEntries,
             date: date,
-            wageCentsPerHour: preferencesStore.baseHourlyWageCents
+            wageCentsPerHour: preferencesStore.baseHourlyWageCents,
+            payrollTimeZone: policyStore.payrollTimeZone,
+            workweekStartWeekday: policyStore.latestCalendarPolicy?.workweekStartWeekday
+                ?? scheduleStore.schedule?.resolvedFirstWeekday
+                ?? Calendar.current.firstWeekday
         )
         NavigationStack {
             List {

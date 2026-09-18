@@ -42,6 +42,7 @@ struct PaycheckEntrySheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
     @Environment(PayScheduleStore.self) private var scheduleStore
+    @Environment(PolicyStore.self) private var policyStore
     @Environment(UserPreferencesStore.self) private var preferencesStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Query private var allEntries: [TipEntry]
@@ -139,6 +140,7 @@ struct PaycheckEntrySheet: View {
             ? breakdown.gratuityFeesCents
             : nil
         let computedWages = PeriodIncome.wages(
+            payrollTimeZone: policyStore.payrollTimeZone,
             entries: entries,
             wageCentsPerHour: preferencesStore.baseHourlyWageCents,
             firstWeekday: scheduleStore.schedule?.firstWeekday

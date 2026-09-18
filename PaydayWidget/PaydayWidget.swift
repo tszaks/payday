@@ -80,7 +80,7 @@ struct PaydayWidgetProvider: TimelineProvider {
         // Same wage-inclusive total the dashboard hero shows — a widget
         // number that disagreed with the app would be worse than none.
         let periodEntries = allEntries.filter { $0.date >= period.start && $0.date <= period.end }
-        let wages = PeriodIncome.wages(entries: periodEntries, wageCentsPerHour: AppGroup.baseHourlyWageCents, firstWeekday: schedule.firstWeekday)
+        let wages = PeriodIncome.wages(payrollTimeZone: PolicyStore.storedPayrollTimeZone(), entries: periodEntries, wageCentsPerHour: AppGroup.baseHourlyWageCents, firstWeekday: schedule.firstWeekday)
         let total = tipsTotal + (wages?.totalCents ?? 0)
 
         // Same usual-pace baseline the Dashboard hero uses — the median of

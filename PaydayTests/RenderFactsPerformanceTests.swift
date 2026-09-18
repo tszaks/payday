@@ -47,7 +47,8 @@ struct RenderFactsPerformanceTests {
             displayedMonth: displayedMonth,
             calendar: calendar,
             wageCentsPerHour: nil,
-            firstWeekday: nil
+            firstWeekday: nil,
+            payrollTimeZone: PaydayTestZone.payroll
         )
         let elapsed = Date.timeIntervalSinceReferenceDate - startedAt
 

@@ -56,6 +56,7 @@ struct PeriodDetailFacts {
         ).nightlyTotals()
         let nonWageEarningsCents = resolvedNights.reduce(0) { $0 + $1.cents }
         let resolvedWages = PeriodIncome.wages(
+            payrollTimeZone: payrollTimeZone,
             entries: resolvedEntries,
             wageCentsPerHour: wageCentsPerHour,
             firstWeekday: schedule?.firstWeekday,

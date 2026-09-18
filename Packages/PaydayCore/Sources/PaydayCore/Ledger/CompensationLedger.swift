@@ -56,7 +56,7 @@ public enum CompensationLedger {
     /// `multiplierHundredths` (100 = straight time, 150 = time and a half).
     /// `rate * minutes * 100` is the regular case because
     /// `rateCents/60 * minutes` cents = `rate * minutes * 100` units.
-    static func wageUnits(rateCents: Int, minutes: Int, multiplierHundredths: Int) -> Int {
+    public static func wageUnits(rateCents: Int, minutes: Int, multiplierHundredths: Int) -> Int {
         rateCents * minutes * multiplierHundredths
     }
 
