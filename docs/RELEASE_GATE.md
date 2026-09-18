@@ -38,12 +38,40 @@ Supabase migrations (db reset)
 payday-api (deno test)
 ```
 
-Not enabled yet, and the reason is specific rather than caution: two PRs
-(#66, #67) have runs in flight, and turning on required checks mid-run is a
-change to the rule those runs are being judged against. Enable once they
-land, then verify BOTH directions before trusting it -- a green PR still
-merges, and a PR with a deliberately failing job is blocked. One direction
-is not a test.
+Not enabled yet, and NOT because nobody tried: the write
+(`gh api -X PUT .../branches/production/protection`) is a repository-settings
+change and the permission layer refused it. It goes to Tyler as a
+two-command change with the payload above already written down. Set
+`enforce_admins: false` -- a misnamed required check with admins enforced is
+a repo-wide outage somebody has to diagnose under pressure while merges pile
+up, whereas admin bypass leaves the protection doing its only job (stopping
+an accidental red merge) while its own misconfiguration stays recoverable in
+one action. Choose which way you fail.
+
+### How to verify it, and why "both directions" was the wrong instruction
+
+An earlier version of this section said to verify both directions and called
+one direction "not a test". That is wrong in a way that matters, because it
+would be followed: **the two directions are not equally informative.**
+
+- **A pending required check and a MISNAMED one are indistinguishable.** Both
+  leave the PR blocked. A name that will never be reported blocks forever and
+  looks exactly like a job that is merely slow. So observing "red or pending
+  is blocked" confirms nothing about whether the names are right -- which is
+  the failure this whole precaution exists to avoid.
+- **Only `green becomes mergeable` distinguishes them.** If every job
+  concludes success and the PR flips to `CLEAN` and merges, then every
+  required name was matched by something that actually reported. That single
+  observation is the test.
+
+So: one PR, two pushes. Push a commit that deliberately fails a job and
+confirm the PR reports blocked; fix it on the same PR and confirm it goes
+`CLEAN` and merges. The second push is the evidence; the first only confirms
+the block engages at all.
+
+Written down because the wrong version of this instruction is one a person
+would carry out and then believe they had verified something. That is the
+difference between a test and a ritual.
 
 
 ## Candidate
