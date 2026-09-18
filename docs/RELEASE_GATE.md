@@ -130,6 +130,7 @@ The goal contract's first item reads "PRs 0-8 merged to `production` with CI gre
 | `8260f7d` | #28, the CSV hours fix | cancelled | next merge 105s later, same concurrency slot |
 | `852f36a` | #11 follow-up, PR 4 | cancelled | next merge 8s later, same slot |
 | `c800493` | #20, PR 5 wave 1 | failure | `Failed to resolve latest Supabase CLI release: rate limit exceeded`; its other four jobs were green |
+| `013de83` | PR 5 wave 2's internal integration merge | **no run at all** | never triggered; found only by querying per-SHA rather than per-branch |
 
 Neither cause is a code failure. Two were a race in our own workflow; one was a GitHub API rate limit while `supabase/setup-cli` resolved `version: latest`. Both are fixed: pushes key the concurrency group on `github.sha`, so no merge commit can cancel another, and the CLI is pinned to an explicit version so `supabase db reset` cannot change behaviour with no change in this repo.
 
@@ -145,10 +146,31 @@ The current `production` tree passes CI in full, and every line those three comm
 
 That is weaker than a per-commit historical verdict and stronger than nothing, and it is the claim that governs shipping: what ships is the current tree.
 
+### Two ways to audit this wrong, both measured
+
+**`gh run list --branch production` manufactures false absences.** It returns only **push**-event runs. A `pull_request` run's `headBranch` is the PR's head branch, never `production`, so that query drops them. Run against this history it reports five merge commits with no run at all — `a83dd0e`, `e39aba1`, `2d1a8c7`, `540ab14`, `013de83` — and **four of those five are in fact green**, under `pull_request`. Only `013de83` is genuinely unrun. A check that invents absences is as misleading as one that invents passes, so the audit line below queries per SHA and accepts a run under any event.
+
+**A green re-run is not evidence about the current workflow, even when it passes.** The `852f36a` re-run (run `35333038807`, `run_attempt=2`) came back `completed/success`, its migrations job included — on the **old** workflow, still carrying `version: latest`. The unpinned CLI simply did not hit the rate limit that time. So the flake is intermittent rather than absent there, which is precisely why the pin matters and precisely why that green tick says nothing about the workflow in the tree today.
+
 - [ ] The current release-candidate commit's full CI is green. Record the run id and every job's conclusion.
-- [ ] Every merge commit after the concurrency fix has a completed, successful run — no `cancelled`, no `failure`. `gh run list --branch production --limit 40 --json headSha,status,conclusion`
-- [ ] The three pre-fix commits (`8260f7d`, `852f36a`, `c800493`) are recorded here as transitively covered, with the later green merge commit that covers them named. They are **not** to be ticked as individually verified, because they cannot be.
-- [ ] No merge commit's run is `cancelled`. A cancelled run is not a pass and not a failure; it is an absence, and in a listing an absence reads like neither. That is exactly how these three went unnoticed.
+- [ ] Every merge commit after the concurrency fix has a completed, successful run — no `cancelled`, no `failure`, and none missing. Audit **per SHA**, not per branch:
+
+      ```
+      for s in $(git log origin/production --merges --format=%H | head -40); do
+        printf "%s  " "${s:0:9}"
+        gh api "repos/tszaks/payday/actions/runs?head_sha=$s" \
+          -q 'if (.workflow_runs|length)==0 then "NO RUN"
+              else ([.workflow_runs[] | "\(.event):\(.status)/\(.conclusion // "pending")"] | join(" ")) end'
+      done
+      ```
+      `status` is printed alongside `conclusion` deliberately: an in-progress
+      run has `conclusion: null`, which renders as an empty field and reads
+      like a missing run. This form distinguishes all four states that matter
+      — `NO RUN`, `in_progress/pending`, `completed/success`,
+      `completed/cancelled` — and was run against this history before being
+      written down here.
+- [ ] The four commits without their own green verdict (`8260f7d`, `852f36a`, `c800493`, `013de83`) are recorded here as transitively covered, with the later green merge commit that covers each one named — `013de83` is covered by `4d631c9`. They are **not** to be ticked as individually verified, because they cannot be.
+- [ ] No merge commit's run is `cancelled`, and none is missing entirely. A cancelled run is not a pass and not a failure; it is an absence, and in a listing an absence reads like neither. That is exactly how these went unnoticed.
 
 ## Human lines — Tyler only
 
