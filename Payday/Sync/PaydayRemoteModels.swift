@@ -200,11 +200,11 @@ struct RemoteTipEntry: Codable, Equatable, Sendable {
     /// `contentFingerprint(workDate:)`, which is what `PaydayRowFingerprint`
     /// does.
     var contentFingerprint: String {
-        get throws { try PaydayMigrationHash.value(businessValue) }
+        get throws { try PaydayMigrationHash.fingerprint(businessValue) }
     }
 
     func contentFingerprint(workDate: String) throws -> String {
-        try PaydayMigrationHash.value(businessValue(workDate: workDate))
+        try PaydayMigrationHash.fingerprint(businessValue(workDate: workDate))
     }
 
     /// This row reduced to what the one-time fingerprint seeding has to judge:
@@ -327,11 +327,11 @@ struct RemotePaycheckRecord: Codable, Equatable, Sendable {
 
     /// See `RemoteTipEntry.contentFingerprint`.
     var contentFingerprint: String {
-        get throws { try PaydayMigrationHash.value(businessValue) }
+        get throws { try PaydayMigrationHash.fingerprint(businessValue) }
     }
 
     func contentFingerprint(periodStart: String, periodEnd: String) throws -> String {
-        try PaydayMigrationHash.value(
+        try PaydayMigrationHash.fingerprint(
             businessValue(periodStart: periodStart, periodEnd: periodEnd)
         )
     }
@@ -523,5 +523,18 @@ enum PaydayMigrationHash {
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         let digest = SHA256.hash(data: try encoder.encode(value))
         return digest.map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// The row-version form of `value`: the same digest, cut to its first 64
+    /// bits, because a checkpoint persists one of these per row into the
+    /// app-group `UserDefaults` and re-encodes the whole blob on every sync.
+    ///
+    /// The comparison is always same-id-to-same-id — "is this row's content
+    /// still what the server acknowledged?" — so the only collision that could
+    /// matter is between two versions of ONE row, over the handful of edits a
+    /// row ever receives. Never used for the migration receipt hashes the
+    /// server stores and compares; those stay full width.
+    static func fingerprint<T: Encodable>(_ value: T) throws -> String {
+        String(try Self.value(value).prefix(16))
     }
 }
