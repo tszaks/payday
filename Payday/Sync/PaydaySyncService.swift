@@ -26,6 +26,7 @@ struct PaydayRemoteRepository {
     private let tipColumns = "id,user_id,shift_id,work_date,amount_cents,kind,note,recorded_at,is_double,hours_worked,tip_out_cents,sales_cents,shift_period,clock_in,clock_out,server_count,receipt_metrics,client_updated_at,deleted_at,updated_at"
     private let paycheckColumns = "id,user_id,period_start,period_end,paid_tips_cents,note,hourly_rate_cents,owed_tips_cents,gross_pay_cents,net_pay_cents,regular_wages_cents,overtime_wages_cents,gratuity_cents,taxes_cents,client_updated_at,deleted_at,updated_at"
     private let settingsColumns = "user_id,first_name,base_hourly_wage_cents,pay_frequency,anchor_period_end,pay_delay_days,first_weekday,smart_nudge_enabled,payday_reminder_enabled,move_ledger,client_updated_at,updated_at"
+    private let shiftColumns = "id,user_id,work_date,shift_period,cash_tips_cents,credit_tips_cents,tip_out_cents,sales_cents,hours_worked,clock_in,clock_out,server_count,receipt_metrics,note,recorded_at,client_updated_at,source,legacy_entry_ids,native_modified_at,deleted_at,deleted_reason,gratuity_fees_cents,non_wage_earnings_cents,version,updated_at"
 
     func importTips(_ rows: [RemoteTipEntry]) async throws {
         try await send(rows, function: "import_tip_entries")
@@ -140,6 +141,133 @@ struct PaydayRemoteRepository {
 
     func fetchPaychecks(userID: UUID, ids: Set<UUID>) async throws -> [RemotePaycheckRecord] {
         try await fetchByIDs(table: "paycheck_records", columns: paycheckColumns, userID: userID, ids: ids)
+    }
+
+    // MARK: - Shifts (PR 2 slice S6)
+
+    /// Writes shifts and RETURNS what the server did with each one.
+    ///
+    /// Unlike `upsertTips`, the result is not discarded, and that is the point
+    /// of the RPC returning outcomes at all. `public.upsert_shifts` is total
+    /// over arbitrary JSON: a row with money the column cannot hold, or no
+    /// readable id or work date, comes back `invalid` while its batch mates are
+    /// stored. A caller that threw the outcomes away would mark those rows
+    /// synced and never retry them, which is the silent loss the outcome shape
+    /// exists to prevent.
+    ///
+    /// `storedClientUpdatedAt` is likewise not decoration. The server clamps a
+    /// future-dated `client_updated_at` to its own clock rather than gating on
+    /// it, so the value the client must record is the one that came back, not
+    /// the one it sent.
+    @discardableResult
+    func upsertShifts(_ rows: [RemoteShift]) async throws -> [ShiftWriteOutcome] {
+        try await sendReturning(rows, function: "upsert_shifts")
+    }
+
+    /// Tombstones shifts. The server stores the EARLIEST of the requested and
+    /// the already-stored tombstone, so a replayed delete is a true no-op and
+    /// a clock-skewed device cannot park a tombstone in the future.
+    @discardableResult
+    func softDeleteShifts(_ pending: [UUID: Date]) async throws -> [ShiftLifecycleOutcome] {
+        var outcomes: [ShiftLifecycleOutcome] = []
+        let groups = Dictionary(grouping: pending, by: \.value)
+        for (date, rows) in groups {
+            let values = rows.map(\.key)
+            for start in stride(from: 0, to: values.count, by: batchSize) {
+                let end = min(start + batchSize, values.count)
+                let page: [ShiftLifecycleOutcome] = try await client
+                    .rpc(
+                        "soft_delete_shifts",
+                        params: PaydayRPCPayload(
+                            pRows: Array(values[start..<end]).map {
+                                ShiftDeletionRow(id: $0, deletedAt: PaydayRemoteDate.instant(date))
+                            }
+                        )
+                    )
+                    .execute()
+                    .value
+                outcomes.append(contentsOf: page)
+            }
+        }
+        return outcomes
+    }
+
+    /// Undo of a USER deletion. A `'converted'` tombstone comes back
+    /// `refused`: it belongs to the fold's own un-delete arm, and reopening it
+    /// here would resurrect a shift whose legacy source rows are gone.
+    @discardableResult
+    func restoreShifts(_ ids: [UUID]) async throws -> [ShiftLifecycleOutcome] {
+        guard !ids.isEmpty else { return [] }
+        var outcomes: [ShiftLifecycleOutcome] = []
+        for start in stride(from: 0, to: ids.count, by: batchSize) {
+            let end = min(start + batchSize, ids.count)
+            let page: [ShiftLifecycleOutcome] = try await client
+                .rpc("restore_shifts", params: PaydayRestoreParameters(ids: Array(ids[start..<end])))
+                .execute()
+                .value
+            outcomes.append(contentsOf: page)
+        }
+        return outcomes
+    }
+
+    /// Every shift the account has, tombstones included.
+    func fetchShiftSnapshot(userID: UUID) async throws -> [RemoteShift] {
+        let rows: [RemoteShift] = try await fetchChanged(
+            table: "shifts",
+            columns: shiftColumns,
+            userID: userID,
+            after: .beginning,
+            cursor: { PaydaySyncState.ServerCursor(updatedAt: $0.serverUpdatedAt ?? "", id: $0.id) }
+        )
+        return deduplicated(rows, id: \.id)
+    }
+
+    /// Shifts changed since `cursor`, on the same `(updated_at, id)` keyset the
+    /// tip leg uses.
+    ///
+    /// Deliberately no `serverNow` watermark, though the slice's plan named
+    /// one. A `statement_timestamp()` read in a SEPARATE statement from the
+    /// page is not a safe fence: a transaction can commit with an `updated_at`
+    /// earlier than that timestamp and still become visible only after the
+    /// page was read, so a client that advanced a time watermark would skip
+    /// those rows for good. That is exactly why Design 3's watermark is a
+    /// server-issued monotonic `dataset_revision` and not a clock, and it
+    /// lands with the snapshot work rather than being approximated here.
+    func fetchShiftChanges(
+        userID: UUID,
+        cursor: PaydaySyncState.ServerCursor
+    ) async throws -> [RemoteShift] {
+        try await fetchChanged(
+            table: "shifts",
+            columns: shiftColumns,
+            userID: userID,
+            after: cursor,
+            cursor: { PaydaySyncState.ServerCursor(updatedAt: $0.serverUpdatedAt ?? "", id: $0.id) }
+        )
+    }
+
+    func fetchShifts(userID: UUID, ids: Set<UUID>) async throws -> [RemoteShift] {
+        try await fetchByIDs(table: "shifts", columns: shiftColumns, userID: userID, ids: ids)
+    }
+
+    /// `send`, but it decodes the RPC's returned rows instead of discarding
+    /// them. Batching means a caller sees one flat list of outcomes across
+    /// however many round trips the payload needed.
+    private func sendReturning<T: Encodable, R: Decodable>(
+        _ rows: [T],
+        function: String
+    ) async throws -> [R] {
+        guard !rows.isEmpty else { return [] }
+        var outcomes: [R] = []
+        for start in stride(from: 0, to: rows.count, by: batchSize) {
+            let end = min(start + batchSize, rows.count)
+            let page: [R] = try await client
+                .rpc(function, params: PaydayRPCPayload(pRows: Array(rows[start..<end])))
+                .execute()
+                .value
+            outcomes.append(contentsOf: page)
+        }
+        return outcomes
     }
 
     private func send<T: Encodable>(_ rows: [T], function: String) async throws {

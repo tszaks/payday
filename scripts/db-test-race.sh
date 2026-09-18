@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# The concurrency half of PR 2 slice S4's gate.
+# The concurrency half of PR 2's gate, for slices S4, S5 and S6.
 #
-# Seven facts about private.fold_legacy_writes() need two or three CONCURRENT
-# sessions, which a single psql script cannot produce, so they are here instead
-# of in supabase/tests/shift_fold_test.sql:
+# Nine facts about the writers that share the payday:shiftmig advisory key need
+# two or three CONCURRENT sessions, which a single psql script cannot produce,
+# so they are here instead of in supabase/tests/shift_fold_test.sql and
+# supabase/tests/shift_write_rpcs_test.sql:
 #
 #   1. the try-lock race          cash 5000 / credit 0    / prov 1 / 1 backlog row
 #   2. the blocking-lock variant  cash 5000 / credit 2000 / prov 2 / 0 backlog rows
@@ -15,6 +16,9 @@
 #      timeout still armed -- the shape 1 to 6 structurally cannot reach, and
 #      the one that used to roll a shipped 1.0 build's write back
 #   8. that same handler does not WAIT for the other transaction either
+#   9. a DEVICE shift write (S6) meeting the one-shot, in BOTH orders: the
+#      blocking lock is really taken, and the device's number survives either
+#      way, because a shift a human authored is closed to conversion
 #
 # Both of 1 and 2 are recorded verbatim because the design's own table records
 # both, and because the shipping (try-) variant leaves the authoritative read
@@ -187,6 +191,22 @@ end \$race\$;
 SQL
 }
 
+# S6's write path, as one self-contained statement: a PR-2 build editing a
+# shift DIRECTLY through public.upsert_shifts, rather than a 1.0 build writing
+# tip_entries and being folded. This is the writer that takes the BLOCKING
+# payday:shiftmig lock.
+shift_upsert_sql() { # user_id rows_json
+  cat <<SQL
+do \$race\$
+begin
+  perform set_config('request.jwt.claims', '{"sub": "$1"}', true);
+  set local role authenticated;
+  perform public.upsert_shifts('$2'::jsonb);
+  reset role;
+end \$race\$;
+SQL
+}
+
 # S5 adds the two orders in which public.migrate_tip_entries_to_shifts and
 # private.fold_legacy_writes can meet. They take the SAME advisory key,
 # payday:shiftmig:<uid>, with different disciplines -- the one-shot BLOCKS, the
@@ -196,7 +216,7 @@ SQL
 # the key after the function has returned, which is what makes both orders
 # expressible with real sessions instead of a simulation.
 
-echo "== S4/S5 concurrency suite (scripts/db-test-race.sh)"
+echo "== S4/S5/S6 concurrency suite (scripts/db-test-race.sh)"
 echo
 
 # ===========================================================================
@@ -826,11 +846,162 @@ check "theKeyTheHandlerDidNotWaitForIsQueuedByTheOtherSessionAnyway" "1" \
 
 sed 's/^/      | /' "$WORK/c_hang.out" | head -4
 
+# ===========================================================================
+# 9. A DEVICE SHIFT WRITE (S6) MEETING THE ONE-SHOT, IN BOTH ORDERS.
+#
+# S6 is the first path by which a DEVICE writes public.shifts, and it takes the
+# BLOCKING pg_advisory_xact_lock on payday:shiftmig:<uid> -- deliberately not
+# the fold's try-lock. The fold tries because it runs inside a shipped 1.0
+# build's transaction and may never make that write wait. A PR-2 build's own
+# write is allowed to wait, and must: case 1 already measured what racing this
+# key costs, cash=0/credit=2000 and an orphaned row.
+#
+# Neither order can be produced by a single psql script, so both live here.
+# The advisory lock is transaction-scoped, so a session that calls either
+# writer inside an open transaction still HOLDS the key after the call
+# returns, which is what makes both orders expressible with real sessions.
+#
+# The money question is the same in both directions and has one right answer:
+# the DEVICE's number survives. private.shift_is_open_to_fold reads
+# native_modified_at, private.write_shifts is its only author, and a shift the
+# user authored or edited is closed to conversion for good.
+# ===========================================================================
+
+U5=54000000-0000-4000-8000-000000000005
+setup_account "$U5"
+
+q "alter table public.tip_entries disable trigger tip_entries_fold_insert" >/dev/null
+q "insert into public.tip_entries (id, user_id, shift_id, work_date, amount_cents, kind, client_updated_at)
+   values ('54000000-0000-0000-0000-000000000121','$U5','54000000-0000-0000-0000-000000000120',
+           '2026-08-07',5000,'cash','2026-08-07T23:00:00Z')" >/dev/null
+q "alter table public.tip_entries enable trigger tip_entries_fold_insert" >/dev/null
+
+# 9a. THE ONE-SHOT FIRST. It converts the group and holds the key; the device
+# write must WAIT for it rather than reading a stale snapshot, and then land on
+# top of the converted row.
+open_session a 3
+send 3 "begin;"
+wait_state a "idle in transaction"
+send 3 "select conservation_touched_count from public.migrate_tip_entries_to_shifts('$U5'::uuid, 200);"
+wait_state a "idle in transaction"
+
+open_session b 4
+send 4 "$(shift_upsert_sql "$U5" '[{"id":"54000000-0000-0000-0000-000000000120","work_date":"2026-08-07","cash_tips_cents":777}]')"
+wait_blocked b
+
+check_true "aDeviceShiftWriteBlocksOnTheOneShotsKeyInsteadOfRacingIt" "t" \
+  "the device write is waiting on a Lock while the one-shot holds payday:shiftmig"
+
+send 3 "commit;"
+wait_state a "idle"
+wait_state b "idle"
+close_session 3
+close_session 4
+wait || true
+
+# The device's edit is final, provenance from the conversion survives it, and
+# the shift is now CLOSED to the fold, so no later conversion reprices it.
+#
+# Note `source=migration`, which is deliberate and was checked the other way
+# round first. A device edit must NOT rewrite where the row came from: S2
+# declares `source = 'migration'` plus legacy_entry_ids to be the only safe
+# rollback query, so stamping 'device' here would hide a conversion artifact
+# from the one query rollback depends on. Origin and human-touch are two
+# orthogonal facts -- `source` is where the row came from, native_modified_at
+# is whether anyone has touched it since -- and neither may overwrite the
+# other. The next check names what that costs.
+check "theDeviceWriteThatWaitedLandsOnTopAndKeepsItsOrigin" \
+  "cash=777 source=migration prov=1 open=false shifts=1" \
+  "$(q "select 'cash=' || s.cash_tips_cents
+            || ' source=' || s.source
+            || ' prov=' || coalesce(array_length(s.legacy_entry_ids,1),0)
+            || ' open=' || private.shift_is_open_to_fold(s.*)
+            || ' shifts=' || (select count(*) from public.shifts where user_id = '$U5')
+        from public.shifts s where s.user_id = '$U5'
+          and s.id = '54000000-0000-0000-0000-000000000120'")"
+
+# What leaving `source` alone costs, stated as a test rather than left to be
+# discovered during an incident: a rollback stops reading public.shifts and
+# reads public.tip_entries again, where this shift is still worth its ORIGINAL
+# 5000 -- a PR-2 build's edit never writes back to the legacy table. So the 777
+# would be lost by a rollback. That is an accepted cost of an emergency lever,
+# but it must be FINDABLE before anyone pulls it, and this is the query that
+# finds it: a converted row that a human has since touched.
+check "anEditedConversionArtifactIsFindableBeforeARollback" \
+  "at_risk=1 legacy_still_says=5000" \
+  "$(q "select 'at_risk=' || (select count(*) from public.shifts
+                               where user_id = '$U5' and source = 'migration'
+                                 and native_modified_at is not null)
+            || ' legacy_still_says=' || (select sum(amount_cents) from public.tip_entries
+                                          where user_id = '$U5' and deleted_at is null)")"
+
+# 9b. THE DEVICE WRITE FIRST, which is the order that actually protects money.
+# The one-shot must wait, and then must NOT reprice the shift the device
+# authored -- it may only write provenance and record the disagreement.
+U6=54000000-0000-4000-8000-000000000006
+setup_account "$U6"
+
+q "alter table public.tip_entries disable trigger tip_entries_fold_insert" >/dev/null
+q "insert into public.tip_entries (id, user_id, shift_id, work_date, amount_cents, kind, client_updated_at)
+   values ('54000000-0000-0000-0000-000000000131','$U6','54000000-0000-0000-0000-000000000130',
+           '2026-08-08',5000,'cash','2026-08-08T23:00:00Z')" >/dev/null
+q "alter table public.tip_entries enable trigger tip_entries_fold_insert" >/dev/null
+
+open_session c 5
+send 5 "begin;"
+wait_state c "idle in transaction"
+send 5 "$(shift_upsert_sql "$U6" '[{"id":"54000000-0000-0000-0000-000000000130","work_date":"2026-08-08","cash_tips_cents":777}]')"
+wait_state c "idle in transaction"
+
+cat > "$WORK/oneshot_d.sql" <<SQL
+select conservation_touched_count, remaining_group_count,
+       (conservation_failed_at is not null) as flagged
+  from public.migrate_tip_entries_to_shifts('$U6'::uuid, 200);
+SQL
+PGAPPNAME=payday_race_d "${PSQL[@]}" -v ON_ERROR_STOP=1 -q -f "$WORK/oneshot_d.sql" \
+  >"$WORK/oneshot_d.out" 2>&1 &
+DPID=$!
+wait_blocked d
+
+check_true "theOneShotBlocksOnADeviceShiftWritesKey" "t" \
+  "the one-shot is waiting on a Lock while the device write holds payday:shiftmig"
+
+send 5 "commit;"
+wait_state c "idle"
+wait "$DPID"
+close_session 5
+wait || true
+
+# The one number that must not move. A conversion arriving after a device edit
+# may not reprice it: the device said 777 and the legacy rows say 5000, and the
+# device wins because a human typed it. Here `source` IS 'device', because this
+# shift was authored natively and never was a conversion artifact.
+check "theOneShotNeverRepricesAShiftTheDeviceAuthored" \
+  "cash=777 source=device open=false shifts=1" \
+  "$(q "select 'cash=' || s.cash_tips_cents
+            || ' source=' || s.source
+            || ' open=' || private.shift_is_open_to_fold(s.*)
+            || ' shifts=' || (select count(*) from public.shifts where user_id = '$U6')
+        from public.shifts s where s.user_id = '$U6'
+          and s.id = '54000000-0000-0000-0000-000000000130'")"
+
+# The disagreement is not swallowed. Provenance is written unconditionally so
+# the partition stays total and nothing is orphaned, and the magnitude of the
+# gap is recorded rather than quietly reconciled.
+check "theDisagreementIsRecordedRatherThanSwallowed" \
+  "prov=1 disagreement=4223" \
+  "$(q "select 'prov=' || coalesce(array_length(s.legacy_entry_ids,1),0)
+            || ' disagreement=' || s.unconverted_legacy_cents
+        from public.shifts s where s.user_id = '$U6'
+          and s.id = '54000000-0000-0000-0000-000000000130'")"
+
+q "delete from auth.users where id in ('$U5','$U6')" >/dev/null
+
 q "delete from auth.users where id in ('$U','$U2')" >/dev/null
 
 echo
 if [ "$FAILED" = "1" ]; then
-  echo "== S4/S5 concurrency suite FAILED"
+  echo "== S4/S5/S6 concurrency suite FAILED"
   exit 1
 fi
-echo "== S4/S5 concurrency suite passed"
+echo "== S4/S5/S6 concurrency suite passed"
