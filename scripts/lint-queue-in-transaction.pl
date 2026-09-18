@@ -1,6 +1,9 @@
 use strict; use warnings; use File::Find;
 my @files; my @hits;
-find(sub { push @files, $File::Find::name if /\.swift$/ }, "Payday", "PaydayWidget");
+# Roots from @ARGV so the rule can be TESTED against planted fixtures rather
+# than trusted on faith. Defaults to the shippable targets.
+my @roots = @ARGV ? @ARGV : ("Payday", "PaydayWidget");
+find(sub { push @files, $File::Find::name if /\.swift$/ }, @roots);
 for my $f (sort @files) {
   open(my $fh, "<", $f) or next;
   local $/; my $src = <$fh>; close $fh;
