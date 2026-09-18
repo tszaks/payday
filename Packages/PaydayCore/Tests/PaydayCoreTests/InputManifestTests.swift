@@ -102,7 +102,7 @@ struct InputManifestTests {
 
     static let shiftsSection = prefix + """
     S|11111111-1111-4111-8111-111111111111|2026-09-28|dinner|1790000000|6000|4000|0|1000|255
-    S|22222222-2222-4222-8222-222222222222|2026-09-29|-|-|0|12345|500|-|-
+    S|22222222-2222-4222-8222-222222222222|2026-09-29|-|-|0|12345|500|0|-
     S|99999999-9999-4999-8999-999999999999|2026-09-21|lunch|1780000000|2500|0|0|0|240
     """
 
@@ -131,7 +131,7 @@ struct InputManifestTests {
     asOf|2026-10-02
     shifts|3
     S|11111111-1111-4111-8111-111111111111|2026-09-28|dinner|1790000000|6000|4000|0|1000|255
-    S|22222222-2222-4222-8222-222222222222|2026-09-29|-|-|0|12345|500|-|-
+    S|22222222-2222-4222-8222-222222222222|2026-09-29|-|-|0|12345|500|0|-
     S|99999999-9999-4999-8999-999999999999|2026-09-21|lunch|1780000000|2500|0|0|0|240
     paychecks|1
     P|33333333-3333-4333-8333-333333333333|2026-09-21|2026-09-27|10000|15050|-|5000|0|0|-
@@ -147,7 +147,72 @@ struct InputManifestTests {
     /// SHA-256 of `canonicalText`, computed with `shasum -a 256` over the
     /// same bytes and pasted. Do not "fix" a mismatch here by re-pinning: a
     /// mismatch means the encoding changed.
-    static let pinnedDigest = "63754abf8e1243699154389965468abe69b360da2c96a1acab190ab5d34440ee"
+    ///
+    /// Re-pinned once, deliberately, on 2026-09-18, when `tipOutCents` was
+    /// canonicalized to `?? 0`. The only byte that moved in `canonicalText`
+    /// is shift `2222...`'s tip-out field, `-` to `0`. The new hex was
+    /// DERIVED, not copied out of the failing assertion: the contract literal
+    /// was extracted and hashed with `shasum -a 256` independently, and that
+    /// external hash agrees with what the encoder produces. A hex pasted from
+    /// the code's own output would only prove the code equals itself.
+    static let pinnedDigest = "d359073164e7dfac00264936c65a17e1b156cf90a23660b690d463b289656cda"
+
+    /// The pair that must be read together, so neither half looks like a bug.
+    ///
+    /// The VALUE keeps nil and 0 apart: `ShiftRecord.tipOutCents` is an
+    /// `Int?`, the record genuinely carries "was tip-out entered", and
+    /// `ShiftInput` preserves it. The DIGEST collapses them, because the
+    /// digest answers only "would this change the valued output", and
+    /// `EarningsComponents.tipOutCents` is a non-optional Int defaulting to
+    /// 0 -- so the engine cannot tell them apart and neither should its
+    /// change-detector.
+    ///
+    /// Before canonicalization these two were inconsistent: the digest was
+    /// finer-grained than the computation it guards, so one shift fingerprinted
+    /// differently depending on whether it was read through
+    /// `ShiftInputAdapter` or `LegacySnapshotBridge` -- a false "changed"
+    /// signal for inputs that value identically.
+    @Test("nil and zero tip-out are distinct as values and identical as digests")
+    func tipOutNilAndZeroAreDistinctValuesWithOneDigest() throws {
+        let day = CivilDay(iso: "2026-09-28")!
+        func shift(_ tipOut: Int?) -> ShiftInput {
+            ShiftInput(
+                id: UUID(uuidString: "11111111-1111-4111-8111-111111111111")!,
+                workDay: day,
+                voluntaryCashCents: 6_000,
+                voluntaryCreditCents: 4_000,
+                tipOutCents: tipOut,
+                minutesWorked: 255
+            )
+        }
+        let unentered = shift(nil)
+        let explicitZero = shift(0)
+
+        // Distinct as values: the fidelity is kept.
+        #expect(unentered.tipOutCents == nil)
+        #expect(explicitZero.tipOutCents == 0)
+        #expect(unentered.tipOutCents != explicitZero.tipOutCents)
+
+        // Identical as digests: the change-detector matches the engine.
+        let a = try InputManifest(
+            shifts: [unentered], paychecks: [], schedule: nil,
+            rates: [], calendars: [], asOf: day
+        )
+        let b = try InputManifest(
+            shifts: [explicitZero], paychecks: [], schedule: nil,
+            rates: [], calendars: [], asOf: day
+        )
+        #expect(a.digest == b.digest)
+        #expect(a.shiftsDigest == b.shiftsDigest)
+
+        // A real tip-out still moves the digest, so the collapse is scoped to
+        // the nil/0 pair and has not blunted the detector.
+        let real = try InputManifest(
+            shifts: [shift(1_000)], paychecks: [], schedule: nil,
+            rates: [], calendars: [], asOf: day
+        )
+        #expect(real.digest != a.digest)
+    }
 
     @Test("Canonical text matches the documented contract byte for byte")
     func canonicalTextMatches() throws {

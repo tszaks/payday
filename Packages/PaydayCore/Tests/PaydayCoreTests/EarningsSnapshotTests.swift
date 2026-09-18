@@ -569,7 +569,14 @@ struct EarningsSnapshotDigestTests {
         let b = try EarningsSnapshot.build(reversed, generation: 99)
 
         #expect(a.stamp.digest == b.stamp.digest)
-        #expect(a.stamp.digest == "6ec417bb99ebaf1cd8183b33118fd4271273ebf7cfae29488573632c4ed1dfb9")
+        // Re-pinned 2026-09-18 with the `tipOutCents ?? 0` canonicalization.
+        // Justified, not merely accepted: all five of W2's shifts declare
+        // `tipOutCents: null`, so every one of them moves from `-` to `0` in
+        // the canonical text and the fingerprint necessarily changes. The
+        // FORMAT is pinned independently by `InputManifestTests.pinnedDigest`,
+        // whose new hex was derived with an external `shasum -a 256` over the
+        // documented contract text rather than copied from the code.
+        #expect(a.stamp.digest == "5a719c9aa196ce16a121b2ecc10664ab9c6f1695eac904a05ec4bcfb08a3e0a6")
         #expect(a.shifts == b.shifts, "the valuations are order-independent too")
         #expect(a.stamp.generation != b.stamp.generation, "only the generation differs")
     }

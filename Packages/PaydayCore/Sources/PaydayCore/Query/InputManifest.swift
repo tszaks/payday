@@ -300,7 +300,32 @@ public struct InputManifest: Hashable, Codable, Sendable {
                         // as `-` keeps this function total instead of trapping.
                         field(s.recordedAt.flatMap { wholeSeconds($0) }),
                         String(s.voluntaryCashCents), String(s.voluntaryCreditCents),
-                        String(s.gratuityFeesCents), field(s.tipOutCents), field(s.minutesWorked),
+                        String(s.gratuityFeesCents),
+                        // CANONICALIZED to the engine's own interpretation.
+                        // `EarningsComponents.tipOutCents` is a non-optional
+                        // Int defaulting to 0, so the engine reads nil and 0
+                        // as the same money. A digest that told them apart
+                        // was a change-detector more sensitive than the
+                        // computation it guards: it reported "changed" for
+                        // two inputs that value identically, which is a false
+                        // signal, and it made one shift digest differently
+                        // depending on whether it was read through
+                        // `ShiftInputAdapter` (nil vs 0 preserved off
+                        // `ShiftRecord.tipOutCents`) or through
+                        // `LegacySnapshotBridge` (always nil, because
+                        // `TipBreakdown` had already summed both to 0).
+                        //
+                        // The VALUE still preserves nil vs 0 -- the record
+                        // genuinely carries that fact and fidelity is kept.
+                        // Only the digest collapses them, because only the
+                        // digest is asking "would this change the answer".
+                        //
+                        // If a caller ever needs "was tip-out entered" as a
+                        // fact, it gets its own explicit field. It is never
+                        // smuggled through the nil/0 ambiguity of a money
+                        // column.
+                        String(s.tipOutCents ?? 0),
+                        field(s.minutesWorked),
                     ].joined(separator: "|"))
                 }
                 .sorted { $0 < $1 }
