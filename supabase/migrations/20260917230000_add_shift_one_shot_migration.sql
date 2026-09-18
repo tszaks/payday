@@ -44,7 +44,14 @@
 --    stamping rollback_at for one account, after which every other converted
 --    account reads null from payday_shift_rollback_at(), keeps treating
 --    public.shifts as authoritative, and keeps having 1.0 devices write
---    tip_entries that nothing folds. The unsafe operation is not expressible.
+--    tip_entries that nothing folds. The unsafe operation is not expressible
+--    AS A SIGNATURE -- but it was still expressible by accident, and was: a
+--    bare `update public.shift_migration_state set rollback_at = ...` stamps
+--    only the rows that happen to exist, and MEASURED, an account with
+--    pre-deploy legacy rows and no state row read payday_shift_rollback_at()
+--    = NULL straight through a global rollback and then converted its whole
+--    history on its next sync. The stamp is therefore an INSERT over
+--    auth.users, and the one-shot carries a rollback guard of its own.
 --    Per-account REPAIR is a separate artifact that touches no trigger.
 --
 -- 5. public.shifts IS DERIVED. public.tip_entries is never rewritten by the
@@ -123,12 +130,69 @@ comment on column public.shift_migration_state.unconverted_legacy_cents is
 --     and its $60 lives in the shift forever;
 --   * a $50 to $40 correction of an already-folded row never applies.
 --
--- The four arms are therefore: never folded; folded then tombstoned; folded
--- with no watermark; folded and then written above the watermark.
+-- The first four arms are therefore: never folded; folded then tombstoned;
+-- folded with no watermark; folded and then written above the watermark.
 --
 -- DELETED shifts are included in `named` on purpose: a tombstoned conversion
 -- artifact still claims its source rows, and the whole point of arms 2 to 4 is
 -- to notice that the claim has gone stale.
+--
+-- ARM 5, THE STALE CLAIM, AND THE MEASURED P0 IT CLOSES. The first four arms
+-- all return the row's CURRENT group key, which is the key the new artifact
+-- needs. They never name the OLD claiming shift, and every provenance-release
+-- arm in the deriver is gated on `s.id = any(v_keys)` (arms 2b, 2a and 4b in
+-- 20260917200000_add_shift_deriver.sql). So when a legacy row's group key
+-- changed while the fold was not firing -- a bulk legacy rewrite with the
+-- triggers off, a replica-mode load, the disabled-trigger window
+-- rollback_shift_migration itself opens -- the old artifact was never handed
+-- to the deriver, never released its claim, and kept its money LIVE forever.
+-- That is the exact trigger-blind case this whole file exists for, and it was
+-- the one case the one-shot could not repair.
+--
+-- MEASURED before this arm existed, on five nights at $100 folded live by the
+-- trigger and then re-keyed for two of them with the triggers off:
+--
+--   truth                         5 shifts,  50000 cents
+--   one-shot pass 1/2/3           remaining=2 dupes=2 every pass
+--   repair_shift_migration        remaining=2 dupes=2
+--   ===> 7 live shifts, 70000 cents (2026-01-02 and 2026-01-04 twice)
+--   payday_unmigrated_tip_row_count() = 2, forever
+--
+-- and on the single-row shapes: a shift_id move gave two live shifts on ONE
+-- date at $60 each for one $60 row; a work_date move gave two live shifts on
+-- TWO DIFFERENT dates at $40 each. duplicate_work_date_count read 0 in every
+-- case -- its detector needs one provenance row AND one native row on the
+-- date, and here both carry provenance -- so the 5.5 duplicate surface could
+-- not see it either. The CONTROL, the same move with the triggers ON, always
+-- converged: the fold unions OLD and NEW keys on UPDATE, so the old artifact
+-- was tombstoned and the predicate reached 0.
+--
+-- With this arm the identical account returns to 5 live shifts / 50000 cents,
+-- duplicate claims 0 and count 0.
+--
+-- THE ARM LIVES HERE, NOT IN THE ONE-SHOT, because Rule 1 is that the
+-- predicate is spelled exactly once: the count the client loops on, the keys
+-- the one-shot spends its budget on and the keys repair re-presents are then
+-- the same expression BY CONSTRUCTION, and repair inherits the fix for free.
+--
+-- IT RETURNS ONE ROW PER (ENTRY, KEY THAT NEEDS WORK), so a row whose claim
+-- is stale contributes TWO: its current key, which builds the right artifact,
+-- and the stale claimer's id, which releases the wrong one. The client-facing
+-- count is therefore 2 per stale-keyed row until both are spent, which is
+-- accurate rather than inflated -- there really are two group keys to derive
+-- -- and remaining_group_count still strictly decreases, so the follow-up
+-- rule is unaffected.
+--
+-- IT TERMINATES. Given the stale claimer's id the deriver either finds no
+-- group for it and arm 2a empties legacy_entry_ids unconditionally, or finds
+-- one and arm 1 overwrites legacy_entry_ids with exactly that key's own rows.
+-- Either way the stale claim is gone and the arm stops matching. Arm 1 can
+-- never create one: it writes id = the group key and provenance = that
+-- group's entries.
+--
+-- TOMBSTONED ENTRIES ARE INCLUDED (no `deleted_at is null` here) because a
+-- row that was both re-keyed and then deleted strands its old claimer in
+-- exactly the same way, and arm 2 alone only ever names the new key.
 --
 -- THIS PREDICATE TERMINATES ONLY BECAUSE THE DERIVER'S ARM 2a RELEASES
 -- PROVENANCE UNCONDITIONALLY. With the first draft's gated arm 2, a closed or
@@ -172,17 +236,34 @@ language sql stable set search_path = '' as $$
        or (n.entry_id is not null
            and ( e.deleted_at is not null
               or n.legacy_source_max_updated_at is null
-              or e.client_updated_at > n.legacy_source_max_updated_at)));
+              or e.client_updated_at > n.legacy_source_max_updated_at)))
+  union
+  -- ARM 5: the STALE CLAIMER's own id, presented as a group key so the
+  -- deriver's release arms (all gated on `s.id = any(v_keys)`) can reach it.
+  -- See the measured $200-of-phantom-money sequence in the block above.
+  select e.id,
+         n.shift_id,
+         e.client_updated_at
+  from named n
+  join public.tip_entries e on e.user_id = p_user_id and e.id = n.entry_id
+  where private.legacy_group_key(e.shift_id, e.work_date) <> n.shift_id;
 $$;
 
 comment on function private.unmigrated_legacy_rows(uuid) is
   'THE `unmigrated` predicate, spelled exactly once. The one-shot''s work set '
   'and public.payday_unmigrated_tip_row_count() are both this function plus '
   'this account''s backlog, so the count the client loops on and the predicate '
-  'the one-shot acts on cannot disagree. Four arms: never folded; folded then '
+  'the one-shot acts on cannot disagree. FIVE arms: never folded; folded then '
   'tombstoned; folded with a null watermark; folded then written above the '
-  'watermark. It terminates only because the deriver''s arm 2a releases '
-  'provenance unconditionally.';
+  'watermark; and a shift whose legacy_entry_ids name a row that no longer '
+  'keys to it, returned as the STALE CLAIMER''s own id. Arm 5 is what lets '
+  'the deriver''s release arms -- all gated on `s.id = any(v_keys)` -- reach '
+  'an artifact whose sources were re-keyed while the fold was not firing; '
+  'without it that artifact kept its money live forever and no shipped '
+  'function could clear it (measured: 7 live shifts / 70000 cents for 5 real '
+  'nights / 50000 cents, count 2 forever). It returns one row per (entry, key '
+  'that needs work), so a stale-claimed row contributes two. It terminates '
+  'only because the deriver''s arm 2a releases provenance unconditionally.';
 
 -- ---------------------------------------------------------------------------
 -- The companion count: the predicate plus this account's backlog size.
@@ -322,6 +403,41 @@ begin
   -- than a raise or an FK violation. The one-shot must never be the thing that
   -- fails a deletion or a raced sign-out.
   if not exists (select 1 from auth.users u where u.id = v_uid) then
+    return null::public.shift_migration_state;
+  end if;
+
+  -- -------------------------------------------------------------------------
+  -- THE ROLLBACK GUARD, AND THE MEASURED FAILURE IT CLOSES.
+  --
+  -- rollback_shift_migration's rule 1 says the three triggers are disabled in
+  -- the SAME TRANSACTION as the tombstoning so that "the re-converter cannot
+  -- race the rollback". The triggers are not the only re-converter: THIS
+  -- FUNCTION is granted to authenticated and the client calls it whenever
+  -- payday_unmigrated_tip_row_count() is positive, which a 1.0 write during
+  -- the rollback window makes positive. MEASURED: with rollback_at set, a 1.0
+  -- device wrote one new night ($33.00), the trigger correctly folded nothing,
+  -- and the client's own documented loop (count = 1, then one call here)
+  -- produced a LIVE source='migration' artifact with rollback_at still set --
+  -- "an account half rolled back with no record of which half", which is the
+  -- exact harm rule 1 claims the same-transaction disable prevents.
+  --
+  -- THE GUARD IS ON THE JWT-BEARING CALLER ONLY, and that is the whole point.
+  -- The client must stop converting; the OPERATOR must not, because
+  -- repair_shift_migration is the forward half of the reversal and the runbook
+  -- runs it BEFORE clearing rollback_at (clearing it first would point every
+  -- client at a public.shifts that is still all tombstones). An operator in
+  -- psql has no JWT at all and service_role is not an end user, so the test is
+  -- exactly the two claims this function already captured for its authority
+  -- check -- no new role test, no new GUC.
+  --
+  -- It returns the same null-shaped no-op as a deleted account rather than
+  -- raising: a raise on this path aborts the caller's transaction, and Rule 2
+  -- of this file is that nothing on the RPC path raises.
+  -- -------------------------------------------------------------------------
+  if v_claim_uid is not null
+     and v_claim_role <> 'service_role'
+     and exists (select 1 from public.shift_migration_state st
+                  where st.user_id = v_uid and st.rollback_at is not null) then
     return null::public.shift_migration_state;
   end if;
 
@@ -585,7 +701,12 @@ comment on function public.migrate_tip_entries_to_shifts(uuid, integer) is
   'before unmigrated, with partial forward progress and '
   'remaining_group_count written every run. Idempotent: two calls over the '
   'same state produce byte-identical rows, and migrated_at never moves after '
-  'the first conversion. Conservation is RECORDED, never raised. Calls '
+  'the first conversion. REFUSES a JWT-bearing caller whose rollback_at is '
+  'set, returning a null row rather than raising, because the client is '
+  'otherwise a live re-converter during the rollback window (measured); an '
+  'operator with no JWT and service_role are not guarded, because '
+  'repair_shift_migration is the forward half of the reversal and runs before '
+  'rollback_at is cleared. Conservation is RECORDED, never raised. Calls '
   'private.derive_shifts, the single deriver, so it cannot disagree with the '
   'trigger. Takes the BLOCKING pg_advisory_xact_lock on payday:shiftmig:<uid>. '
   'No exception handler on purpose: its work set is recomputed from data by '
@@ -670,12 +791,18 @@ comment on function public.repair_shift_migration(uuid) is
 --
 --   * Every cent any 1.0 build ever wrote. tip_entries was never rewritten, so
 --     the old build's own screens read exactly what they read before PR 2.
---   * No later conversion: the three triggers are off, so the re-converter
---     cannot race the rollback.
+--   * No later conversion. BOTH re-converters are stopped in the same
+--     transaction, not just the triggers: the three triggers are disabled
+--     here, and public.migrate_tip_entries_to_shifts refuses a JWT-bearing
+--     caller whose rollback_at is set (see the guard on that function for the
+--     measured artifact a 1.0 write plus one client call produced without it).
 --   * No derived history on the new build: every artifact (source =
 --     'migration' with provenance) is tombstoned.
---   * Every account's client returns to the legacy read leg, because EVERY
---     shift_migration_state row is stamped in the same transaction.
+--   * EVERY ACCOUNT's client returns to the legacy read leg, because
+--     shift_migration_state is stamped for every row of auth.users in the same
+--     transaction -- an INSERT ... ON CONFLICT, not an UPDATE, because an
+--     account that has never taken a legacy write and never synced has no row
+--     yet and a bare UPDATE left the kill switch invisible to it (measured).
 --
 -- WHAT ROLLBACK CANNOT RESTORE, AND THE COMPENSATING ACTION
 --
@@ -689,13 +816,23 @@ comment on function public.repair_shift_migration(uuid) is
 --     the requested set. This function does not do it for you, because doing it
 --     silently would be a destructive write to the one table that is the
 --     reversibility artifact.
---   * A POST-CONVERSION EDIT REVERTS in the old build's display. R1 means
---     tip_entries was never rewritten, so the pre-edit values are what a 1.0
---     device shows. COMPENSATING ACTION, BEFORE calling this function: dump
+--   * A POST-CONVERSION EDIT REVERTS in the old build's display, AND THE LOSS
+--     SURVIVES THE FORWARD PATH. R1 means tip_entries was never rewritten, so
+--     the pre-edit values are what a 1.0 device shows -- but the edit is ALSO
+--     not restored by re-enabling the triggers and repairing, because the
+--     deriver's un-delete arm reopens a 'converted' tombstone only on a shift
+--     with native_modified_at null and an edited shift is closed forever.
+--     MEASURED on the full round trip: an account with Jun 1 (legacy, $60) and
+--     Jun 2 (the user's own native correction to $90) came back as Jun 1 only;
+--     new-build visible money went 15000 to 9300 and Jun 2 stayed tombstoned
+--     with deleted_reason 'converted'. So the dump is not a precaution, it is
+--     an INPUT to step 4 of the re-enable runbook below.
+--     COMPENSATING ACTION, BEFORE calling this function: dump
 --     `select * from public.shifts where native_modified_at is not null`. NOT
 --     `converted_at < client_updated_at` -- see the edited_since_conversion_count
 --     comment above for the measured reason that comparison silently omits
---     exactly the shifts most likely to need recovery.
+--     exactly the shifts most likely to need recovery. Keep the id list: the
+--     runbook reopens exactly those ids.
 --   * A NATIVELY AUTHORED SHIFT BECOMES INVISIBLE to a legacy reader, by
 --     design: it has no tip_entries representation. COMPENSATING ACTION: dump
 --     `select * from public.shifts where array_length(legacy_entry_ids,1) is
@@ -725,22 +862,37 @@ comment on function public.repair_shift_migration(uuid) is
 --     public.tip_entries. Rollback therefore BLOCKS EVERY DEVICE'S WRITES on
 --     the app's only legacy write table for its duration, and queues behind any
 --     open transaction on it.
---   * RE-ENABLING IS AN EXPLICIT SEPARATE OPERATOR STEP, and it is THREE
+--   * RE-ENABLING IS AN EXPLICIT SEPARATE OPERATOR STEP, and it is SIX
 --     statements, not one, because the triggers saw nothing at all while they
---     were off, the backlog was emptied, and every client is still being told
---     to stay on the legacy leg:
+--     were off, the backlog was emptied, no shipped function reopens an edited
+--     artifact, and every client is still being told to stay on the legacy leg.
+--     IN THIS ORDER:
 --
+--       -- 1-3. the three triggers
 --       alter table public.tip_entries enable trigger tip_entries_fold_insert;
 --       alter table public.tip_entries enable trigger tip_entries_fold_update;
 --       alter table public.tip_entries enable trigger tip_entries_fold_delete;
+--       -- 4. re-derive every account
 --       select public.repair_shift_migration(id) from auth.users;
+--       -- 5. reopen the nights the user had EDITED on the new build, from the
+--       --    mandatory pre-rollback `native_modified_at is not null` dump.
+--       --    Repair cannot do this: the un-delete arm skips a closed shift, so
+--       --    without this statement every edited night stays tombstoned and
+--       --    its money is invisible on BOTH legs (measured: 15000 -> 9300).
+--       update public.shifts
+--          set deleted_at = null, deleted_reason = null
+--        where (user_id, id) in (<the (user_id, id) pairs from that dump>)
+--          and deleted_reason = 'converted';
+--       -- 6. and only now let the clients back onto the new leg
 --       update public.shift_migration_state set rollback_at = null;
 --
 --     public.repair_shift_migration, NOT migrate_tip_entries_to_shifts: see the
---     measured reason on that function. And the rollback_at clear is not
---     optional -- while it is set, every client keeps clearing its shift state
---     on every sync, so a re-converted account would be re-derived on the
---     server and read by nobody.
+--     measured reason on that function. Step 5 is ordered BEFORE step 6 so no
+--     client ever reads a history with the edited nights missing. And the
+--     rollback_at clear is LAST and is not optional -- while it is set, every
+--     client keeps clearing its shift state on every sync (and the one-shot's
+--     rollback guard keeps refusing it), so a re-converted account would be
+--     re-derived on the server and read by nobody.
 --
 -- `source = 'migration'` PLUS legacy_entry_ids IS THE ONLY SAFE ROLLBACK
 -- QUERY, which is why that source value is load-bearing: writing 'device' there
@@ -766,9 +918,29 @@ begin
 
   delete from private.shift_fold_backlog;
 
-  -- EVERY row, same transaction. rollback_at is never overwritten.
-  update public.shift_migration_state
-     set rollback_at = coalesce(rollback_at, statement_timestamp());
+  -- EVERY ACCOUNT, not every existing row, same transaction. rollback_at is
+  -- never overwritten.
+  --
+  -- MEASURED, AND THE REASON THIS IS AN INSERT. A bare
+  -- `update public.shift_migration_state set rollback_at = ...` can only stamp
+  -- rows that already exist, and a row exists only once
+  -- private.note_legacy_write has fired (a legacy write after S4 deployed) or
+  -- the one-shot has run. At the moment a rollback would actually be ordered,
+  -- right after deploy, every account whose 1.0 device has not written and
+  -- whose client has not synced has NO row, so the kill switch was INVISIBLE
+  -- to it: an account with two pre-deploy legacy rows and no state row read
+  -- payday_shift_rollback_at() = NULL both before and after the rollback, and
+  -- its very next sync converted its whole history (count 2, one call to the
+  -- one-shot, two LIVE conversion artifacts fleet-wide AFTER the kill switch,
+  -- remaining_group_count 0, rollback_at still NULL). With count 0 and rows in
+  -- public.shifts the client's first-switch rule then points
+  -- shiftsAreAuthoritativeAt at the new leg during a global rollback. The
+  -- guarantee above says every ACCOUNT's client returns to the legacy leg, so
+  -- the statement has to cover the account population.
+  insert into public.shift_migration_state as st (user_id, rollback_at)
+  select u.id, statement_timestamp() from auth.users u
+  on conflict (user_id) do update set
+    rollback_at = coalesce(st.rollback_at, excluded.rollback_at);
 
   return v_tombstoned;
 end;
@@ -781,8 +953,14 @@ comment on function public.rollback_shift_migration() is
   'null from payday_shift_rollback_at(), still treating public.shifts as '
   'authoritative, and still taking 1.0 writes that nothing folds. Takes ACCESS '
   'EXCLUSIVE on public.tip_entries, so it blocks every device''s writes for its '
-  'duration. Re-enabling the three triggers is a separate operator step and '
-  'must be followed by one migrate_tip_entries_to_shifts run per account. '
+  'duration. Stamps rollback_at for EVERY row of auth.users, not only the '
+  'shift_migration_state rows that already exist, because an account that has '
+  'never taken a legacy write and never synced has no row and the kill switch '
+  'was invisible to it (measured). Re-enabling is a SIX-statement operator '
+  'runbook -- three triggers, repair_shift_migration per account, reopen the '
+  'edited nights from the mandatory pre-rollback dump, and only then clear '
+  'rollback_at -- written out in full in the comment block above this '
+  'function. '
   'Returns the number of conversion artifacts tombstoned. Nothing on the legacy '
   'side is unrecoverable: tip_entries is never rewritten by the new build, and '
   'the full "what this restores, what it cannot, and what is unrecoverable" '
@@ -809,10 +987,16 @@ comment on function public.payday_shift_rollback_at() is
   'Non-null means the conversion was rolled back. On a non-null value the '
   'client clears shiftIDs, shiftServerCursor, shiftClientUpdatedAt, '
   'shiftServerAckedIDs, shiftWriteAttempts, pendingShiftRestores and '
-  'shiftsAreAuthoritativeAt, stops pushing shifts, and deletes every local '
+  'shiftsAreAuthoritativeAt, stops pushing shifts, STOPS CALLING '
+  'public.migrate_tip_entries_to_shifts and '
+  'public.payday_unmigrated_tip_row_count, and deletes every local '
   'ShiftRecord and every durable ShiftTombstone -- otherwise a later '
   're-forward-migration meets a stale cache. Clearing '
-  'shiftsAreAuthoritativeAt is what returns the reader to the legacy leg.';
+  'shiftsAreAuthoritativeAt is what returns the reader to the legacy leg. The '
+  'one-shot refuses a JWT-bearing caller while this is non-null anyway, '
+  'because a client that kept calling it re-converted every 1.0 write taken '
+  'during the rollback window (measured), but the client contract says stop '
+  'so the refusal is a backstop rather than the mechanism.';
 
 -- ---------------------------------------------------------------------------
 -- Grants. Supabase's default privileges grant EXECUTE on every new function in
