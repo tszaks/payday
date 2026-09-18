@@ -1741,19 +1741,36 @@ owning account does not leak, provenance replaces the embedded rows, and
 absent optionals report null rather than vanishing. Same instrument error as
 searching for a test SUITE by filename when it is a struct.
 
-Corrected, the two halves differ:
+**Corrected AGAIN, and S11 is essentially COMPLETE.** The second version of
+this line said the query layer was uncovered. Also wrong, by the same
+instrument error a third time: I grepped `supabase/tests/` for `get_shift`
+and `list_shifts`, the SLICE's names, while the function is
+`public.payday_agent_shift_by_id`.
 
-- **Response shaping and the money: COVERED**, five tests, through the
-  production path.
-- **The query layer: NOT covered.** `getShift`'s step-2 lookup,
-  `coalesce(shift_id, id)` selection, and `get_shift` resolving a
-  pre-conversion nil-`shift_id` id via provenance have no test on either
-  side -- `agent_shifts_test.ts` does not exist and no SQL test in
-  `supabase/tests/` references `get_shift` or `list_shifts`.
+`supabase/tests/agent_api_shifts_test.sql` exists and covers exactly the
+case I twice claimed was missing, including
+`aPreConversionLegacyIdStillResolvesViaProvenance` -- a pre-conversion
+legacy id resolving through the shift that absorbed it -- plus both absorbed
+legacy ids, a not-found id, and cross-account isolation.
 
-That narrower gap is the real S11 remainder, and it is the half where a
-defect is a shift the agent cannot find rather than a number it reports
-wrongly.
+So both halves are covered:
+
+- **Response shaping and the money:** five tests in `index_test.ts` through
+  `testing.shiftResponse`, the production path.
+- **The query layer:** `agent_api_shifts_test.sql`, including the
+  provenance case.
+
+The slice's named artifact `agent_shifts_test.ts` does not exist; the
+coverage lives in the SQL test the slice ALSO asked for ("Tests (C, plus E
+for the SQL side)"). A missing filename is not a missing test.
+
+**Three identical instrument errors, one root cause.** Searching for
+`DayHeroEqualsItsRowsTests` as a FILE when it is a struct; for
+`listShifts`/`getShift` in a test file that names BEHAVIOUR; for `get_shift`
+when the function is `payday_agent_shift_by_id`. Each time I searched for
+the SPEC's name rather than the CODE's, and each time the absence of a
+string read as the absence of a test. All three made things look worse than
+they were.
 
 **S11 (original).** Files: `index.ts` (`listShifts`, `getShift` with the step-2 lookup, `payday_agent_summary` on `shifts`, `CHANGE_TABLES`, the `createShift` corrections), `sql_corrections.ts`, `agent_shifts_test.ts`, `docs/PAYDAY_API.md`.
 Tests (C, plus E for the SQL side): the six corrections with fixtures; `tipOutIsResolvedOnceByBothImplementations`; `differentialAgainstGroupShifts` both directions; the identity vectors; the forced-stale replay; `anAgentMovingARowBetweenShiftsRefoldsBothGroups`; `get_shift` by a pre-conversion nil-`shift_id` id resolves via provenance. Gate: C and E. **Depends on S3.**
@@ -1787,7 +1804,7 @@ progress number remain unbuilt.
 | Slice | Assumes legacy dead or dying? | Holds | Destination | State |
 |---|---|---|---|---|
 | S10 fence | **YES** — "TipEntry is read-only in this build" | **NO** | **PR 8**, behind the RELEASE_GATE entry condition | reclassified |
-| S11 Agent API | No — resolves pre-conversion ids via provenance | Yes | PR 2, now | money COVERED (5 tests); query layer untested |
+| S11 Agent API | No — resolves pre-conversion ids via provenance | Yes | **essentially DONE** | money covered (5 tests) AND query layer covered (`agent_api_shifts_test.sql`) |
 | S12 bridge parity | No — a bridge needs both representations | Yes | PR 2, now | 2 tests, none specified |
 | S13 data health | No — surfaces conversion in progress | Yes | PR 2, now | not started |
 
