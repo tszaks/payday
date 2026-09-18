@@ -51,6 +51,11 @@ struct HistoryView: View {
     @Environment(PayScheduleStore.self) private var scheduleStore
     @Environment(PolicyStore.self) private var policyStore
     @Query private var allEntries: [TipEntry]
+    /// The other representation, for the export. On a converted account a
+    /// shift logged since conversion has NO `TipEntry` at all, so an export
+    /// built from `allEntries` alone omits it permanently -- the deriver runs
+    /// legacy-to-records only and nothing ever writes a `TipEntry` back.
+    @Query private var shiftRecords: [ShiftRecord]
     @Query private var paycheckRecords: [PaycheckRecord]
 
     private var calculator: PayPeriodCalculator {
@@ -96,6 +101,7 @@ struct HistoryView: View {
                         item: CSVExport {
                             CSVExporter.export(
                                 entries: allEntries,
+                                records: shiftRecords,
                                 paycheckRecords: paycheckRecords,
                                 calculator: calculator
                             )

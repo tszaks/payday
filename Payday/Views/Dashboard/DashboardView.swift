@@ -681,18 +681,13 @@ struct DashboardView: View {
         // `DashboardEarnings.build`.
         let dataset = renderCache?.revision == snapshotRevision
             ? renderCache!.dataset
-            : (PaydaySyncState.shiftsAreAuthoritativeForCurrentAccount
-                ? DashboardEarnings.build(
-                    records: shiftRecords,
-                    policies: policyStore.policies,
-                    payrollTimeZone: payrollTimeZone
-                )
-                : DashboardEarnings.build(
-                    entries: allEntries,
-                    policies: policyStore.policies,
-                    payrollTimeZone: payrollTimeZone,
-                    calendar: payrollCalendar
-                ))
+            : DashboardEarnings.build(
+                entries: allEntries,
+                records: shiftRecords,
+                policies: policyStore.policies,
+                payrollTimeZone: payrollTimeZone,
+                calendar: payrollCalendar
+            )
         let snapshot = dataset.snapshot
         // Rule 3: the facts are keyed on the dataset's own digest, the
         // complete computed key, plus this screen's presentational selection.

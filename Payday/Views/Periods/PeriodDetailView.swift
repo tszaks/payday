@@ -326,19 +326,13 @@ struct PeriodDetailView: View {
            cached.payrollTimeZone == zone {
             return cached.build
         }
-        // The representation switch, at the one place this screen's money and
-        // rows are both produced. `HistoryEarnings.build` keeps the snapshot
-        // and the row list on the SAME representation, which is what stops a
-        // total from one source sitting over rows from another.
-        if PaydaySyncState.shiftsAreAuthoritativeForCurrentAccount {
-            return HistoryEarnings.build(
-                records: shiftRecords,
-                policies: policies,
-                payrollTimeZone: zone
-            )
-        }
+        // Both representations handed over; `HistoryEarnings.build` resolves
+        // which one and keeps the snapshot and the row list on the SAME one,
+        // which is what stops a total from one source sitting over rows from
+        // another.
         return HistoryEarnings.build(
             entries: allEntries,
+            records: shiftRecords,
             policies: policies,
             payrollTimeZone: zone
         )

@@ -27,6 +27,25 @@ enum CSVExporter {
     /// zero: a blank says "not computed", a zero says "the engine says you
     /// earned nothing", and in a file someone may take to a payroll dispute
     /// those are not interchangeable.
+    /// The one entry point. Takes BOTH representations and resolves which
+    /// to read itself — see `ShiftRepresentation` for why callers no longer
+    /// get to choose, and `export(records:)` below for what this file in
+    /// particular gets wrong when a caller chooses legacy by accident.
+    @MainActor
+    static func export(
+        entries: [TipEntry],
+        records: [ShiftRecord],
+        paycheckRecords: [PaycheckRecord],
+        calculator: PayPeriodCalculator,
+        calendar: Calendar = .current,
+        valuations: [UUID: ShiftValuation] = [:],
+        representation: ShiftRepresentation = .automatic
+    ) -> String {
+        representation.usesRecords
+            ? export(records: records, paycheckRecords: paycheckRecords, calculator: calculator, calendar: calendar, valuations: valuations)
+            : export(entries: entries, paycheckRecords: paycheckRecords, calculator: calculator, calendar: calendar, valuations: valuations)
+    }
+
     static func export(
         entries: [TipEntry],
         paycheckRecords: [PaycheckRecord],
@@ -35,24 +54,135 @@ enum CSVExporter {
         valuations: [UUID: ShiftValuation] = [:]
     ) -> String {
         let shifts = ShiftDays.groupedByShift(entries, shiftID: \.shiftID, date: \.date, period: \.shiftPeriod, calendar: calendar)
-            .sorted { $0.day < $1.day }
+            .map(RowShift.init(legacyGroup:))
+        return export(shifts: shifts, paycheckRecords: paycheckRecords, calculator: calculator, calendar: calendar, valuations: valuations)
+    }
+
+    /// The same export from the new representation.
+    ///
+    /// This exists because of what the export IS on a converted account.
+    /// `LogTipSheet.saveNew` writes a `ShiftRecord` and no `TipEntry` once
+    /// the account is authoritative, so a shift logged after conversion has
+    /// no legacy row at all — and an exporter reading `entries` would omit
+    /// it silently. `DeleteAccountSheet` offers this file directly above the
+    /// delete button, calling it the honest alternative to losing the
+    /// record, so a short export there is the safety net failing quietly at
+    /// the one moment it is the only thing standing between someone and
+    /// permanently losing their own history.
+    ///
+    /// Both entry points funnel into `export(shifts:)`. One row builder, so
+    /// the two representations cannot drift into two different files.
+    @MainActor
+    static func export(
+        records: [ShiftRecord],
+        paycheckRecords: [PaycheckRecord],
+        calculator: PayPeriodCalculator,
+        calendar: Calendar = .current,
+        valuations: [UUID: ShiftValuation] = [:]
+    ) -> String {
+        export(shifts: records.map(RowShift.init(record:)), paycheckRecords: paycheckRecords, calculator: calculator, calendar: calendar, valuations: valuations)
+    }
+
+    private static func export(
+        shifts unsorted: [RowShift],
+        paycheckRecords: [PaycheckRecord],
+        calculator: PayPeriodCalculator,
+        calendar: Calendar,
+        valuations: [UUID: ShiftValuation]
+    ) -> String {
+        let shifts = unsorted.sorted { $0.day < $1.day }
         var dayShiftCounts: [Date: Int] = [:]
         for shift in shifts { dayShiftCounts[shift.day, default: 0] += 1 }
-        let rows = shifts.map { group -> String in
-            row(for: group.items, day: group.day, dayHasMultipleShifts: (dayShiftCounts[group.day] ?? 0) >= 2, paycheckRecords: paycheckRecords, calculator: calculator, calendar: calendar, valuation: valuations[group.shiftID])
+        let rows = shifts.map { shift -> String in
+            row(for: shift, dayHasMultipleShifts: (dayShiftCounts[shift.day] ?? 0) >= 2, paycheckRecords: paycheckRecords, calculator: calculator, calendar: calendar, valuation: valuations[shift.shiftID])
         }
         return ([header] + rows).joined(separator: "\n")
     }
 
-    private static func row(for items: [TipEntry], day: Date, dayHasMultipleShifts: Bool, paycheckRecords: [PaycheckRecord], calculator: PayPeriodCalculator, calendar: Calendar, valuation: ShiftValuation?) -> String {
-        let breakdown = TipBreakdown.total(of: items)
-        let cashCents = breakdown.cashCents
-        let creditCents = breakdown.creditCents
-        let shiftDetails = ShiftDetails.resolve(from: items)
-        let gratuityFeesCents = breakdown.gratuityFeesCents
-        let netCents = breakdown.netTotalCents
-        let shiftField = shiftDetails.shiftPeriod?.displayName ?? ""
-        let note = items.compactMap(\.note).joined(separator: "; ")
+    /// One shift's facts as a row needs them, from EITHER representation.
+    ///
+    /// The row builder below takes this and nothing else, which is what makes
+    /// "the legacy export and the record export produce different files" a
+    /// thing that cannot be written rather than a thing to be tested for.
+    /// Every money value arrives already resolved — no arithmetic happens in
+    /// the row.
+    private struct RowShift {
+        let day: Date
+        let shiftID: UUID
+        let cashCents: Int
+        let creditCents: Int
+        let gratuityFeesCents: Int
+        /// Named for the engine's own metric rather than the legacy
+        /// `.netCents` spelling: this is `nonWageEarnings` (cash + credit +
+        /// gratuity - tip-out), the CSV's `Net` column is just its label, and
+        /// design-lint rule 4 correctly refuses the old name outside the
+        /// engine because PR 8 deletes it.
+        let nonWageEarningsCents: Int
+        let tipOutCents: Int?
+        let hoursWorked: Double?
+        let clockIn: Date?
+        let clockOut: Date?
+        let salesCents: Int?
+        let serverCount: Int?
+        let shiftPeriod: ShiftPeriod?
+        let note: String
+
+        /// The legacy pair-of-rows shape, resolved by the same two helpers
+        /// every other legacy reader uses: `TipBreakdown.total` for the money
+        /// and `ShiftDetails.resolve` for the shift-level facts. Unchanged
+        /// behaviour — this is the code that was inline in `row`.
+        init(legacyGroup group: (day: Date, shiftID: UUID, items: [TipEntry])) {
+            let breakdown = TipBreakdown.total(of: group.items)
+            let details = ShiftDetails.resolve(from: group.items)
+            day = group.day
+            shiftID = group.shiftID
+            cashCents = breakdown.cashCents
+            creditCents = breakdown.creditCents
+            gratuityFeesCents = breakdown.gratuityFeesCents
+            nonWageEarningsCents = breakdown.netTotalCents
+            tipOutCents = details.tipOutCents
+            hoursWorked = details.hoursWorked
+            clockIn = details.clockIn
+            clockOut = details.clockOut
+            salesCents = details.salesCents
+            serverCount = details.serverCount
+            shiftPeriod = details.shiftPeriod
+            note = group.items.compactMap(\.note).joined(separator: "; ")
+        }
+
+        /// One record, one shift, no resolution step: the fields ARE the
+        /// shift's facts. `nonWageEarningsCents` is the model's own helper
+        /// rather than the sum spelled out here, so this file adds no money
+        /// arithmetic outside the engine (design-lint rule 4) and the Net
+        /// column cannot disagree with every other reader of the same shift.
+        @MainActor
+        init(record: ShiftRecord) {
+            day = record.workDate
+            shiftID = record.id
+            cashCents = record.cashTipsCents
+            creditCents = record.creditTipsCents
+            gratuityFeesCents = record.receiptMetrics?.employeeGratuityFeesCents ?? 0
+            nonWageEarningsCents = record.nonWageEarningsCents
+            tipOutCents = record.tipOutCents
+            hoursWorked = record.hoursWorked
+            clockIn = record.clockIn
+            clockOut = record.clockOut
+            salesCents = record.salesCents
+            serverCount = record.serverCount
+            shiftPeriod = record.shiftPeriod
+            note = record.note ?? ""
+        }
+    }
+
+    private static func row(for shift: RowShift, dayHasMultipleShifts: Bool, paycheckRecords: [PaycheckRecord], calculator: PayPeriodCalculator, calendar: Calendar, valuation: ShiftValuation?) -> String {
+        let day = shift.day
+        let shiftDetails = shift
+        let cashCents = shift.cashCents
+        let creditCents = shift.creditCents
+        let gratuityFeesCents = shift.gratuityFeesCents
+        let nonWageEarningsCents = shift.nonWageEarningsCents
+        let shiftField = shift.shiftPeriod?.displayName ?? ""
+        let note = shift.note
 
         let period = calculator.period(containing: day)
         let paycheck = paycheckRecords.first { $0.periodEnd >= period.start && $0.periodEnd <= period.end }
@@ -85,7 +215,7 @@ enum CSVExporter {
             dollars(creditCents),
             gratuityFeesCents > 0 ? dollars(gratuityFeesCents) : "",
             tipOutField,
-            dollars(netCents),
+            dollars(nonWageEarningsCents),
             hoursField,
             startField,
             endField,

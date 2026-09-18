@@ -60,6 +60,27 @@ enum HistoryEarnings {
     /// legacy store would show one figure over rows summing to something else
     /// under any bug -- which is criterion 5 broken by construction, on the
     /// most scrutinised screens in the app.
+    /// **The one entry point.** Takes BOTH representations and resolves
+    /// which to read itself, so a caller cannot read one representation's
+    /// money over the other's rows -- and, more to the point, cannot forget
+    /// to choose at all. `PeriodsView` called the legacy arm directly with
+    /// no switch, which would have put the History list on the legacy rows
+    /// while the detail it pushes into read records: the audit's original
+    /// criterion-5 defect, reintroduced by the PR meant to end it.
+    @MainActor
+    static func build(
+        entries: [TipEntry],
+        records: [ShiftRecord],
+        policies: CompensationPolicies,
+        payrollTimeZone: TimeZone,
+        calendar: Calendar = .current,
+        representation: ShiftRepresentation = .automatic
+    ) -> Build {
+        representation.usesRecords
+            ? build(records: records, policies: policies, payrollTimeZone: payrollTimeZone)
+            : build(entries: entries, policies: policies, payrollTimeZone: payrollTimeZone, calendar: calendar)
+    }
+
     @MainActor
     static func build(
         records: [ShiftRecord],

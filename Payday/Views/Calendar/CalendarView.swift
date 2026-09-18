@@ -81,6 +81,57 @@ enum CalendarEarnings {
             asOf: .distantFuture
         )
     }
+
+    /// The same snapshot from the new representation. Main actor because
+    /// `ShiftRecord` is a `@Model`, the same reason `ShiftInputAdapter` is.
+    @MainActor
+    static func snapshot(
+        records: [ShiftRecord],
+        policies: CompensationPolicies,
+        payrollTimeZone: TimeZone
+    ) -> EarningsSnapshot? {
+        let adapted = ShiftInputAdapter.adapt(records, calendars: policies.calendars)
+        return try? EarningsSnapshot.build(EarningsInputs(
+            shifts: adapted.inputs,
+            rates: policies.rates,
+            calendars: policies.calendars,
+            // `.distantFuture` for the reason the legacy overload above
+            // records at length: the calendar has never clamped to today and
+            // must not start, and opting out in the STAMP rather than per
+            // query is what keeps `day(_:)`, `range(_:)` and `days(in:)`
+            // clamping identically. That agreement is the whole
+            // `sum of tiles == headline` guarantee.
+            asOf: CivilDay(.distantFuture, in: payrollTimeZone),
+            unreadableReceiptShiftIDs: adapted.unreadableReceiptShiftIDs
+        ))
+    }
+
+    /// **The one entry point for this screen's snapshot.**
+    ///
+    /// Takes BOTH representations and resolves which to read itself. The
+    /// month grid was the last whole-screen reader still on a legacy-only
+    /// path: `makeFacts` called `shiftGroups(entries:)` with no switch, so
+    /// after the flip the tiles would have rendered only the shifts logged
+    /// BEFORE conversion and silently dropped every one since. It survived
+    /// the earlier sweep because the per-screen audit that cleared it counted
+    /// edit and delete TARGETS -- of which this screen has none -- and that
+    /// zero was carried forward as though it were a statement about reads.
+    @MainActor
+    static func snapshot(
+        entries: [TipEntry],
+        records: [ShiftRecord],
+        policies: CompensationPolicies,
+        payrollTimeZone: TimeZone,
+        representation: ShiftRepresentation = .automatic
+    ) -> EarningsSnapshot? {
+        representation.usesRecords
+            ? snapshot(records: records, policies: policies, payrollTimeZone: payrollTimeZone)
+            : snapshot(
+                shifts: shiftGroups(entries: entries, payrollTimeZone: payrollTimeZone),
+                policies: policies,
+                payrollTimeZone: payrollTimeZone
+            )
+    }
 }
 
 /// One tile of the month grid.
@@ -247,6 +298,10 @@ struct CalendarView: View {
     @Environment(PolicyStore.self) private var policyStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Query private var allEntries: [TipEntry]
+    /// The other representation. `CalendarEarnings.snapshot` resolves which
+    /// one this screen reads; see its header for why the choice is no longer
+    /// made here.
+    @Query private var shiftRecords: [ShiftRecord]
 
     @State private var displayedMonth: Date = Calendar.current.startOfDay(for: .now)
     @State private var daySelection: DaySelection?
@@ -339,7 +394,8 @@ struct CalendarView: View {
         let zone = policyStore.payrollTimeZone
         return CalendarMonthFacts(
             snapshot: CalendarEarnings.snapshot(
-                shifts: CalendarEarnings.shiftGroups(entries: allEntries, payrollTimeZone: zone),
+                entries: allEntries,
+                records: shiftRecords,
                 policies: policyStore.policies,
                 payrollTimeZone: zone
             ),

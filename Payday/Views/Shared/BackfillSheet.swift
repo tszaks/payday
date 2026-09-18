@@ -131,7 +131,7 @@ struct BackfillSheet: View {
                 // was just entered -- appending it on the correct representation
                 // is what stops the nudge firing for a night the user just typed in.
                 SmartNudgeScheduler.reschedule(preferencesStore: preferencesStore, allEntries: allEntries + sessionEntries, shiftRecords: shiftRecords + sessionRecords)
-                PaydayPushScheduler.reschedule(preferencesStore: preferencesStore, schedule: scheduleStore.schedule, allEntries: allEntries + sessionEntries, paycheckRecords: paycheckRecords)
+                PaydayPushScheduler.reschedule(preferencesStore: preferencesStore, schedule: scheduleStore.schedule, allEntries: allEntries + sessionEntries, shiftRecords: shiftRecords + sessionRecords, paycheckRecords: paycheckRecords)
                 PaydayWidgetRefresh.request()
             }
             .task {

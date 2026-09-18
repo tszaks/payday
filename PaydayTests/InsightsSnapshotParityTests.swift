@@ -188,7 +188,7 @@ struct InsightsSnapshotParityTests {
         #expect(engineTotal != queried.knownComponents.nonWageEarningsCents)
         let unpriced = StatsEngine(
             payrollTimeZone: PaydayTestZone.payroll,
-            records: set.shiftDays.flatMap(\.items).map(TipRecord.init),
+            records: set.tipRecords,
             calendar: insightsCalendar()
         )
         #expect(unpriced.nightlyTotals().reduce(0) { $0 + $1.cents } == 47_300)
@@ -340,9 +340,9 @@ struct InsightsPricingTotalityTests {
                 "the page fell back to tips in \(zone.identifier), so an id did not match"
             )
 
-            #expect(set.shiftDays.count == 3)
-            for group in set.shiftDays {
-                #expect(pricing[group.shiftID] != nil, "unpriced shift in \(zone.identifier)")
+            #expect(set.shiftIDs.count == 3)
+            for shiftID in set.shiftIDs {
+                #expect(pricing[shiftID] != nil, "unpriced shift in \(zone.identifier)")
             }
             // And the prices are the ledger's own, not a repricing.
             let snapshot = try #require(set.snapshot)
@@ -541,7 +541,7 @@ struct InsightsDerivationBasisTests {
 
         let unpriced = StatsEngine(
             payrollTimeZone: PaydayTestZone.payroll,
-            records: set.shiftDays.flatMap(\.items).map(TipRecord.init),
+            records: set.tipRecords,
             calendar: insightsCalendar()
         )
         let tipsOnly = try #require(unpriced.typicalRanges(referenceDate: now)?.overall)
@@ -562,7 +562,7 @@ struct InsightsDerivationBasisTests {
         let unpriced = try #require(
             StatsEngine(
                 payrollTimeZone: PaydayTestZone.payroll,
-                records: set.shiftDays.flatMap(\.items).map(TipRecord.init),
+                records: set.tipRecords,
                 calendar: insightsCalendar()
             ).planForward(referenceDate: now)
         )
@@ -592,7 +592,7 @@ struct InsightsDerivationBasisTests {
         let unpriced = try #require(
             StatsEngine(
                 payrollTimeZone: PaydayTestZone.payroll,
-                records: set.shiftDays.flatMap(\.items).map(TipRecord.init),
+                records: set.tipRecords,
                 calendar: insightsCalendar()
             ).insightsFacts(referenceDate: now)?.sales
         )

@@ -137,16 +137,16 @@ enum PaydayPushScheduler {
     /// the policies BEFORE their `await`, so whichever resumes last enqueues
     /// its own figure. The one that resumed last could be the one holding
     /// `$0.02`. Cancel-and-replace makes the last trigger the last word.
-    static func reschedule(preferencesStore: UserPreferencesStore, schedule: PaySchedule?, allEntries: [TipEntry], paycheckRecords: [PaycheckRecord]) {
+    static func reschedule(preferencesStore: UserPreferencesStore, schedule: PaySchedule?, allEntries: [TipEntry], shiftRecords: [ShiftRecord], paycheckRecords: [PaycheckRecord]) {
         coalescedReschedule?.cancel()
         coalescedReschedule = Task {
             try? await Task.sleep(nanoseconds: EarningsStore.debounceNanoseconds)
             guard !Task.isCancelled else { return }
-            await performReschedule(preferencesStore: preferencesStore, schedule: schedule, allEntries: allEntries, paycheckRecords: paycheckRecords)
+            await performReschedule(preferencesStore: preferencesStore, schedule: schedule, allEntries: allEntries, shiftRecords: shiftRecords, paycheckRecords: paycheckRecords)
         }
     }
 
-    private static func performReschedule(preferencesStore: UserPreferencesStore, schedule: PaySchedule?, allEntries: [TipEntry], paycheckRecords: [PaycheckRecord]) async {
+    private static func performReschedule(preferencesStore: UserPreferencesStore, schedule: PaySchedule?, allEntries: [TipEntry], shiftRecords: [ShiftRecord], paycheckRecords: [PaycheckRecord]) async {
         let center = UNUserNotificationCenter.current()
         center.removePendingNotificationRequests(withIdentifiers: [notificationIdentifier])
 
@@ -158,10 +158,22 @@ enum PaydayPushScheduler {
         let policies = PolicyStore.storedPolicies()
         let payrollTimeZone = policies.payrollTimeZone ?? .current
         let calculator = PayPeriodCalculator(payrollTimeZone: payrollTimeZone, schedule: schedule ?? .fallback)
+        // The representation switch, made HERE rather than inside
+        // `spokenFigure`, for an isolation reason worth recording.
+        // `ShiftRecord` is a `@Model` and `ShiftInputAdapter` is therefore
+        // `@MainActor`, while `decision` and `spokenFigure` are deliberately
+        // `nonisolated` so the suite can exercise the rule without a main
+        // actor. Adapting here crosses that boundary once, in the one place
+        // that is already on the main actor, and everything below it stays
+        // value types. Nil means "not authoritative, use the legacy rows".
+        let shiftInputs = PaydaySyncState.shiftsAreAuthoritativeForCurrentAccount
+            ? ShiftInputAdapter.adapt(shiftRecords, calendars: policies.calendars)
+            : nil
         guard let decision = decision(
             now: .now,
             calculator: calculator,
             allEntries: allEntries,
+            shiftInputs: shiftInputs,
             paycheckRecords: paycheckRecords,
             isReminderEnabled: preferencesStore.isPaydayReminderEnabled,
             policies: policies,
@@ -193,6 +205,10 @@ enum PaydayPushScheduler {
         now: Date,
         calculator: PayPeriodCalculator,
         allEntries: [TipEntry],
+        /// The new representation, already adapted to value types by the
+        /// caller, or nil on an account the server has not converted yet.
+        /// See `performReschedule` for why the adaptation happens there.
+        shiftInputs: ShiftInputAdapter.Output? = nil,
         paycheckRecords: [PaycheckRecord],
         isReminderEnabled: Bool,
         policies: CompensationPolicies,
@@ -220,6 +236,7 @@ enum PaydayPushScheduler {
         let figure = spokenFigure(
             for: period,
             allEntries: allEntries,
+            shiftInputs: shiftInputs,
             policies: policies,
             payrollTimeZone: payrollTimeZone
         )
@@ -264,16 +281,47 @@ enum PaydayPushScheduler {
     private nonisolated static func spokenFigure(
         for period: PayPeriod,
         allEntries: [TipEntry],
+        shiftInputs: ShiftInputAdapter.Output?,
         policies: CompensationPolicies,
         payrollTimeZone: TimeZone
     ) -> EarningsFigure? {
-        let dataset = DashboardEarnings.build(
-            entries: allEntries,
-            policies: policies,
-            payrollTimeZone: payrollTimeZone,
-            calendar: PayrollCalendar.gridCalendar(in: payrollTimeZone)
-        )
-        guard let snapshot = dataset.snapshot else { return nil }
+        // The figure a person HEARS has to be the figure the app SHOWS, so
+        // this reads whichever representation the screens read. A push that
+        // speaks a number from the legacy rows while Dashboard shows the
+        // records is the same disagreement as two screens disagreeing, except
+        // the person cannot open the number to check it.
+        let snapshotOrNil: EarningsSnapshot?
+        if let shiftInputs {
+            // The same inputs, rates, calendars and unclamped `asOf`
+            // `DashboardEarnings.build(records:)` uses, so the notification
+            // and the card cannot price the period differently.
+            snapshotOrNil = try? EarningsSnapshot.build(EarningsInputs(
+                shifts: shiftInputs.inputs,
+                rates: policies.rates,
+                calendars: policies.calendars,
+                asOf: CivilDay(.distantFuture, in: payrollTimeZone),
+                unreadableReceiptShiftIDs: shiftInputs.unreadableReceiptShiftIDs
+            ))
+        } else {
+            // The legacy ARM directly, not the combined builder, and the one
+            // place in app code that reads a single representation on
+            // purpose. The reason is actor isolation, not convenience: this
+            // function is deliberately `nonisolated` so the suite can
+            // exercise the payday rule without a main actor, while adapting a
+            // `ShiftRecord` is main-actor work -- so the combined builder is
+            // unreachable from here by construction. The choice was already
+            // made, upstream in `performReschedule`, and arrives as the
+            // already-adapted `shiftInputs` this branch is the `nil` case of.
+            //
+            // lint:representation-resolved-upstream
+            snapshotOrNil = DashboardEarnings.build(
+                entries: allEntries,
+                policies: policies,
+                payrollTimeZone: payrollTimeZone,
+                calendar: PayrollCalendar.gridCalendar(in: payrollTimeZone)
+            ).snapshot
+        }
+        guard let snapshot = snapshotOrNil else { return nil }
         let result = snapshot.range(DayRange(
             start: CivilDay(period.start, in: payrollTimeZone),
             end: CivilDay(period.end, in: payrollTimeZone)
