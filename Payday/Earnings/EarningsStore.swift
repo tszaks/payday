@@ -345,15 +345,24 @@ final class EarningsStore {
     /// An app-written file would go stale by construction, because App
     /// Intents and Controls already write to the shared store from other
     /// processes (Design 2, "Out-of-process: recompute, do not read a file").
+    /// - Parameter shiftsAreAuthoritative: same meaning and same default as
+    ///   on `init`. It is a parameter rather than an omission so the widget
+    ///   and the intent cannot end up with a different rule from the app:
+    ///   a Lock Screen reading `$0` off a purged cache would be the same
+    ///   lie in a smaller font.
     static func buildOnce(
         source: any EarningsInputSource,
-        computedAt: Date = Date()
+        computedAt: Date = Date(),
+        shiftsAreAuthoritative: Bool = false
     ) -> Result<EarningsSnapshot, EarningsUnavailable> {
         let fetch: EarningsFetch
         do {
             fetch = try source.fetchInputs()
         } catch {
             return .failure(.fetchFailed(detail: "\(error)"))
+        }
+        if shiftsAreAuthoritative, fetch.inputs.shifts.isEmpty, fetch.legacyTipEntryCount > 0 {
+            return .failure(.shiftCacheWiped)
         }
         do {
             return .success(try EarningsSnapshot.build(
@@ -387,12 +396,37 @@ private final class ObserverBox: @unchecked Sendable {
 /// configuration stores.
 @MainActor
 final class ModelContextEarningsInputSource: EarningsInputSource {
-    private let context: ModelContext
+    private let makeContext: () -> ModelContext
     private let policies: () -> CompensationPolicies
     private let schedule: () -> PaySchedule?
     private let now: () -> Date
     private let storeOpened: Bool
 
+    /// The app's spelling: the shared container, the live `PolicyStore` and
+    /// the live `PayScheduleStore`.
+    ///
+    /// A FRESH `ModelContext` per fetch, deliberately. A long-lived context
+    /// answers from its own registered objects, so one held across rebuilds
+    /// can hand back a row that another context (a view's, an App Intent's,
+    /// the sync leg's) has since changed — and a snapshot built from a stale
+    /// row is exactly the class of disagreement this whole PR exists to
+    /// remove. A context is cheap next to valuing every shift.
+    init(
+        container: ModelContainer,
+        policyStore: PolicyStore,
+        scheduleStore: PayScheduleStore,
+        now: @escaping () -> Date = { Date() },
+        storeOpened: Bool = !SharedModelContainer.openingFailed
+    ) {
+        self.makeContext = { ModelContext(container) }
+        self.policies = { policyStore.policies }
+        self.schedule = { scheduleStore.schedule }
+        self.now = now
+        self.storeOpened = storeOpened
+    }
+
+    /// The test seam: an explicit context (reused, so a test can insert and
+    /// read in one place) and explicit policies, schedule and clock.
     init(
         context: ModelContext,
         policies: @escaping () -> CompensationPolicies,
@@ -400,29 +434,11 @@ final class ModelContextEarningsInputSource: EarningsInputSource {
         now: @escaping () -> Date = { Date() },
         storeOpened: Bool = true
     ) {
-        self.context = context
+        self.makeContext = { context }
         self.policies = policies
         self.schedule = schedule
         self.now = now
         self.storeOpened = storeOpened
-    }
-
-    /// The app's spelling: the shared container, the live `PolicyStore` and
-    /// the live `PayScheduleStore`.
-    convenience init(
-        container: ModelContainer,
-        policyStore: PolicyStore,
-        scheduleStore: PayScheduleStore,
-        now: @escaping () -> Date = { Date() },
-        storeOpened: Bool = !SharedModelContainer.openingFailed
-    ) {
-        self.init(
-            context: ModelContext(container),
-            policies: { policyStore.policies },
-            schedule: { scheduleStore.schedule },
-            now: now,
-            storeOpened: storeOpened
-        )
     }
 
     struct StoreUnavailable: Error, CustomStringConvertible {
@@ -438,6 +454,7 @@ final class ModelContextEarningsInputSource: EarningsInputSource {
         // another week or another pay period.
         let zone = policies.payrollTimeZone ?? .current
 
+        let context = makeContext()
         let shifts = try context.fetch(FetchDescriptor<ShiftRecord>())
         let paychecks = try context.fetch(FetchDescriptor<PaycheckRecord>())
         let legacyCount = try context.fetchCount(FetchDescriptor<TipEntry>())
