@@ -214,7 +214,15 @@ final class EarningsStore {
     /// extension and this type compiles into the widget, so `PaydayApp`
     /// calls `requestRebuild(reason: .sceneActive)` from `.onChange(of:
     /// scenePhase)` instead.
-    private static let triggerNames: [(Notification.Name, Reason)] = [
+    ///
+    /// `nonisolated` and internal, not private, for one reason: a wave-1 PR 5
+    /// screen that still builds its own `LegacySnapshotBridge` snapshot has to
+    /// know when to build the next one, and the answer must be THIS list and
+    /// not a second copy of it. `LegacySnapshotRevision` merges exactly these
+    /// publishers. When PR 2 slice S7 lands and the screens read
+    /// `earningsStore.snapshot` directly, that consumer goes away and this can
+    /// go back to private.
+    nonisolated static let triggerNames: [(Notification.Name, Reason)] = [
         (ModelContext.didSave, .modelContextDidSave),
         (PaydaySettingsSyncClock.didChange, .settingsClockDidChange),
         (PolicyStore.didChange, .policiesDidChange),

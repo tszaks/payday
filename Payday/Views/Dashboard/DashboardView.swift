@@ -9,19 +9,85 @@ private func shiftRecordedAt(_ items: [TipEntry]) -> Date {
     items.compactMap(\.recordedAt).max() ?? items.map(\.date).max() ?? .distantPast
 }
 
-/// Every number the Dashboard shows, computed exactly once per render from
-/// allEntries — StatsEngine construction and workRhythm() (which walks
-/// every calendar day since the first entry) are real costs that used to
-/// happen 4-5 times per body evaluation, once per scattered computed
-/// property that each rebuilt its own StatsEngine from scratch. This
-/// bundles them into one pass; the engine itself is untouched and stays
-/// pure — this is a call-site fix, not an engine rewrite.
-private struct DashboardFacts {
+/// Everything the Dashboard shows, and nothing it computes.
+///
+/// A PR 5 wave 1 adapter, to the contract in `Payday/Earnings/SnapshotFacts.swift`:
+/// presentation on this struct, every cents figure out of one
+/// `EarningsSnapshot`, and no money arithmetic anywhere between them. Read
+/// that header before changing this file; the four rules each cost a measured
+/// defect.
+///
+/// ## What moved, and what it closed
+///
+/// Before wave 1 this struct held eleven loose `Int`s and derived the hero
+/// from three sources at once: `StatsEngine.periodToDateTotal` for the tips
+/// (clamped to today), `TipBreakdown.total(of:)` for the cash/credit/gratuity
+/// split (whole period, unclamped) and `PeriodIncome.wages` for the wages
+/// (whole period, scalar weekday). `docs/METRICS.md` [DB-21] names the
+/// consequence: "the drawer's component rows are whole-period and the total
+/// is asOf-today tips + whole-period wages", i.e. a drawer whose rows could
+/// not be made to sum to the bottom line it printed them under. The tip-out
+/// was not read at all — it was BACK-DERIVED as
+/// `max(0, cash + credit + gratuity - net)`, so any rounding disagreement
+/// upstream became a phantom "Tipped out" row.
+///
+/// Now there is one query per figure group and one `EarningsResult` behind
+/// the whole hero: `snapshot.range(heroPeriod, asOf: today)`. Its components ARE the
+/// drawer rows (`BreakdownRow.ledgerRows(_:)`), its `earnedIncome` IS the
+/// face figure (`EarningsFigure.earnedIncome(_:)`), its `tipOutCents` IS the
+/// "Tipped out" row, and its label comes from `CompletenessCopy` rather than
+/// from this file writing `tipOut > 0 ? "You kept" : "Total"` a sixth time.
+/// One selection, one clamp, one workweek: rows that sum to their total by
+/// construction.
+///
+/// ## The snapshot spans the whole dataset, on purpose
+///
+/// Wave 0 built Dashboard's snapshot over the CURRENT PERIOD's shifts only
+/// and said so: "a workweek straddling the period edge still under-reports
+/// overtime" (`docs/METRICS.md`, 2.3 after wave 0, row [SC-01]). The ledger
+/// allocates the overtime threshold across the complete workweek of the
+/// shifts it is handed, so handing it fourteen days cannot price the
+/// forty-first hour of a week that began before day one.
+/// `DashboardEarnings.build` covers the whole local history instead, which is
+/// also what lets the hero follow a CLOSED period (the morning after a pay
+/// period ends) and lets the payday card read the closed period it is
+/// reporting on.
+///
+/// ## The cutoff is a query argument, and the hero says so
+///
+/// The dataset is UNCLAMPED, matching History, Calendar and the log preview,
+/// so every screen's stamp is the same stamp and a disagreement between two
+/// of them stays diffable (contract rule 3). Dashboard's period-to-date
+/// cutoff is therefore an `asOf:` argument on one query rather than a
+/// property of its copy of the data — and `heroDeferredShiftCount` makes the
+/// narrower scope visible, because a hero that quietly excludes a shift whose
+/// own row is right underneath it is two answers to one question.
+///
+/// ## Membership is the engine's, not an entry-date filter
+///
+/// `PayPeriodCalculator.period(containing:)` returns `end` as the START of
+/// the period's last day, and the old `allEntries.filter { $0.date >=
+/// period.start && $0.date <= period.end }` therefore dropped every shift
+/// logged at a real hour on that last day — while `StatsEngine
+/// .periodToDateTotal`, which compares civil days, kept them. MEASURED in
+/// `DashboardPeriodParityTests`: the Shifts list omitted the final day's
+/// shift while the hero above it counted the money. Both sides now select by
+/// civil work day through `DayRange`, which is the engine's own membership
+/// rule, so the list and the total cannot disagree about which shifts the
+/// period holds.
+/// Internal, not private, for one reason: `DashboardPeriodParityTests` builds
+/// one and compares its hero against `PeriodsPageFacts`' row and
+/// `PeriodDetailFacts`' hero. The plan's completion rule 2 is "its parity test
+/// passes against the **real adapter**, not a helper", and a `private` adapter
+/// can only be parity-tested against a copy of itself.
+struct DashboardFacts: SnapshotFacts {
+    // MARK: Presentation
+
     let calculator: PayPeriodCalculator
-    let currentPeriod: PayPeriod
+    /// The current period's entries, selected by the same civil-day range the
+    /// hero's query uses. Drives the empty state and the screenshot hook
+    /// only; nothing reads money off it.
     let periodEntries: [TipEntry]
-    let breakdown: TipBreakdown
-    let totalCents: Int
     let daysRemaining: Int
     /// The period the hero number represents — usually the current one, but
     /// the just-finished one on the morning after a close, while the new
@@ -29,19 +95,8 @@ private struct DashboardFacts {
     /// card.
     let heroPeriod: PayPeriod
     let heroLabel: String
-    let heroTotalCents: Int
-    /// Gross voluntary cash/credit tips plus employee-paid Toast gratuity for
-    /// the hero period, for the one-glance split under the total. Tip-out is
-    /// deliberately not shown here.
-    let heroCashCents: Int
-    let heroCreditCents: Int
-    let heroGratuityFeesCents: Int
     let heroPayDate: Date
     let heroIsCurrent: Bool
-    /// Base wage + overtime for the hero period, folded into heroTotalCents
-    /// and broken back out for the drawer's reconciliation rows. nil when no
-    /// rate is set — the wage feature is off.
-    let heroWages: PeriodIncome.Wages?
     /// The `end` of the period the payday moment is showing, so the dismiss
     /// button can remember which one was closed.
     let paydayPeriodEnd: Date?
@@ -51,21 +106,6 @@ private struct DashboardFacts {
     let paydayPhase: PaydayMoment.Phase?
     let shiftCount: Int
     let shiftDays: [(day: Date, shiftID: UUID, items: [TipEntry])]
-    /// Each listed shift's ledger-allocated wages, keyed by `shiftDays`' own
-    /// ids: the row prints its slice of the workweek allocation, never its
-    /// own independent rounding, so the rows and the hero's wage line are one
-    /// number source (PR 3 review, P0).
-    let wagesByShiftID: [UUID: Int]
-    /// The engine's valuation of exactly the shifts `shiftDays` lists, so a
-    /// row can take a whole `ShiftValuation` (which knows the difference
-    /// between "earned nothing" and "not in the dataset") instead of a loose
-    /// `Int` (which cannot).
-    ///
-    /// Same ledger, same allocation, same cents as `wagesByShiftID` above:
-    /// PR 5 wave 0 changed where a ROW reads its figure from, not what the
-    /// figure is. `wagesByShiftID` survives here only because the hero, the
-    /// drawer and the reveal echo above it are group 2.1, WAVE 1.
-    let shiftSnapshot: EarningsSnapshot?
     /// Calendar days that hold 2+ shifts — a "double" — so a row can label
     /// itself "Today · Lunch" / "Today · Dinner" only when it needs to.
     let multiShiftDays: Set<Date>
@@ -75,73 +115,119 @@ private struct DashboardFacts {
     /// "your usual pace."
     let pacePeriodCount: Int
     let isPaydayMoment: Bool
-    let isBestPeriodEver: Bool
-    /// The whole pre-tax check for the payday-moment period: the stub's tips
-    /// line plus wages, in ONE number (PredictedPaycheck). Never split into
-    /// "$X, plus $Y in wages" on screen — that left the person adding it up.
-    let predictedPaycheckCents: Int
-    let predictedPayDate: Date
-    /// Cash tips in the payday-moment period — the ENTIRE gap between "You
-    /// kept" and the check, since cash is the one thing that never runs through
-    /// payroll. Named on the card so nobody has to subtract two big numbers to
-    /// find out why their check is smaller than what they made (Tyler, on his
-    /// own real period: "if i kept 3100 why would my check be 2600?? cash?").
-    let paydayCashCents: Int
     let tonightLine: String?
 
-    init(allEntries: [TipEntry], schedule: PaySchedule?, now: Date, forcedPaydayPhase: PaydayMoment.Phase?, dismissedClosedEnd: Date?, dismissedCheckEnd: Date?, wageCentsPerHour: Int?, policies: CompensationPolicies, payrollTimeZone: TimeZone) {
-        let calendar = Calendar.current
+    // MARK: Money, from the engine
+
+    /// The dataset every figure below was selected out of. Held so each shift
+    /// row can ask for its own valuation by the id it renders under.
+    let snapshot: EarningsSnapshot?
+
+    /// The hero face: `MetricID.earnedIncome` over the hero period, clamped
+    /// to today, labelled and captioned by its own `Completeness`. Renders no
+    /// currency at all when the engine could not answer (rule 4).
+    let hero: EarningsFigure
+    /// How many shifts the hero period holds that its to-date clamp excluded
+    /// — shifts dated after today. A COUNT, not money: the figures all still
+    /// come from the engine, and this only decides whether the hero has to
+    /// say that it is not the whole period.
+    ///
+    /// MEASURED, and the reason it exists: a biweekly period whose only
+    /// shift was dated two days ahead rendered `heroText "$0.00"`, `label
+    /// "Total"`, `caption nil`, state `.noShifts` — directly above that
+    /// shift's own row reading $394.00, because `valuation(_:)` is
+    /// deliberately unclamped. The empty-state sentence the `$0.00`
+    /// deferral leans on ("No shifts this period.") is gated on
+    /// `periodEntries.isEmpty`, which is false in that state, so nothing on
+    /// screen explained the zero. It was also a regression: the superseded
+    /// hero printed 14400 for the same input.
+    let heroDeferredShiftCount: Int
+    /// The drawer's itemization, straight off the same `EarningsResult` the
+    /// hero is — so "Cash tips + Credit tips + Gratuity + Wages - Tipped out"
+    /// reconciles to the bottom line by construction, not by agreement.
+    let heroBreakdownRows: [BreakdownRow]
+    /// The drawer's emphasized bottom line, whose LABEL is
+    /// `CompletenessCopy.earnedIncomeLabel` — so a partial period reads
+    /// "Known so far" and can no longer print "Total".
+    let heroBreakdownTotal: BreakdownRow
+    /// The collapsed lip. Nil when there is no dataset behind it.
+    let heroLipText: String?
+    let heroHasBreakdown: Bool
+
+    /// `MetricID.expectedPaycheckGross` for the period the payday card is
+    /// reporting on. `.unavailable` when no card is showing, which is also
+    /// every case in which nothing renders it.
+    let predictedPaycheck: EarningsFigure
+    /// `MetricID.voluntaryTips`, cash component, same period and same query
+    /// as `predictedPaycheck` — the gap between "You kept" and the check.
+    let paydayCash: EarningsFigure
+
+    let stamp: SnapshotStamp?
+
+    // MARK: Construction
+
+    /// - Parameters:
+    ///   - snapshot: the dataset, built once by the caller and cached there.
+    ///     Optional per rule 2: nil is "no dataset stands behind this", not
+    ///     "zero", and every figure on this struct renders as unavailable for
+    ///     it.
+    ///   - allShifts: the SAME grouping `snapshot` was built from, which is
+    ///     why both arrive from one `DashboardEarnings.Dataset`. This struct
+    ///     deliberately does not group anything itself: it used to, with the
+    ///     payroll-zone calendar, while the snapshot was built with the
+    ///     device's, and a legacy row with no `shiftID` therefore got a
+    ///     different deterministic id from the two and its valuation lookup
+    ///     missed (see `DashboardEarnings`). Presentation and `StatsEngine`
+    ///     inputs only; no cents figure on this struct is derived from it.
+    ///   - schedule: the pay-period GRID. It decides which days a period
+    ///     covers and NOTHING about money — PR 3 severed its `firstWeekday`
+    ///     from the workweek that owns overtime, which lives in
+    ///     `CompensationPolicies` and reached this struct inside `snapshot`.
+    init(
+        snapshot: EarningsSnapshot?,
+        allShifts: [(day: Date, shiftID: UUID, items: [TipEntry])],
+        schedule: PaySchedule?,
+        now: Date,
+        forcedPaydayPhase: PaydayMoment.Phase?,
+        dismissedClosedEnd: Date?,
+        dismissedCheckEnd: Date?,
+        payrollTimeZone: TimeZone
+    ) {
+        // One calendar for this whole screen, in the FROZEN payroll zone.
+        // It is the same one `DashboardEarnings.build` grouped `allShifts`
+        // with — the caller's, not a second construction — because this
+        // struct no longer groups anything. See that type's header for the
+        // measured id mismatch two groupings produced.
+        let calendar = PayrollCalendar.gridCalendar(in: payrollTimeZone)
+
+        self.snapshot = snapshot
+        stamp = snapshot?.stamp
         calculator = PayPeriodCalculator(payrollTimeZone: payrollTimeZone, schedule: schedule ?? .fallback)
         let period = calculator.period(containing: now)
-        currentPeriod = period
-        periodEntries = allEntries.filter { $0.date >= period.start && $0.date <= period.end }
-        breakdown = TipBreakdown.total(of: periodEntries)
         daysRemaining = calculator.daysRemaining(from: now)
-        shiftDays = ShiftDays.groupedByShift(periodEntries, shiftID: \.shiftID, date: \.date, period: \.shiftPeriod)
-        // The USER'S rate and workweek history, effective dates intact —
-        // never a scalar rate re-stamped as `.distantPast`, which repriced
-        // every pre-raise shift at today's rate. See the bridge's header for
-        // the measured $520-vs-$440 divergence that rule closed.
-        let resolvedShiftSnapshot = LegacySnapshotBridge.snapshot(
-            shifts: shiftDays,
-            policies: policies,
-            payrollTimeZone: payrollTimeZone,
-            asOf: now
-        )
-        shiftSnapshot = resolvedShiftSnapshot
-        // Read off the snapshot rather than calling the ledger a second
-        // time: `WageEstimate.centsByShiftID` and the snapshot above run the
-        // SAME `CompensationLedger` over the same shift set, so taking both
-        // would be two identical valuations per render for one answer.
-        wagesByShiftID = Dictionary(
-            shiftDays.map { ($0.shiftID, resolvedShiftSnapshot?.valuation($0.shiftID)?.components.wagesCents ?? 0) },
-            uniquingKeysWith: +
-        )
-        // ONE workweek for this screen. The snapshot above buckets overtime
-        // by the calendar POLICY; `PeriodIncome` below is a pre-policy helper
-        // that can only take a scalar, so it gets the scalar for the policy
-        // IN EFFECT rather than `schedule?.firstWeekday` — which is the
-        // pay-period GRID's weekday, a different Settings control PR 3
-        // severed from the workweek. Handing the two different weekdays put
-        // the hero and the shift rows beneath it on different weeks, which is
-        // the "a screen a cent apart from itself" defect PR 3's review
-        // already paid for once. Falls back to the grid weekday only before
-        // the first calendar policy exists (the async hop in
-        // `PaydayCloudGate.adoptPolicyInputs`), which is exactly what shipped
-        // before. Wave 1 deletes `PeriodIncome` and this line with it.
-        let workweekStartWeekday = policies.calendar(on: CivilDay(now, in: payrollTimeZone))?.workweekStartWeekday
-            ?? schedule?.firstWeekday
-        // A "shift" now counts closeouts, not calendar days.
-        shiftCount = shiftDays.count
+
+        // Membership by civil work day, which is the engine's rule. See the
+        // type header for the final-day shifts the old entry-date filter
+        // dropped.
+        let currentRange = Self.range(of: period, in: payrollTimeZone)
+        let periodShifts = allShifts.filter {
+            currentRange.contains(CivilDay($0.day, in: payrollTimeZone))
+        }
+        shiftDays = periodShifts
+        periodEntries = periodShifts.flatMap(\.items)
+        // A "shift" counts closeouts, not calendar days.
+        shiftCount = periodShifts.count
         // Days that hold more than one shift — the emergent doubles.
         var dayCounts: [Date: Int] = [:]
-        for shift in shiftDays { dayCounts[shift.day, default: 0] += 1 }
+        for shift in periodShifts { dayCounts[shift.day, default: 0] += 1 }
         multiShiftDays = Set(dayCounts.filter { $0.value >= 2 }.keys)
-        let tipRecords = allEntries.map(TipRecord.init)
-        let statsEngine = StatsEngine(payrollTimeZone: payrollTimeZone, records: tipRecords)
-        // Net of any tip-out, same rule as every other analytical total —
-        // breakdown above stays gross, purely for the cash/credit subtitle.
-        totalCents = statsEngine.periodToDateTotal(period: period, asOf: now)
+
+        // Every entry, read back out of the grouping rather than taken as a
+        // second parameter: one input cannot disagree with itself about which
+        // rows the screen holds. `StatsEngine` sorts its own records, so the
+        // grouping's order is not an input to anything.
+        let tipRecords = allShifts.flatMap(\.items).map(TipRecord.init)
+        let statsEngine = StatsEngine(payrollTimeZone: payrollTimeZone, records: tipRecords, calendar: calendar)
 
         // Measured against the MEDIAN of the last several periods at this
         // same point, not against whichever single period happened to come
@@ -149,6 +235,14 @@ private struct DashboardFacts {
         // big Saturday in it would read as a real trend. Hidden entirely
         // until some prior period has a record; a brand-new user has no
         // "usual" to be ahead of. See StatsEngine.usualPaceBaseline.
+        //
+        // Still a `StatsEngine` fact, and deliberately so: the pace line is
+        // `analytics:paceComparison` ([DB-04]) and both of its sides are
+        // `nonWageEarnings`. One basis on both sides is the property that
+        // makes a delta mean anything, and moving only this screen's half of
+        // it onto `earnedIncome` would compare a wage-inclusive present
+        // against a wage-exclusive past. Group 2.6 owns the engine-wide
+        // move.
         let comparison = statsEngine.paceComparison(
             currentPeriod: period,
             priorPeriods: calculator.priorPeriods(before: period, count: StatsEngine.paceLookbackPeriods),
@@ -156,6 +250,7 @@ private struct DashboardFacts {
         )
         paceDeltaCents = comparison?.deltaCents
         pacePeriodCount = comparison?.periodCount ?? 0
+
         // The payday card belongs to a FINISHED period, and shows twice: the
         // day or two after its last shift, then again the day the check lands
         // (see PaydayMoment). Never on a day still workable.
@@ -167,164 +262,302 @@ private struct DashboardFacts {
         } else {
             moment = PaydayMoment.moment(now: now, calculator: calculator, dismissedClosedEnd: dismissedClosedEnd, dismissedCheckEnd: dismissedCheckEnd)
         }
-        // Nothing to show if that period had no earnings.
-        let paydayMoment = moment.flatMap { statsEngine.periodToDateTotal(period: $0.period, asOf: $0.period.end) > 0 ? $0 : nil }
+        // Nothing to show if that period had no earnings. The gate is
+        // `earnedIncome` now, not tips-net: fixture Z1 is a period that was
+        // worked for wages and tipped nothing, and the old gate suppressed
+        // its "Your check should show" card even though the check is real
+        // money ([DB-03]).
+        //
+        // `asOf` is an ARGUMENT here, not a property of the dataset. The
+        // snapshot is built unclamped (`DashboardEarnings.build`) so that
+        // Dashboard and History share one stamp over one dataset; the
+        // period-to-date cutoff is Dashboard's own scope and it is spelled
+        // once, here. MEASURED before this: the snapshot carried `asOf: now`
+        // and History's carried `.distantFuture`, so the same current period
+        // read 40400 here and 79800 there under the same label, with
+        // different digests.
+        let toDate = CivilDay(now, in: payrollTimeZone)
+        let currentResult = snapshot?.range(currentRange, asOf: toDate)
+        // The payday card's period is CLOSED, so its query takes no cutoff:
+        // `now` is already past the period's end and a clamp would be a
+        // no-op that only looks like a scope.
+        let paydayResult = moment.flatMap { candidate -> (PaydayMoment.Moment, EarningsResult)? in
+            guard let result = snapshot?.range(Self.range(of: candidate.period, in: payrollTimeZone)),
+                  result.knownComponents.earnedIncomeCents > 0
+            else { return nil }
+            return (candidate, result)
+        }
+        let paydayMoment = paydayResult?.0
         let paydayPeriod = paydayMoment?.period
         isPaydayMoment = paydayPeriod != nil
         paydayPeriodEnd = paydayPeriod?.end
         paydayPhase = paydayMoment?.phase
 
-        // Tips-only net for whichever period becomes the hero — wages fold
-        // in below, after heroPeriod is settled.
-        let heroTipsNetCents: Int
-        if let pay = paydayPeriod {
-            let payEntries = allEntries.filter { $0.date >= pay.start && $0.date <= pay.end }
-            let payBreakdown = TipBreakdown.total(of: payEntries)
-            let payNetCents = statsEngine.periodToDateTotal(period: pay, asOf: pay.end)
-            // The whole pre-tax check in one number: credit tips minus
-            // tip-out (what payroll prints) plus wages. Wages come from
-            // PeriodIncome — the same function the hero total uses — so the
-            // check figure and the hero can never disagree about a week that
-            // crossed 40 hours, which is what WageEstimate used to do here.
-            let payWages = PeriodIncome.wages(payrollTimeZone: payrollTimeZone, entries: payEntries, wageCentsPerHour: wageCentsPerHour, firstWeekday: workweekStartWeekday)
-            predictedPaycheckCents = PredictedPaycheck.cents(from: payBreakdown, wagesCents: payWages?.totalCents ?? 0)
-            predictedPayDate = calculator.payDate(for: pay)
-            paydayCashCents = payBreakdown.cashCents
-
-            // Only claims "best period yet" when there's at least one completed
-            // period in history to actually beat.
-            if let earliestEntryDate = allEntries.map(\.date).min() {
-                var cursor = pay
-                var comparedAny = false
-                var isBest = true
-                for _ in 0..<24 {
-                    guard let previousEnd = calendar.date(byAdding: .day, value: -1, to: cursor.start),
-                          previousEnd >= earliestEntryDate
-                    else { break }
-                    cursor = calculator.period(containing: previousEnd)
-                    comparedAny = true
-                    if statsEngine.periodToDateTotal(period: cursor, asOf: cursor.end) >= payNetCents {
-                        isBest = false
-                        break
-                    }
-                }
-                isBestPeriodEver = comparedAny && isBest
-            } else {
-                isBestPeriodEver = false
-            }
-
-            // On the morning after a close the new period is still empty; lead
-            // with the period that just finished so a $0.00 hero never sits
-            // above its own "complete" card. Once the new period has earnings,
-            // the hero follows it and the completed card rides along below.
-            if totalCents == 0 && pay != period {
-                heroPeriod = pay
-                heroLabel = "Last pay period"
-                heroTipsNetCents = payNetCents
-                heroCashCents = payBreakdown.cashCents
-                heroCreditCents = payBreakdown.creditCents
-                heroGratuityFeesCents = payBreakdown.gratuityFeesCents
-                heroPayDate = predictedPayDate
-                heroIsCurrent = false
-            } else {
-                heroPeriod = period
-                heroLabel = "This pay period"
-                heroTipsNetCents = totalCents
-                heroCashCents = breakdown.cashCents
-                heroCreditCents = breakdown.creditCents
-                heroGratuityFeesCents = breakdown.gratuityFeesCents
-                heroPayDate = calculator.payDate(for: period)
-                heroIsCurrent = true
-            }
+        // On the morning after a close the new period is still empty; lead
+        // with the period that just finished so a $0.00 hero never sits
+        // above its own "complete" card. Once the new period has earnings,
+        // the hero follows it and the completed card rides along below.
+        //
+        // "Empty" is the wage-inclusive figure ([DB-02] asks for exactly
+        // that): a period worked for wages with no tips yet is not empty,
+        // and the old tips-only gate read it as empty and pushed the hero
+        // back onto last period while wages sat unread underneath.
+        //
+        // With no snapshot there is nothing to compare, so the hero stays on
+        // the current period and renders as unavailable rather than silently
+        // relabelling itself "Last pay period".
+        let heroResult: EarningsResult?
+        if let pay = paydayPeriod, let payResult = paydayResult?.1,
+           currentResult?.knownComponents.earnedIncomeCents == 0, pay != period {
+            heroPeriod = pay
+            heroLabel = "Last pay period"
+            heroPayDate = calculator.payDate(for: pay)
+            heroIsCurrent = false
+            heroResult = payResult
         } else {
-            isBestPeriodEver = false
-            let currentWages = PeriodIncome.wages(payrollTimeZone: payrollTimeZone, entries: periodEntries, wageCentsPerHour: wageCentsPerHour, firstWeekday: workweekStartWeekday)
-            predictedPaycheckCents = PredictedPaycheck.cents(from: breakdown, wagesCents: currentWages?.totalCents ?? 0)
-            predictedPayDate = calculator.payDate(for: period)
-            paydayCashCents = breakdown.cashCents
             heroPeriod = period
             heroLabel = "This pay period"
-            heroTipsNetCents = totalCents
-            heroCashCents = breakdown.cashCents
-            heroCreditCents = breakdown.creditCents
-            heroGratuityFeesCents = breakdown.gratuityFeesCents
             heroPayDate = calculator.payDate(for: period)
             heroIsCurrent = true
+            heroResult = currentResult
         }
 
-        // Wages fold into the hero total (and get broken back out for the
-        // drawer) but never touch totalCents/breakdown/statsEngine above.
-        // totalCents already includes employee gratuity because it is earned
-        // compensation; tip-specific analytics use StatsEngine's gross tips.
-        // heroPeriod's bounds are captured into locals first — referencing a
-        // stored property from inside a closure here, before every stored
-        // property is initialized, is a definite-initialization error.
-        let heroPeriodStart = heroPeriod.start
-        let heroPeriodEnd = heroPeriod.end
-        let heroEntries = allEntries.filter { $0.date >= heroPeriodStart && $0.date <= heroPeriodEnd }
-        heroWages = PeriodIncome.wages(payrollTimeZone: payrollTimeZone, entries: heroEntries, wageCentsPerHour: wageCentsPerHour, firstWeekday: workweekStartWeekday)
-        heroTotalCents = heroTipsNetCents + (heroWages?.totalCents ?? 0)
+        // How much of the hero period the to-date clamp left out, as a count
+        // of shifts. Both sides are the engine's own selection over the same
+        // snapshot: `valuations(in:)` is unclamped, `result.shiftIDs` is what
+        // the clamped query actually summed. See `heroDeferredShiftCount`.
+        let heroRange = Self.range(of: heroPeriod, in: payrollTimeZone)
+        let heroShiftsInPeriod = snapshot.map { $0.valuations(in: heroRange).count } ?? 0
+        let deferredShiftCount = max(0, heroShiftsInPeriod - (heroResult?.shiftIDs.count ?? 0))
+        heroDeferredShiftCount = deferredShiftCount
+
+        // ONE EarningsResult behind the whole hero: the face figure, the
+        // drawer's rows, the drawer's bottom line and the collapsed lip.
+        // Nothing here adds, subtracts, scales or rounds a cents value; the
+        // four `BreakdownRow` builders are wave 0's shared composition and
+        // this is their first production caller ([SC-02], [SC-03]).
+        if let heroResult {
+            let figure = Self.declaringDeferral(
+                EarningsFigure.earnedIncome(heroResult),
+                deferredShiftCount: deferredShiftCount
+            )
+            hero = figure
+            heroBreakdownRows = BreakdownRow.ledgerRows(heroResult)
+            // The drawer's bottom line takes its CENTS from wave 0's shared
+            // builder either way. Its LABEL follows the face figure, so the
+            // two cannot say two things about the same number — which is the
+            // whole reason the face stopped saying "Total" here.
+            let total = BreakdownRow.total(heroResult)
+            heroBreakdownTotal = deferredShiftCount > 0
+                ? BreakdownRow(figure.label, cents: total.cents, emphasized: true)
+                : total
+            heroLipText = BreakdownRow.lipText(heroResult)
+            heroHasBreakdown = BreakdownRow.hasBreakdown(heroResult)
+        } else {
+            // A label is still owed even with no figure: VoiceOver reads it
+            // next to the placeholder glyph. It comes from the figure so the
+            // face and the drawer's bottom line cannot say two things.
+            let unavailable = EarningsFigure.unavailable()
+            hero = unavailable
+            heroBreakdownRows = []
+            heroBreakdownTotal = BreakdownRow(unavailable.label, cents: nil, emphasized: true)
+            heroLipText = nil
+            heroHasBreakdown = false
+        }
+
+        // The whole pre-tax check in one number, fed the components the
+        // engine already wrote for that period rather than a second pass
+        // over the same shifts. Never split into "$X, plus $Y in wages" on
+        // screen — that left the person adding it up.
+        //
+        // No `predictedPayDate` here any more: it was stored and never
+        // rendered. The card deliberately does not repeat the pay date,
+        // because the progress bar a few lines above already labels where the
+        // period ends ([DB-22]), and `heroPayDate` is what draws that.
+        predictedPaycheck = PredictedPaycheck.figure(from: paydayResult?.1)
+        // Cash tips in the payday-moment period — the ENTIRE gap between
+        // "You kept" and the check, since cash is the one thing that never
+        // runs through payroll. Named on the card so nobody has to subtract
+        // two big numbers to find out why their check is smaller than what
+        // they made (Tyler, on his own real period: "if i kept 3100 why
+        // would my check be 2600?? cash?"). Same query as the check above,
+        // so the two cannot be a cent apart.
+        paydayCash = EarningsFigure(
+            metric: .voluntaryTips,
+            amount: paydayResult.map { .cents($0.1.knownComponents.voluntaryCashCents) } ?? .unavailable,
+            label: "Cash tips",
+            caption: nil,
+            completeness: paydayResult?.1.completeness ?? .empty
+        )
 
         // Echo of tonight's reveal verdict, for the most recently logged
         // shift today — consistent with the per-shift reveal shown at log
         // time, rather than summing a double day into one number.
-        let todayShifts = ShiftDays.groupedByShift(
-            periodEntries.filter { calendar.isDateInToday($0.date) },
-            shiftID: \.shiftID, date: \.date, period: \.shiftPeriod
-        )
+        //
+        // A shift speaks ONE number (Tyler's ruling, 2026-07-27), and it is
+        // the engine's: the same `earnedIncome` the shift's own row prints
+        // directly below this line, so "the echo and the row must reconcile
+        // on sight" is true by construction and not by two derivations
+        // agreeing. `.unavailable` prints no line at all rather than an echo
+        // with a placeholder where the money goes.
+        let todayShifts = periodShifts.filter { calendar.isDateInToday($0.day) }
         var tonightRevealText: String?
-        if let latest = todayShifts.max(by: { shiftRecordedAt($0.items) < shiftRecordedAt($1.items) }) {
-            let netCents = TipBreakdown.total(of: latest.items).netTotalCents
-            let today = calendar.startOfDay(for: now)
+        if let latest = todayShifts.max(by: { shiftRecordedAt($0.items) < shiftRecordedAt($1.items) }),
+           let valuation = snapshot?.valuation(latest.shiftID),
+           let revealCents = EarningsFigure
+               .shiftEarnedIncome(valuation, wageFeatureEnabled: snapshot?.wageFeatureEnabled ?? false)
+               .cents {
             let details = ShiftDetails.resolve(from: latest.items)
-            // The same wage math the shift's own row uses — the echo and
-            // the row must reconcile on sight. A shift speaks ONE number
-            // (Tyler's ruling, 2026-07-27): the reveal pipeline moves to
-            // that same wage-inclusive basis via its own StatsEngine. The
-            // main engine remains wage-exclusive; its earnings totals already
-            // include any employee gratuity captured for the shift.
-            // Read the SAME slice the shift's own row prints, not an
-            // independently-rounded `rate x hours`: "the echo and the row
-            // must reconcile on sight" is only true if both come out of one
-            // allocation. nil still means "no wage to speak of" (feature off
-            // or hours never logged), which is what drives the copy below.
-            let hasWage = (wageCentsPerHour ?? 0) > 0 && (details.hoursWorked ?? 0) > 0
-            let shiftWageCents = hasWage ? (wagesByShiftID[latest.shiftID] ?? 0) : nil
-            let revealCents = netCents + (shiftWageCents ?? 0)
-            let revealEngine = StatsEngine(payrollTimeZone: payrollTimeZone, records: tipRecords, wageCentsPerHour: wageCentsPerHour)
-            let result = revealEngine.reveal(forNightAt: today, cents: revealCents, period: period, shiftID: latest.shiftID)
-            tonightRevealText = "\(RevealCopy.headline(cents: revealCents, includesNonTipIncome: shiftWageCents != nil || TipBreakdown.total(of: latest.items).gratuityFeesCents > 0)) \(RevealCopy.comparison(for: result.comparison, period: details.shiftPeriod))"
+            // The engine's per-shift figures on BOTH sides of the
+            // comparison. Handing `StatsEngine` a scalar rate instead made
+            // it price each prior shift on its own with
+            // `WageEstimate.cents`, so a workweek's overtime and its
+            // cumulative rounding reached the headline but not the record it
+            // claimed to beat ([DB-25]: "inputs should be earnedIncome per
+            // shift").
+            let revealEngine = StatsEngine(
+                payrollTimeZone: payrollTimeZone,
+                records: tipRecords,
+                calendar: calendar,
+                valuedShiftCents: Self.valuedCents(in: snapshot)
+            )
+            let result = revealEngine.reveal(
+                forNightAt: calendar.startOfDay(for: now),
+                cents: revealCents,
+                period: period,
+                shiftID: latest.shiftID
+            )
+            let components = valuation.components
+            tonightRevealText = "\(RevealCopy.headline(cents: revealCents, includesNonTipIncome: components.wagesCents > 0 || components.gratuityFeesCents > 0)) \(RevealCopy.comparison(for: result.comparison, period: details.shiftPeriod))"
         }
         tonightLine = TonightLine.compose(
             tonightRevealText: tonightRevealText,
             isPaydayMoment: isPaydayMoment
         )
     }
+
+    /// A pay period as the civil days it covers. `PayPeriod.end` is the START
+    /// of the last day, and the range is inclusive of that whole day.
+    private static func range(of period: PayPeriod, in timeZone: TimeZone) -> DayRange {
+        DayRange(
+            start: CivilDay(period.start, in: timeZone),
+            end: CivilDay(period.end, in: timeZone)
+        )
+    }
+
+    /// The same figure, saying out loud that the hero period holds shifts
+    /// its to-date clamp left out.
+    ///
+    /// The CENTS are untouched — this adds, subtracts and rounds nothing, and
+    /// the amount is still the engine's answer for the clamped selection.
+    /// What changes is the words, under the rule the whole completeness
+    /// machinery exists for: a figure that is not the whole story may not be
+    /// headed with the word "Total".
+    ///
+    /// - "Known so far" is `MetricID.earnedIncome.allowedLabels`' own spelling
+    ///   for that, and it is what `.partial` already reads. Wages `.off` keeps
+    ///   its label: `nonWageEarnings` allows only "Tips" and "Tips & gratuity"
+    ///   and neither can be misread as a settled total, so relabelling it
+    ///   would put a label on a figure whose metric does not sanction it.
+    /// - The caption NAMES the deferral, because "$0.00 · Known so far" with
+    ///   nothing else on screen is still a person wondering where the shift
+    ///   below it went. An existing completeness caption is kept and this is
+    ///   appended to it; both facts are true at once.
+    private static func declaringDeferral(
+        _ figure: EarningsFigure,
+        deferredShiftCount: Int
+    ) -> EarningsFigure {
+        guard deferredShiftCount > 0 else { return figure }
+        let deferred = "\(CompletenessCopy.shiftCount(deferredShiftCount)) dated later this period"
+        return EarningsFigure(
+            metric: figure.metric,
+            amount: figure.amount,
+            label: figure.metric == .earnedIncome ? "Known so far" : figure.label,
+            caption: [figure.caption, deferred].compactMap { $0 }.joined(separator: " · "),
+            completeness: figure.completeness
+        )
+    }
+
+    /// Every shift's `earnedIncome`, for `StatsEngine`'s reveal comparison.
+    /// Nil without a snapshot, which leaves the engine on its own fallback
+    /// rather than on a dictionary of zeros.
+    private static func valuedCents(in snapshot: EarningsSnapshot?) -> [UUID: Int]? {
+        guard let snapshot else { return nil }
+        return Dictionary(
+            snapshot.shifts.map { ($0.id, $0.components.earnedIncomeCents) },
+            uniquingKeysWith: { first, _ in first }
+        )
+    }
 }
 
-private struct DashboardFactsKey: Hashable {
-    let entriesRevision: Int
+/// The grid calendar in the FROZEN payroll zone.
+///
+/// One spelling for the whole screen. `ShiftDays.groupedByShift` defaults to
+/// `Calendar.current`, so before this the shift grouping bucketed by the
+/// DEVICE's civil day while the ledger valued by the payroll zone's — and a
+/// legacy row with no `shiftID` took its deterministic fallback id from the
+/// grouping calendar, so the two could key the same shift differently and a
+/// `snapshot.valuation(id)` lookup would miss entirely.
+enum PayrollCalendar {
+    static func gridCalendar(in payrollTimeZone: TimeZone) -> Calendar {
+        var calendar = Calendar.current
+        calendar.timeZone = payrollTimeZone
+        return calendar
+    }
+}
+
+/// The half of the render cache the snapshot's stamp cannot cover, because
+/// none of it is an input to the engine.
+///
+/// Rule 3 of the adapter contract deletes `DashboardFactsKey`, which listed
+/// the inputs this screen THOUGHT could move a number — the wage rate, the
+/// policies, the payroll zone, a `dataRevision` counter. Every one of those
+/// is now inside `SnapshotStamp.digest`, a SHA-256 over the complete input
+/// set, so the facts cache keys on that. What is left here is genuinely
+/// presentational: which pay period is selected, which day it is, and which
+/// cards the person has dismissed. The pay-period GRID belongs in this half
+/// specifically because `LegacySnapshotBridge` supplies no
+/// `EarningsInputs.schedule`, so the grid is not in the digest and moving it
+/// has to invalidate the facts some other way.
+private struct DashboardSelection: Hashable {
+    let day: Date
     let frequency: PayFrequency?
     let anchorPeriodEnd: Date?
     let payDelayDays: Int?
     let firstWeekday: Int?
-    let day: Date
     let forcedPhase: String?
     let dismissedClosedEndRaw: Double
     let dismissedCheckEndRaw: Double
-    let wageCentsPerHour: Int?
-    /// The whole policy value, not a scalar view of it: a queued workweek
-    /// change or a dated raise moves the snapshot's cents without touching
-    /// `wageCentsPerHour`, so anything less than this leaves the cache
-    /// serving figures computed under the old history.
-    let policies: CompensationPolicies
-    /// An input to every bucketed figure below, so a new calendar policy has
-    /// to invalidate the cache rather than wait for the entries to change.
-    let payrollTimeZone: String
 }
 
-private struct DashboardFactsCache {
-    let key: DashboardFactsKey
+/// One render's worth of work, kept so a `@State` change (opening the drawer,
+/// presenting a sheet) does not redo it.
+///
+/// Two independent reuse tests, because the two halves cost different things:
+///
+/// - The DATASET (the grouping and the snapshot built from it) is valid while
+///   `revision` has not moved. `LegacySnapshotBridge` costs 41.7 ms over
+///   1,000 shifts and 307.4 ms over 10,000 (MEASURED, iPhone 17 Pro
+///   simulator, 2026-09-18), so it must not run per `body`, and neither must
+///   the grouping that feeds it. `LegacySnapshotRevision` is the invalidation
+///   signal, and it is `EarningsStore`'s own trigger set rather than a second
+///   opinion about what can change an input.
+/// - The FACTS are valid while the dataset digest and the selection have not
+///   moved. `digest` is the complete key; `selection` is the presentational
+///   remainder.
+private struct DashboardCacheIdentity: Hashable {
+    let revision: Int
+    let selection: DashboardSelection
+}
+
+private struct DashboardRenderCache {
+    let revision: Int
+    /// The grouping AND the snapshot built from it, together, because they
+    /// have to be the same pair every render: caching only the snapshot is
+    /// what let the view group a second time with a different calendar.
+    let dataset: DashboardEarnings.Dataset
+    let digest: String?
+    let selection: DashboardSelection
     let facts: DashboardFacts
 }
 
@@ -348,8 +581,15 @@ struct DashboardView: View {
     private var shiftSession = ShiftSessionState.shared
     /// Whether the cash/credit breakdown drawer tucked under the hero is open.
     @State private var breakdownExpanded = false
-    @State private var factsCache: DashboardFactsCache?
-    @State private var dataRevision = 0
+    @State private var renderCache: DashboardRenderCache?
+    /// Bumped by `LegacySnapshotRevision` — `EarningsStore`'s own rebuild
+    /// triggers — so the cached snapshot is rebuilt when, and only when, an
+    /// input to it moved. Not a `dataRevision`: that watched
+    /// `ModelContext.didSave` alone, so a queued policy change or a midnight
+    /// rollover left this screen serving figures computed under the old
+    /// inputs. Gone entirely when PR 2 slice S7 lets this read
+    /// `earningsStore.snapshot`.
+    @State private var snapshotRevision = 0
     /// The `end` (as a reference-date interval) of the period whose completion
     /// card the person dismissed; 0 means none. Kept so the card stays gone
     /// once closed, without reappearing on the next launch.
@@ -392,32 +632,57 @@ struct DashboardView: View {
         let now = Date.now
         let dismissedClosedEnd = dismissedClosedEndRaw == 0 ? nil : Date(timeIntervalSinceReferenceDate: dismissedClosedEndRaw)
         let dismissedCheckEnd = dismissedCheckEndRaw == 0 ? nil : Date(timeIntervalSinceReferenceDate: dismissedCheckEndRaw)
-        let key = DashboardFactsKey(
-            entriesRevision: dataRevision,
+        let payrollTimeZone = policyStore.payrollTimeZone
+        let payrollCalendar = PayrollCalendar.gridCalendar(in: payrollTimeZone)
+        // The selection the snapshot's digest cannot cover: which period is
+        // on screen, which day it is, and which cards were dismissed. See
+        // `DashboardSelection`.
+        let selection = DashboardSelection(
+            day: payrollCalendar.startOfDay(for: now),
             frequency: scheduleStore.schedule?.frequency,
             anchorPeriodEnd: scheduleStore.schedule?.anchorPeriodEnd,
             payDelayDays: scheduleStore.schedule?.payDelayDays,
             firstWeekday: scheduleStore.schedule?.firstWeekday,
-            day: Calendar.current.startOfDay(for: now),
             forcedPhase: forcedPaydayPhase?.rawValue,
             dismissedClosedEndRaw: dismissedClosedEndRaw,
-            dismissedCheckEndRaw: dismissedCheckEndRaw,
-            wageCentsPerHour: preferencesStore.baseHourlyWageCents,
-            policies: policyStore.policies,
-            payrollTimeZone: policyStore.payrollTimeZone.identifier
+            dismissedCheckEndRaw: dismissedCheckEndRaw
         )
-        let facts = factsCache?.key == key
-            ? factsCache!.facts
+        // ONE grouping and ONE snapshot built from it, over the WHOLE history
+        // rather than this period's slice, so a workweek that straddles the
+        // period edge is priced by the ledger as one week and the hero can
+        // follow a closed period. `DashboardEarnings` holds the two together
+        // and its header carries the two measured defects that come from
+        // doing either one twice: a device-zone grouping under a
+        // payroll-zone lookup, and a dataset-level `asOf` that made this
+        // screen a different dataset from History's.
+        //
+        // `LegacySnapshotBridge` and not `earningsStore.snapshot`: nothing
+        // writes `ShiftRecord` on a device until PR 2 slice S7, so the
+        // store's snapshot is empty and a screen on it would show a person
+        // with years of shifts a blank page. The swap is inside
+        // `DashboardEarnings.build`.
+        let dataset = renderCache?.revision == snapshotRevision
+            ? renderCache!.dataset
+            : DashboardEarnings.build(
+                entries: allEntries,
+                policies: policyStore.policies,
+                payrollTimeZone: payrollTimeZone,
+                calendar: payrollCalendar
+            )
+        let snapshot = dataset.snapshot
+        // Rule 3: the facts are keyed on the dataset's own digest, the
+        // complete computed key, plus this screen's presentational selection.
+        let facts = renderCache?.digest == snapshot?.stamp.digest && renderCache?.selection == selection
+            ? renderCache!.facts
             : DashboardFacts(
-                allEntries: allEntries,
+                snapshot: snapshot,
+                allShifts: dataset.shiftDays,
                 schedule: scheduleStore.schedule,
                 now: now,
                 forcedPaydayPhase: forcedPaydayPhase,
                 dismissedClosedEnd: dismissedClosedEnd,
                 dismissedCheckEnd: dismissedCheckEnd,
-                wageCentsPerHour: preferencesStore.baseHourlyWageCents,
-                policies: policyStore.policies,
-                payrollTimeZone: policyStore.payrollTimeZone
+                payrollTimeZone: payrollTimeZone
             )
         NavigationStack {
             // A ScrollView, deliberately NOT a List: the hero's drawer changes
@@ -496,12 +761,16 @@ struct DashboardView: View {
             guard newPhase == .active else { return }
             shiftSession.sync()
         }
-        .task(id: key) {
-            factsCache = DashboardFactsCache(key: key, facts: facts)
+        .task(id: DashboardCacheIdentity(revision: snapshotRevision, selection: selection)) {
+            renderCache = DashboardRenderCache(
+                revision: snapshotRevision,
+                dataset: dataset,
+                digest: snapshot?.stamp.digest,
+                selection: selection,
+                facts: facts
+            )
         }
-        .onReceive(NotificationCenter.default.publisher(for: ModelContext.didSave)) { _ in
-            dataRevision &+= 1
-        }
+        .legacySnapshotRevision($snapshotRevision)
     }
 
     // MARK: Tonight line
@@ -530,59 +799,21 @@ struct DashboardView: View {
     /// coverage drawer, now also used by PeriodDetailView's hero). The
     /// drawer's collapsed lip shows the earnings split at rest; tapping the
     /// hero slides it open to the full reconciliation (cash tips + credit
-    /// tips + employee gratuity − tip-out = take-home), which is where the
+    /// tips + employee gratuity - tip-out = take-home), which is where the
     /// tip-out lives now instead of cluttering the card face.
+    ///
+    /// Every figure in it arrives composed. This function used to build the
+    /// row list itself from five of its own additions and derive the
+    /// tip-out as `max(0, cash + credit + gratuity - nonWageNet)`; the rows
+    /// now come out of `BreakdownRow.ledgerRows(_:)` over the hero's one
+    /// `EarningsResult`, and the tip-out is the ledger's own
+    /// `tipOutCents`, READ rather than reconstructed.
     private func heroWithDrawer(_ facts: DashboardFacts) -> some View {
-        let hasBreakdown = facts.heroCashCents > 0 || facts.heroCreditCents > 0 || facts.heroGratuityFeesCents > 0
-        // The figure that makes the split reconcile to Total, derived so it
-        // always adds up regardless of how tip-out was logged across a
-        // shift. Wages sit outside cash/credit/gratuity entirely, so tip-out
-        // is measured against non-wage earnings, not the combined Total.
-        let wagesTotalCents = facts.heroWages?.totalCents ?? 0
-        let nonWageNetCents = facts.heroTotalCents - wagesTotalCents
-        let tipOutCents = max(0, facts.heroCashCents + facts.heroCreditCents + facts.heroGratuityFeesCents - nonWageNetCents)
-        // Everything that ADDS, then the subtotal, then everything that
-        // SUBTRACTS, then what's left. The old order ran cash, credit, tipped
-        // out, wages, overtime — plus, plus, minus, plus, plus — so the eye had
-        // to track a sign that flipped twice on the way down a five-row column.
-        var rows: [BreakdownRow] = [
-            BreakdownRow("Cash tips", cents: facts.heroCashCents),
-            BreakdownRow("Credit tips", cents: facts.heroCreditCents),
-        ]
-        if facts.heroGratuityFeesCents > 0 {
-            rows.append(BreakdownRow("Gratuity & fees", cents: facts.heroGratuityFeesCents))
-        }
-        if let wages = facts.heroWages {
-            // Regular hours only — `wages.hours` is the TOTAL, so labeling this
-            // row with it claims the base-rate line covers hours that are
-            // actually priced at 1.5x on the Overtime row below it. Identical
-            // when there's no overtime.
-            rows.append(BreakdownRow("Wages · \(WageEstimate.hoursLabel(wages.hours - wages.overtimeHours))", cents: wages.regularCents))
-            if wages.overtimeCents > 0 {
-                rows.append(BreakdownRow("Overtime · \(WageEstimate.hoursLabel(wages.overtimeHours))", cents: wages.overtimeCents))
-            }
-        }
-        // The subtotal only earns its rule when something is subtracted below
-        // it; with no tip-out logged, "Earned" and "You kept" would be the same
-        // number printed twice.
-        if tipOutCents > 0 {
-            rows.append(BreakdownRow("Earned", cents: facts.heroCashCents + facts.heroCreditCents + facts.heroGratuityFeesCents + wagesTotalCents, dividerAbove: true))
-            rows.append(BreakdownRow("Tipped out", cents: -tipOutCents))
-        }
-
-        return HeroBreakdownDrawer(
-            // The lip has to reconcile to the number directly above it. It used
-            // to show gross cash + credit, which sum to MORE than the hero
-            // (tip-out is already out of the hero, wages are already in), so
-            // the closed card presented two figures that could not be squared.
-            lipText: tipOutCents > 0
-                ? "Earned \(Money.string(fromCents: facts.heroCashCents + facts.heroCreditCents + facts.heroGratuityFeesCents + wagesTotalCents)) · Tipped out \(Money.string(fromCents: tipOutCents))"
-                : facts.heroGratuityFeesCents > 0
-                    ? "Tips \(Money.string(fromCents: facts.heroCashCents + facts.heroCreditCents)) · Gratuity \(Money.string(fromCents: facts.heroGratuityFeesCents))"
-                    : "Cash \(Money.string(fromCents: facts.heroCashCents)) · Credit \(Money.string(fromCents: facts.heroCreditCents))",
-            rows: rows,
-            total: BreakdownRow(tipOutCents > 0 ? "You kept" : "Total", cents: facts.heroTotalCents, emphasized: true),
-            hasBreakdown: hasBreakdown,
+        HeroBreakdownDrawer(
+            lipText: facts.heroLipText ?? "",
+            rows: facts.heroBreakdownRows,
+            total: facts.heroBreakdownTotal,
+            hasBreakdown: facts.heroHasBreakdown,
             isExpanded: $breakdownExpanded
         ) {
             heroCard(facts)
@@ -684,20 +915,45 @@ struct DashboardView: View {
     /// outside this combined region so its own Dismiss button and TipKit
     /// popover keep their individual accessibility.
     private func heroSummary(_ facts: DashboardFacts) -> some View {
-        let hasBreakdown = facts.heroCashCents > 0 || facts.heroCreditCents > 0 || facts.heroGratuityFeesCents > 0
+        let hasBreakdown = facts.heroHasBreakdown
         return VStack(spacing: PaydaySpacing.p20) {
             VStack(spacing: 6) {
                 Text(facts.heroLabel)
                     .font(PaydayFont.subheadline)
                     .foregroundStyle(PaydayColor.textSecondary)
-                Text(Money.string(fromCents: facts.heroTotalCents))
+                // `figure.text` is nil when the engine could not answer, so
+                // this cannot print "$0.00" for "Payday couldn't read your
+                // shifts" (adapter contract, rule 4). A pay period with no
+                // shifts at all is a different case and DOES print $0.00:
+                // that zero is a fact, and "No shifts this period." is drawn
+                // directly underneath it because `periodEntries` is empty.
+                //
+                // A period whose shifts are all dated AHEAD of today used to
+                // land in the same $0.00-under-"Total" presentation while
+                // that sentence was NOT drawn (the shift's own row was),
+                // which is the state `heroDeferredShiftCount` closed: the
+                // label becomes "Known so far" and the caption below names
+                // the shifts dated later in the period.
+                Text(facts.hero.text ?? ShiftDayRow.unavailablePlaceholder)
                     .font(PaydayFont.displayXXL)
                     .monospacedDigit()
-                    .foregroundStyle(PaydayColor.textPrimary)
+                    .foregroundStyle(
+                        facts.hero.isUnavailable ? PaydayColor.textSecondary : PaydayColor.textPrimary
+                    )
                     .contentTransition(.numericText())
-                    .animation(reduceMotion ? nil : PaydayAnimation.premiumSpring, value: facts.heroTotalCents)
+                    .animation(reduceMotion ? nil : PaydayAnimation.premiumSpring, value: facts.hero.cents)
                     .lineLimit(1)
                     .minimumScaleFactor(0.5)
+                // "Wages estimated from your current rate" / "wages missing
+                // for 1 shift". The one line that keeps a partial total from
+                // reading as a settled one; `CompletenessCopy` decides when
+                // it exists, never this screen.
+                if let caption = facts.hero.caption {
+                    Text(caption)
+                        .font(PaydayFont.caption2)
+                        .foregroundStyle(PaydayColor.textSecondary)
+                        .multilineTextAlignment(.center)
+                }
                 // Pace only makes sense for the period still in progress —
                 // a finished period isn't racing anything.
                 if facts.heroIsCurrent, let paceDeltaCents = facts.paceDeltaCents {
@@ -797,10 +1053,14 @@ struct DashboardView: View {
                 Text(isCheckDay ? "Today's check should show" : "Your check should show")
                     .font(PaydayFont.caption)
                     .foregroundStyle(PaydayColor.textSecondary)
-                Text(Money.string(fromCents: facts.predictedPaycheckCents))
+                Text(facts.predictedPaycheck.text ?? ShiftDayRow.unavailablePlaceholder)
                     .font(PaydayFont.displayLarge)
                     .monospacedDigit()
-                    .foregroundStyle(PaydayColor.textPrimary)
+                    .foregroundStyle(
+                        facts.predictedPaycheck.isUnavailable
+                            ? PaydayColor.textSecondary
+                            : PaydayColor.textPrimary
+                    )
                 // The arithmetic, stated out loud. This number used to be
                 // gross credit tips with the tip-out silently left in and the
                 // wages added back in a second sentence, which is exactly how
@@ -819,8 +1079,17 @@ struct DashboardView: View {
                 // did exactly that on his own real period before asking "cash?".
                 // Not a repeat under rule 11: it does arithmetic for the reader
                 // rather than restating something already on screen.
-                if facts.paydayCashCents > 0 {
-                    Text("Cash already paid · \(Money.string(fromCents: facts.paydayCashCents))")
+                if let cash = facts.paydayCash.text, (facts.paydayCash.cents ?? 0) > 0 {
+                    Text("Cash already paid · \(cash)")
+                        .font(PaydayFont.caption2)
+                        .foregroundStyle(PaydayColor.textSecondary)
+                        .multilineTextAlignment(.center)
+                }
+                // The check figure's own completeness, when it has one: a
+                // period with an unpriced shift cannot present a settled
+                // check total without saying so.
+                if let caption = facts.predictedPaycheck.caption {
+                    Text(caption)
                         .font(PaydayFont.caption2)
                         .foregroundStyle(PaydayColor.textSecondary)
                         .multilineTextAlignment(.center)
@@ -919,9 +1188,8 @@ struct DashboardView: View {
                 sheetTarget = .edit(anchor)
             } label: {
                 ShiftDayRow(facts: ShiftDayRowFacts(
-                    valuation: facts.shiftSnapshot?.valuation(group.shiftID),
-                    wageFeatureEnabled: facts.shiftSnapshot?.wageFeatureEnabled ?? false,
-                    stamp: facts.shiftSnapshot?.stamp,
+                    snapshot: facts.snapshot,
+                    shiftID: group.shiftID,
                     day: group.day,
                     period: ShiftDetails.resolve(from: group.items).shiftPeriod,
                     dayHasMultipleShifts: facts.multiShiftDays.contains(group.day)

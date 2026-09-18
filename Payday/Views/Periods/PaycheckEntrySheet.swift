@@ -3,7 +3,6 @@ import SwiftData
 import PhotosUI
 import OSLog
 import UIKit
-import Combine
 
 struct PaycheckEntrySheet: View {
     private enum PaycheckScannedField: Hashable {
@@ -28,12 +27,6 @@ struct PaycheckEntrySheet: View {
         let showedManualTipsEntry: Bool
     }
 
-    private struct AuditContext {
-        let loggedCreditTipsCents: Int?
-        let loggedGratuityCents: Int?
-        let computedWages: PeriodIncome.Wages?
-    }
-
     private static let scanLogger = Logger(
         subsystem: "com.szakacsmedia.payday",
         category: "PaycheckScanUI"
@@ -42,7 +35,6 @@ struct PaycheckEntrySheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
     @Environment(PayScheduleStore.self) private var scheduleStore
-    @Environment(PolicyStore.self) private var policyStore
     @Environment(UserPreferencesStore.self) private var preferencesStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Query private var allEntries: [TipEntry]
@@ -50,6 +42,19 @@ struct PaycheckEntrySheet: View {
 
     let period: PayPeriod
     let existing: PaycheckRecord?
+    /// What the engine expects for this period, from the SAME
+    /// `EarningsResult` the screen that opened this sheet rendered.
+    ///
+    /// Handed in rather than rebuilt here, and that is the whole point: this
+    /// sheet used to compose its own basis from
+    /// `allEntries.filter { $0.date >= period.start && $0.date <= period.end }`
+    /// and `PeriodIncome.wages(firstWeekday: schedule?.firstWeekday)`, which
+    /// dropped every shift logged at a real hour on the period's final day
+    /// (`PayPeriod.end` is that day's midnight) and allocated overtime by the
+    /// pay-period GRID's weekday instead of the payroll calendar policy's.
+    /// MEASURED divergence against period detail on one fixture: $310.00.
+    /// `PaycheckAuditBasis`'s header has the full measurement.
+    let auditBasis: PaycheckAuditBasis
 
     @State private var amountCents: Int
     @State private var note: String
@@ -78,11 +83,11 @@ struct PaycheckEntrySheet: View {
     @State private var scanTask: Task<Void, Never>?
     @State private var scanScrollRequest = 0
     @State private var showManualTipsEntry: Bool
-    @State private var auditContextCache: AuditContext?
 
-    init(period: PayPeriod, existing: PaycheckRecord?) {
+    init(period: PayPeriod, existing: PaycheckRecord?, auditBasis: PaycheckAuditBasis) {
         self.period = period
         self.existing = existing
+        self.auditBasis = auditBasis
         _amountCents = State(initialValue: existing?.reconciledPaidTipsCents ?? 0)
         _note = State(initialValue: existing?.note ?? "")
         _regularWagesCents = State(initialValue: existing?.regularWagesCents ?? 0)
@@ -92,7 +97,6 @@ struct PaycheckEntrySheet: View {
         _taxesCents = State(initialValue: existing?.taxesCents ?? 0)
         _netPayCents = State(initialValue: existing?.netPayCents ?? 0)
         _showManualTipsEntry = State(initialValue: existing != nil)
-        _auditContextCache = State(initialValue: nil)
     }
 
     /// Forward-only reading-order chain: Regular wages -> Overtime wages ->
@@ -116,42 +120,6 @@ struct PaycheckEntrySheet: View {
         "Tips line only"
     }
 
-    /// What the stub's tips line should read — the audit's ground truth for the
-    /// tips-vs-logged check, from the one shared formula. Credit tips NET OF
-    /// TIP-OUT: this used to compare a real stub against GROSS credit, so every
-    /// period with a tip-out was reported as short by exactly the tip-out.
-    /// Nil (not zero) when nothing's been logged as credit, same
-    /// silence-over-nagging treatment as every other audit input: a period
-    /// that's cash-only isn't a discrepancy.
-    /// One audit input pass per field update. The previous computed-property
-    /// chain filtered the full history three times and rebuilt the tip split
-    /// twice whenever SwiftUI asked for the findings.
-    private var auditContext: AuditContext {
-        auditContextCache ?? makeAuditContext()
-    }
-
-    private func makeAuditContext() -> AuditContext {
-        let entries = allEntries.filter { $0.date >= period.start && $0.date <= period.end }
-        let breakdown = TipBreakdown.total(of: entries)
-        let loggedCreditTipsCents = breakdown.creditCents > 0
-            ? PredictedPaycheck.tipsLineCents(from: breakdown)
-            : nil
-        let loggedGratuityCents = breakdown.gratuityFeesCents > 0
-            ? breakdown.gratuityFeesCents
-            : nil
-        let computedWages = PeriodIncome.wages(
-            payrollTimeZone: policyStore.payrollTimeZone,
-            entries: entries,
-            wageCentsPerHour: preferencesStore.baseHourlyWageCents,
-            firstWeekday: scheduleStore.schedule?.firstWeekday
-        )
-        return AuditContext(
-            loggedCreditTipsCents: loggedCreditTipsCents,
-            loggedGratuityCents: loggedGratuityCents,
-            computedWages: computedWages
-        )
-    }
-
     private var auditStub: PaycheckAudit.Stub {
         PaycheckAudit.Stub(
             tipsCents: amountCents > 0 ? amountCents : nil,
@@ -166,14 +134,21 @@ struct PaycheckEntrySheet: View {
 
     /// Recomputed on every field change — PaycheckAudit is pure and cheap,
     /// so there's no reason to debounce or cache this.
+    ///
+    /// The engine side needs no cache either, now that it arrives as
+    /// `auditBasis`: the filter-and-reprice pass this used to hold (three
+    /// passes over the whole history, the tip split rebuilt twice) was the
+    /// reason there was ever an `AuditContext` cache, a `.task` to fill it and
+    /// a `ModelContext.didSave` subscription to refresh it. All three are
+    /// gone; the parent screen rebuilds its snapshot on the same trigger and
+    /// hands a fresh basis down.
     private var auditFindings: [PaycheckAudit.Finding] {
-        let context = auditContext
-        return PaycheckAudit.run(
+        PaycheckAudit.run(
             stub: auditStub,
-            loggedCreditTipsCents: context.loggedCreditTipsCents,
-            loggedGratuityCents: context.loggedGratuityCents,
-            computedWages: context.computedWages,
-            computedOvertimeHours: context.computedWages?.overtimeHours
+            loggedCreditTipsCents: auditBasis.loggedCreditTipsCents,
+            loggedGratuityCents: auditBasis.loggedGratuityCents,
+            computedWages: auditBasis.wages,
+            computedOvertimeHours: auditBasis.wages?.overtimeHours
         )
     }
 
@@ -315,14 +290,6 @@ struct PaycheckEntrySheet: View {
         .onDisappear {
             scanResetTask?.cancel()
             scanTask?.cancel()
-        }
-        .task {
-            if auditContextCache == nil {
-                auditContextCache = makeAuditContext()
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: ModelContext.didSave)) { _ in
-            auditContextCache = makeAuditContext()
         }
         #if DEBUG
         .onAppear {
