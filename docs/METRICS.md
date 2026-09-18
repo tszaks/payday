@@ -67,7 +67,7 @@ Conventions used below. All money is integer cents. "Work date" means the civil 
 281 rendered, emitted, prefilled, or rewritten figures, one row each, grouped by surface. "Current formula" is what the code does today; "MetricID" is the registry row it must resolve to once PaydayCore lands (tags `presentation-only` and `analytics:*` are defined in 1.2). Row ids in brackets (for example `[DB-03]`) are referenced by Section 3.
 
 
-### 2.1 Dashboard (32 rows)
+### 2.1 Dashboard (32 rows) — **MIGRATED, all 32 rows, PR 5 wave 1, 2026-09-18** (read *2.1 after wave 1* under the table)
 
 | Surface | File:line | Symbol | Figure | Current formula | Helpers | Cutoff | Wages? | MetricID |
 |---|---|---|---|---|---|---|---|---|
@@ -103,6 +103,174 @@ Conventions used below. All money is integer cents. "Work date" means the civil 
 | [DB-30] Dashboard (computed, NOT rendered anywhere in this file): best-period-ever flag | Payday/Views/Dashboard/DashboardView.swift:148-163 | DashboardFacts.isBestPeriodEver | Boolean from comparing closed-period tips-net against up to 24 prior periods | payNetCents = periodToDateTotal(pay, asOf: pay.end); walks back up to 24 prior periods, false if any prior periodToDateTotal >= payNetCents. Never read by the view ("Best day is gone entirely" comment at :726). | StatsEngine.periodToDateTotal; PayPeriodCalculator.period(containing:) | whole periods (asOf each period.end) | no | analytics:bestPeriodEver (dead code candidate) |
 | [DB-31] The first-period wording of the pace sentence that DB-04, WG-08 and WG-12 actually render: "$X ahead of last period at this point." / "$X behind last period at this point." / "Even with last period at this point." | Payday/Utilities/StatsEngine.swift:2890 (money formatted :2893); reached from the two-argument overload's guard at :2904; live callers DashboardView.swift:640 (DB-04), PaydayWidget/PaydayWidget.swift:204 (WG-08), PaydayWidget/PaydayWidgetAccessoryViews.swift:60 (WG-12); wording pinned by PaydayTests/StatsEngineTests.swift:1958-1961 and :605 | RevealCopy.paceLine(deltaCents:) (the single-argument overload; RevealCopy.paceLine(deltaCents:periodCount:) delegates to it) | Pace delta sentence measured against the immediately preceding period, cents-precise, direction from the sign of deltaCents | deltaCents == 0 -> "Even with last period at this point."; otherwise Money.string(fromCents: abs(deltaCents)) + " ahead of" (deltaCents > 0) or " behind" + " last period at this point.". Takes an already-computed delta and does no aggregation. NOT dead and not a fallback branch of the two-arg formatter's copy: `guard periodCount > 1 else { return paceLine(deltaCents: deltaCents) }` (:2904) hands every pacePeriodCount of 0 or 1 to this function, so a first-period account's hero pace line (DB-04), widget systemSmall VoiceOver label (WG-08) and Lock Screen accessoryRectangular VoiceOver label (WG-12) all speak THIS string, with the baseline named "last period at this point" rather than "your usual pace". | Money.string; abs; own string assembly (input: StatsEngine.paceComparison.deltaCents) | Inherits its caller's: current period asOf startOfDay(now) for DB-04 and asOf the entry date for WG-08/WG-12, priors at the same elapsed fraction | No (a nonWageEarnings delta printed under a wage-inclusive hero, the DB-04 / WG-05 basis split) | analytics:paceComparison (presentation of the same delta as DB-04 / WG-05 / WG-07 / ID-28). Three formatters now exist for this one figure, not two as ID-28 says: paceLine/1 (here), paceLine/2 (:2910) and compactPaceLine (:2979), plus Money.directionalDeltaString rendering the same delta at PaydayWidget.swift:197 and PaydayWidgetAccessoryViews.swift:54. A PR 5 sweep keyed on file AND symbol would rewrite :2910 and skip :2890, leaving the periodCount <= 1 branch on the old formatter, so the sweep has to key on file and line. |
 | [DB-32] Dashboard hero: whether the breakdown drawer exists at all and whether VoiceOver can open it (gate) | Payday/Views/Dashboard/DashboardView.swift:620 (heroSummary; consumed :656 trait, :657 hint, :658-660 action) and the identical duplicate at :469 (heroWithDrawer; passed to HeroBreakdownDrawer at :518, which gates the tap at HeroBreakdownDrawer.swift:79 and the whole drawer at :84) | local `hasBreakdown`, written twice in this file over the same three DashboardFacts fields | Money-thresholded reachability gate: `facts.heroCashCents > 0 \|\| facts.heroCreditCents > 0 \|\| facts.heroGratuityFeesCents > 0` decides the `.isButton` trait, the spoken "Show breakdown" / "Hide breakdown" hint, the `.accessibilityAction` toggle, and whether the drawer renders | TipBreakdown.total(of: hero-period entries) cashCents / creditCents / gratuityFeesCents each compared to 0 (owner-row normalization only, the DB-09..DB-15 basis). False suppresses DB-07 through DB-21 entirely: no lip, no rows, no "You kept" total, and no VoiceOver path to any of them. Wage-exclusive, so a hero period holding only logged hours with $0 tips renders a wage-inclusive hero number (DB-01) with no drawer explaining it, the Z1 shape. Written twice with no shared helper, and a third time in PeriodDetailView over different inputs (HP-27). | TipBreakdown.total -> ShiftDays.groupedByShift + ShiftDetails.resolve; own comparisons | Whole hero period by entry.date, no asOf (a future-dated entry opens the drawer; S2) | No (the drawer it gates does show DB-16 / DB-18 wages, but the gate never looks at them) | earnedIncome (gate on voluntaryTips + gratuityFees; the same `> 0`-on-money class as DB-02 / DB-03; fixtures Z1, S2; divergence candidate against its twin HP-27) |
+
+#### 2.1 after wave 1 (2026-09-18) — **all 32 rows migrated**
+
+The adapter contract every row follows is `Payday/Earnings/SnapshotFacts.swift`.
+The `File:line`, `Symbol` and `Current formula` columns in the table above
+describe the state the audit found and are kept verbatim, because they are the
+provenance of the defects this migration closed. What each row reads **now** is
+below.
+
+The whole hero — face figure, drawer rows, subtotal, bottom line, collapsed lip
+— is ONE `EarningsResult`: `snapshot.range(heroPeriod, asOf: CivilDay(now))`.
+The snapshot and the shift grouping that indexes it are ONE value,
+`DashboardEarnings.build(entries:policies:payrollTimeZone:calendar:)`, over the
+**whole history** rather than the current period's slice, built UNCLAMPED so
+that Dashboard, History, Calendar and the log preview share one dataset and one
+stamp. It is not `earningsStore.snapshot` (nothing writes `ShiftRecord` on a
+device until PR 2 slice S7; `DashboardEarnings.build` is the one-line swap
+point).
+
+| Row | Reads | From |
+|---|---|---|
+| [DB-01] Hero face | `EarningsFigure.earnedIncome(heroResult).text`, plus `.caption` under it | `snapshot.range(heroPeriod, asOf: CivilDay(now))`. `earnedIncome`, scope pay period, to-date cutoff passed as an ARGUMENT rather than baked into the dataset (see the `asOf` note below). `.unavailable` renders the en-dash placeholder and never `$0.00`. When the clamp excluded shifts the period holds, the label is "Known so far" and the caption names them: `DashboardFacts.heroDeferredShiftCount`. |
+| [DB-02] Which period the hero represents (gate) | `currentResult.knownComponents.earnedIncomeCents == 0` | Was `StatsEngine.periodToDateTotal == 0`, tips-only, so a period worked for wages and tipped nothing read as "empty" and pushed the hero back onto last period (fixture Z1). The gate is the wage-inclusive figure the registry asked for. With no snapshot the hero stays on the current period rather than silently relabelling itself. |
+| [DB-03] Whether the payday card renders (gate) | `paydayResult.knownComponents.earnedIncomeCents > 0` | Same Z1 fix, other half: a wage-only closed period now gets its "Your check should show" card. Pinned by `DashboardPaydayCardTests.wageOnlyPeriodGetsItsCard`. |
+| [DB-04] Pace line | `StatsEngine.paceComparison`, unchanged | **Deliberately still `analytics:paceComparison`.** Both sides are `nonWageEarnings`, which is what makes a delta mean anything; moving only this screen's half onto `earnedIncome` would compare a wage-inclusive present against a wage-exclusive past. The engine-wide move is group 2.6. |
+| [DB-05] Progress bar fill | `PayPeriodCalculator.progress`, unchanged | `presentation-only`. |
+| [DB-06] Progress bar VoiceOver value | `calculator.daysRemaining`, unchanged | `presentation-only`. |
+| [DB-07] Lip "Earned $X" | `BreakdownRow.lipText(heroResult)` | `EarningsComponents.grossBeforeTipOutCents`. Wave 0's helper; **this is its first production caller** ([SC-03] now closed). |
+| [DB-08] Lip "Tipped out $Y" | `BreakdownRow.lipText(heroResult)` | `components.tipOutCents`, **read**. Was `max(0, cash + credit + gratuity - net)`, and the gross and the net came from two different selections: gross over the whole period, net clamped to today. MEASURED in `DashboardTipOutIsReadTests`: one future-dated shift inside the current period made the residual invent **$290.00** of tip-out under a $260.00 bottom line. |
+| [DB-09]–[DB-12] Lip variants | `BreakdownRow.lipText(heroResult)` | `components.voluntaryTipsCents` / `.gratuityFeesCents` / `.voluntaryCashCents` / `.voluntaryCreditCents`, one result, one clamp. |
+| [DB-13]–[DB-15] Drawer rows Cash / Credit / Gratuity | `BreakdownRow.ledgerRows(heroResult)` | Same result as the hero, so the rows and the total share a selection. Previously `TipBreakdown.total` over the whole period under an asOf-clamped total ([DB-21]'s note), which is a column that could not be made to add up. |
+| [DB-16]–[DB-18] Drawer rows Wages / Overtime | `BreakdownRow.ledgerRows(heroResult)` | `components.regularWagesCents` / `.overtimeWagesCents`; hour labels from `result.regularMinutes` / `.overtimeMinutes` via `WorkedMinutes.hoursLabel`. `PeriodIncome.wages` is gone from this screen, and with it the scalar weekday. |
+| [DB-19] Drawer subtotal "Earned" | `BreakdownRow.ledgerRows(heroResult)` | `EarningsComponents.grossBeforeTipOutCents`, one property instead of a four-term addition in the view. **Registry gap, unchanged:** the label "Earned" is listed under `earnedIncome` while this figure is gross-before-tip-out, which has no `MetricID`. Section 1.3 already owes that decision; wave 1 did not invent an answer. |
+| [DB-20] Drawer row "Tipped out" | `BreakdownRow.ledgerRows(heroResult)` | `-components.tipOutCents`. See [DB-08]. |
+| [DB-21] Drawer total "You kept" / "Total" | `BreakdownRow.total(heroResult)` | Label is `CompletenessCopy.earnedIncomeLabel`, never this screen's `tipOut > 0 ? "You kept" : "Total"`. A `.partial` period reads **"Known so far"** and can no longer print "Total" — pinned by `DashboardCompletenessTests.partialNeverSaysTotal`. Same cents as [DB-01] by construction, not by agreement, and the same LABEL as [DB-01] too: when the hero declares a deferral the bottom line follows it, so the face and the drawer cannot say two things about one number. |
+| [DB-22] Payday card check amount | `PredictedPaycheck.figure(from: paydayResult)` | `MetricID.expectedPaycheckGross` over `snapshot.range(paydayPeriod)`'s components: tips line + gratuity + wages, with the wages the ledger already allocated. `.unavailable` when no card is showing, so there is no `$0.00` check. Carries the completeness caption. **Registry gap:** the card's sentence ("Your check should show" / "Today's check should show") is not in `expectedPaycheckGross.allowedLabels`, whose only member is "Expected"; the figure carries "Expected" and the sentence stays presentation the screen owns. |
+| [DB-23] Payday card "Cash already paid" | `paydayCash` = `EarningsFigure(.voluntaryTips, .cents(components.voluntaryCashCents))` | Same query as [DB-22], so the identity the caption promises — kept − check == cash — holds to the cent. Pinned by `DashboardPaydayCardTests.checkReconcilesAgainstTheHero`. |
+| [DB-24] Tonight line headline | `EarningsFigure.shiftEarnedIncome(snapshot.valuation(shiftID)).cents` | `earnedIncome`, scope one shift — the SAME figure the shift's own row prints directly below it. Was `TipBreakdown.netTotalCents + wagesByShiftID[id]`, an addition in the facts struct. `.unavailable` prints no line at all. Closes the [DB-24] note "a 41st hour of the week is priced at 1x here and 1.5x in the hero" (fixture W2). |
+| [DB-25] Tonight line comparison | `StatsEngine(..., valuedShiftCents:)` | Still `analytics:revealComparison`, but its inputs are now `earnedIncome` per shift, which is what the row asked for. `StatsEngine.revealCents(of:)` priced every prior shift with `WageEstimate.cents(wageCentsPerHour:hours:)` — an independent per-shift rounding that knows nothing about the workweek — so the figure SHOWN and the record it claimed to beat were two derivations (W1: 1556 against 1557). Pinned by `DashboardTonightEchoTests`. |
+| [DB-26] "N this period" | `shiftDays.count`, selected through `DayRange` | `presentation-only`, but the SELECTION changed: see the note below. |
+| [DB-27] Shift row amounts | `ShiftDayRowFacts(snapshot:shiftID:...)` | `earnedIncome`, scope one shift. Wave 0 already moved the row; wave 1 widened the snapshot behind it from the current period to the whole history, so **a workweek straddling the period edge now carries its overtime** — wave 0 left that gap open on [SC-01]. MEASURED in `DashboardStraddlingWorkweekTests`: $50.00 of overtime the period-scoped snapshot dropped. |
+| [DB-28]–[DB-29] Live shift VoiceOver label and clock | unchanged | `presentation-only`. |
+| [DB-30] `isBestPeriodEver` | **DELETED** | It was computed on every render — a walk back through up to 24 pay periods, each one a full `StatsEngine.periodToDateTotal` pass — and read by nothing. The inventory called it a "dead code candidate"; a grep for `isBestPeriodEver` over `Payday/` and `PaydayWidget/` returned only its own declaration and three assignments. Migrating it would have been migrating a figure no one can see. Two more stored properties went with it for the same reason — `predictedPayDate` (the card deliberately does not repeat the pay date; the progress bar above it already labels where the period ends) and `currentPeriod` (nothing rendered it). |
+| [DB-31] First-period pace wording | `RevealCopy.paceLine`, unchanged | `presentation-only` formatter inside `StatsEngine.swift`. |
+| [DB-32] Whether the drawer exists (gate) | `BreakdownRow.hasBreakdown(heroResult)` | One gate, computed once. The old screen had the identical expression written twice (`heroWithDrawer` and `heroSummary`), which is the shape a VoiceOver trait and a tap target drifting apart takes. |
+
+**Wave 0's rows [SC-02] and [SC-03] are closed by this group.**
+`BreakdownRow.ledgerRows(_:)`, `.total(_:)`, `.lipText(_:)` and
+`.hasBreakdown(_:)` now have production callers — MEASURED with
+`grep -rnE 'BreakdownRow\.(ledgerRows|total|lipText|hasBreakdown)\(' Payday/ PaydayWidget/`,
+which returns seven hits — four of them CALLS, all four inside
+`DashboardView.heroWithDrawer`'s single `heroResult` block
+(`Payday/Views/Dashboard/DashboardView.swift:345`, `:350`, `:354`, `:355`),
+and three in doc comments.
+Group 2.4 still owes Period detail's half of [SC-02]/[SC-03]: that screen
+composes its own rows and still back-derives its tip-out.
+
+**Three defects this migration surfaced, all now measured:**
+
+1. **The pay period's final day was not in the Shifts list.**
+   `PayPeriodCalculator.period(containing:)` returns `end` as the START of the
+   last day, so `allEntries.filter { $0.date >= period.start && $0.date <=
+   period.end }` excluded every shift logged at a real hour on that day —
+   while `StatsEngine.periodToDateTotal`, which compares civil days, counted
+   its money. Both halves now select through `DayRange`. `DashboardFinalDayMembershipTests`
+   pins it, and also records that **`PeriodsPageFacts` (which buckets by
+   `period(containing:)`) and `PeriodDetailFacts` (which uses the same
+   entry-date filter) disagree with each other by a whole shift today** —
+   MEASURED at 34,400c on a two-shift fixture. That one is group 2.4's.
+2. **The shift grouping bucketed by the DEVICE's civil day.**
+   `ShiftDays.groupedByShift` defaults to `Calendar.current` and this screen
+   never overrode it, while the ledger valued by the frozen payroll zone. A
+   legacy row with no `shiftID` takes its deterministic fallback id from the
+   grouping calendar, so the two could key the same shift differently and a
+   `snapshot.valuation(id)` lookup would miss outright.
+
+   The first cut of this migration only half-closed it: `DashboardFacts`
+   grouped in the payroll zone while `DashboardView.body` still built the
+   snapshot through `LegacySnapshotBridge.snapshot(entries:)`, whose own
+   grouping takes the default device calendar. MEASURED (payroll zone
+   `Pacific/Honolulu`, one nil-`shiftID` row, 8h at $18/hr): the view minted
+   `5AAC5D00-…-C024-…` and the adapter `5AAC5D00-…-C124-…`, so
+   `snapshot.valuation(payrollID)` was nil, the hero read 26,745c and the one
+   shift row under it rendered the unavailable placeholder. `tonightLine`
+   died silently the same way. Every test was blind to it because
+   `PaydayTestZone.payroll == TimeZone.current`.
+
+   There is ONE grouping per render now — `DashboardEarnings.build`, which
+   returns the grouping and the snapshot built from that same grouping as one
+   value — and `DashboardFacts` takes it instead of re-grouping. Two gates:
+   `DashboardPayrollZoneTests` runs in a zone that is deliberately not the
+   device's, and the render cache holds the pair so they cannot drift across
+   a `@State` change.
+
+3. **Dashboard and History were two datasets.**
+   The snapshot was built with `asOf: now`, so the to-date clamp was a
+   property of the DATASET. `HistoryEarnings.build` (group 2.4) builds its
+   own with `asOf: .distantFuture`, because History has never applied a
+   to-date cutoff. MEASURED on the merged tree, current period, one past
+   shift and one future-dated one: Dashboard 40400, the History row 79800,
+   period detail 79800, all three labelled "You kept" — and the stamp
+   digests DIFFERED, so two screens' disagreement was not even diffable,
+   which is the one thing contract rule 3 exists to prevent. Tapping "See
+   all" walked the person from $404.00 to $798.00.
+
+   The dataset is unclamped now and Dashboard's narrower scope is an `asOf:`
+   argument on the hero's query. `DashboardCutoffTests` pins it on the
+   CURRENT period: a closed period cannot see any of this, because `now` is
+   past `period.end` and the clamp is a no-op — which is exactly how the
+   split survived a suite whose header claimed to prove Definition of Done
+   #5's first clause.
+
+   **Owed to Definition of Done #5, and named rather than guessed:** the
+   clause "Dashboard equals the History row equals period detail" does not
+   yet say which SCOPE it means for the period still in progress. Dashboard
+   is period-to-date by design (it carries a progress bar and a pace line);
+   History's row is the whole period. Both now read the same dataset with
+   the same stamp, and Dashboard declares its cutoff on screen, so this is a
+   stated scope difference rather than two answers. The coordinator has to
+   pick one of two settlements: either DoD #5 names the scope, or History's
+   current-period row takes the same cutoff. The cross-surface test belongs
+   in the shared `PaydayTests/EarningsParityTests.swift` once both groups
+   have merged, on the CURRENT period.
+
+**Two deferrals, named rather than closed:**
+
+1. **`WageState.noShifts` keeps `$0.00`, but only when the period is really
+   empty.** Design 2 says `.noShifts` renders no currency figure and
+   `CompletenessCopy` deferred the call to the hero that owns it, which is
+   this group. Decision: a pay period **holding no shifts at all** keeps its
+   zero. It is not a placeholder standing in for an unknown — that period
+   genuinely earned nothing — and "No shifts this period." is drawn directly
+   underneath it, because `periodEntries` is empty in exactly that case.
+   Replacing a true zero with an en dash would make the one honest number on
+   the screen look like a failed read.
+   `DashboardCompletenessTests.noShiftsKeepsItsZero` pins it.
+
+   **The first version of this deferral was wrong, and the sentence it leaned
+   on was measurably not on screen.** `.noShifts` is the state of the
+   SELECTION, not of the period, so a period whose only shift is dated ahead
+   of today also produced it: the hero's query is clamped and selected
+   nothing, while the row below is `snapshot.valuation(_:)` which is
+   deliberately unclamped. MEASURED (one shift logged 2026-10-09, 8h, $250
+   credit, now 2026-10-07, $18/hr, biweekly period ending 10-11): hero
+   "$0.00" under "Total", caption nil, `periodEntries` NOT empty so no
+   empty-state sentence, and the single row under it reading "$394.00" while
+   the Shifts header said "1 this period". A regression too, not just an
+   inherited gap: the superseded hero (clamped tips plus whole-period wages)
+   printed 14,400c for the same input.
+
+   `DashboardFacts.heroDeferredShiftCount` closes it. The cents are
+   unchanged, because $0.00 earned so far is true; the words change, under
+   the rule the completeness machinery exists for. The label becomes "Known
+   so far" (`MetricID.earnedIncome.allowedLabels`) and the caption names what
+   was left out: "1 shift dated later this period", appended to any
+   completeness caption rather than replacing it. Gated by
+   `DashboardCompletenessTests.futureOnlyPeriodDeclaresWhatItLeftOut`,
+   `.partiallyClampedPeriodDeclaresWhatItLeftOut` and `.bothCaptionsSurvive`.
+2. **A shift row is not clamped and the hero is, and now the hero says so.**
+   `snapshot.valuation(_:)` and `snapshot.day(_:)` are deliberately unclamped
+   ("a single shift is a fact someone can open, not a period-to-date total"),
+   so a future-dated shift inside the current period renders its own row
+   while the hero excludes it. That asymmetry is the engine's and it is
+   pinned by test in `PaydayCore`, so `Σ rows == hero` still holds only for a
+   period with no future-dated shifts. What changed is that the gap is no
+   longer silent: the hero carries "Known so far" and a caption counting the
+   shifts dated later in the period, so a reader who adds the rows up and
+   gets a bigger number has been told why.
 
 
 ### 2.2 Calendar and day detail (8 rows)
