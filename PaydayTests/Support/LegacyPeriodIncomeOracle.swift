@@ -1,4 +1,33 @@
 import Foundation
+@testable import Payday
+@testable import PaydayCore
+
+/// The old period-level wage INTERPRETATION, frozen as a test oracle.
+///
+/// Moved out of `Payday/` on 2026-09-18 for criterion 6 ("every old
+/// calculation path deleted"). Production had already stopped calling it: the
+/// only non-comment reference left in `Payday/` or `PaydayWidget/` was its own
+/// declaration, and `PaycheckAudit` reads
+/// `reconciliation.expectation.regularWagesCents` off the engine instead.
+///
+/// It is NOT deleted, because six parity suites use it as the reference for
+/// the number the engine must NOT return -- `DashboardParityTests` asserts
+/// `gridAllocation.totalCents != facts.hero.cents` to prove the grid weekday
+/// can no longer move a Dashboard figure, and `EarningsParityTests` pins the
+/// month-first answer the engine supersedes. Deleting the oracle would delete
+/// the demonstration that those bugs are fixed, which is most of what the
+/// parity suites are worth.
+///
+/// Living in the test target is what makes this safe: nothing shippable can
+/// route money through it, so it is no longer a path anything can bypass the
+/// engine with, while the differential proof survives. Its arithmetic was
+/// already the ledger's as of PR 3 -- what it preserves is the old
+/// INTERPRETATION (`PaySchedule.firstWeekday` driving the overtime workweek,
+/// wages computed over the caller's range), which is exactly the thing the
+/// audit found wrong and the engine changed.
+///
+/// Frozen: do not extend it, and do not fix bugs in it. A bug in here is the
+/// historical behaviour and is the point.
 
 /// Period-level wage math (hero, drawer, period detail, periods list) for the
 /// surfaces that have not moved to `EarningsSnapshot` yet. As of PR 3 it is a

@@ -186,7 +186,6 @@ targets:
       - path: Payday/Utilities/ShiftDays.swift
       - path: Payday/Utilities/ShiftDetails.swift
       - path: Payday/Utilities/ShiftReceiptMetrics.swift
-      - path: Payday/Utilities/PeriodIncome.swift
       - path: Payday/Utilities/AppGroup.swift
       # The widget renders in its own process and never traverses RootView,
       # so it has to consult the shared authorization policy itself before
