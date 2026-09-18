@@ -1704,34 +1704,15 @@ struct RevealTests {
         #expect(sampleCount == 1)   // only one other Monday to average against
     }
 
-    @Test("reveal has no rate clause when tonight has no hours logged")
-    func revealNoRateClauseWithoutHours() {
-        let period = PayPeriod(start: date(2026, 7, 6), end: date(2026, 7, 19))
-        let engine = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: [])
-        let result = engine.reveal(forNightAt: date(2026, 7, 6), cents: 5000, period: period)
-        #expect(result.rateClause == nil)
-    }
-
-    @Test("reveal's rate clause marks the best rate this period when nothing else beats it")
-    func revealRateClauseBestThisPeriod() {
-        let period = PayPeriod(start: date(2026, 7, 6), end: date(2026, 7, 19))
-        let engine = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: [
-            record(2026, 7, 6, cents: 10000, hoursWorked: 5) // $20/hr, earlier this period
-        ])
-        // Tonight: $30/hr, beats the $20/hr night earlier this period.
-        let result = engine.reveal(forNightAt: date(2026, 7, 8), cents: 15000, period: period, hoursWorked: 5)
-        #expect(result.rateClause == .rate(dollarsPerHour: 30, isBestThisPeriod: true))
-    }
-
-    @Test("reveal's rate clause is not the best when another rate night this period beats it")
-    func revealRateClauseNotBest() {
-        let period = PayPeriod(start: date(2026, 7, 6), end: date(2026, 7, 19))
-        let engine = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: [
-            record(2026, 7, 6, cents: 20000, hoursWorked: 5) // $40/hr, earlier this period
-        ])
-        let result = engine.reveal(forNightAt: date(2026, 7, 8), cents: 15000, period: period, hoursWorked: 5)
-        #expect(result.rateClause == .rate(dollarsPerHour: 30, isBestThisPeriod: false))
-    }
+    // The three reveal rate-clause tests are gone with the clause itself.
+    // `RevealResult.rateClause` (`docs/METRICS.md` [LS-17]) was computed on
+    // every log and never rendered — `RevealCardView` ignored it — and it was
+    // `Double(cents)/100/hours` for tonight compared against a TIPS-ONLY
+    // field of every other shift in the period, a basis mismatch inside one
+    // unrendered sentence. PR 5 group 2.6 deleted the whole path rather than
+    // migrating it. The live $/hr figure is now
+    // `EarningsResult.hourlyRateCents`, pinned by
+    // `InsightsSnapshotParityTests.theHourlyTileIsTheEnginesOwnRate`.
 }
 
 /// Tyler's ruling (2026-07-27): a shift speaks ONE number. These fixtures
@@ -1961,24 +1942,17 @@ struct RevealCopyTests {
         #expect(RevealCopy.paceLine(deltaCents: 0) == "Even with last period at this point.")
     }
 
-    @Test("compact pace line fits a widget caption: signed amount, no sentence")
-    func compactPaceLineWording() {
-        #expect(RevealCopy.compactPaceLine(deltaCents: 12000) == "+$120.00 vs last period")
-        #expect(RevealCopy.compactPaceLine(deltaCents: -5000) == "-$50.00 vs last period")
-        #expect(RevealCopy.compactPaceLine(deltaCents: 0) == "Even vs last period")
-    }
-
-    @Test("rate clause names the best-this-period rate as a whole dollar amount")
-    func rateClauseBestThisPeriod() {
-        let text = RevealCopy.rateClause(for: .rate(dollarsPerHour: 41.2, isBestThisPeriod: true))
-        #expect(text == "$41/hr, your best rate this period.")
-    }
-
-    @Test("rate clause without the best-rate flag stays a plain shift fact")
-    func rateClauseOrdinary() {
-        let text = RevealCopy.rateClause(for: .rate(dollarsPerHour: 18, isBestThisPeriod: false))
-        #expect(text == "$18/hr this shift.")
-    }
+    // Three deleted formatters, three deleted tests (`docs/METRICS.md`
+    // [ID-28], [ID-29], [ID-30]):
+    //
+    // - `compactPaceLine` was a SECOND formatter for the pace delta. The
+    //   widget caption it was written for ([WG-07]) uses
+    //   `Money.directionalDeltaString` instead, so nothing called this and
+    //   one figure had two spellings.
+    // - `projectionLine` had no caller anywhere in the repo, app, widget or
+    //   tests, and no `MetricID` — a future caller could have revived a
+    //   period projection with no registry row and no completeness caption.
+    // - `rateClause` formatted [LS-17]'s never-rendered value.
 }
 
 @Suite("Insights facts")
@@ -1989,7 +1963,15 @@ struct InsightsFactsTests {
         #expect(engine.insightsFacts(referenceDate: date(2026, 7, 10)) == nil)
     }
 
-    @Test("computes totals, average, and top days")
+    /// `totalCents`, `averagePerShiftCents` (`totalCents / count`, arithmetic
+    /// in a facts struct) and `topDays` were deleted with the only two things
+    /// that read them, `InsightsFactsCopy` and the narration prompt
+    /// (`docs/METRICS.md` [ID-02] through [ID-04]). What the page actually
+    /// renders from a whole-history money total is the CHART, which is
+    /// `EarningsChartFacts` over the snapshot and carries its own
+    /// completeness. The gate this test still guards is the one that
+    /// survived: how many shifts the facts rest on.
+    @Test("counts the shifts in the window and reports no split without one")
     func basicFacts() {
         let records = [
             record(2026, 7, 1, cents: 1000, kind: .cash),
@@ -2003,11 +1985,7 @@ struct InsightsFactsTests {
             Issue.record("expected facts")
             return
         }
-        #expect(facts.totalCents == 15000)
         #expect(facts.shiftCount == 5)
-        #expect(facts.averagePerShiftCents == 3000)
-        #expect(facts.topDays.count == 3)
-        #expect(facts.topDays[0].cents == 5000)
         #expect(facts.lunchDinner == nil)
         #expect(facts.doublesSolo == nil)
     }
@@ -2020,23 +1998,10 @@ struct InsightsFactsTests {
         #expect(engine.insightsFacts(referenceDate: date(2026, 7, 10))?.shiftCount == 5)
     }
 
-    @Test("notes pass through newest-first, trimmed, deduped, window-bound")
-    func notesPassThrough() {
-        var records = [
-            record(2026, 7, 1, cents: 1000, note: "  POS outage, lunch tips paid at dinner  "),
-            record(2026, 7, 2, cents: 2000, note: ""),
-            record(2026, 7, 3, cents: 3000, note: "slow night, private party"),
-            // Same day + same note on both rows of one closeout — one NoteFact.
-            record(2026, 7, 4, cents: 4000, kind: .cash, note: "new manager"),
-            record(2026, 7, 4, cents: 500, kind: .credit, note: "new manager"),
-            record(2026, 7, 5, cents: 5000)
-        ]
-        // A noted shift outside the recent window must not leak in.
-        records.append(record(2024, 1, 1, cents: 1000, note: "ancient note"))
-        let engine = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: records)
-        let notes = engine.insightsFacts(referenceDate: date(2026, 7, 10))?.notes ?? []
-        #expect(notes.map(\.text) == ["new manager", "slow night, private party", "POS outage, lunch tips paid at dinner"])
-    }
+    // The notes-pass-through test went with `InsightsFacts.notes`. Its only
+    // two readers were `InsightsFactsCopy` and `InsightsService`'s prompt
+    // ([ID-12] onward), and a shift note has never been rendered on a Payday
+    // screen. Nothing sends a note off-device any more.
 
     @Test("a single hot night never crowns a best-paying weekday")
     func weekdayBestNeedsRealSample() {
@@ -2190,8 +2155,16 @@ struct InsightsFactsTests {
         #expect(engine.insightsFacts(referenceDate: date(2026, 7, 10))?.doublesSolo == nil)
     }
 
-    @Test("overall total is net of tip-outs, and tip-out fact reports the total tipped out")
-    func totalIsNetAndTipOutFactPopulates() {
+    /// Retargeted, not deleted. `InsightsFacts.totalCents` and
+    /// `.totalTipOutCents` went with `InsightsFactsCopy`'s "Overall Snapshot"
+    /// and its tip-out clause (`docs/METRICS.md` [ID-02], [ID-03]), which were
+    /// the only two readers. The BEHAVIOUR they pinned — every figure on this
+    /// page is net of the tip-out, taken once per shift and never once per
+    /// record — is a property of `cents(of:)`, so it is pinned on a figure
+    /// the page actually renders: the day totals the chart, pace, rhythm and
+    /// weekday Moves all read.
+    @Test("day totals are net of tip-outs, counted once per shift")
+    func dayTotalsAreNetOfTipOut() {
         let records = [
             record(2026, 7, 1, cents: 10000, tipOutCents: 1000),
             record(2026, 7, 2, cents: 10000, tipOutCents: 500),
@@ -2200,16 +2173,14 @@ struct InsightsFactsTests {
             record(2026, 7, 5, cents: 10000)
         ]
         let engine = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: records)
-        let facts = engine.insightsFacts(referenceDate: date(2026, 7, 10))
-        #expect(facts?.totalCents == 48500) // 50000 gross - 1500 total tip-out
-        #expect(facts?.totalTipOutCents == 1500)
-    }
+        // 50000 gross - 1500 tipped out.
+        #expect(engine.nightlyTotals().reduce(0) { $0 + $1.cents } == 48500)
 
-    @Test("tip-out fact is zero when nothing was tipped out")
-    func tipOutFactZeroWithoutAny() {
-        let records = (1...5).map { record(2026, 7, $0, cents: 1000) }
-        let engine = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: records)
-        #expect(engine.insightsFacts(referenceDate: date(2026, 7, 10))?.totalTipOutCents == 0)
+        let untouched = StatsEngine(
+            payrollTimeZone: PaydayTestZone.payroll,
+            records: (1...5).map { record(2026, 7, $0, cents: 1000) }
+        )
+        #expect(untouched.nightlyTotals().reduce(0) { $0 + $1.cents } == 5000)
     }
 
     @Test("sales facts are nil below the minimum nights with sales logged")
@@ -2444,86 +2415,14 @@ struct InsightsFactsTests {
     }
 }
 
-@Suite("Insights facts copy (no-AI fallback)")
-struct InsightsFactsCopyTests {
-    @Test("always includes overall and top days, in order")
-    func alwaysIncludedSections() {
-        let facts = InsightsFacts(totalCents: 10000, shiftCount: 5, averagePerShiftCents: 2000, topDays: [], lunchDinner: nil, doublesSolo: nil)
-        let titles = InsightsFactsCopy.sections(for: facts).map(\.title)
-        #expect(titles == ["Overall Snapshot", "Top Earning Days"])
-    }
-
-    @Test("cash nights section appears only when the cash-weekday fact qualifies, with the one allowed sentence")
-    func cashWeekdaySectionAppearsWhenPresent() {
-        var facts = InsightsFacts(totalCents: 10000, shiftCount: 5, averagePerShiftCents: 2000, topDays: [], lunchDinner: nil, doublesSolo: nil)
-        #expect(!InsightsFactsCopy.sections(for: facts).contains { $0.title == "Cash Nights" })
-
-        facts.cashWeekday = CashWeekdayFacts(weekday: 6, sharePercent: 58, restSharePercent: 31, nightCount: 8)
-        let sections = InsightsFactsCopy.sections(for: facts)
-        let cashSection = sections.first { $0.title == "Cash Nights" }
-        #expect(cashSection?.body == "Fridays run more cash - 58% of tips against 31% the rest of the week (across 8 Fridays).")
-    }
-
-    @Test("lunch vs dinner and doubles vs solo sections only appear when their facts exist")
-    func conditionalSections() {
-        let facts = InsightsFacts(
-            totalCents: 10000, shiftCount: 5, averagePerShiftCents: 2000,
-            topDays: [],
-            lunchDinner: LunchDinnerFacts(lunchCents: 1000, lunchShiftCount: 1, dinnerCents: 2000, dinnerShiftCount: 1),
-            doublesSolo: DoublesSoloFacts(doubleAverageCents: 5000, doubleCount: 1, soloAverageCents: 3000, soloCount: 2)
-        )
-        let titles = InsightsFactsCopy.sections(for: facts).map(\.title)
-        #expect(titles.contains("Lunch vs Dinner"))
-        #expect(titles.contains("Doubles vs Solo"))
-    }
-
-    @Test("copy never uses technical jargon like entries")
-    func noJargonInCopy() {
-        let facts = InsightsFacts(totalCents: 10000, shiftCount: 5, averagePerShiftCents: 2000, topDays: [], lunchDinner: nil, doublesSolo: nil)
-        for section in InsightsFactsCopy.sections(for: facts) {
-            #expect(!section.body.lowercased().contains("entries"))
-        }
-    }
-
-    @Test("start times section appears only when start-time facts exist")
-    func startTimesSectionAppearsWhenPresent() {
-        var facts = InsightsFacts(totalCents: 10000, shiftCount: 5, averagePerShiftCents: 2000, topDays: [], lunchDinner: nil, doublesSolo: nil)
-        facts.startTime = StartTimeFacts(bestStartHour: 17, bestDollarsPerHour: 34, bestShiftCount: 6, worstStartHour: 16, worstDollarsPerHour: 27, worstShiftCount: 4)
-        let sections = InsightsFactsCopy.sections(for: facts)
-        #expect(sections.contains { $0.title == "Start Times" })
-        let body = sections.first { $0.title == "Start Times" }?.body ?? ""
-        // Computed the same way production's hourLabel does, so this stays
-        // correct regardless of the test runner's locale/region.
-        let bestHourLabel = Calendar.current.date(bySettingHour: 17, minute: 0, second: 0, of: .now)!.formatted(.dateTime.hour())
-        #expect(body.contains(bestHourLabel))
-        #expect(body.contains("6 shifts")) // matches the shiftsPhrase convention every other section here uses
-    }
-
-
-    @Test("guest and table copy states the pre-tax basis and inferred-table caveat")
-    func guestAndTableCopy() {
-        var facts = InsightsFacts(totalCents: 10000, shiftCount: 5, averagePerShiftCents: 2000, topDays: [], lunchDinner: nil, doublesSolo: nil)
-        facts.receiptPerformance = ReceiptPerformanceFacts(
-            guestShiftCount: 5,
-            totalGuests: 42,
-            averageSpendPerGuestCents: 2950,
-            grossTipsPerGuestCents: 600,
-            netTipsPerGuestCents: 520,
-            tableShiftCount: 5,
-            totalTables: 21,
-            estimatedTableShiftCount: 4,
-            averageSpendPerTableCents: 5900,
-            netTipsPerTableCents: 1040,
-            averageGuestsPerTable: 2,
-            averageCheckCents: nil,
-            guestsPerHour: nil,
-            tipOutPercentOfGrossTips: nil,
-            topCategories: []
-        )
-
-        let section = InsightsFactsCopy.sections(for: facts).first { $0.title == "Guests and Tables" }
-
-        #expect(section?.body.contains("$29.50 before tax") == true)
-        #expect(section?.body.contains("split checks") == true)
-    }
-}
+// `InsightsFactsCopyTests` is gone with `InsightsFactsCopy` itself.
+//
+// PR 5 group 2.7, rows [ID-02] through [ID-11]. The type turned
+// `InsightsFacts` into ten prose sections as "the fallback for hardware that
+// can't run Foundation Models" — and it had no live caller: the page renders
+// the deterministic tile grid, has never rendered a prose section since it
+// stopped narrating, and the narration whose absence it covered for is
+// deleted too. Every section restated a figure a tile already shows, each
+// with its own division (`lunchCents / lunchShiftCount`, twice), so it was a
+// second money formula for a figure that already had one. Deleting it now is
+// cheaper than migrating it onto the snapshot only for PR 8 to delete it.

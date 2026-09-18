@@ -207,4 +207,92 @@ struct CompletenessCopyTests {
         #expect(figure.label == "Tips & gratuity")
         #expect(figure.cents == 3200)
     }
+
+    /// **The tips-only figure a page that DECLARED a tips-only basis needs.**
+    ///
+    /// `earnedIncome(_:)` is not it: on a `.partial` selection it returns
+    /// `knownComponents.earnedIncomeCents`, a wage-inclusive number, under
+    /// "Known so far". PR 5 wave 2 measured that on Insights — the chart drew
+    /// 26,500c for a day the rest of the page called 10,500c, under a note
+    /// reading "Every figure below is tips only" and a bar labelled "Total".
+    @Test("nonWageEarnings drops the wages a partial earnedIncome figure keeps")
+    func nonWageFigureOnAPartialSelection() {
+        let result = EarningsResult(
+            metric: .earnedIncome,
+            scope: nil,
+            range: nil,
+            asOf: nil,
+            knownComponents: EarningsComponents(
+                voluntaryCashCents: 0,
+                voluntaryCreditCents: 12_000,
+                gratuityFeesCents: 0,
+                tipOutCents: 1_500,
+                regularWagesCents: 16_000
+            ),
+            coveredComponents: .zero,
+            minutes: 0,
+            regularMinutes: 0,
+            overtimeMinutes: 0,
+            completeness: Completeness(
+                totalShifts: 5,
+                shiftsWithHours: 4,
+                shiftsWageValued: 4,
+                shiftsWageAssumed: 0,
+                wageFeatureEnabled: true
+            ),
+            shiftIDs: []
+        )
+
+        let wageInclusive = EarningsFigure.earnedIncome(result)
+        #expect(wageInclusive.cents == 26_500)
+        #expect(wageInclusive.metric == .earnedIncome)
+
+        let tipsOnly = EarningsFigure.nonWageEarnings(result)
+        #expect(tipsOnly.cents == 10_500)
+        #expect(tipsOnly.metric == .nonWageEarnings)
+        #expect(tipsOnly.label == "Tips")
+        #expect(tipsOnly.mayBeCalledATotal == false)
+        // No caption: `nonWageEarnings`' missing-data rule is "none", so
+        // there is nothing about a tips figure to hedge.
+        #expect(tipsOnly.caption == nil)
+        // The wage picture is still carried whole — it is what told the
+        // caller to be on this basis.
+        #expect(tipsOnly.completeness == result.completeness)
+        #expect(tipsOnly.cents != wageInclusive.cents)
+    }
+
+    @Test("a nonWageEarnings figure takes a nonWageEarnings label, gratuity included")
+    func nonWageFigureLabels() {
+        func figure(gratuity: Int, tipOut: Int) -> EarningsFigure {
+            EarningsFigure.nonWageEarnings(
+                EarningsResult(
+                    metric: .earnedIncome,
+                    scope: nil,
+                    range: nil,
+                    asOf: nil,
+                    knownComponents: EarningsComponents(
+                        voluntaryCashCents: 1_000,
+                        voluntaryCreditCents: 2_000,
+                        gratuityFeesCents: gratuity,
+                        tipOutCents: tipOut
+                    ),
+                    coveredComponents: .zero,
+                    minutes: 0,
+                    regularMinutes: 0,
+                    overtimeMinutes: 0,
+                    completeness: .empty,
+                    shiftIDs: []
+                )
+            )
+        }
+        #expect(figure(gratuity: 0, tipOut: 0).label == "Tips")
+        #expect(figure(gratuity: 500, tipOut: 0).label == "Tips & gratuity")
+        // A tip-out never turns a tips figure into "You kept": that label
+        // belongs to earnedIncome.
+        #expect(figure(gratuity: 0, tipOut: 900).label == "Tips")
+        for gratuity in [0, 500] {
+            let label = figure(gratuity: gratuity, tipOut: 0).label
+            #expect(MetricID.nonWageEarnings.allowedLabels.contains(label))
+        }
+    }
 }

@@ -66,18 +66,17 @@ struct PeriodDetailFacts: SnapshotFacts {
     /// `chartFacts.whole`, which is the same range query the hero is.
     let chartFacts: EarningsChartFacts
 
-    /// `MetricID.expectedPaycheckGross` for the period, from the result's
-    /// components rather than from a second breakdown. Read off `auditBasis`,
-    /// which is the value handed to `PaycheckEntrySheet`, so the figure this
-    /// screen renders and the figure the sheet audits against are the same
-    /// expression and not two that agree.
+    /// `MetricID.expectedPaycheckGross` for the period, read off
+    /// `expectation` — the value handed to `PaycheckEntrySheet` — so the
+    /// figure this screen renders and the figure the sheet renders and audits
+    /// against are one property and not two that agree.
     let expectedCheckCents: Int
-    /// The basis `PaycheckEntrySheet` audits a real stub against. See
-    /// `PaycheckAuditBasis` for the divergence this closes: the sheet used to
-    /// rebuild its own basis from an entry-date filter and the pay-period
-    /// GRID's weekday, and disagreed with this screen by $310.00 on a
-    /// measured fixture.
-    let auditBasis: PaycheckAuditBasis
+    /// What the engine expects of this period's stub. See
+    /// `PaycheckReconciler.Expectation` for the divergence this closes: the
+    /// sheet used to rebuild its own basis from an entry-date filter and the
+    /// pay-period GRID's weekday, and disagreed with this screen by $310.00
+    /// on a measured fixture.
+    let expectation: PaycheckReconciler.Expectation
     let noPaycheckCaption: String
     let paycheck: PaycheckRecord?
     /// The recorded check next to what the engine expected. One type shared
@@ -145,12 +144,19 @@ struct PeriodDetailFacts: SnapshotFacts {
         }
         hourlyRateCaption = HistoryEarnings.hourlyRateCaption(periodResult)
 
-        // One basis for the expectation, whether it is rendered on this
-        // screen or audited inside the sheet this screen opens. The `?? 0` is
-        // never rendered as money: with no dataset `noPaycheckCaption` below
-        // names the pay date and no dollar figure, and `checked` refuses.
-        auditBasis = PaycheckAuditBasis(result: periodResult)
-        expectedCheckCents = auditBasis.expectedCheckCents ?? 0
+        // ONE expectation for this period, built from the result the hero,
+        // the drawer rows and the $/hr caption already read, and handed
+        // straight to `PaycheckEntrySheet`. The sheet used to rebuild its own
+        // from an entry-date filter and the pay-period GRID's weekday and
+        // audited a real stub $310.00 away from this screen;
+        // `PaycheckReconciler.Expectation`'s header has the measurement, and
+        // `PaycheckParityTests` pins the two sides equal.
+        //
+        // The `?? 0` is never rendered as money: with no dataset
+        // `noPaycheckCaption` below names the pay date and no dollar figure,
+        // and `checked` refuses.
+        expectation = PaycheckReconciler.Expectation(result: periodResult, stamp: snapshot?.stamp)
+        expectedCheckCents = expectation.grossCents ?? 0
 
         // Every bar is `snapshot.day(thatDay)` and `whole` is the same
         // `range(_:)` the hero is, so the chart and the figure above it are
@@ -256,12 +262,12 @@ struct PeriodDetailView: View {
         }
         .sheet(isPresented: $showPaycheckSheet) {
             // The sheet is HANDED this screen's basis rather than rebuilding
-            // one: see `PaycheckAuditBasis` for the $310.00 divergence that
+            // one: see `PaycheckReconciler.Expectation` for the $310.00 divergence that
             // closes.
             PaycheckEntrySheet(
                 period: period,
                 existing: facts.paycheck,
-                auditBasis: facts.auditBasis
+                expectation: facts.expectation
             )
             .paydayAppearance()
         }

@@ -294,4 +294,68 @@ struct RenderFactsPerformanceTests {
 
         #expect(elapsed < Self.budget(1.0), "Insights facts took \(elapsed) seconds over \(records.count) shifts against a 1.0s budget scaled x\(Self.budgetScale)")
     }
+
+    /// PR 5 group 2.12. The payday notification now builds the SAME
+    /// whole-history snapshot the Dashboard does, because speaking a
+    /// different number from the card is the defect the migration closed.
+    /// That makes `reschedule` an extra ledger pass, and it runs on the
+    /// MainActor: `[TipEntry]` is SwiftData-managed, so handing it to a
+    /// detached task would be the unsafe fix, not the cheap one.
+    ///
+    /// Budgeted rather than assumed, and NOT at interactive latency — this
+    /// runs on foreground and after a log, never inside a scroll or a frame.
+    /// The PR 2 S7 swap to `earningsStore.snapshot` deletes the build here
+    /// entirely, which is the real fix.
+    ///
+    /// **2,000 rows here, though the number quoted in `docs/METRICS.md` was
+    /// measured at 10,000. MEASURED why:** the one-off 10,000-row run took
+    /// **0.447s** against a 1.0s budget, and it is the same bridge build the
+    /// five budgets above already cover at 10,000 and 20,000 rows. Adding a
+    /// SIXTH large allocation to this suite cost a run: Swift Testing runs
+    /// these concurrently, and the full suite came back
+    /// `dashboardFactsStayFastForLargeHistory` **"Test crashed with signal
+    /// kill"** — a jetsam kill from the combined peak, not a budget failure.
+    /// A resident gate that kills a sibling test one run in five is worse
+    /// than no resident gate, so the size that proves boundedness stays and
+    /// the headline figure lives in the inventory where it was measured.
+    @Test("the payday notification decides over a 2,000-row history inside its budget")
+    func pushDecisionStaysFastForLargeHistory() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let historyStart = date(2000, 1, 1, calendar: calendar)
+        let now = date(2026, 7, 14, calendar: calendar)
+        let entries = (0..<2_000).map { index in
+            TipEntry(
+                date: calendar.date(byAdding: .day, value: index, to: historyStart)!,
+                amountCents: 100,
+                kind: .credit,
+                recordedAt: historyStart
+            )
+        }
+        let calculator = PayPeriodCalculator(
+            payrollTimeZone: PaydayTestZone.payroll,
+            schedule: PaySchedule(
+                frequency: .biweekly,
+                anchorPeriodEnd: date(2026, 7, 19, calendar: calendar),
+                payDelayDays: 5
+            )
+        )
+
+        let startedAt = Date.timeIntervalSinceReferenceDate
+        let decision = PaydayPushScheduler.decision(
+            now: now,
+            calculator: calculator,
+            allEntries: entries,
+            paycheckRecords: [],
+            isReminderEnabled: true,
+            policies: policies(rateCents: 2_000, zone: PaydayTestZone.payroll),
+            payrollTimeZone: PaydayTestZone.payroll,
+            calendar: calendar
+        )
+        let elapsed = Date.timeIntervalSinceReferenceDate - startedAt
+
+        // It actually decided something, or the budget measures nothing.
+        #expect(decision != nil)
+        #expect(elapsed < Self.budget(0.5), "Payday push decision took \(elapsed) seconds against a 0.5s budget scaled x\(Self.budgetScale)")
+    }
 }

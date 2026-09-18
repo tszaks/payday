@@ -116,15 +116,6 @@ struct RevealResult: Equatable {
     let comparison: RevealComparison
     /// Drives the reveal's one flourish (green sweep + success haptic).
     let isRecord: Bool
-    /// Nil whenever tonight's shift has no hours logged — a rate clause is
-    /// never fabricated from a fallback.
-    let rateClause: RevealRateClause?
-}
-
-/// A second, independent fact stacked under the reveal's main comparison —
-/// only appears when hours were logged for tonight's shift.
-enum RevealRateClause: Equatable {
-    case rate(dollarsPerHour: Double, isBestThisPeriod: Bool)
 }
 
 /// One shift's (one closeout's) canonical facts — the single place the
@@ -189,38 +180,47 @@ struct StatsEngine {
     private let calendar: Calendar
     /// The zone every bucket in this engine is a civil day in.
     let payrollTimeZone: TimeZone
-    /// The reveal pipeline's ONLY wage-aware surface (Tyler's ruling,
-    /// 2026-07-27): "for a shift, we don't differentiate [tips vs wages] —
-    /// it's 1 amount." When set, revealComparison's own record/average/
-    /// slowest checks price each shift at non-wage earnings + that shift's
-    /// wages instead of non-wage earnings alone. Pace, charts, projections,
-    /// Insights, and Moves never read this property; gratuity inclusion is
-    /// handled independently in ShiftFacts. Payroll categories remain
-    /// separate even though operational tip analytics combine voluntary tips
-    /// and auto-grat.
+    /// The reveal pipeline's pre-PR-5 wage fallback, and nothing else.
+    ///
+    /// Tyler's ruling, 2026-07-27: "for a shift, we don't differentiate [tips
+    /// vs wages] — it's 1 amount." That ruling is now served by
+    /// `valuedShiftCents`, which carries the LEDGER's answer. This scalar
+    /// remains only for a reveal caller that has no snapshot, and it is
+    /// wrong in two ways a scalar always is: it rounds each shift in
+    /// isolation, and it knows nothing about the workweek, so it carries no
+    /// overtime. Both of the reveal's live callers pass the map instead
+    /// (PR 5 wave 1), so nothing in production reads this today. PR 8 deletes
+    /// it. **Do not give it a second caller** — "never put a scalar rate or a
+    /// scalar weekday on a money path again" is wave 0's measured rule.
     private let wageCentsPerHour: Int?
-    /// The ledger's own valuation of each shift, keyed by `shiftID` — the
-    /// SAME cents the shift's row renders and the same cents that shift
-    /// contributed to the hero above it.
+    /// **This engine's declared basis.** The ledger's own `earnedIncome` for
+    /// each shift, keyed by `shiftID` — the SAME cents that shift's row
+    /// renders and the same cents it contributed to the hero above it.
     ///
-    /// Set by a PR 5-migrated caller (Dashboard's tonight echo) and nil
-    /// everywhere else. When it holds a shift's id, `revealCents(of:)` reads
-    /// it verbatim instead of pricing the shift itself.
+    /// - nil (the default) → every figure in this file is
+    ///   `MetricID.nonWageEarnings`. Byte-identical to this engine's
+    ///   behaviour before PR 5 wave 2.
+    /// - set → every figure is `MetricID.earnedIncome`. Not some of them:
+    ///   `cents(of:)` is the single read, so the basis cannot be one thing in
+    ///   a typical range and another in a Move.
     ///
-    /// Why it exists: `revealCents(of:)`'s fallback is
-    /// `WageEstimate.cents(wageCentsPerHour:hours:)`, which rounds one shift
-    /// in isolation and knows nothing about the workweek. So the figure the
-    /// echo SHOWS (the engine's, workweek-allocated, carrying overtime) and
-    /// the figures it is COMPARED against (per-shift base-rate roundings)
-    /// were two different derivations — W1's 1556-vs-1557 cent and W2's
-    /// missing 41st-hour overtime, on both sides of a "topping your previous
-    /// record of $Y" claim. `docs/METRICS.md` [DB-25] states the requirement:
-    /// "inputs should be earnedIncome per shift".
+    /// It has to be TOTAL over the records the engine holds. A map with a hole
+    /// in it would price one shift at earned income and its neighbour at tips
+    /// inside one comparison, which is the defect PR 5 group 2.6 exists to
+    /// close: `InsightsView` built this engine with NO wage rate, so every
+    /// fact, chart point, range, trend, forecast and Move on the page was
+    /// tips-only under wage-inclusive headlines. `InsightsEarnings.pricing`
+    /// therefore returns nil rather than a partial map, and `cents(of:)`
+    /// asserts on a miss.
     ///
-    /// Not defaulted to a dictionary the engine builds itself: a shift's
-    /// wage is a property of its whole workweek, and this engine is handed
-    /// records, not policies. Only a caller holding an `EarningsSnapshot`
-    /// can answer it, which is exactly why it is passed in.
+    /// Not defaulted to a dictionary the engine builds itself: a shift's wage
+    /// is a property of its whole WORKWEEK (the overtime threshold and the
+    /// ledger's cumulative rounding — W1's two shifts are 1203 and 1556
+    /// summing to the week's 2759, not 1203 and 1557), and this engine is
+    /// handed records, not policies. Only a caller holding an
+    /// `EarningsSnapshot` can answer it, which is exactly why it is passed in.
+    /// `docs/METRICS.md` [DB-25] states the requirement: "inputs should be
+    /// earnedIncome per shift".
     private let valuedShiftCents: [UUID: Int]?
 
     /// - Parameters:
@@ -234,7 +234,9 @@ struct StatsEngine {
     ///   - calendar: the grid calendar, for week and month arithmetic. Its
     ///     own time zone is ignored; `payrollTimeZone` replaces it.
     ///   - valuedShiftCents: the ledger's `earnedIncome` per shift, when the
-    ///     caller holds an `EarningsSnapshot`. See the property.
+    ///     caller holds an `EarningsSnapshot`. Setting it puts EVERY figure
+    ///     this engine produces on the wage-inclusive basis; leaving it nil
+    ///     puts every one of them on tips. See the property.
     init(
         payrollTimeZone: TimeZone,
         records: [TipRecord],
@@ -285,6 +287,51 @@ struct StatsEngine {
             .sorted { $0.date < $1.date }
     }
 
+    // MARK: The basis
+
+    /// What one shift is worth ON THIS ENGINE'S DECLARED BASIS, and the only
+    /// place any figure in this file reads a shift's money.
+    ///
+    /// Two bases, chosen once by the caller and never per figure:
+    ///
+    /// - `valuedShiftCents == nil` → `ShiftFacts.netCents`, which is
+    ///   `MetricID.nonWageEarnings`: cash + credit + gratuity - tip-out. This
+    ///   is the default and it is byte-identical to what this file did before
+    ///   PR 5 wave 2, so every caller that does not opt in is unchanged.
+    /// - `valuedShiftCents != nil` → the LEDGER's `earnedIncome` for that
+    ///   shift, verbatim: `nonWageEarnings` plus that shift's slice of its
+    ///   workweek's wage allocation. Not added to anything here.
+    ///
+    /// **Why the wage cannot be computed here.** A shift's wage is a property
+    /// of its whole WORKWEEK — the overtime threshold, and the ledger's
+    /// cumulative half-up rounding, which is why W1's two shifts are 1203 and
+    /// 1556 summing to the week's 2759 rather than 1203 and 1557. This engine
+    /// is handed records, not policies, so only a caller holding an
+    /// `EarningsSnapshot` can answer it (`InsightsEarnings.pricing`).
+    ///
+    /// **The map must be TOTAL, and that is the CALLER's job.** A map with a
+    /// hole in it would price one shift at earned income and its neighbour at
+    /// tips inside the same comparison — the mixed basis the audit found. This
+    /// function cannot repair that: it sees one shift at a time and has no
+    /// second basis to fall the whole engine back to. So the guarantee lives
+    /// where the map is built. `InsightsEarnings.pricing` checks its own
+    /// output against the grouping it was built from and returns **nil**,
+    /// collapsing the whole page to tips, rather than handing over a partial
+    /// map; `InsightsPricingTotalityTests` measures that, including for a
+    /// legacy row with no `shiftID` whose deterministic id depends on the
+    /// grouping calendar.
+    ///
+    /// A miss here is therefore a programming error — a grouping calendar that
+    /// disagrees with the one the snapshot was built from. It is not raised as
+    /// an assertion because two of the three callers are reveal surfaces on
+    /// live paths whose pre-existing behaviour for an unpriceable shift is
+    /// this same fallback, and turning that into a debug crash on a log would
+    /// be a worse failure than the one it reports.
+    private func cents(of shift: ShiftFacts) -> Int {
+        guard let valuedShiftCents else { return shift.netCents }
+        return valuedShiftCents[shift.shiftID] ?? shift.netCents
+    }
+
     // MARK: Daily and per-shift totals
 
     /// One row per calendar DAY worked — a day's shifts summed. This is the
@@ -296,7 +343,7 @@ struct StatsEngine {
 
     private func dayTotals() -> [(date: Date, cents: Int)] {
         Dictionary(grouping: shiftFacts(from: records), by: { $0.date })
-            .map { day, shifts in (date: day, cents: shifts.reduce(0) { $0 + $1.netCents }) }
+            .map { day, shifts in (date: day, cents: shifts.reduce(0) { $0 + self.cents(of: $1) }) }
             .sorted { $0.date < $1.date }
     }
 
@@ -312,7 +359,7 @@ struct StatsEngine {
                 if let excludingShift, shift.shiftID == excludingShift { return false }
                 return true
             }
-            .map { (shiftID: $0.shiftID, date: $0.date, cents: $0.netCents) }
+            .map { (shiftID: $0.shiftID, date: $0.date, cents: self.cents(of: $0)) }
     }
 
     // MARK: Records (per-shift)
@@ -367,7 +414,7 @@ struct StatsEngine {
         shiftFacts(from: records).compactMap { shift in
             if let excludedDate, calendar.isDate(shift.date, inSameDayAs: excludedDate) { return nil }
             guard let hours = shift.hoursWorked, hours > 0 else { return nil }
-            return (date: shift.date, cents: shift.netCents, hours: hours)
+            return (date: shift.date, cents: cents(of: shift), hours: hours)
         }
     }
 
@@ -463,7 +510,7 @@ struct StatsEngine {
         let cutoff = min(calendar.startOfDay(for: date), period.end)
         return shiftFacts(from: records)
             .filter { $0.date >= period.start && $0.date <= cutoff }
-            .reduce(0) { $0 + $1.netCents }
+            .reduce(0) { $0 + self.cents(of: $1) }
     }
 
     /// The prior period's total through the same number of elapsed days —
@@ -477,7 +524,7 @@ struct StatsEngine {
         let cappedEnd = min(comparableEnd, priorPeriod.end)
         return shiftFacts(from: records)
             .filter { $0.date >= priorPeriod.start && $0.date <= cappedEnd }
-            .reduce(0) { $0 + $1.netCents }
+            .reduce(0) { $0 + self.cents(of: $1) }
     }
 
     /// Current net total plus one estimated night for every remaining
@@ -522,19 +569,26 @@ struct StatsEngine {
 
     // MARK: Reveal
 
-    /// A shift's reveal-basis cents: non-wage earnings, plus that shift's wages when
-    /// BOTH this engine's wageCentsPerHour and the shift's own hoursWorked
-    /// are known. Falls back to plain netCents whenever either is missing —
-    /// which is also every value this returns when wageCentsPerHour is nil,
-    /// so the fork below is byte-identical to the wage-exclusive path by
-    /// default. Used ONLY by revealComparison's own helpers; every other
-    /// caller in this file reads shiftFacts/netCents directly and never
-    /// sees a wage.
+    /// A shift's reveal-basis cents: `cents(of:)`, the engine's declared
+    /// basis, with ONE extra fallback the rest of the file does not have.
+    ///
+    /// The fallback is the pre-PR-5 scalar wage
+    /// (`WageEstimate.cents(wageCentsPerHour:hours:)`), which prices one shift
+    /// in isolation and knows nothing about the workweek — so it rounds
+    /// per shift and carries no overtime. It survives only for the reveal, and
+    /// only for a caller that passes `wageCentsPerHour` and no pricing map.
+    /// Both of the reveal's live callers (Dashboard's tonight echo and the log
+    /// sheet's card, PR 5 wave 1) pass the map, so the fallback is already
+    /// dead on every production path; PR 8 deletes `wageCentsPerHour` and this
+    /// branch with it.
+    ///
+    /// When the map is present this is `cents(of:)` exactly, which is what
+    /// makes the shift the reveal SHOWS and the history it is COMPARED
+    /// against one derivation instead of two — the W1 1556-vs-1557 cent and
+    /// W2's missing forty-first hour, on both sides of a "topping your
+    /// previous record" claim.
     private func revealCents(of shift: ShiftFacts) -> Int {
-        // The engine's own answer for this shift, when the caller has one.
-        // Not added to anything here: `earnedIncome` is already non-wage
-        // earnings plus that shift's slice of the workweek allocation.
-        if let valued = valuedShiftCents?[shift.shiftID] { return valued }
+        if valuedShiftCents != nil { return cents(of: shift) }
         guard let wageCentsPerHour,
               let hours = shift.hoursWorked,
               let wage = WageEstimate.cents(wageCentsPerHour: wageCentsPerHour, hours: hours)
@@ -597,18 +651,25 @@ struct StatsEngine {
     /// Picks the one most interesting true thing about tonight, in priority
     /// order: all-time record, first shift of a period, weekday record,
     /// notably slow night, then the everyday weekday-average comparison.
-    /// Stacks an independent $/hr clause underneath when hours were logged.
     /// `cents` must be the SAME basis this engine's history is compared
     /// on: pass the shift's displayed total — non-wage earnings, plus wages when a
     /// wage is set on this engine (Tyler's ruling, 2026-07-27) — never a
     /// wage-exclusive figure alongside a wage-aware engine or vice versa.
-    func reveal(forNightAt date: Date, cents: Int, period: PayPeriod, hoursWorked: Double? = nil, shiftID: UUID? = nil) -> RevealResult {
+    ///
+    /// It used to take `hoursWorked` too, for `RevealResult.rateClause`
+    /// (`docs/METRICS.md` [LS-17] and [ID-30]) — a $/hr sentence
+    /// `RevealCardView` never rendered. PR 5 group 2.6 DELETED that path
+    /// rather than migrating it: the rate was `Double(cents)/100/hours` for
+    /// this shift compared against a tips-only field of every other shift in
+    /// the period, a basis mismatch inside one unrendered sentence. The live
+    /// $/hr figure on Insights is `EarningsResult.hourlyRateCents` now, which
+    /// excludes an hours-less shift from both sides of the division instead.
+    func reveal(forNightAt date: Date, cents: Int, period: PayPeriod, shiftID: UUID? = nil) -> RevealResult {
         let (comparison, isRecord) = revealComparison(forNightAt: date, cents: cents, period: period, shiftID: shiftID)
         return RevealResult(
             cents: cents,
             comparison: comparison,
-            isRecord: isRecord,
-            rateClause: rateClause(forNightAt: date, cents: cents, period: period, hoursWorked: hoursWorked)
+            isRecord: isRecord
         )
     }
 
@@ -654,19 +715,6 @@ struct StatsEngine {
         let weekdaySampleCount = nights(excludingDate: excludingDate, excludingShift: shiftID)
             .filter { calendar.component(.weekday, from: $0.date) == weekday }.count
         return (.weekdayAverage(weekday: weekday, deltaCents: deltaCents, periodRank: qualifyingRank, periodNightCount: periodShiftCount, sampleCount: weekdaySampleCount), false)
-    }
-
-    /// $/hr for tonight, plus whether it beats every other night this period
-    /// that also has hours logged. Nil whenever tonight has no hours — never
-    /// fabricated from a fallback.
-    private func rateClause(forNightAt date: Date, cents: Int, period: PayPeriod, hoursWorked: Double?) -> RevealRateClause? {
-        guard let hoursWorked, hoursWorked > 0 else { return nil }
-        let rate = Double(cents) / 100 / hoursWorked
-        let otherPeriodRates = nightlyRates(excluding: date)
-            .filter { $0.date >= period.start && $0.date <= period.end }
-            .map { Double($0.cents) / 100 / $0.hours }
-        let isBestThisPeriod = !otherPeriodRates.isEmpty && otherPeriodRates.allSatisfy { rate >= $0 }
-        return .rate(dollarsPerHour: rate, isBestThisPeriod: isBestThisPeriod)
     }
 
     /// "$120 ahead of last period at this point" — nil when there's no
@@ -749,7 +797,7 @@ struct StatsEngine {
             let index = Int((fraction * Double(max(length - 1, 0))).rounded())
             guard let cutoff = calendar.date(byAdding: .day, value: index, to: period.start) else { continue }
             let cappedCutoff = min(cutoff, period.end)
-            samples.append(periodShifts.filter { $0.date <= cappedCutoff }.reduce(0) { $0 + $1.netCents })
+            samples.append(periodShifts.filter { $0.date <= cappedCutoff }.reduce(0) { $0 + self.cents(of: $1) })
         }
 
         guard !samples.isEmpty else { return nil }
@@ -882,8 +930,8 @@ struct StatsEngine {
             // $60 lunches and six $200 dinners has a "typical range" that
             // contains almost no actual shift, centred on a value that has
             // never occurred once.
-            let lunch = dayShifts.filter { periods[$0.shiftID] == .lunch }.map(\.netCents)
-            let dinner = dayShifts.filter { periods[$0.shiftID] == .dinner }.map(\.netCents)
+            let lunch = dayShifts.filter { periods[$0.shiftID] == .lunch }.map { self.cents(of: $0) }
+            let dinner = dayShifts.filter { periods[$0.shiftID] == .dinner }.map { self.cents(of: $0) }
             if lunch.count >= ReliabilityThresholds.minimumShiftsForRange,
                dinner.count >= ReliabilityThresholds.minimumShiftsForRange {
                 byWeekday.append(WeekdayTypicalRange(weekday: weekday, shiftPeriod: .lunch, range: Self.typicalRange(lunch)))
@@ -893,7 +941,7 @@ struct StatsEngine {
 
             // Not splittable (legacy shifts carry no period, or one side is
             // thin). Detect the same shape and withhold rather than lie.
-            let values = dayShifts.map(\.netCents)
+            let values = dayShifts.map { self.cents(of: $0) }
             if isTwoClump(values) {
                 mixedShapeWeekdays.append(weekday)
                 continue
@@ -908,7 +956,7 @@ struct StatsEngine {
         let overall: TypicalRange? = (
             shifts.count >= ReliabilityThresholds.minimumShiftsForRange
             && distinctWeekdays.count >= ReliabilityThresholds.minimumWeekdaysForOverall
-        ) ? Self.typicalRange(shifts.map(\.netCents)) : nil
+        ) ? Self.typicalRange(shifts.map { self.cents(of: $0) }) : nil
 
         // Non-nil when anything is KNOWN, including a deliberate
         // withholding — dropping that on the floor would lose the one
@@ -1072,7 +1120,7 @@ struct StatsEngine {
 
         func byWeekday(_ shifts: [ShiftFacts]) -> [Int: [Int]] {
             Dictionary(grouping: shifts, by: { calendar.component(.weekday, from: $0.date) })
-                .mapValues { $0.map(\.netCents) }
+                .mapValues { $0.map { self.cents(of: $0) } }
         }
         let recentByWeekday = byWeekday(recent)
         let priorByWeekday = byWeekday(prior)
@@ -1280,7 +1328,7 @@ struct StatsEngine {
             }
 
             let byDay = Dictionary(grouping: worked, by: { $0.date })
-            let actualCents = worked.reduce(0) { $0 + $1.netCents }
+            let actualCents = worked.reduce(0) { $0 + self.cents(of: $1) }
 
             // Per-shift average for the day, never "the day's first shift":
             // shiftFacts sorts by date only, so intra-day order is
@@ -1288,7 +1336,7 @@ struct StatsEngine {
             var priceDelta = 0
             for night in plan.nights {
                 guard let date = dateForWeekday[night.weekday], let dayShifts = byDay[date], !dayShifts.isEmpty else { continue }
-                let dayAverageShiftCents = dayShifts.reduce(0) { $0 + $1.netCents } / dayShifts.count
+                let dayAverageShiftCents = dayShifts.reduce(0) { $0 + self.cents(of: $1) } / dayShifts.count
                 priceDelta += dayAverageShiftCents - night.averageNetCents
             }
             // Defined as the remainder so the identity holds EXACTLY
@@ -1471,15 +1519,6 @@ struct StatsEngine {
 
     static let minimumShiftsForInsights = 5
     static let insightsRecentWindowDays = 180
-    /// Notes get a much shorter window than the facts do. A note explains one
-    /// day, and its explanatory value decays fast — the 180-day facts window
-    /// meant a Toast-error note from July 17 was still the highest-priority
-    /// thing narration could say on August 5, three weeks later, because notes
-    /// were capped by COUNT and never by age (Tyler: "Why is it surfacing one
-    /// single thing from July 17th? ... Of all the things that it thinks are
-    /// worth surfacing, that's what it decides to pick"). Thirty days keeps a
-    /// note useful while the day it explains is still in recent memory.
-    static let insightsNoteWindowDays = 30
     /// Lower bar than minimumShiftsForInsights on purpose — hours-logging
     /// is optional, so RATE facts should surface as soon as there's a
     /// handful of nights to blend, not wait for the full insights gate.
@@ -1514,58 +1553,70 @@ struct StatsEngine {
     static let minimumCashWeekdayShareDelta = 0.15
 
     /// Every number Insights is allowed to talk about — computed here, not
-    /// by the model. "The stats engine computes facts; the model narrates
-    /// them. Never let the model do arithmetic." Nil when there isn't
-    /// enough recent history yet.
+    /// by the model. Nil when there isn't enough recent history yet, which is
+    /// also the page's unlock signal.
+    ///
+    /// **Scope: the last `insightsRecentWindowDays` civil days.** Not all
+    /// history. `InsightsEarnings.recentRange(...)` is the same window
+    /// expressed as a `DayRange`, so the HOURLY tile can ask the snapshot the
+    /// same question over the same days.
+    ///
+    /// **Basis: this engine's declared one**, via `cents(of:)`. It used to be
+    /// tips-only always, because `InsightsView` built the engine with no wage
+    /// rate; `docs/METRICS.md` [IL-01] to [IL-27] all recorded "basis
+    /// nonWageEarnings" beneath wage-inclusive headlines.
+    ///
+    /// PR 5 group 2.7 DELETED four money fields that used to be computed
+    /// here — `totalCents`, `averagePerShiftCents` (`totalCents / count`,
+    /// arithmetic in a facts struct), `topDays` and `totalTipOutCents` — plus
+    /// `notes`. Every one of them was read only by `InsightsFactsCopy` and
+    /// `InsightsService`'s narration prompt, both of which had no live caller
+    /// and are gone ([ID-02] to [ID-04], [ID-12], [ID-13], [ID-15]). The page
+    /// has rendered no prose section and no narration since it became
+    /// deterministic.
+    /// **The one definition of the recent window**, as a half-open interval
+    /// of instants in the frozen payroll zone: the 180 civil days before
+    /// today, plus today.
+    ///
+    /// `InsightsEarnings.recentRange(referenceDate:in:)` is the same window
+    /// as the `DayRange` the snapshot selects by, and the HOURLY tile is
+    /// `snapshot.range(thatRange).hourlyRateCents`. Both bounds are stated in
+    /// whole civil days for that reason, and both were once wrong here: the
+    /// filter read `$0.date >= referenceDate - 180 days`, an instant cutoff
+    /// with no `startOfDay` and **no upper bound at all**, so a future-dated
+    /// shift was in the engine's sample and outside the tile's, and a shift
+    /// on the boundary day earlier in the clock than `referenceDate` was in
+    /// the tile's and outside the engine's. The tile's caption is a coverage
+    /// claim about the shifts its neighbours count, so the two have to be the
+    /// same shifts. `InsightsWindowAgreementTests` measures both edges.
+    ///
+    /// The upper bound is deliberately "the end of today" and not "now":
+    /// every other window in this file is civil-day-bounded, and a shift
+    /// logged at 11pm must not drop out of the sample because the facts were
+    /// computed at 9am.
+    func recentWindow(referenceDate: Date = .now) -> Range<Date> {
+        let today = calendar.startOfDay(for: referenceDate)
+        let start = calendar.date(byAdding: .day, value: -Self.insightsRecentWindowDays, to: today) ?? .distantPast
+        let end = calendar.date(byAdding: .day, value: 1, to: today) ?? .distantFuture
+        return start..<end
+    }
+
     func insightsFacts(referenceDate: Date = .now) -> InsightsFacts? {
-        let cutoff = calendar.date(byAdding: .day, value: -Self.insightsRecentWindowDays, to: referenceDate) ?? .distantPast
-        let recent = records.filter { $0.date >= cutoff }
+        let window = recentWindow(referenceDate: referenceDate)
+        let recent = records.filter { window.contains($0.date) }
         let shifts = shiftFacts(from: recent)
 
         guard shifts.count >= Self.minimumShiftsForInsights else { return nil }
 
-        let totalCents = shifts.reduce(0) { $0 + $1.netCents }
-        // Top earning DAYS, not shifts — a double day's combined take is one
-        // day's earnings here, so sum shifts back up per calendar day.
-        let dayNet = Dictionary(grouping: shifts, by: { $0.date }).mapValues { $0.reduce(0) { $0 + $1.netCents } }
-        let topDays = dayNet.sorted { $0.value > $1.value }.prefix(3).map { InsightsFacts.DayAmount(date: $0.key, cents: $0.value) }
-        // Each shift's canonical tip-out, never the raw per-record sum — a
-        // shift with a (legacy) value on both entries would otherwise
-        // count it twice here too.
-        let totalTipOutCents = shifts.compactMap(\.tipOutCents).reduce(0, +)
-
-        // The worker's own notes, newest first — context the narration can
-        // use to explain an anomalous day instead of reading a pattern into
-        // it (a POS outage note beats any inference). Deduped per day+text
-        // (a shift's rows share one note), capped in count and length so
-        // the prompt stays bounded.
-        var seenNoteKeys = Set<String>()
-        let noteCutoff = calendar.date(byAdding: .day, value: -Self.insightsNoteWindowDays, to: referenceDate) ?? .distantPast
-        let notes: [InsightsFacts.NoteFact] = recent
-            .filter { $0.date >= noteCutoff }
-            .sorted { $0.date > $1.date }
-            .compactMap { record in
-                guard let raw = record.note?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { return nil }
-                let text = String(raw.prefix(200))
-                let key = "\(record.date.timeIntervalSinceReferenceDate)|\(text)"
-                guard seenNoteKeys.insert(key).inserted else { return nil }
-                return InsightsFacts.NoteFact(date: record.date, text: text)
-            }
-
         return InsightsFacts(
-            totalCents: totalCents,
             shiftCount: shifts.count,
-            averagePerShiftCents: totalCents / shifts.count,
-            topDays: Array(topDays),
             lunchDinner: lunchDinnerFacts(from: shifts),
             doublesSolo: doublesSoloFacts(from: shifts),
-            totalTipOutCents: totalTipOutCents,
             rate: rateFacts(from: shifts),
             sales: salesFacts(from: shifts),
             startTime: startTimeFacts(from: shifts),
             cashWeekday: cashWeekdayFacts(from: shifts),
-            receiptPerformance: receiptPerformanceFacts(from: shifts),
-            notes: Array(notes.prefix(10))
+            receiptPerformance: receiptPerformanceFacts(from: shifts)
         )
     }
 
@@ -1777,7 +1828,7 @@ struct StatsEngine {
     private func rateFacts(from shifts: [ShiftFacts]) -> RateFacts? {
         let rateShifts = shifts.compactMap { shift -> (shiftID: UUID, date: Date, cents: Int, hours: Double)? in
             guard let hours = shift.hoursWorked, hours > 0 else { return nil }
-            return (shiftID: shift.shiftID, date: shift.date, cents: shift.netCents, hours: hours)
+            return (shiftID: shift.shiftID, date: shift.date, cents: cents(of: shift), hours: hours)
         }
         func rate(_ list: [(shiftID: UUID, date: Date, cents: Int, hours: Double)]) -> Double? {
             blendedRate(list.map { (date: $0.date, cents: $0.cents, hours: $0.hours) })
@@ -1830,7 +1881,7 @@ struct StatsEngine {
     private func startTimeFacts(from shifts: [ShiftFacts]) -> StartTimeFacts? {
         let qualifying = shifts.compactMap { shift -> (hour: Int, date: Date, cents: Int, hours: Double)? in
             guard let hours = shift.hoursWorked, hours > 0, let clockIn = shift.clockIn else { return nil }
-            return (hour: calendar.component(.hour, from: clockIn), date: shift.date, cents: shift.netCents, hours: hours)
+            return (hour: calendar.component(.hour, from: clockIn), date: shift.date, cents: cents(of: shift), hours: hours)
         }
         let buckets = Dictionary(grouping: qualifying, by: { $0.hour })
             .filter { $0.value.count >= Self.minimumShiftsPerStartBucket }
@@ -1866,9 +1917,9 @@ struct StatsEngine {
         guard !lunch.isEmpty, !dinner.isEmpty else { return nil }
 
         return LunchDinnerFacts(
-            lunchCents: lunch.reduce(0) { $0 + $1.grossCents },
+            lunchCents: lunch.reduce(0) { $0 + self.cents(of: $1) },
             lunchShiftCount: lunch.count,
-            dinnerCents: dinner.reduce(0) { $0 + $1.grossCents },
+            dinnerCents: dinner.reduce(0) { $0 + self.cents(of: $1) },
             dinnerShiftCount: dinner.count
         )
     }
@@ -2269,6 +2320,24 @@ struct StatsEngine {
     /// The best-paying weekday by $/hr against the overall $/hr average -
     /// a genuinely different fact from weekdaySwapMove, which compares
     /// $/night.
+    ///
+    /// **Its "overall" clause NAMES its scope**, and that is a fix rather
+    /// than a flourish. Both sides of this comparison come from
+    /// `nightlyRates()`, which is ALL history (every Move in this file is,
+    /// deliberately — see `startTimeLeaderMove`'s header), while the HOURLY
+    /// tile that renders on the same Insights page is
+    /// `EarningsResult.hourlyRateCents` over the 180-day
+    /// `InsightsEarnings.recentRange`. `InsightsPresentation
+    /// .redundantMetricIDs(for:)` only ever excludes the `startTimes` tile,
+    /// so for anyone with more than 180 days of history the Move and the tile
+    /// render together and differ, both naming the person's hourly rate.
+    /// Saying "across all your history" is what makes them two answers to two
+    /// questions instead of two answers to one.
+    ///
+    /// The scope is not narrowed to the tile's window instead, because
+    /// `best.rate` — the other side of this very sentence — is all-history
+    /// too. Moving one side would put a scope seam inside the comparison,
+    /// which is worse than a scope difference between two labelled figures.
     private func rateLeaderMove() -> MoveCandidate? {
         guard let best = bestDollarsPerHourWeekday(), let overallRate = averageDollarsPerHour() else { return nil }
         let deltaPerHourCents = Int(((best.rate - overallRate) * 100).rounded())
@@ -2302,7 +2371,7 @@ struct StatsEngine {
         let move = Move(
             id: "rateLeader",
             title: "\(weekdayName)s Lead Per Hour",
-            body: "\(weekdayName)s average \(Money.wholeDollarString(fromCents: Int((best.rate * 100).rounded())))/hr across \(countPhrase(weekdayRates.count, singular: "shift", plural: "shifts")), against \(Money.wholeDollarString(fromCents: Int((overallRate * 100).rounded())))/hr overall. \(closingClause)",
+            body: "\(weekdayName)s average \(Money.wholeDollarString(fromCents: Int((best.rate * 100).rounded())))/hr across \(countPhrase(weekdayRates.count, singular: "shift", plural: "shifts")), against \(Money.wholeDollarString(fromCents: Int((overallRate * 100).rounded())))/hr across all your history. \(closingClause)",
             effectSize: effectSize(delta: Double(deltaPerHourCents), pooledStandardDeviation: pooledSD, countA: weekdayRates.count, countB: otherRates.count),
             supportingShiftCount: min(weekdayRates.count, otherRates.count)
         )
@@ -2324,7 +2393,7 @@ struct StatsEngine {
         // lucky late starts can't look like real signal against noisy history.
         let qualifying = shiftFacts(from: records).compactMap { shift -> (hour: Int, cents: Int, hours: Double)? in
             guard let hours = shift.hoursWorked, hours > 0, let clockIn = shift.clockIn else { return nil }
-            return (hour: calendar.component(.hour, from: clockIn), cents: shift.netCents, hours: hours)
+            return (hour: calendar.component(.hour, from: clockIn), cents: cents(of: shift), hours: hours)
         }
         func centsPerHour(_ shift: (hour: Int, cents: Int, hours: Double)) -> Int {
             Int((Double(shift.cents) / shift.hours).rounded())
@@ -2446,7 +2515,7 @@ struct StatsEngine {
         let soloDays = byDay.filter { $0.value.count == 1 }
         guard !doubleDays.isEmpty, !soloDays.isEmpty else { return nil }
 
-        func dayNet(_ group: [ShiftFacts]) -> Int { group.reduce(0) { $0 + $1.netCents } }
+        func dayNet(_ group: [ShiftFacts]) -> Int { group.reduce(0) { $0 + self.cents(of: $1) } }
         let doubleTotal = doubleDays.values.reduce(0) { $0 + dayNet($1) }
         let soloTotal = soloDays.values.reduce(0) { $0 + dayNet($1) }
         let doubleShiftCount = doubleDays.values.reduce(0) { $0 + $1.count }
@@ -2480,7 +2549,7 @@ struct StatsEngine {
     private func nightlyFacts() -> [(date: Date, netCents: Int, isDouble: Bool)] {
         let byDay = Dictionary(grouping: shiftFacts(from: records), by: { $0.date })
         return byDay
-            .map { day, shifts in (date: day, netCents: shifts.reduce(0) { $0 + $1.netCents }, isDouble: shifts.count >= 2) }
+            .map { day, shifts in (date: day, netCents: shifts.reduce(0) { $0 + self.cents(of: $1) }, isDouble: shifts.count >= 2) }
             .sorted { $0.date < $1.date }
     }
 
@@ -2664,45 +2733,25 @@ struct WorkRhythm: Equatable {
     let typicalLogHour: Int?
 }
 
-struct InsightsFacts: Equatable, Codable, Sendable {
-    struct DayAmount: Equatable, Codable, Sendable {
-        let date: Date
-        let cents: Int
-    }
-
-    /// A shift note passed through verbatim (dated, trimmed, length-capped) —
-    /// the worker's own context for why a number looks the way it does.
-    struct NoteFact: Equatable, Codable, Sendable {
-        let date: Date
-        let text: String
-    }
-
-    let totalCents: Int
+struct InsightsFacts: Equatable, Sendable {
+    /// How many shifts in the window these facts rest on. Every sub-struct
+    /// below carries its OWN count as well, because each one qualifies a
+    /// different subset (shifts with hours, shifts with sales, lunches) and
+    /// the caption under a tile has to name the sample that tile actually
+    /// used.
     let shiftCount: Int
-    let averagePerShiftCents: Int
-    let topDays: [DayAmount]
     let lunchDinner: LunchDinnerFacts?
     let doublesSolo: DoublesSoloFacts?
     // var + inline default (not let) so the synthesized memberwise init
     // both defaults these AND still accepts an explicit override — a `let`
-    // with an inline default gets excluded from the init entirely. This
-    // keeps InsightsFactsCopyTests' pre-existing hand-built fixtures
-    // compiling without every call site needing to name them.
-    var totalTipOutCents: Int = 0
+    // with an inline default gets excluded from the init entirely.
     var rate: RateFacts? = nil
     var sales: SalesFacts? = nil
     var startTime: StartTimeFacts? = nil
     // Replaces the old cashCents/creditCents pair (cash-vs-credit is a
-    // known pay structure, never an insight — see CashWeekdayFacts). Kept
-    // as var + default like the fields above; a persisted InsightsSnapshot
-    // from before this field existed simply has this decode to nil
-    // (JSONDecoder ignores its now-gone "cashCents"/"creditCents" keys
-    // rather than failing), which self-heals on the next refresh.
+    // known pay structure, never an insight — see CashWeekdayFacts).
     var cashWeekday: CashWeekdayFacts? = nil
     var receiptPerformance: ReceiptPerformanceFacts? = nil
-    /// Newest-first, one per noted shift, capped — context for the narration,
-    /// never an arithmetic input.
-    var notes: [NoteFact] = []
 }
 
 /// Receipt-derived guest, table, and sales-mix performance. Each average is
@@ -2750,6 +2799,32 @@ struct LunchDinnerFacts: Equatable, Codable, Sendable {
     let lunchShiftCount: Int
     let dinnerCents: Int
     let dinnerShiftCount: Int
+
+    /// The per-shift averages the LUNCH and DINNER tiles print, computed HERE
+    /// rather than in the tile.
+    ///
+    /// Two reasons, and the first is the adapter contract's rule 1: a Facts
+    /// struct keeps only presentation, and a view that divides cents is a view
+    /// that can compute. `DoublesSoloFacts.doublePerShiftCents` already sits
+    /// on this side of the line for the identical reason, so the two rows of
+    /// one grid now get their averages from the same place.
+    ///
+    /// The second is that the shift counts DIFFER between lunch and dinner, so
+    /// the raw totals cannot be compared — "dinner out-earned lunch 4 to 1" off
+    /// totals is the wrong conclusion when per shift it is 2 to 1. Keeping the
+    /// division next to the counts it divides by is what stops a caller
+    /// reaching for `lunchCents` and comparing the wrong pair.
+    ///
+    /// Zero when the count is zero, which `lunchDinnerFacts(from:)` never
+    /// produces (it requires both sides non-empty) but a decoded payload
+    /// could.
+    var lunchPerShiftCents: Int {
+        lunchShiftCount > 0 ? lunchCents / lunchShiftCount : 0
+    }
+
+    var dinnerPerShiftCents: Int {
+        dinnerShiftCount > 0 ? dinnerCents / dinnerShiftCount : 0
+    }
 }
 
 struct DoublesSoloFacts: Equatable, Codable, Sendable {
@@ -2769,6 +2844,20 @@ struct DoublesSoloFacts: Equatable, Codable, Sendable {
 /// logged, never estimated for the rest. Every field but the overall rate
 /// and its night count is optional, since each needs its own qualifying
 /// split (two-plus weekdays, at least one double and one solo night, etc).
+///
+/// **Do not render `overallDollarsPerHour`.** PR 5 group 2.6 moved the HOURLY
+/// tile ([IL-13], [IL-14]) onto `EarningsResult.hourlyRateCents`, which is
+/// `Σ earnedIncome over covered shifts × 60 / Σ minutes over covered shifts`
+/// — one blended division that excludes an hours-less shift from BOTH sides.
+/// This field is a mean of per-shift rates over a different denominator, so
+/// the two answers are not interchangeable and the registry sanctions only
+/// the first. That left this whole struct with **no live consumer**: its
+/// remaining readers were `InsightsFactsCopy` and the narration prompt, both
+/// deleted ([ID-08], [ID-18]). It is kept rather than deleted because the
+/// weekday/lunch/dinner/double/solo splits are tested analytic facts that a
+/// future surface may want, and inventing them again would be worse than
+/// leaving them — but a future surface has to route the OVERALL rate through
+/// the engine. PR 8 deletes whatever is still unread by then.
 struct RateFacts: Equatable, Codable, Sendable {
     let overallDollarsPerHour: Double
     let nightsWithHours: Int
@@ -2797,6 +2886,21 @@ struct StartTimeFacts: Equatable, Codable, Sendable {
     let worstStartHour: Int
     let worstDollarsPerHour: Double
     let worstShiftCount: Int
+
+    /// The two rates in cents, for the START TIMES tile.
+    ///
+    /// The Double-to-cents conversion lives here rather than in the tile for
+    /// the same reason `LunchDinnerFacts.lunchPerShiftCents` does: a
+    /// `.rounded()` on money inside a view is arithmetic inside a view
+    /// (adapter contract, rule 4), and doing it in two tiles is two chances
+    /// to round differently.
+    ///
+    /// These stay a Double internally because `blendedRate` is one; PR 8's
+    /// deletion pass is where the whole analytic rate pipeline can move to
+    /// integer cents, and doing it here would silently re-round every
+    /// `StartTimeFacts` and `RateFacts` test in the suite.
+    var bestRateCents: Int { Int((bestDollarsPerHour * 100).rounded()) }
+    var worstRateCents: Int { Int((worstDollarsPerHour * 100).rounded()) }
 }
 
 /// Tip-percent facts — only ever built from nights that actually have
@@ -3009,25 +3113,4 @@ enum RevealCopy {
         max(granularity, Int((Double(cents) / Double(granularity)).rounded()) * granularity)
     }
 
-    static func projectionLine(cents: Int) -> String {
-        "On pace for about \(Money.wholeDollarString(fromCents: cents))."
-    }
-
-    static func rateClause(for clause: RevealRateClause) -> String {
-        switch clause {
-        case .rate(let dollarsPerHour, let isBestThisPeriod):
-            let rateString = Money.wholeDollarString(fromCents: Int((dollarsPerHour * 100).rounded()))
-            return isBestThisPeriod
-                ? "\(rateString)/hr, your best rate this period."
-                : "\(rateString)/hr this shift."
-        }
-    }
-
-    /// Same fact as paceLine, sized for the widget's systemSmall family —
-    /// the full sentence overflows a caption2 line in that little space.
-    static func compactPaceLine(deltaCents: Int) -> String {
-        if deltaCents == 0 { return "Even vs last period" }
-        let sign = deltaCents > 0 ? "+" : "-"
-        return "\(sign)\(Money.string(fromCents: abs(deltaCents))) vs last period"
-    }
 }

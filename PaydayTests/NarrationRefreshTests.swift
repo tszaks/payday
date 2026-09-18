@@ -112,17 +112,11 @@ struct NarrationRefreshTests {
         ))
     }
 
-    // MARK: Which failures are even allowed to retry
-
-    @Test("transient failures are retryable, deterministic ones are not")
-    func retryabilityByErrorKind() {
-        #expect(InsightsError.generationFailed("no network").isRetryable)
-        // A 4xx and an unparseable answer both fail identically on identical
-        // input, and the parse case has already been billed.
-        #expect(!InsightsError.requestRejected("Narration turned down this request (400).").isRetryable)
-        #expect(!InsightsError.requestRejected("Couldn't read the analysis.").isRetryable)
-        #expect(!InsightsError.notEnoughData.isRetryable)
-    }
+    // The retryability-by-error-kind test went with `InsightsError`, which
+    // went with `InsightsService` — PR 5 group 2.7 deleted the whole
+    // narration path (`docs/METRICS.md` [ID-12] through [ID-27]) rather than
+    // migrating sixteen money figures that no live caller ever sent. Nothing
+    // in the app can produce one of those errors any more.
 }
 
 /// Counts in prose are spelled; digits belong to money and clock times. The
@@ -164,9 +158,15 @@ struct NumberWordsTests {
     }
 }
 
-/// Notes age out of narration on their own clock, much shorter than the
-/// 180-day facts window. A Toast-error note from July 17 was still the
-/// highest-priority thing narration could say on August 5.
+/// A noted shift is still a shift.
+///
+/// This suite used to assert that a shift NOTE aged out of narration on its
+/// own 30-day clock, shorter than the 180-day facts window. Both the notes
+/// and the narration that read them are gone: `InsightsFacts.notes` had
+/// exactly two readers, `InsightsFactsCopy` and `InsightsService`'s prompt,
+/// and PR 5 group 2.7 deleted both. What survives from the original
+/// regression is the half that is still observable — a shift carrying a note
+/// counts toward the facts window like any other.
 @Suite("Insights note recency")
 struct InsightsNoteRecencyTests {
     private func record(_ day: Int, note: String?, cents: Int = 20000) -> TipRecord {
@@ -180,21 +180,17 @@ struct InsightsNoteRecencyTests {
         )
     }
 
-    @Test("a note older than the window is dropped, its shift still counted")
-    func staleNoteDropped() {
-        // Aug 5 reference: Jul 17 is 19 days back (inside), Jun 20 is 46 (outside).
+    @Test("a shift with a note is counted like any other shift in the facts window")
+    func notedShiftStillCounts() {
         let asOf = Calendar(identifier: .gregorian).date(from: DateComponents(year: 2026, month: 8, day: 5))!
         var records = (10...20).map { record($0, note: nil) }
         records.append(record(17, note: "Toast error carried lunch tips into dinner"))
         let facts = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: records).insightsFacts(referenceDate: asOf)
-        #expect(facts != nil)
-        #expect(facts?.notes.contains { $0.text.contains("Toast") } == true)
+        #expect(facts?.shiftCount == records.count)
 
-        // Same note, now beyond the 30-day note window.
+        // Still inside the 180-day facts window a month later.
         let laterAsOf = Calendar(identifier: .gregorian).date(from: DateComponents(year: 2026, month: 9, day: 1))!
         let laterFacts = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: records).insightsFacts(referenceDate: laterAsOf)
-        #expect(laterFacts?.notes.isEmpty == true)
-        // The shifts themselves are still inside the 180-day facts window.
         #expect(laterFacts?.shiftCount == records.count)
     }
 }
@@ -214,8 +210,7 @@ struct InsightsRuleVersionTests {
         let store = InsightsStore(defaults: defaults)
         store.snapshot = InsightsSnapshot(
             sections: [InsightSection(title: "July 17 Split", body: "A Toast error.")],
-            generatedAt: .now,
-            facts: nil
+            generatedAt: .now
         )
         // Wipe the stamp, i.e. any build from before versioning existed.
         defaults.removeObject(forKey: "com.szakacsmedia.payday.insightsRuleVersion")
@@ -230,8 +225,7 @@ struct InsightsRuleVersionTests {
         let store = InsightsStore(defaults: defaults)
         store.snapshot = InsightsSnapshot(
             sections: [InsightSection(title: "Overall", body: "Steady.")],
-            generatedAt: .now,
-            facts: nil
+            generatedAt: .now
         )
         // The first init already stamped the current version, so this reload keeps it.
         let reloaded = InsightsStore(defaults: defaults)

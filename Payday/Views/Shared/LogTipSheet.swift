@@ -1659,7 +1659,6 @@ struct LogTipSheet: View {
                 forNightAt: normalizedDate,
                 cents: cents,
                 period: period,
-                hoursWorked: hoursWorked,
                 shiftID: draftShiftID
             )
         }

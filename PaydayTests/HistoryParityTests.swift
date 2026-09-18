@@ -587,10 +587,10 @@ struct HistoryFigurePresentationTests {
         #expect(detail.noPaycheckCaption == "Check recorded · Payday couldn't read your shifts right now.")
         // Nothing for the sheet to audit against either, so every engine-side
         // check in it stays silent instead of reporting the stub as over zero.
-        #expect(detail.auditBasis.expectedCheckCents == nil)
-        #expect(detail.auditBasis.loggedCreditTipsCents == nil)
-        #expect(detail.auditBasis.loggedGratuityCents == nil)
-        #expect(detail.auditBasis.wages == nil)
+        #expect(detail.expectation.grossCents == nil)
+        #expect(detail.expectation.auditableTipsLineCents == nil)
+        #expect(detail.expectation.gratuityFeesCents == nil)
+        #expect(detail.expectation.hasAuditableWages == false)
     }
 
     @Test("wages off labels the figure Tips, because that is the metric it is")
@@ -740,7 +740,7 @@ struct PaycheckAuditBasisParityTests {
     func sheetBasisEqualsTheScreensExpectation() throws {
         let render = render()
         let result = try #require(render.detail.result)
-        let basis = render.detail.auditBasis
+        let basis = render.detail.expectation
 
         // Every shift the engine selected, including the final-day one the
         // sheet's entry-date filter used to drop.
@@ -749,26 +749,26 @@ struct PaycheckAuditBasisParityTests {
         // $700.00 of credit tips (the final-day $200.00 included) and
         // $610.00 of wages: 40h regular + 10h overtime in the policy's
         // Sunday-start week, plus 6h regular in the next one.
-        #expect(basis.loggedCreditTipsCents == 70_000)
-        #expect(basis.loggedGratuityCents == nil)
-        #expect(basis.wages?.regularCents == 46_000)
-        #expect(basis.wages?.overtimeCents == 15_000)
-        #expect(basis.wages?.totalCents == 61_000)
-        #expect(basis.wages?.overtimeHours == 10)
-        #expect(basis.wages?.hours == 56)
+        #expect(basis.auditableTipsLineCents == 70_000)
+        #expect(basis.gratuityFeesCents == nil)
+        #expect(basis.regularWagesCents == 46_000)
+        #expect(basis.overtimeWagesCents == 15_000)
+        #expect(basis.wagesCents == 61_000)
+        #expect(basis.overtimeMinutes == 600)
+        #expect(basis.minutes == 3_360)
 
         // One expectation, and it is the screen's own.
-        #expect(basis.expectedCheckCents == 131_000)
-        #expect(basis.expectedCheckCents == render.detail.expectedCheckCents)
-        #expect(basis.expectedCheckCents == PredictedPaycheck.cents(from: result.knownComponents))
+        #expect(basis.grossCents == 131_000)
+        #expect(basis.grossCents == render.detail.expectedCheckCents)
+        #expect(basis.grossCents == PredictedPaycheck.cents(from: result.knownComponents))
 
         // The two superseded halves, named so a regression is legible rather
         // than a bare number mismatch. Each of these was the sheet's answer.
-        #expect(basis.loggedCreditTipsCents != 50_000,
+        #expect(basis.auditableTipsLineCents != 50_000,
                 "the superseded entry.date <= period.end filter, dropping the final-day shift")
-        #expect(basis.wages?.totalCents != 50_000,
+        #expect(basis.wagesCents != 50_000,
                 "the superseded PaySchedule.firstWeekday allocation, losing the week's overtime")
-        #expect(basis.expectedCheckCents != 100_000,
+        #expect(basis.grossCents != 100_000,
                 "the superseded basis: both halves at once")
     }
 
@@ -778,10 +778,10 @@ struct PaycheckAuditBasisParityTests {
         let monday = HistoryRender(entries: entries(), policies: policies, schedule: testSchedule(firstWeekday: 2))
         let sunday = HistoryRender(entries: entries(), policies: policies, schedule: testSchedule(firstWeekday: 1))
 
-        #expect(monday.detail.auditBasis.expectedCheckCents == sunday.detail.auditBasis.expectedCheckCents)
-        #expect(monday.detail.auditBasis.loggedCreditTipsCents == sunday.detail.auditBasis.loggedCreditTipsCents)
-        #expect(monday.detail.auditBasis.wages?.totalCents == sunday.detail.auditBasis.wages?.totalCents)
-        #expect(monday.detail.auditBasis.wages?.overtimeHours == sunday.detail.auditBasis.wages?.overtimeHours)
+        #expect(monday.detail.expectation.grossCents == sunday.detail.expectation.grossCents)
+        #expect(monday.detail.expectation.auditableTipsLineCents == sunday.detail.expectation.auditableTipsLineCents)
+        #expect(monday.detail.expectation.wagesCents == sunday.detail.expectation.wagesCents)
+        #expect(monday.detail.expectation.overtimeMinutes == sunday.detail.expectation.overtimeMinutes)
     }
 
     /// The gratuity half, and the silence rule on each side: a cash-only
@@ -794,15 +794,15 @@ struct PaycheckAuditBasisParityTests {
                      tipOutCents: 2_000, shiftID: shiftID(1),
                      receiptMetrics: ShiftReceiptMetrics(earningsSchemaVersion: 2, gratuityFeesCents: 3_000))
         ])
-        #expect(gratuity.detail.auditBasis.loggedCreditTipsCents == 10_000)
-        #expect(gratuity.detail.auditBasis.loggedGratuityCents == 3_000)
+        #expect(gratuity.detail.expectation.auditableTipsLineCents == 10_000)
+        #expect(gratuity.detail.expectation.gratuityFeesCents == 3_000)
 
         let cashOnly = HistoryRender(entries: [
             TipEntry(date: at(2026, 9, 28), amountCents: 12_000, kind: .cash, hoursWorked: 8,
                      shiftID: shiftID(1))
         ])
-        #expect(cashOnly.detail.auditBasis.loggedCreditTipsCents == nil)
-        #expect(cashOnly.detail.auditBasis.loggedGratuityCents == nil)
+        #expect(cashOnly.detail.expectation.auditableTipsLineCents == nil)
+        #expect(cashOnly.detail.expectation.gratuityFeesCents == nil)
     }
 
     /// With no rate in effect the engine prices nothing, so there is no
@@ -811,8 +811,8 @@ struct PaycheckAuditBasisParityTests {
     @Test("no rate in effect means no wage basis, not a zero one")
     func noRateMeansNoWageBasis() {
         let render = HistoryRender(entries: h1Entries(), policies: testPolicies(rateCents: nil))
-        #expect(render.detail.auditBasis.wages == nil)
-        #expect(render.detail.auditBasis.expectedCheckCents != nil)
+        #expect(render.detail.expectation.hasAuditableWages == false)
+        #expect(render.detail.expectation.grossCents != nil)
     }
 }
 

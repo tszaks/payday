@@ -209,7 +209,6 @@ struct LogShiftRevealBasisTests {
             forNightAt: revealCalendar().startOfDay(for: Self.draftDate),
             cents: headlineCents,
             period: wholeFixturePeriod(),
-            hoursWorked: 10,
             shiftID: Self.draftID
         )
 
@@ -228,7 +227,6 @@ struct LogShiftRevealBasisTests {
             forNightAt: revealCalendar().startOfDay(for: Self.draftDate),
             cents: brokenCents,
             period: wholeFixturePeriod(),
-            hoursWorked: 10,
             shiftID: Self.draftID
         )
         #expect(broken.isRecord == true)
@@ -247,7 +245,6 @@ struct LogShiftRevealBasisTests {
             forNightAt: revealCalendar().startOfDay(for: Self.draftDate),
             cents: headlineCents,
             period: wholeFixturePeriod(),
-            hoursWorked: 10,
             shiftID: Self.draftID
         )
         // The whole defect in one line: these two were 25000 and 45000.
@@ -278,7 +275,6 @@ struct LogShiftRevealBasisTests {
             forNightAt: revealCalendar().startOfDay(for: Self.draftDate),
             cents: 25_000,
             period: wholeFixturePeriod(),
-            hoursWorked: 10,
             shiftID: Self.draftID
         )
         // $250.00 IS a record against a $100.00 history, and the record it
@@ -295,7 +291,6 @@ struct LogShiftRevealBasisTests {
             forNightAt: revealCalendar().startOfDay(for: Self.draftDate),
             cents: 25_000,
             period: wholeFixturePeriod(),
-            hoursWorked: 10,
             shiftID: Self.draftID
         )
         #expect(scalarResult.isRecord == false)

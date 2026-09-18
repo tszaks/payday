@@ -31,6 +31,27 @@ struct PayrollSettingsSection: View {
         CivilDay(.now, in: policyStore.payrollTimeZone)
     }
 
+    /// The rate the row shows and the row's field edits: the rate POLICY's,
+    /// never `UserPreferencesStore.baseHourlyWageCents`.
+    ///
+    /// `docs/METRICS.md` [ST-01] is group 2.15's single row, and this is it.
+    /// The legacy scalar is now a one-way MIRROR of this value, written on
+    /// every edit below only because the shipped 1.0 build, the widget and
+    /// the Siri intent still read it (PR 6 removes those readers). Nothing in
+    /// Settings reads it back, so there is one rate on screen and not two.
+    ///
+    /// **`latestRate` and not `policies.rate(on: today)`, deliberately.**
+    /// The contract's "never `latestCalendar`" rule is about MONEY paths: a
+    /// queued future workweek re-buckets history today. This is not a money
+    /// path — it is the policy input itself, with no `MetricID`, no
+    /// completeness and no cents derived from it here — and the editor
+    /// (`PolicyStore.applyRateEdit`) rewrites `latestRate` IN PLACE so that
+    /// correcting a typo never invents a raise. Display and editor must name
+    /// the same policy or typing in this row silently edits a policy the row
+    /// is not showing. They are also the same value for every policy set the
+    /// UI can produce: `RateChangeSheet`'s date picker is bounded
+    /// `in: ...Date.now`, so no rate policy is ever effective in the future.
+    /// `SettingsWageRowTests` pins both halves of that.
     private var currentRateCents: Int? { policyStore.currentHourlyRateCents }
 
     private var isRateHistoryPromptOwed: Bool {
@@ -156,10 +177,7 @@ struct PayrollSettingsSection: View {
                 .foregroundStyle(PaydayColor.textPrimary)
             Spacer()
             ZStack(alignment: .trailing) {
-                // "Not set", never "$0.00": nil has always meant the wage
-                // feature is off, and a money screen that prints $0.00 is
-                // claiming a rate of zero.
-                Text(currentRateCents.map { Money.string(fromCents: $0) } ?? "Not set")
+                Text(Self.rateDisplay(currentRateCents))
                     .foregroundStyle(currentRateCents == nil ? PaydayColor.textSecondary : PaydayColor.textPrimary)
                     .monospacedDigit()
                     .accessibilityHidden(true)
@@ -170,7 +188,7 @@ struct PayrollSettingsSection: View {
                     .opacity(0.01)
                     .frame(maxWidth: 90)
                     .accessibilityLabel("Hourly wage")
-                    .accessibilityValue(currentRateCents.map { Money.string(fromCents: $0) } ?? "Not set")
+                    .accessibilityValue(Self.rateDisplay(currentRateCents))
             }
         }
         .contentShape(Rectangle())
@@ -180,7 +198,11 @@ struct PayrollSettingsSection: View {
     @ViewBuilder
     private func rateHistoryPrompt(rate: Int) -> some View {
         Section {
-            Text("Has your rate always been \(Money.string(fromCents: rate))?")
+            // The same rate the row above shows, through the same function.
+            // It was the one figure in this section `docs/METRICS.md`'s
+            // sweep missed (now [ST-02]): a second spelling of the rate, and
+            // a second chance for the two to disagree about a nil.
+            Text("Has your rate always been \(Self.rateDisplay(rate))?")
                 .foregroundStyle(PaydayColor.textPrimary)
             Button("Yes, since I started") {
                 policyStore.confirmRateHistory()
@@ -195,6 +217,29 @@ struct PayrollSettingsSection: View {
     // MARK: Helpers
 
     static let maxWageDigits = 4 // caps at $99.99/hr
+
+    /// The wage row's rendered value: the rate, or **"Not set" and never
+    /// "$0.00"**.
+    ///
+    /// `docs/METRICS.md` [ST-01] recorded the old spelling as a contract
+    /// breach in so many words: "The rendered placeholder '$0.00' is a money
+    /// string shown for a nil value, which the contract (Section 4, rule 4)
+    /// forbids for an `.unavailable` state." nil has always meant the wage
+    /// feature is off, and a money screen printing "$0.00" is claiming a
+    /// rate of zero on real worked hours. Both the row and
+    /// `RateChangeSheet`'s field call this, so there is one spelling of the
+    /// rule and not two.
+    ///
+    /// Not an `EarningsFigure`: that type's contract is a `MetricID` from the
+    /// registry plus a label the completeness rules allow, and a rate is a
+    /// policy INPUT with neither — [ST-01]'s MetricID column reads
+    /// "presentation-only (policy input)". The rule it would have enforced
+    /// here, "an unavailable read renders no currency", is enforced directly
+    /// by this function's own return value.
+    static func rateDisplay(_ cents: Int?) -> String {
+        guard let cents else { return "Not set" }
+        return Money.string(fromCents: cents)
+    }
 
     /// The one digits-to-rate rule, shared by the "Hourly wage" row and the
     /// rate-change sheet so the two fields cannot disagree about what the
@@ -271,10 +316,10 @@ private struct RateChangeSheet: View {
                             .foregroundStyle(PaydayColor.textPrimary)
                         Spacer()
                         ZStack(alignment: .trailing) {
-                            // "Not set", never "$0.00" — the same law the
-                            // wage row above states: a money screen that
-                            // prints $0.00 is claiming a rate of zero.
-                            Text(cents.map { Money.string(fromCents: $0) } ?? "Not set")
+                            // The same one rule as the wage row, through the
+                            // same function: two spellings of "Not set" is
+                            // two chances for one of them to become "$0.00".
+                            Text(PayrollSettingsSection.rateDisplay(cents))
                                 .foregroundStyle(cents == nil ? PaydayColor.textSecondary : PaydayColor.textPrimary)
                                 .monospacedDigit()
                                 .accessibilityHidden(true)
