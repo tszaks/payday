@@ -263,10 +263,32 @@ the check has been shown to FAIL on purpose at least once.
 
 ### GREEN, with the command and the number
 
-| Line | Evidence |
+**MEASURED AT `8b2454a`, 2026-09-18.** Every row below is a reading taken at
+that commit, not a standing property of the repo.
+
+A row here says "this command printed this number once, on this tree". It
+does not say "this is true now". Those are different claims and only the
+first one is evidence. An undated "still green" is a false-alarm generator
+with a timer on it: the baseline drifts, the assertion does not, and the
+artifact goes from informative to actively misleading without anyone
+touching it.
+
+Paid for twice in one day. The app-suite row below read `1141 tests in 200
+suites` until this commit, which was accurate when written and wrong three
+hours later once #65 added tests -- nobody re-derived it because a number
+that specific reads as care. And a fleet watchdog elsewhere held a stale
+expected version, which made a correctly-behaving system look like three
+unauthorised deploys. **A watchdog with a stale baseline does not fail
+quietly, it fails loudly**, and crying wolf on a healthy system is worse
+than no watchdog, because it teaches the reader to discount the next alarm.
+
+**So: re-run the command before citing a row. If you update a number, update
+the commit and date in this heading in the same edit.**
+
+| Line | Evidence (at `8b2454a`) |
 |---|---|
 | PaydayCore green | `swift test --package-path Packages/PaydayCore` → `250 tests in 32 suites passed` |
-| App suite green, at/above baseline | `1141 tests in 200 suites passed`; baseline 1082/192 |
+| App suite green, at/above baseline | `1144 tests in 200 suites passed`; baseline 1082/192. Was `1141/200` here until #65 added three tests -- the stale-number case that produced the dating rule above |
 | 14 fixtures vs the real engine | mutation sweep: **14/14 money-gated** (was 8/14). Gates call `CompensationLedger.evaluate`, `PaycheckReconciler.proposal`, `HoursFormatting.*`; grep for test-local cents arithmetic returns nothing |
 | Release gate armed | `PAYDAYCORE_RELEASE_GATE=1` green, `knownIssueCountIsZero` passed, `KnownIssues.json` = `[]`. Proven BOTH ways: planting `["W1"]` fails with `Release blocked` |
 | Dashboard == History == period detail | per-arm mutation; records 2 suites/14 tests, legacy 5/32 |
@@ -480,7 +502,8 @@ Measured on `DashboardEarnings`:
 | records arm clamps, before | 1 | 3 |
 | records arm clamps, after `DashboardRecordsArmParityTests` | 2 | **14** |
 
-**Current gap: 5 suites / 32 tests on legacy against 2 / 14 on records.**
+**Gap as measured on 2026-09-18: 5 suites / 32 tests on legacy against
+2 / 14 on records.**
 That is the number PR 8 must close, and it is a measurement rather than an
 estimate — re-run the mutation, do not re-read this table, because the whole
 point of the condition is that counts drift.
