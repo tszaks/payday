@@ -15,13 +15,13 @@ struct ShiftReadAuthorityTests {
 
     @Test("an unconverted account is not authoritative")
     func unconvertedIsNotAuthoritative() {
-        #expect(!ShiftReadAuthority.isAuthoritative(.init()))
+        #expect(!ShiftReadAuthority.isAuthoritative(.probe()))
     }
 
     @Test("a fully converted account is authoritative")
     func convertedIsAuthoritative() {
         #expect(ShiftReadAuthority.isAuthoritative(
-            .init(migratedAt: Self.then, remainingGroupCount: 0)
+            .probe(migratedAt: Self.then, remainingGroupCount: 0)
         ))
     }
 
@@ -32,7 +32,7 @@ struct ShiftReadAuthorityTests {
     @Test("a null remaining count is ready, not pending")
     func nullRemainingCountIsReady() {
         #expect(ShiftReadAuthority.isAuthoritative(
-            .init(migratedAt: Self.then, remainingGroupCount: nil)
+            .probe(migratedAt: Self.then, remainingGroupCount: nil)
         ))
     }
 
@@ -43,7 +43,7 @@ struct ShiftReadAuthorityTests {
     @Test("a rolled-back account is not authoritative, even though it converted")
     func rollbackRevokesAuthority() {
         #expect(!ShiftReadAuthority.isAuthoritative(
-            .init(migratedAt: Self.then, rollbackAt: Self.then, remainingGroupCount: 0)
+            .probe(migratedAt: Self.then, rollbackAt: Self.then, remainingGroupCount: 0)
         ))
     }
 
@@ -54,7 +54,7 @@ struct ShiftReadAuthorityTests {
     @Test("a failed conservation check is not authoritative")
     func conservationFailureRevokesAuthority() {
         #expect(!ShiftReadAuthority.isAuthoritative(
-            .init(migratedAt: Self.then, conservationFailedAt: Self.then, remainingGroupCount: 0)
+            .probe(migratedAt: Self.then, conservationFailedAt: Self.then, remainingGroupCount: 0)
         ))
     }
 
@@ -65,10 +65,10 @@ struct ShiftReadAuthorityTests {
     @Test("a partly converted account is not authoritative")
     func remainingGroupsRevokeAuthority() {
         #expect(!ShiftReadAuthority.isAuthoritative(
-            .init(migratedAt: Self.then, remainingGroupCount: 1)
+            .probe(migratedAt: Self.then, remainingGroupCount: 1)
         ))
         #expect(!ShiftReadAuthority.isAuthoritative(
-            .init(migratedAt: Self.then, remainingGroupCount: 47)
+            .probe(migratedAt: Self.then, remainingGroupCount: 47)
         ))
     }
 
@@ -76,14 +76,14 @@ struct ShiftReadAuthorityTests {
     /// cannot make one of them merely advisory by combining conditions.
     @Test("each refusal stands alone")
     func eachRefusalIsSufficient() {
-        let ready = ShiftReadAuthority.State(migratedAt: Self.then, remainingGroupCount: 0)
+        let ready = ShiftReadAuthority.State.probe(migratedAt: Self.then, remainingGroupCount: 0)
         #expect(ShiftReadAuthority.isAuthoritative(ready))
 
         let refusals: [(String, ShiftReadAuthority.State)] = [
-            ("never converted", .init(remainingGroupCount: 0)),
-            ("rolled back", .init(migratedAt: Self.then, rollbackAt: Self.then, remainingGroupCount: 0)),
-            ("conservation failed", .init(migratedAt: Self.then, conservationFailedAt: Self.then, remainingGroupCount: 0)),
-            ("groups remaining", .init(migratedAt: Self.then, remainingGroupCount: 1)),
+            ("never converted", .probe(remainingGroupCount: 0)),
+            ("rolled back", .probe(migratedAt: Self.then, rollbackAt: Self.then, remainingGroupCount: 0)),
+            ("conservation failed", .probe(migratedAt: Self.then, conservationFailedAt: Self.then, remainingGroupCount: 0)),
+            ("groups remaining", .probe(migratedAt: Self.then, remainingGroupCount: 1)),
         ]
         for (reason, state) in refusals {
             #expect(!ShiftReadAuthority.isAuthoritative(state),

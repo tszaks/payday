@@ -31,7 +31,7 @@ import Testing
 struct FlipStraddleDeferralTests {
 
     private func ready() -> ShiftReadAuthority.State {
-        ShiftReadAuthority.State(
+        ShiftReadAuthority.State.probe(
             migratedAt: Date(timeIntervalSince1970: 1_750_000_000),
             remainingGroupCount: 0
         )
@@ -75,12 +75,12 @@ struct FlipStraddleDeferralTests {
     @Test(
         "a demotion is never deferred, even with a legacy-edit sheet open",
         arguments: [
-            ShiftReadAuthority.State(
+            ShiftReadAuthority.State.probe(
                 migratedAt: Date(timeIntervalSince1970: 1),
                 rollbackAt: Date(timeIntervalSince1970: 2),
                 remainingGroupCount: 0
             ),
-            ShiftReadAuthority.State(
+            ShiftReadAuthority.State.probe(
                 migratedAt: Date(timeIntervalSince1970: 1),
                 conservationFailedAt: Date(timeIntervalSince1970: 2),
                 remainingGroupCount: 0
@@ -95,7 +95,7 @@ struct FlipStraddleDeferralTests {
 
     @Test("an unready, non-authoritative account is unchanged whatever is on screen")
     func unchangedWhenNothingToDo() {
-        let notReady = ShiftReadAuthority.State(remainingGroupCount: 3)
+        let notReady = ShiftReadAuthority.State.probe(remainingGroupCount: 3)
         #expect(ShiftReadAuthority.resolve(
             notReady, currentlyAuthoritative: false, legacyEditSheetPresented: false
         ) == .unchanged)
@@ -130,7 +130,7 @@ struct FlipStraddleDeferralTests {
 
         LegacyEditSheetPresence.begin()
         let outcome = PaydaySyncState.applyShiftAuthority(
-            ShiftReadAuthority.State(
+            ShiftReadAuthority.State.probe(
                 migratedAt: Date(timeIntervalSince1970: 1),
                 rollbackAt: Date(timeIntervalSince1970: 2),
                 remainingGroupCount: 0
@@ -182,22 +182,22 @@ struct FlipStraddleDeferralTests {
         "the predicate refuses each partial state independently",
         arguments: [
             // Never converted.
-            ShiftReadAuthority.State(remainingGroupCount: 0),
+            ShiftReadAuthority.State.probe(remainingGroupCount: 0),
             // Converted, then rolled back.
-            ShiftReadAuthority.State(
+            ShiftReadAuthority.State.probe(
                 migratedAt: Date(timeIntervalSince1970: 1),
                 rollbackAt: Date(timeIntervalSince1970: 2),
                 remainingGroupCount: 0
             ),
             // Converted, but the money did not add up.
-            ShiftReadAuthority.State(
+            ShiftReadAuthority.State.probe(
                 migratedAt: Date(timeIntervalSince1970: 1),
                 conservationFailedAt: Date(timeIntervalSince1970: 2),
                 remainingGroupCount: 0
             ),
             // Converted, but not finished: some nights have shifts and some
             // have only legacy rows.
-            ShiftReadAuthority.State(
+            ShiftReadAuthority.State.probe(
                 migratedAt: Date(timeIntervalSince1970: 1),
                 remainingGroupCount: 1
             ),
