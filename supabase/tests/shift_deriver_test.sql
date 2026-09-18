@@ -169,6 +169,37 @@ select pg_temp.legacy_row(
   '00000000-0000-0000-0000-000000000101', '2026-09-29', 4000, 'credit',
   p_tip_out => 1000, p_cua => '2026-09-29 21:35:00+00');
 
+-- N2: the SAME v1 receipt payload duplicated onto BOTH rows of one group.
+--
+-- ADDED 2026-09-18. N2 is one of the plan's 14 golden fixtures and it was
+-- asserted NOWHERE against a real engine: the only file referencing it was
+-- PaydayCoreTests/FixtureConsistencyTests, which pins cross-fixture
+-- invariants and never runs the ledger or the deriver. So the one shape the
+-- original audit named as making two engines disagree had no engine-level
+-- test at all.
+--
+-- It is a distinct shape from N4, which carries its v1 receipt on the credit
+-- row only. Here both rows carry it, which is live production data: the
+-- shipped writer passed the same payload to both TipEntry initializers. The
+-- metrics-owner rule is what has to make the gratuity count ONCE and the
+-- credit normalize ONCE. Get it wrong in either direction and the money is
+-- wrong: sum the gratuity and the night gains $5, normalize twice and it
+-- loses $5.
+--
+-- cash 3000, credit 7500 with the gratuity folded in, gratuity 500, hours 6.
+-- Correct: cash 3000, credit 7000, gratuity 500, non-wage 10500.
+select pg_temp.legacy_row(
+  '51000000-0000-4000-8000-000000000001', '00000000-0000-0000-0000-000000000202',
+  '00000000-0000-0000-0000-000000000201', '2026-09-29', 3000, 'cash',
+  p_receipt => '{"guestCount":40,"creditCheckCount":18,"netSalesCents":80000,"gratuityFeesCents":500}'::jsonb,
+  p_cua => '2026-09-29 22:00:00+00');
+select pg_temp.legacy_row(
+  '51000000-0000-4000-8000-000000000001', '00000000-0000-0000-0000-000000000203',
+  '00000000-0000-0000-0000-000000000201', '2026-09-29', 7500, 'credit',
+  p_hours => 6.0,
+  p_receipt => '{"guestCount":40,"creditCheckCount":18,"netSalesCents":80000,"gratuityFeesCents":500}'::jsonb,
+  p_cua => '2026-09-29 22:05:00+00');
+
 -- N4: cash 5000, credit 2000, a v1 receipt (no earningsSchemaVersion key, which
 -- is live production data) carrying gratuity 4200 on the CREDIT row, tip-out
 -- 1000. This ports the READ path: resolve the owner, then max(0, amount -
@@ -300,6 +331,7 @@ begin
   select * into v_out from private.derive_shifts(
     '51000000-0000-4000-8000-000000000001',
     array['00000000-0000-0000-0000-000000000101'::uuid,
+          '00000000-0000-0000-0000-000000000201'::uuid,
           '00000000-0000-0000-0000-000000000401'::uuid,
           '00000000-0000-0000-0000-000000000501'::uuid,
           '00000000-0000-0000-0000-000000000601'::uuid,
@@ -307,13 +339,15 @@ begin
           '00000000-0000-0000-0000-000000000801'::uuid,
           '00000000-0000-0000-0000-000000000901'::uuid,
           public.payday_legacy_shift_id('2026-09-28')]);
-  perform pg_temp.expect('theFixtureDeriveWroteEightGroupsAndRaisedNothing',
-    v_out.touched_count = 8 and v_out.wrote_count = 8 and v_out.conflicts = 0,
+  perform pg_temp.expect('theFixtureDeriveWroteNineGroupsAndRaisedNothing',
+    v_out.touched_count = 9 and v_out.wrote_count = 9 and v_out.conflicts = 0,
     'touched=' || v_out.touched_count || ' wrote=' || v_out.wrote_count
       || ' conflicts=' || v_out.conflicts
       || ' in=' || v_out.source_cents || ' out=' || v_out.shift_cents);
   perform pg_temp.expect('aPristineDeriveConservesEveryCent',
-    v_out.source_cents = v_out.shift_cents and v_out.source_cents = 9000 + 8200 + 7000 + 3000 + 9200 + 8000 + 3000 + 11200,
+    v_out.source_cents = v_out.shift_cents
+      and v_out.source_cents = 9000 + 8200 + 7000 + 3000 + 9200 + 8000 + 3000 + 11200
+                             + 10500,  -- N2: cash 3000 + credit 7500 as stored
     'in=' || v_out.source_cents || ' out=' || v_out.shift_cents);
 end;
 $$;
@@ -371,6 +405,44 @@ select pg_temp.expect('N4_theEditPathSplitIsExcluded',
   f::text)
 from pg_temp.shift_facts('51000000-0000-4000-8000-000000000001',
                          '00000000-0000-0000-0000-000000000401') as f;
+
+-- N2 ---------------------------------------------------------------------------
+select pg_temp.expect('N2_aDuplicatedV1PayloadCountsTheGratuityOnce',
+  (f ->> 'cash_tips_cents')::integer = 3000
+  and (f ->> 'credit_tips_cents')::integer = 7000
+  and (f ->> 'gratuity_fees_cents')::integer = 500
+  and (f ->> 'non_wage_earnings_cents')::integer = 10500
+  and (f ->> 'hours_worked')::numeric = 6.0,
+  f::text)
+from pg_temp.shift_facts('51000000-0000-4000-8000-000000000001',
+                         '00000000-0000-0000-0000-000000000201') as f;
+
+-- Both ways of getting it wrong, asserted as wrong. A fixture that only
+-- checked the right answer would pass against an engine that happened to
+-- produce it for the wrong reason.
+select pg_temp.expect('N2_theGratuityIsNotSummedAcrossTheDuplicatedRows',
+  (f ->> 'gratuity_fees_cents')::integer <> 1000
+  and (f ->> 'non_wage_earnings_cents')::integer <> 11000,
+  f::text)
+from pg_temp.shift_facts('51000000-0000-4000-8000-000000000001',
+                         '00000000-0000-0000-0000-000000000201') as f;
+
+select pg_temp.expect('N2_theCreditIsNotNormalizedTwice',
+  (f ->> 'credit_tips_cents')::integer <> 6500
+  and (f ->> 'non_wage_earnings_cents')::integer <> 10000,
+  f::text)
+from pg_temp.shift_facts('51000000-0000-4000-8000-000000000001',
+                         '00000000-0000-0000-0000-000000000201') as f;
+
+-- And it is ONE shift, not two, which is the other half of a duplicated
+-- payload's damage.
+select pg_temp.expect('N2_theDuplicatedPayloadStillMakesOneShift',
+  (select count(*) from public.shifts
+    where user_id = '51000000-0000-4000-8000-000000000001'
+      and id = '00000000-0000-0000-0000-000000000201') = 1
+  and (select coalesce(array_length(legacy_entry_ids, 1), 0) from public.shifts
+        where user_id = '51000000-0000-4000-8000-000000000001'
+          and id = '00000000-0000-0000-0000-000000000201') = 2);
 
 -- N5 ---------------------------------------------------------------------------
 select pg_temp.expect('N5_objectFirstRankingGives800_2000_4200_7000',
@@ -620,12 +692,12 @@ select pg_temp.expect('P7_conservationIsBlindToAReaderDisagreement',
        array['00000000-0000-0000-0000-000000000901'::uuid])));
 
 -- Every fixture row is one shift and every shift is source 'migration'.
-select pg_temp.expect('theEightFixtureGroupsAreEightShiftsAllMarkedMigration',
+select pg_temp.expect('theNineFixtureGroupsAreNineShiftsAllMarkedMigration',
   (select count(*) from public.shifts
-    where user_id = '51000000-0000-4000-8000-000000000001') = 8
+    where user_id = '51000000-0000-4000-8000-000000000001') = 9
   and (select count(*) from public.shifts
         where user_id = '51000000-0000-4000-8000-000000000001'
-          and source = 'migration') = 8,
+          and source = 'migration') = 9,
   (select count(*)::text from public.shifts
     where user_id = '51000000-0000-4000-8000-000000000001'));
 
@@ -788,7 +860,9 @@ select pg_temp.expect('theStoredPayloadSetIsExactlyWhatTheSwiftDecoderTestCarrie
     where user_id in ('51000000-0000-4000-8000-000000000001',
                       '51000000-0000-4000-8000-000000000002')
       and receipt_metrics is not null)
-  -- Sorted by TEXT, so 2147483647 precedes 4200. Eight distinct payloads.
+  -- Sorted by TEXT, so 2147483647 precedes 4200. Nine distinct payloads.
+  -- The `guestCount 40` one is N2's, whose v1 payload is duplicated across
+  -- both rows of its group and normalized once.
   = array[
     '{"gratuityFeesCents": 0, "earningsSchemaVersion": 2}',
     '{"gratuityFeesCents": 1000, "earningsSchemaVersion": 2}',
@@ -797,6 +871,7 @@ select pg_temp.expect('theStoredPayloadSetIsExactlyWhatTheSwiftDecoderTestCarrie
     '{"gratuityFeesCents": 2000000, "earningsSchemaVersion": 2}',
     '{"gratuityFeesCents": 2147483647, "earningsSchemaVersion": 2}',
     '{"gratuityFeesCents": 4200, "earningsSchemaVersion": 2}',
+    '{"guestCount": 40, "netSalesCents": 80000, "creditCheckCount": 18, "gratuityFeesCents": 500, "earningsSchemaVersion": 2}',
     '{"guestCount": 42, "gratuityFeesCents": 4200, "earningsSchemaVersion": 2}'],
   (select array_agg(distinct receipt_metrics::text order by receipt_metrics::text)::text
      from public.shifts
@@ -1252,8 +1327,8 @@ $$;
 -- and would vanish from the report instead of failing, so the count of the
 -- assertions ahead of this line is pinned.
 select pg_temp.expect('theSuiteRanEveryAssertion',
-  (select count(*) from results) = 73,
-  'ran ' || (select count(*) from results)::text || ' of 73');
+  (select count(*) from results) = 77,
+  'ran ' || (select count(*) from results)::text || ' of 77');
 
 select seq, case when ok then 'PASS' else 'FAIL' end as result, name, detail
 from results order by seq;

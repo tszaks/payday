@@ -35,6 +35,10 @@ struct ShiftDeriverStoredPayloadTests {
         #"{"gratuityFeesCents": 2000000, "earningsSchemaVersion": 2}"#,
         #"{"gratuityFeesCents": 2147483647, "earningsSchemaVersion": 2}"#,
         #"{"gratuityFeesCents": 4200, "earningsSchemaVersion": 2}"#,
+        // N2's payload. Its v1 receipt is duplicated across BOTH rows of its
+        // group, and the fold has to count the gratuity once and normalize the
+        // credit once. Sorts before guestCount 42 because "40" < "42" by text.
+        #"{"guestCount": 40, "netSalesCents": 80000, "creditCheckCount": 18, "gratuityFeesCents": 500, "earningsSchemaVersion": 2}"#,
         #"{"guestCount": 42, "gratuityFeesCents": 4200, "earningsSchemaVersion": 2}"#
     ]
 
@@ -60,7 +64,9 @@ struct ShiftDeriverStoredPayloadTests {
         #expect(decode(Self.storedPayloads[0])?.gratuityFeesCents == 0)
         #expect(decode(Self.storedPayloads[3])?.gratuityFeesCents == 1_235)
         #expect(decode(Self.storedPayloads[5])?.gratuityFeesCents == 2_147_483_647)
-        #expect(decode(Self.storedPayloads[7])?.guestCount == 42)
+        #expect(decode(Self.storedPayloads[7])?.guestCount == 40)
+        #expect(decode(Self.storedPayloads[7])?.gratuityFeesCents == 500)
+        #expect(decode(Self.storedPayloads[8])?.guestCount == 42)
     }
 
     @Test("a v2 stored payload is idempotent under normalizedToV2")

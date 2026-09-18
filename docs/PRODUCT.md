@@ -259,10 +259,25 @@ deviation across the whole roadmap.
   AX sizes), VoiceOver labels on day cells/tiles, Reduce Motion on every
   animation including the reveal.
 
-## Pillar 8: The Earnings Engine (Deep Audit Phase 3, 2026-07-14) — DONE
+## Pillar 8: The Earnings Engine (Deep Audit Phase 3, 2026-07-14) — IN PROGRESS
 
 PaydayCore package introduced (PR 0, 2026-09-17); earnings-engine
 consolidation in progress, see docs/METRICS.md (PR 1).
+
+**The heading said DONE until 2026-09-18 and that was false.** It was written
+after the 2026-07-14 audit phase and never revised, while the body underneath
+it described work still open. An external audit in September found the same
+overclaim from the other side: the app had shared helpers but not a shared
+INTERPRETATION, so the same stored shift produced different answers on
+different screens. The heading now matches the body, and the body is dated.
+
+**Status as of 2026-09-18, measured rather than asserted.** Merged: PR 0, 1,
+3, 4 and all three waves of PR 5, plus 8 of PR 2's 13 slices. Not started: PR
+6 (the backend's second money engine, the widget, Siri and CSV), PR 7
+(lifecycle hardening) and PR 8 (deleting the old paths and adding the
+money-boundary lint). So a reader should take everything below as true of the
+in-app screens and NOT of the widget, Siri, the CSV export or the `/v1`
+API, which still compute their own figures.
 
 **What the engine actually guarantees as of PR 3 (2026-09-17).** Scope
 matters here: `CompensationLedger` now values every shift exactly once, and
@@ -284,10 +299,14 @@ one is not:
   hourly rate at all; it cannot compute a wage on its own, because overtime
   and the cumulative rounding are properties of a workweek and not of one
   shift. Measured in `DayHeroEqualsItsRowsTests`.
-- **A month equals the sum of its days. STILL OPEN, PR 5.** The calendar's
-  header asks the engine over the month and its tiles ask once per day, and
-  a single day can never see its week's overtime. Measured, not assumed:
-  `MonthEqualsSumOfItsDaysTests`.
+- **A month equals the sum of its days. CLOSED (PR 5, 2026-09-18.)** This
+  entry read STILL OPEN until PR 5's waves merged, and leaving it that way
+  was understating the engine rather than overstating it — the opposite
+  direction from the heading, and just as wrong. The calendar's header and
+  its tiles now both read one `EarningsSnapshot` over the whole dataset, so a
+  day can see its week's overtime. Measured, not assumed:
+  `MonthEqualsSumOfItsDaysTests`, and 36 parity suites pass in the app run of
+  972 tests across 169 suites.
 
 Guaranteed now:
 
@@ -325,10 +344,26 @@ policy change, a new civil day or a scene activation, coalesces a burst into
 one rebuild, skips the rebuild entirely when the digest has not moved, and
 discards a slow rebuild whose answer arrived after a newer one.
 
-What is still NOT true: **no screen reads it yet.** Every Facts struct, hero
-and tile is untouched, so the month-versus-days divergence below is exactly
-as open as it was after PR 3. PR 5 migrates the consumers; until then the
-snapshot is a correct engine that nothing is plugged into.
+**Superseded 2026-09-18.** This paragraph read "no screen reads it yet" and
+was accurate when written, immediately after PR 4. PR 5's three waves have
+since merged, so every in-app screen — the calendar and its day sheet, the
+Dashboard, the History rows and period detail, the charts, Insights, the
+paycheck surfaces and the log sheet's reveal — reads one snapshot, and the
+month-versus-days divergence named above is closed.
+
+What is still NOT true, precisely:
+
+- **The widget, Siri and the CSV export still compute their own figures**,
+  and the backend is a second, independently maintained money engine: the
+  `/v1` API computes net per row in TypeScript and again in SQL, and has no
+  wage concept at all, so it and the app answer "how much this period" with
+  different numbers by construction. That is PR 6, not started.
+- **The old calculation paths are all still present.** `TipBreakdown`,
+  `ShiftDetails`, `WageEstimate`, `PeriodIncome`, `PredictedPaycheck`,
+  `PaycheckAudit`, `TipRecord` and `ShiftWriter` still exist, several as
+  wrappers over the engine rather than as rival arithmetic, but they exist.
+- **There is no money-boundary lint yet**, so nothing structurally prevents a
+  new screen from computing its own total. Both of those are PR 8.
 
 Three smaller guarantees arrived with it, each measured:
 

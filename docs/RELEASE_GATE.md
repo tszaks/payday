@@ -61,6 +61,36 @@ A parity test written before its fix is the honest way to hold the line: it name
 
 - [ ] Zero entries remain in this table, and `grep -rn withKnownIssue PaydayTests/` returns nothing.
 
+## The shift cursor fence — machine-checkable, and it blocks a ship
+
+Added 2026-09-18 after a retraction. S6 shipped the shift read path without
+this fence, and applying the fold to production does **not** expose a live
+user to it, because no shipped build reads `public.shifts` and no migration
+runs a backfill. It becomes live the moment a build ships that reads shifts.
+
+The bug it prevents is permanent and silent. `updated_at` is the transaction
+timestamp, and the fold runs at the end of a 1.0 build's batch, so a shift can
+be stamped seconds before it is visible. A client that advances its cursor to
+the newest `updated_at` it pulled then filters that shift out forever, on
+every device, with nothing indicating a fault. It is fatal on this leg alone
+because `shifts` is the only read surface there, the writer is a third party
+so the post-push readback cannot cover it, and the cache check compares ID
+sets so a present-but-stale shift never forces a re-baseline.
+
+- [ ] The client clamps the shift cursor to
+      `min(max(updated_at) among pulled rows, server_now - shiftCursorSafetyWindow)`,
+      where `server_now` comes from `public.fetch_shift_changes` **in the same
+      statement as the page**, never a separate read.
+- [ ] `scripts/db-test-race.sh` case 10 passes **both** arms: the folded shift
+      is MISSING with the unclamped cursor and ARRIVES, with its money, with
+      the clamped one. One arm alone proves nothing.
+- [ ] `20260918120000_add_shift_change_feed.sql` is applied to production
+      before, or in the same batch as, the first build that reads shifts.
+
+**No build that reads `public.shifts` ships until all three are green.** This
+is the guard; migration ordering is not, because the clamp is client code and
+the migration only supplies a timestamp.
+
 ## Human lines — Tyler only
 
 - [H] Clean install on a real device, release configuration, exercised for a full logging session.
