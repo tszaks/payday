@@ -10,6 +10,7 @@
 #   3. the loser of the try-lock does not BLOCK behind the winner's transaction
 #   4. two sessions queueing the same group neither block-forever nor raise 23505
 #   5. the 40P01 deadlock row of the S-gate table
+#   6. the ONE-SHOT racing the trigger, in BOTH orders (S5)
 #
 # Both of 1 and 2 are recorded verbatim because the design's own table records
 # both, and because the shipping (try-) variant leaves the authoritative read
@@ -65,6 +66,15 @@ cleanup() {
   exec 4>&- 2>/dev/null || true
   exec 5>&- 2>/dev/null || true
   wait 2>/dev/null || true
+  # S5's two orders seed pre-deploy rows with the fold suppressed by ALTER TABLE
+  # ... DISABLE TRIGGER. On CI this runs against the SHARED local stack, so a
+  # mid-script failure must not leave the app's conversion trigger off for
+  # whatever runs next. Unconditional, idempotent, and not gated on success.
+  "$PSQL_BIN" ${DSN:+"$DSN"} -q -c \
+    "alter table public.tip_entries enable trigger tip_entries_fold_insert;
+     alter table public.tip_entries enable trigger tip_entries_fold_update;
+     alter table public.tip_entries enable trigger tip_entries_fold_delete;" \
+    >/dev/null 2>&1 || true
   if [ "$OWN_CLUSTER" = "1" ]; then payday_cluster_stop; fi
   rm -rf "$WORK"
 }
@@ -173,7 +183,16 @@ end \$race\$;
 SQL
 }
 
-echo "== S4 concurrency suite (scripts/db-test-race.sh)"
+# S5 adds the two orders in which public.migrate_tip_entries_to_shifts and
+# private.fold_legacy_writes can meet. They take the SAME advisory key,
+# payday:shiftmig:<uid>, with different disciplines -- the one-shot BLOCKS, the
+# fold TRIES -- and the whole "they cannot disagree" argument rests on that
+# asymmetry being the right way round. The advisory lock is transaction-scoped,
+# so a session that calls the one-shot inside an open transaction still HOLDS
+# the key after the function has returned, which is what makes both orders
+# expressible with real sessions instead of a simulation.
+
+echo "== S4/S5 concurrency suite (scripts/db-test-race.sh)"
 echo
 
 # ===========================================================================
@@ -486,11 +505,152 @@ check "aDeadlockInsideTheFoldIsCaughtAndTheKeysAreQueued" "rows=1 keys=2 queued=
   "rows=$FOLD_40P01 keys=$(q "select count(distinct k) from private.shift_fold_failures f, unnest(f.group_keys) k
                 where f.user_id = '$U' and f.sqlstate = '40P01'") queued=$(q "select count(*) from private.shift_fold_backlog where user_id = '$U'")"
 
-q "delete from auth.users where id in ('$U','$U2')" >/dev/null
+# ===========================================================================
+# 6. THE ONE-SHOT AND THE TRIGGER, BOTH ORDERS (S5).
+#
+# ORDER A -- the one-shot holds the key, a 1.0 build writes.
+#
+# The rule that dominates S4 is that the fold never rejects and never blocks a
+# shipped 1.0 build's write. A long one-shot is the worst thing it can meet, so
+# this is the case that decides whether pg_try_advisory_xact_lock was the right
+# call: the 1.0 write must return IMMEDIATELY, be accepted, and have its group
+# QUEUED rather than dropped, leaving the reader under-counted until the next
+# drain. The one-shot's transaction is held open deliberately -- the advisory
+# lock outlives the function call and dies with the transaction.
+# ===========================================================================
+
+U3=54000000-0000-4000-8000-000000000003
+setup_account "$U3"
+
+# A pre-deploy group: written straight to the table with the fold suppressed,
+# which is the state the one-shot exists for. `set session_replication_role =
+# replica` is NOT usable here -- measured on Supabase the postgres role is not a
+# superuser and it fails with "permission denied to set parameter" -- so the
+# suppression is ALTER TABLE ... DISABLE TRIGGER, the same mechanism rollback
+# uses.
+q "alter table public.tip_entries disable trigger tip_entries_fold_insert" >/dev/null
+q "insert into public.tip_entries (id, user_id, shift_id, work_date, amount_cents, kind, client_updated_at)
+   values ('54000000-0000-0000-0000-000000000091','$U3','54000000-0000-0000-0000-000000000090',
+           '2026-08-04',5000,'cash','2026-08-04T23:00:00Z')" >/dev/null
+q "alter table public.tip_entries enable trigger tip_entries_fold_insert" >/dev/null
+
+open_session a 3
+send 3 "begin;"
+wait_state a "idle in transaction"
+# The one-shot runs and RETURNS, but its transaction stays open, so it still
+# holds payday:shiftmig:$U3.
+send 3 "select remaining_group_count from public.migrate_tip_entries_to_shifts('$U3'::uuid, 200);"
+wait_state a "idle in transaction"
+
+START=$(python3 -c 'import time; print(int(time.time()*1000))')
+PGAPPNAME=payday_race_b "${PSQL[@]}" -v ON_ERROR_STOP=1 -q -c \
+  "$(device_upsert_sql "$U3" '[{"id":"54000000-0000-0000-0000-000000000101","shift_id":"54000000-0000-0000-0000-000000000100","work_date":"2026-08-05","amount_cents":2500,"kind":"cash","client_updated_at":"2026-08-05T23:00:00Z"}]')"
+END=$(python3 -c 'import time; print(int(time.time()*1000))')
+WRITER_MS=$((END - START))
+
+check_true "aLegacyWriteMeetingARunningOneShotDoesNotBlock" \
+  "$([ "$WRITER_MS" -lt 1000 ] && echo t || echo f)" \
+  "the 1.0 write returned in ${WRITER_MS} ms while the one-shot held the key"
+
+check "aLegacyWriteMeetingARunningOneShotIsAcceptedAndQueuedNotDropped" \
+  "row=1 shift=0 backlog=1 failures=0" \
+  "row=$(q "select count(*) from public.tip_entries where id = '54000000-0000-0000-0000-000000000101' and deleted_at is null") shift=$(q "select count(*) from public.shifts where user_id = '$U3' and id = '54000000-0000-0000-0000-000000000100'") backlog=$(q "select count(*) from private.shift_fold_backlog where user_id = '$U3' and group_key = '54000000-0000-0000-0000-000000000100'") failures=$(q "select count(*) from private.shift_fold_failures where user_id = '$U3'")"
+
+send 3 "commit;"
+wait_state a "idle"
+close_session 3
+wait || true
+
+# The one-shot's own work committed, and the queued group converges on the next
+# invocation. remaining_group_count is what the client's follow-up decision is
+# made on, so it has to be the number that moves.
+check "theOneShotsOwnGroupWasConvertedByTheRunThatHeldTheKey" \
+  "cash=5000 prov=1" \
+  "$(q "select 'cash=' || s.cash_tips_cents || ' prov=' || coalesce(array_length(s.legacy_entry_ids,1),0)
+        from public.shifts s where s.user_id = '$U3' and s.id = '54000000-0000-0000-0000-000000000090'")"
+
+q "select remaining_group_count from public.migrate_tip_entries_to_shifts('$U3'::uuid, 200)" >/dev/null
+
+check "theQueuedGroupConvergesOnTheNextOneShotInvocation" \
+  "cash=2500 prov=1 backlog=0 remaining=0 flagged=false" \
+  "$(q "select 'cash=' || s.cash_tips_cents || ' prov=' || coalesce(array_length(s.legacy_entry_ids,1),0)
+            || ' backlog=' || (select count(*) from private.shift_fold_backlog where user_id = '$U3')
+            || ' remaining=' || (select remaining_group_count from public.shift_migration_state where user_id = '$U3')
+            || ' flagged=' || (select (conservation_failed_at is not null)::text from public.shift_migration_state where user_id = '$U3')
+        from public.shifts s where s.user_id = '$U3' and s.id = '54000000-0000-0000-0000-000000000100'")"
+
+# ===========================================================================
+# ORDER B -- a 1.0 build holds the key, the one-shot arrives.
+#
+# The one-shot takes the BLOCKING lock, so it WAITS instead of racing. That is
+# what makes "the trigger and the one-shot cannot disagree" true rather than
+# hopeful: after the wait its snapshot includes the fold's committed work, so it
+# finds the group already converted and re-derives nothing. The alternative --
+# a try-lock in the one-shot too -- would have it skip the account silently and
+# report progress it did not make.
+#
+# Both writers touch the SAME group, which is the only arrangement in which a
+# disagreement would be visible: the pre-deploy row is $50 cash, the 1.0 write
+# is $20 credit, and the answer either way must be one shift at 5000/2000.
+# ===========================================================================
+
+U4=54000000-0000-4000-8000-000000000004
+setup_account "$U4"
+
+q "alter table public.tip_entries disable trigger tip_entries_fold_insert" >/dev/null
+q "insert into public.tip_entries (id, user_id, shift_id, work_date, amount_cents, kind, client_updated_at)
+   values ('54000000-0000-0000-0000-000000000111','$U4','54000000-0000-0000-0000-000000000110',
+           '2026-08-06',5000,'cash','2026-08-06T23:00:00Z')" >/dev/null
+q "alter table public.tip_entries enable trigger tip_entries_fold_insert" >/dev/null
+
+open_session a 3
+send 3 "begin;"
+wait_state a "idle in transaction"
+# The 1.0 write folds and holds the key until it commits.
+send 3 "$(device_upsert_sql "$U4" '[{"id":"54000000-0000-0000-0000-000000000112","shift_id":"54000000-0000-0000-0000-000000000110","work_date":"2026-08-06","amount_cents":2000,"kind":"credit","client_updated_at":"2026-08-06T23:05:00Z"}]')"
+wait_state a "idle in transaction"
+
+cat > "$WORK/oneshot_b.sql" <<SQL
+select conservation_touched_count, remaining_group_count,
+       (conservation_failed_at is not null) as flagged
+  from public.migrate_tip_entries_to_shifts('$U4'::uuid, 200);
+SQL
+PGAPPNAME=payday_race_b "${PSQL[@]}" -v ON_ERROR_STOP=1 -q -f "$WORK/oneshot_b.sql" \
+  >"$WORK/oneshot_b.out" 2>&1 &
+BPID=$!
+wait_blocked b
+
+check_true "theOneShotBlocksOnALegacyWritesKeyInsteadOfRacingIt" "t" \
+  "the one-shot is waiting on a Lock while the 1.0 write holds payday:shiftmig"
+
+send 3 "commit;"
+wait_state a "idle"
+wait "$BPID"
+close_session 3
+wait || true
+
+# The fold did the whole group inside the 1.0 transaction, so the one-shot that
+# waited finds nothing unmigrated: touched=0. One shift, both rows' money, no
+# duplicate provenance, nothing queued, nothing flagged.
+check "theOneShotThatWaitedFindsTheWorkDoneAndReDerivesNothing" \
+  "cash=5000 credit=2000 nonwage=7000 prov=2 shifts=1 backlog=0 failures=0" \
+  "$(q "select 'cash=' || s.cash_tips_cents || ' credit=' || s.credit_tips_cents
+            || ' nonwage=' || s.non_wage_earnings_cents
+            || ' prov=' || coalesce(array_length(s.legacy_entry_ids,1),0)
+            || ' shifts=' || (select count(*) from public.shifts where user_id = '$U4')
+            || ' backlog=' || (select count(*) from private.shift_fold_backlog where user_id = '$U4')
+            || ' failures=' || (select count(*) from private.shift_fold_failures where user_id = '$U4')
+        from public.shifts s where s.user_id = '$U4' and s.id = '54000000-0000-0000-0000-000000000110'")"
+
+TOUCHED_B="$(sed -n '3p' "$WORK/oneshot_b.out" | tr -d ' ')"
+check "theWaitingOneShotReportedZeroTouchedAndZeroRemainingAndNoFlag" "0|0|f" \
+  "${TOUCHED_B:-<no output>}"
+
+q "delete from auth.users where id in ('$U','$U2','$U3','$U4')" >/dev/null
 
 echo
 if [ "$FAILED" = "1" ]; then
-  echo "== S4 concurrency suite FAILED"
+  echo "== S4/S5 concurrency suite FAILED"
   exit 1
 fi
-echo "== S4 concurrency suite passed"
+echo "== S4/S5 concurrency suite passed"
