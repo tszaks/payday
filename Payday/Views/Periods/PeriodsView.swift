@@ -162,6 +162,13 @@ struct PeriodsView: View {
     @Environment(PolicyStore.self) private var policyStore
     @Environment(TabRouter.self) private var tabRouter
     @Query private var allEntries: [TipEntry]
+    /// The other representation. `snapshotBuild` picks one, and it must be
+    /// the SAME one `PeriodDetailView` picks: this list pushes into that
+    /// detail, so a row total from one source over a detail from the other
+    /// is criterion 5 broken on the exact pair the original audit measured
+    /// it on -- "a 5pm shift on the period's last day was in the row's
+    /// total and absent from the detail's".
+    @Query private var shiftRecords: [ShiftRecord]
     @Query private var paycheckRecords: [PaycheckRecord]
 
     /// Owned by HistoryView's single NavigationStack — passed down rather
@@ -255,8 +262,14 @@ struct PeriodsView: View {
            cached.payrollTimeZone == zone {
             return cached.build
         }
+        // Both representations handed over; `HistoryEarnings.build` resolves
+        // which one. The choice deliberately does NOT live here -- this
+        // screen reading legacy while the detail it pushes into read records
+        // is the audit's original criterion-5 defect, and a screen that
+        // cannot make the choice cannot make it differently.
         return HistoryEarnings.build(
             entries: allEntries,
+            records: shiftRecords,
             policies: policies,
             payrollTimeZone: zone
         )

@@ -120,6 +120,86 @@ struct LogTipsIntent: AppIntent {
 
         let context = SharedModelContainer.shared.mainContext
         let today = Calendar.current.startOfDay(for: .now)
+
+        // The writer switch, the same predicate every sheet uses. Siri is
+        // the surface where writing the wrong representation hurts most: the
+        // user says "log my tips", hears a confirmation, and — on an
+        // authoritative account, where nothing reads `TipEntry` any more —
+        // sees nothing until the server folds the row and a later pull
+        // brings it back. Not lost, but invisible for a round-trip, which on
+        // the surface with the least recourse reads as the app ignoring
+        // them. Same family as the silent no-op delete.
+        let completedIntoExistingShift: Bool
+        if PaydaySyncState.shiftsAreAuthoritativeForCurrentAccount {
+            completedIntoExistingShift = try logToRecords(in: context, today: today, cents: cents, tipOutCents: tipOutCents)
+        } else {
+            completedIntoExistingShift = try logToLegacyEntries(in: context, today: today, cents: cents, tipOutCents: tipOutCents)
+        }
+
+        let allEntries = try context.fetch(FetchDescriptor<TipEntry>())
+        let shiftRecords = try context.fetch(FetchDescriptor<ShiftRecord>())
+        let paycheckRecords = try context.fetch(FetchDescriptor<PaycheckRecord>())
+        let preferencesStore = UserPreferencesStore()
+        SmartNudgeScheduler.reschedule(preferencesStore: preferencesStore, allEntries: allEntries, shiftRecords: shiftRecords)
+        PaydayPushScheduler.reschedule(preferencesStore: preferencesStore, schedule: PayScheduleStore().schedule, allEntries: allEntries, shiftRecords: shiftRecords, paycheckRecords: paycheckRecords)
+        PaydayWidgetRefresh.request()
+
+        let kindText = kind.tipKind.displayName.lowercased()
+        return .result(dialog: completedIntoExistingShift
+            ? IntentDialog("Added \(Money.string(fromCents: cents)) in \(kindText) tips to today's shift.")
+            : IntentDialog("Logged \(Money.string(fromCents: cents)) in \(kindText) tips."))
+    }
+
+    /// The new representation. Returns whether it completed an existing
+    /// shift rather than starting one, which is the only thing the spoken
+    /// confirmation needs to know.
+    ///
+    /// The completion rule is the record-side equivalent of
+    /// `targetShiftID`: today's most recently recorded shift that does not
+    /// already carry THIS kind of tip gets the amount, otherwise a new
+    /// shift starts. Records mid-conversion are excluded from the candidates
+    /// rather than mutated and allowed to throw, so Siri starts a fresh
+    /// shift instead of failing outright on a `conversionPending` row.
+    @MainActor
+    private func logToRecords(in context: ModelContext, today: Date, cents: Int, tipOutCents: Int?) throws -> Bool {
+        let todaysRecords = try context.fetch(FetchDescriptor<ShiftRecord>(predicate: #Predicate { $0.workDate == today }))
+        let target = todaysRecords
+            .filter { ShiftCommands.mayMutate($0) }
+            .filter { kind.tipKind == .cash ? $0.cashTipsCents == 0 : $0.creditTipsCents == 0 }
+            .max { ($0.recordedAt ?? .distantPast) < ($1.recordedAt ?? .distantPast) }
+
+        if let target {
+            // `update` touches the row, without which the edit never enters
+            // the upload set. Assigning the one field leaves hours, sales,
+            // period and clock times exactly as the shift already carried
+            // them — the record model gives that for free, where the legacy
+            // path below has to resolve and rewrite them to avoid dropping
+            // any.
+            try ShiftCommands.update(target, in: context) { record in
+                if kind.tipKind == .cash {
+                    record.cashTipsCents = cents
+                } else {
+                    record.creditTipsCents = cents
+                }
+                if let tipOutCents { record.tipOutCents = tipOutCents }
+            }
+            return true
+        }
+
+        _ = try ShiftCommands.create(
+            in: context,
+            workDate: today,
+            cashTipsCents: kind.tipKind == .cash ? cents : 0,
+            creditTipsCents: kind.tipKind == .credit ? cents : 0,
+            tipOutCents: tipOutCents
+        )
+        return false
+    }
+
+    /// The legacy representation, unchanged from what shipped, for accounts
+    /// the server has not converted yet.
+    @MainActor
+    private func logToLegacyEntries(in context: ModelContext, today: Date, cents: Int, tipOutCents: Int?) throws -> Bool {
         let todaysEntries = try context.fetch(FetchDescriptor<TipEntry>(predicate: #Predicate { $0.date == today }))
         let existingToday = todaysEntries.map { (shiftID: $0.shiftID, kind: $0.kind, recordedAt: $0.recordedAt) }
         let completingShiftID = Self.targetShiftID(existingToday: existingToday, kind: kind.tipKind)
@@ -138,18 +218,6 @@ struct LogTipsIntent: AppIntent {
         }
 
         try context.save()
-
-        let allEntries = try context.fetch(FetchDescriptor<TipEntry>())
-        let shiftRecords = try context.fetch(FetchDescriptor<ShiftRecord>())
-        let paycheckRecords = try context.fetch(FetchDescriptor<PaycheckRecord>())
-        let preferencesStore = UserPreferencesStore()
-        SmartNudgeScheduler.reschedule(preferencesStore: preferencesStore, allEntries: allEntries, shiftRecords: shiftRecords)
-        PaydayPushScheduler.reschedule(preferencesStore: preferencesStore, schedule: PayScheduleStore().schedule, allEntries: allEntries, paycheckRecords: paycheckRecords)
-        PaydayWidgetRefresh.request()
-
-        let kindText = kind.tipKind.displayName.lowercased()
-        return .result(dialog: completingShiftID != nil
-            ? IntentDialog("Added \(Money.string(fromCents: cents)) in \(kindText) tips to today's shift.")
-            : IntentDialog("Logged \(Money.string(fromCents: cents)) in \(kindText) tips."))
+        return completingShiftID != nil
     }
 }

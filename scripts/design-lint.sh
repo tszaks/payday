@@ -15,10 +15,25 @@ FAIL=0
 # grep over app + widget extension sources; tests/build excluded
 SRC=(Payday PaydayWidget)
 
+# Every source line as `path:line:text`, with comments and string CONTENTS
+# blanked. Built once; every rule below greps this instead of the raw files.
+#
+# The reason is a false positive this script produced on its own explanatory
+# comments: a rule of the form "this spelling must not appear outside these
+# files" cannot distinguish a CALL from a MENTION, so a header that quoted the
+# banned spelling in order to explain why it must never be used was reported as
+# using it. That is the repo's most expensive recurring bug class -- a check
+# that invents its own answer -- and it had already been paid for three times
+# elsewhere. Blanking once, centrally, removes it from all rules at once
+# instead of rewording every comment that trips one.
+SOURCE_STREAM=$(mktemp)
+trap 'rm -f "$SOURCE_STREAM"' EXIT
+perl scripts/lint-blank-comments.pl "${SRC[@]}" > "$SOURCE_STREAM"
+
 run_check() {
   local name="$1" pattern="$2" exclude_re="$3" hint="$4"
   local hits
-  hits=$(grep -rn -E "$pattern" "${SRC[@]}" --include="*.swift" 2>/dev/null | grep -Ev "$exclude_re" || true)
+  hits=$(grep -E "$pattern" "$SOURCE_STREAM" 2>/dev/null | grep -Ev "$exclude_re" || true)
   if [ -n "$hits" ]; then
     FAIL=1
     echo "[FAIL] $name"
@@ -759,6 +774,78 @@ if [ "$QUEUE_SELFTEST_STATUS" -ne 0 ]; then
   echo ""
 else
   echo "[PASS] rule 20 proves itself against all 14 queue symbols, positive and negative"
+fi
+
+# --- Rule 23: no app-code call reads the legacy shift representation alone.
+#
+#     The flip gives Payday two stored shapes for the same shift, and for as
+#     long as both exist a reader can be pointed at the wrong one. The cost of
+#     getting that wrong is not a wrong total -- each surface stays perfectly
+#     self-consistent with whatever it read, which is why every parity gate in
+#     the suite stayed green through EIGHT of these. It is two surfaces
+#     disagreeing about one fact, which is the entire thing PaydayCore exists
+#     to end.
+#
+#     The primary enforcement is the type system: the combined builders take
+#     BOTH lists and resolve the representation internally, so a legacy-only
+#     call does not compile and the COMPILER enumerates the call sites. This
+#     rule is the backstop for what the compiler cannot see -- a NEW
+#     legacy-only builder added later, which has no missing parameter to
+#     object to.
+#
+#     Per-call-site, not per-file, and that distinction was paid for. The
+#     first draft asked whether a FILE mentioning the legacy list also
+#     mentioned the predicate. It was silent on `DeleteAccountSheet`'s CSV
+#     export -- the worst defect of the eight, a permanently short export
+#     offered directly above the delete button -- because the same file
+#     mentioned the predicate for an unrelated shift count three lines away.
+#     And it flagged `DayDetailSheet`, which was correct all along. "The file
+#     has a switch in it" is not evidence that a given read is switched.
+#
+#     SCOPE, and this was wrong when the rule was written: it ran against
+#     `Payday` alone, so the WIDGET -- a separate target that reads the same
+#     App Group store and shows its own money -- was never checked by the
+#     rule written to prevent exactly that class of miss. Found by running it
+#     against `PaydayWidget` by hand, which turned up the pace baseline
+#     reading `allEntries` directly. That is the same narrower-than-the-family
+#     error rule 20 already paid for (it knew only the tip queues and was
+#     blind to three others), repeated inside the rule meant to end it. It now
+#     takes "${SRC[@]}", the same roots every other rule uses, so the scope
+#     cannot drift from the rest of the script again.
+REPRESENTATION=$(perl scripts/lint-representation-switch.pl "${SRC[@]}" 2>&1)
+REPRESENTATION_STATUS=$?
+if [ "$REPRESENTATION_STATUS" -ne 0 ]; then
+  FAIL=1
+  echo "[FAIL] a reader takes its shifts from the legacy representation alone"
+  printf '%s\n' "$REPRESENTATION" | sed 's/^/   /'
+  echo ""
+else
+  echo "[PASS] every app-code shift read hands over both representations"
+fi
+
+# --- Rule 24: rule 23 proves itself.
+#
+#     Same discipline as rule 22, and for the same reason: a lint that has
+#     never been shown to catch every shape it claims to is a lint trusted on
+#     faith. The self-test plants all eight real defect shapes the sweep found
+#     plus a hypothetical future legacy-only builder, and asserts rule 23
+#     reports each. It also plants the six shapes that must NOT fire -- a
+#     switched call, a declaration, a doc comment, a block comment, a tuple
+#     whose label happens to be `entries`, and a resolution marked as made
+#     upstream -- so the rule is shown to DISCRIMINATE rather than merely to
+#     fire.
+#
+#     Proven to work: stubbing rule 23's reporting branch makes the self-test
+#     report 9 misses and fail.
+REPRESENTATION_SELFTEST=$(bash scripts/lint-selftest-representation.sh 2>&1)
+REPRESENTATION_SELFTEST_STATUS=$?
+if [ "$REPRESENTATION_SELFTEST_STATUS" -ne 0 ]; then
+  FAIL=1
+  echo "[FAIL] rule 23 does not catch every representation shape it claims to"
+  printf '%s\n' "$REPRESENTATION_SELFTEST" | sed 's/^/   /'
+  echo ""
+else
+  echo "[PASS] rule 23 proves itself: 9 defect shapes caught, 6 correct shapes left alone"
 fi
 
 echo ""

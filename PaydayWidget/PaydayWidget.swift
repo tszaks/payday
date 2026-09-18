@@ -149,9 +149,26 @@ struct PaydayWidgetProvider: TimelineProvider {
         // StatsEngine is still the pace baseline, which is a COMPARISON and
         // not a money figure. Migrating that is group 2.6's job, not this
         // slice's, and mixing the two would make this change unreviewable.
+        // The pace baseline reads whichever representation the account uses.
+        //
+        // It used to fetch `TipEntry` alone. That is a COMPARISON rather than
+        // a money figure -- the money comes from `buildOnce` above, which was
+        // switched -- but post-flip the comparison would have run over a
+        // history missing every shift logged since conversion, and the
+        // deriver never writes a `TipEntry` back, so the truncation is
+        // permanent and grows. A pace delta measured against a shrinking
+        // fraction of the history is a wrong number, not a stale one.
+        //
+        // Found by running rule 23 against `PaydayWidget` by hand: the rule
+        // had been scoped to `Payday` alone, so this whole target was
+        // unchecked by the lint written to prevent this class of miss.
         let context = ModelContext(SharedModelContainer.shared)
         let allEntries = (try? context.fetch(FetchDescriptor<TipEntry>())) ?? []
-        let engine = StatsEngine(payrollTimeZone: policyStore.payrollTimeZone, records: allEntries.map(TipRecord.init))
+        let allRecords = (try? context.fetch(FetchDescriptor<ShiftRecord>())) ?? []
+        let engine = StatsEngine(
+            payrollTimeZone: policyStore.payrollTimeZone,
+            records: StatsRecordAdapter.tipRecords(entries: allEntries, records: allRecords)
+        )
         return dates.map {
             Self.buildEntry(at: $0, schedule: schedule, snapshot: snapshot, engine: engine, policyStore: policyStore)
         }

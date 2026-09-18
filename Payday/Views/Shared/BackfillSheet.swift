@@ -37,6 +37,11 @@ struct BackfillSheet: View {
     /// uses, since allEntries' @Query isn't guaranteed to have refreshed by
     /// the time onDisappear fires for the very last save.
     @State private var sessionEntries: [TipEntry] = []
+    /// The same, in the shift representation. Backfill enters a whole history
+    /// in one sitting, so `@Query` lags badly here -- this is why the session
+    /// list exists at all, and the record path needs its own for the same
+    /// reason. Exactly one of the two ever fills.
+    @State private var sessionRecords: [ShiftRecord] = []
 
     init() {
         let yesterday = Calendar.current.date(byAdding: .day, value: -1, to: .now) ?? .now
@@ -121,8 +126,12 @@ struct BackfillSheet: View {
             }
             .onDisappear {
                 guard shiftsAddedCount > 0 else { return }
-                SmartNudgeScheduler.reschedule(preferencesStore: preferencesStore, allEntries: allEntries + sessionEntries, shiftRecords: shiftRecords)
-                PaydayPushScheduler.reschedule(preferencesStore: preferencesStore, schedule: scheduleStore.schedule, allEntries: allEntries + sessionEntries, paycheckRecords: paycheckRecords)
+                // FLIP GATE 1's other call site. Backfill writes many nights in one
+                // sitting, so the session list is the only thing that knows what
+                // was just entered -- appending it on the correct representation
+                // is what stops the nudge firing for a night the user just typed in.
+                SmartNudgeScheduler.reschedule(preferencesStore: preferencesStore, allEntries: allEntries + sessionEntries, shiftRecords: shiftRecords + sessionRecords)
+                PaydayPushScheduler.reschedule(preferencesStore: preferencesStore, schedule: scheduleStore.schedule, allEntries: allEntries + sessionEntries, shiftRecords: shiftRecords + sessionRecords, paycheckRecords: paycheckRecords)
                 PaydayWidgetRefresh.request()
             }
             .task {
@@ -189,16 +198,33 @@ struct BackfillSheet: View {
         // with autosave off a backfilled shift would vanish on relaunch --
         // and backfill is used to enter a whole history at once, so the loss
         // would be many nights rather than one.
+        // The writer flip, same single decision as `LogTipSheet.saveNew`, and
+        // the two paths are mutually exclusive so the session append below
+        // cannot double-count. `create` owns its own save and rollback, so it
+        // is not wrapped in `commit`.
         let entries: [TipEntry]
+        let records: [ShiftRecord]
         do {
-            entries = try ShiftCommands.commit(in: modelContext) {
-                ShiftWriter.insertShift(
-                    into: modelContext,
-                    date: selectedDate,
-                    cashCents: cashCents,
-                    creditCents: creditCents,
+            if PaydaySyncState.shiftsAreAuthoritativeForCurrentAccount {
+                records = [try ShiftCommands.create(
+                    in: modelContext,
+                    workDate: selectedDate,
+                    cashTipsCents: cashCents,
+                    creditTipsCents: creditCents,
                     tipOutCents: tipOutCents > 0 ? tipOutCents : nil
-                )
+                )]
+                entries = []
+            } else {
+                entries = try ShiftCommands.commit(in: modelContext) {
+                    ShiftWriter.insertShift(
+                        into: modelContext,
+                        date: selectedDate,
+                        cashCents: cashCents,
+                        creditCents: creditCents,
+                        tipOutCents: tipOutCents > 0 ? tipOutCents : nil
+                    )
+                }
+                records = []
             }
         } catch {
             // Rolled back. The amounts stay on screen so the night can be
@@ -208,18 +234,24 @@ struct BackfillSheet: View {
             return
         }
         sessionEntries.append(contentsOf: entries)
+        sessionRecords.append(contentsOf: records)
         datesWithExistingShifts.insert(Calendar.current.startOfDay(for: selectedDate))
         PaydayHaptics.success()
         shiftsAddedCount += 1
     }
 
     private func refreshExistingShiftDates() {
-        datesWithExistingShifts = Set(
-            (allEntries + sessionEntries).compactMap { entry in
-                guard entry.shiftID != nil else { return nil }
-                return Calendar.current.startOfDay(for: entry.date)
-            }
-        )
+        // Both representations, because this set is what stops backfill
+        // offering a night the user has already entered. Reading only the
+        // legacy side after the flip would re-offer every night just written.
+        let legacyDays = (allEntries + sessionEntries).compactMap { entry -> Date? in
+            guard entry.shiftID != nil else { return nil }
+            return Calendar.current.startOfDay(for: entry.date)
+        }
+        let recordDays = (shiftRecords + sessionRecords).map {
+            Calendar.current.startOfDay(for: $0.workDate)
+        }
+        datesWithExistingShifts = Set(legacyDays + recordDays)
     }
 
     /// Saves, then resets for the next entry: clears the three amounts,

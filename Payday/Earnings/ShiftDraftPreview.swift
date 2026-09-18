@@ -253,4 +253,62 @@ enum ShiftDraftPreview {
         )
         return try? EarningsSnapshot.build(inputs.substituting(draft))
     }
+
+    /// The same preview over the new representation.
+    ///
+    /// The draft still substitutes in by id, so the sheet's own figure is
+    /// unchanged; what changes is the HISTORY it sits in. That history is not
+    /// decoration here: `revealHistorySnapshot` feeds `StatsEngine`'s reveal
+    /// comparison, which is what decides whether tonight is a personal
+    /// record. Reading the legacy rows alone on a converted account would
+    /// compare tonight against only the shifts logged BEFORE conversion, and
+    /// since the deriver never writes a `TipEntry` back, that truncation is
+    /// permanent. The reveal would then congratulate someone on a best night
+    /// that was not one -- a false claim rather than a wrong total, which is
+    /// the reveal's specific way of losing trust.
+    @MainActor
+    static func snapshot(
+        draft: ShiftInput?,
+        records: [ShiftRecord],
+        policies: CompensationPolicies,
+        payrollTimeZone: TimeZone,
+        windowed: Bool = true
+    ) -> EarningsSnapshot? {
+        guard let draft else { return nil }
+        let window = windowed ? workweek(containing: draft.workDay, policies: policies) : nil
+        let adapted = ShiftInputAdapter.adapt(records, calendars: policies.calendars)
+        let inputs = EarningsInputs(
+            // Filtered on the input's OWN `workDay`, which the adapter
+            // already resolved in the payroll zone of the calendar policy
+            // effective that day. The legacy arm above has to re-derive that
+            // day from the earliest row; here it is already the answer, so
+            // the filter and the valuation cannot disagree about the week.
+            shifts: adapted.inputs.filter { input in
+                guard let window else { return true }
+                return window.contains(input.workDay)
+            },
+            rates: policies.rates,
+            calendars: policies.calendars,
+            asOf: CivilDay.distantFuture,
+            unreadableReceiptShiftIDs: adapted.unreadableReceiptShiftIDs
+        )
+        return try? EarningsSnapshot.build(inputs.substituting(draft))
+    }
+
+    /// **The one entry point.** Takes both representations and resolves which
+    /// to read; see `ShiftRepresentation`.
+    @MainActor
+    static func snapshot(
+        draft: ShiftInput?,
+        entries: [TipEntry],
+        records: [ShiftRecord],
+        policies: CompensationPolicies,
+        payrollTimeZone: TimeZone,
+        windowed: Bool = true,
+        representation: ShiftRepresentation = .automatic
+    ) -> EarningsSnapshot? {
+        representation.usesRecords
+            ? snapshot(draft: draft, records: records, policies: policies, payrollTimeZone: payrollTimeZone, windowed: windowed)
+            : snapshot(draft: draft, entries: entries, policies: policies, payrollTimeZone: payrollTimeZone, windowed: windowed)
+    }
 }

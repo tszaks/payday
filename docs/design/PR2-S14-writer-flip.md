@@ -84,10 +84,20 @@ no-op proof:
 ## The changes, by file
 
 **The writer.** `LogTipSheet`'s four write paths move to `ShiftCommands`:
-`saveNew` → `create`, `commitLiveEdit` → `update`, `delete` → `delete`,
-`pruneZeroedRows` → deleted outright (a `ShiftRecord` has no zeroed sibling
-rows to prune; the concept exists only in the two-row model).
+`saveNew` → `create`, `commitLiveEdit` → `update`, `delete` → `delete`.
 `BackfillSheet.performSave` likewise.
+
+**CORRECTED 2026-09-18.** This section said `pruneZeroedRows` was "deleted
+outright". It is not, and must not be: the legacy arm still needs the sweep
+until PR 8 removes the legacy representation entirely, because a
+non-authoritative account is still writing `TipEntry` pairs and can still
+zero one of them. What the code actually does is keep the function with an
+explicit `if editingRecord != nil { return }` at the top, so the sweep is a
+no-op in the shift representation and unchanged in the legacy one. That is
+the correct shape and the DOC was the wrong artifact. Recorded rather than
+quietly amended, because this file is what a future reader diffs the code
+against, and a doc claiming a function is gone when it is present is the
+same drift-in-silence problem as a fixture that gates nothing.
 
 **The rows.** `DayDetailSheet`, `DashboardView` and `PeriodDetailView` render
 `ShiftRecord` and hand `ShiftRecord` to the edit sheet, the undo toast and the
@@ -201,7 +211,7 @@ two remaining facts types, the three views' row rendering, the sheet target and
 
 6. **Edit and delete still work on a flipped row**, which is the whole reason
    the class-B readers could not move early. Including the parity case that
-   pins `pruneZeroedRows`' removal as intended: on an authoritative account,
+   pins `pruneZeroedRows`' no-op as intended: on an authoritative account,
    editing a shift to zero persists **exactly one zeroed `ShiftRecord`** --
    not deleted, not duplicated.
 
@@ -218,8 +228,10 @@ two remaining facts types, the three views' row rendering, the sheet target and
 - `tip_entries` remains the legacy write surface for shipped 1.0 builds and is
   never rewritten. The flip changes what THIS build writes, not what the
   server accepts.
-- `pruneZeroedRows` disappears, and it is safe, established by reading the
-  code rather than by arguing from the model. It is guarded by
+- `pruneZeroedRows` becomes a no-op in the shift representation and STAYS
+  for the legacy one (see the correction above; an earlier draft of this file
+  said it disappears). It is safe, established by reading the code rather
+  than by arguing from the model. It is guarded by
   `guard rows.count > 1 else { return }`, so it only ever acts when one shift
   has multiple `TipEntry` rows -- precisely the two-row model that ceases to
   exist under one record per shift. It is already a no-op there. And the
@@ -238,3 +250,44 @@ two remaining facts types, the three views' row rendering, the sheet target and
   seam and `ShiftQueueOrderingTests`, and rule 20 widened to every queue
   symbol -- which then found a fourth site in `PaycheckEntrySheet`. The flip
   inherits the rule, so a new write path cannot reintroduce it.
+
+
+## Carried to the NEXT slice: the sync leg, and the liveness requirement
+
+`PaydaySyncState.applyShiftAuthority` is the one writer of
+`shiftsAreAuthoritativeAt` and it has **no caller**. That is deliberate and
+reviewed: it is what makes S14 a provable no-op and what keeps gate 7's
+empirical half ("no account is authoritative today") true by construction
+rather than by luck. Piece 12's lesson was about UNNOTICED dead code; this is
+documented, gated and intentional.
+
+The next slice adds the caller: the sync leg that reads
+`public.shift_migration_state` into the checkpoint and hands the resulting
+`ShiftReadAuthority.State` to `applyShiftAuthority`. No migration is needed --
+that table already carries `sms_read_own` RLS and
+`grant select ... to authenticated`, so a device reads its own row directly.
+
+**That slice MUST carry a liveness test, and it is written here so it cannot
+be lost between slices.**
+
+> A deferred promotion is re-attempted, and completes, once the legacy-edit
+> sheet closes.
+
+The reason is structural, not hypothetical. `resolve` returns
+`.deferPromotion` while a legacy-edit sheet is open, and **nothing inside the
+deferral re-arms it**. If the sync leg treats `.deferPromotion` as a no-op and
+does not schedule another pass, the account is stranded on the legacy
+representation for the remainder of the session -- a guard against a
+few-seconds straddle turned into an indefinite one. The existing
+`writerHonoursTheOutcome` test proves the NEXT call promotes; it cannot prove
+that a next call happens, because no caller exists to test.
+
+Two related notes for that slice:
+
+- `applyShiftAuthority` is deliberately **not** `@discardableResult`, so a
+  caller cannot silently drop `.deferPromotion`. If the compiler is
+  complaining, that is the design working.
+- A demotion must stay immediate. `resolve` returns `.demote` on the
+  `currentlyAuthoritative` branch without consulting the sheet state at all,
+  so this is control flow rather than a condition -- do not "simplify" the two
+  branches into one predicate.

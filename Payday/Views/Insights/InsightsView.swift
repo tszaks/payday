@@ -39,6 +39,12 @@ struct InsightsView: View {
     @Environment(MoveLedgerStore.self) private var moveLedgerStore
     @Environment(PolicyStore.self) private var policyStore
     @Query(sort: \TipEntry.date, order: .reverse) private var allEntries: [TipEntry]
+    /// The other representation. `InsightsEarnings.build` picks one, and it
+    /// has to be the same one Dashboard picks: group 2.6's whole point is
+    /// that this page and the headline above it share a basis, and reading a
+    /// different REPRESENTATION is a sharper version of the same defect than
+    /// reading a different basis.
+    @Query(sort: \ShiftRecord.workDate, order: .reverse) private var shiftRecords: [ShiftRecord]
 
     @State private var isShowingBackfillSheet = false
     @State private var renderCache: InsightsRenderCache?
@@ -81,15 +87,14 @@ struct InsightsView: View {
         // window. `InsightsEarnings` holds the pair together and its header
         // carries the two defects that come from doing either one twice.
         //
-        // `LegacySnapshotBridge` and not `earningsStore.snapshot`: nothing
-        // writes `ShiftRecord` on a device until PR 2 slice S7, so the
-        // store's snapshot is empty and a screen on it would show a person
-        // with years of shifts a blank page. The swap is inside
-        // `InsightsEarnings.build`.
+        // The representation switch, inside `InsightsEarnings.build` exactly
+        // as this comment promised before the switch existed, and on the
+        // same predicate every other switched screen uses.
         let dataset = renderCache?.revision == snapshotRevision
             ? renderCache!.dataset
             : InsightsEarnings.build(
                 entries: allEntries,
+                records: shiftRecords,
                 policies: policyStore.policies,
                 payrollTimeZone: payrollTimeZone,
                 calendar: payrollCalendar
@@ -681,7 +686,7 @@ struct InsightsPageFacts: SnapshotFacts {
         // $265.00 on the chart and $105.00 in the tiles beside it.
         let basis = InsightsEarnings.basis(for: snapshot)
         self.basis = basis
-        let records = dataset.shiftDays.flatMap(\.items).map(TipRecord.init)
+        let records = dataset.tipRecords
         // The engine is built by `InsightsEarnings.engine`, not here, so the
         // parity suite gates this wiring instead of restating it. See that
         // function's header for the measurement that made it a function.
