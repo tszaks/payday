@@ -16,7 +16,31 @@ struct RenderFactsPerformanceTests {
     /// have given up the regression signal on a developer machine too, where the
     /// numbers are actually meaningful.
     ///
-    /// GitHub Actions sets CI=true; locally it is unset, so `scale` is 1.
+    /// THE ENVIRONMENT VARIABLE HAS TO BE FORWARDED, AND IT IS NOT AUTOMATIC.
+    /// GitHub Actions sets CI=true in the RUNNER's shell, but these tests run in
+    /// the host app process on the simulator, which does not inherit the
+    /// runner's environment. So from 2026-09-17 until this comment was written
+    /// the scaling was dead code: every CI run measured against the unscaled
+    /// budget, which is why PR #13 -- a SQL-only slice touching no Swift at all
+    /// -- failed here at 0.5406s against 0.5s while its own message printed
+    /// "scaled x1.0".
+    ///
+    /// MEASURED on this simulator, forcing a failure so the message prints the
+    /// scale, three ways:
+    ///
+    ///   xcodebuild ...                          -> scaled x1.0
+    ///   CI=true xcodebuild ...                  -> scaled x1.0   (what CI did)
+    ///   xcodebuild ... TEST_RUNNER_CI=true      -> scaled x1.0   (a build
+    ///                                              setting, not an env var)
+    ///   TEST_RUNNER_CI=true xcodebuild ...      -> scaled x4.0
+    ///
+    /// xcodebuild forwards a SHELL environment variable named TEST_RUNNER_<VAR>
+    /// into the test process as <VAR>, with the prefix stripped. The CI workflow
+    /// therefore sets TEST_RUNNER_CI on the `xcodebuild test` step. Setting plain
+    /// CI, or passing TEST_RUNNER_CI as an xcodebuild argument, silently does
+    /// nothing -- and "silently" is the whole problem: the guard still runs, it
+    /// just runs at the wrong limit and reports a scale of 1 in a message nobody
+    /// reads until it fails.
     static let budgetScale: Double = ProcessInfo.processInfo.environment["CI"] == nil ? 1 : 4
 
     /// Budget in seconds, scaled for the host, with the raw limit kept for the
