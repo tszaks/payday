@@ -9,6 +9,10 @@ struct PeriodDetailFacts {
     let payDate: Date
     let entries: [TipEntry]
     let shiftDays: [(day: Date, shiftID: UUID, items: [TipEntry])]
+    /// Each shift's ledger-allocated wages, keyed by `shiftDays`' own ids.
+    /// `wages` below is the sum of exactly these, so the hero and the rows
+    /// under it are one allocation rather than two roundings.
+    let wagesByShiftID: [UUID: Int]
     let multiShiftDays: Set<Date>
     let breakdown: TipBreakdown
     let nightsInPeriod: [(date: Date, cents: Int)]
@@ -63,6 +67,13 @@ struct PeriodDetailFacts {
             calendar: calendar
         )
         let resolvedHeroTotalCents = nonWageEarningsCents + (resolvedWages?.totalCents ?? 0)
+
+        let resolvedWagesByShiftID = WageEstimate.centsByShiftID(
+            payrollTimeZone: payrollTimeZone,
+            workweekStartWeekday: schedule?.firstWeekday ?? calendar.firstWeekday,
+            shifts: resolvedShiftDays,
+            wageCentsPerHour: wageCentsPerHour
+        )
 
         let loggedHours = WageEstimate.loggedHours(shiftGroups: resolvedShiftDays.map(\.items))
         let resolvedHeroRateCaption: String?
@@ -125,6 +136,7 @@ struct PeriodDetailFacts {
         payDate = resolvedPayDate
         entries = resolvedEntries
         shiftDays = resolvedShiftDays
+        wagesByShiftID = resolvedWagesByShiftID
         multiShiftDays = resolvedMultiShiftDays
         breakdown = resolvedBreakdown
         nightsInPeriod = resolvedNights
@@ -316,7 +328,11 @@ struct PeriodDetailView: View {
 
                 ForEach(Array(facts.shiftDays.enumerated()), id: \.element.shiftID) { index, group in
                     if index > 0 { Divider() }
-                    shiftRow(for: group, multiShiftDays: facts.multiShiftDays)
+                    shiftRow(
+                        for: group,
+                        multiShiftDays: facts.multiShiftDays,
+                        wageCents: facts.wagesByShiftID[group.shiftID] ?? 0
+                    )
                 }
             }
         }
@@ -354,7 +370,8 @@ struct PeriodDetailView: View {
     @ViewBuilder
     private func shiftRow(
         for group: (day: Date, shiftID: UUID, items: [TipEntry]),
-        multiShiftDays: Set<Date>
+        multiShiftDays: Set<Date>,
+        wageCents: Int
     ) -> some View {
         let period = ShiftDetails.resolve(from: group.items).shiftPeriod
         let dayHasMultiple = multiShiftDays.contains(group.day)
@@ -362,7 +379,7 @@ struct PeriodDetailView: View {
             Button {
                 sheetTarget = .edit(anchor)
             } label: {
-                ShiftDayRow(day: group.day, period: period, dayHasMultipleShifts: dayHasMultiple, entries: group.items, wageCentsPerHour: preferencesStore.baseHourlyWageCents)
+                ShiftDayRow(day: group.day, period: period, dayHasMultipleShifts: dayHasMultiple, entries: group.items, wageCents: wageCents)
                     .padding(.vertical, PaydaySpacing.p12)
                     .contentShape(Rectangle())
             }

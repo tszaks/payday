@@ -156,6 +156,115 @@ struct PolicyStoreMigrationTests {
                 "the migration advanced the settings clock")
     }
 
+    /// The other half of "the migration does not touch the clock": if the
+    /// clock is the ONLY thing `synchronize` looks at, an adoption never
+    /// reaches the server at all. So the adoption raises its own flag, and
+    /// leaves the clock where it was.
+    @Test("an adoption raises the pending-upload flag without moving the settings clock")
+    func adoptionFlagsAnUploadWithoutTouchingTheClock() {
+        let defaults = freshDefaults()
+        let store = PolicyStore(defaults: defaults)
+        #expect(store.adoptedPoliciesAwaitingUpload == false, "nothing adopted yet")
+
+        let outcome = store.runMigrationsIfNeeded(
+            resolvedFirstWeekday: 2, earliestShiftDate: .now,
+            baseHourlyWageCents: 283, deviceTimeZone: PaydayTestZone.newYork
+        )
+
+        #expect(outcome.changedAnything)
+        #expect(store.adoptedPoliciesAwaitingUpload, "the server has never seen these policies")
+        #expect(PaydaySettingsSyncClock.modifiedAt(in: defaults) == Date(timeIntervalSince1970: 0),
+                "the adoption must not look like a user edit")
+
+        // A second, no-op pass neither re-flags nor un-flags.
+        store.acknowledgePolicyUpload()
+        #expect(store.adoptedPoliciesAwaitingUpload == false)
+        let second = store.runMigrationsIfNeeded(
+            resolvedFirstWeekday: 2, earliestShiftDate: .now,
+            baseHourlyWageCents: 283, deviceTimeZone: PaydayTestZone.newYork
+        )
+        #expect(second.changedAnything == false)
+        #expect(store.adoptedPoliciesAwaitingUpload == false, "nothing new to upload")
+        #expect(PaydaySettingsSyncClock.modifiedAt(in: defaults) == Date(timeIntervalSince1970: 0))
+    }
+
+    /// The upload decision itself, which is the line the bug lived on:
+    /// `checkpoint.settingsClientUpdatedAt != localSettings.clientUpdatedAt`
+    /// is false on an already-synced device with no settings edit, so before
+    /// this fix `upsertSettings` was never called and
+    /// `user_settings.compensation_policies` stayed NULL indefinitely.
+    @Test("an already-synced device with no settings edit still owes one settings upload after adopting")
+    func adoptionForcesExactlyOneSettingsUpload() {
+        let defaults = freshDefaults()
+        let store = PolicyStore(defaults: defaults)
+        store.runMigrationsIfNeeded(
+            resolvedFirstWeekday: 2, earliestShiftDate: .now,
+            baseHourlyWageCents: 283, deviceTimeZone: PaydayTestZone.newYork
+        )
+
+        // The already-synced state: the checkpoint holds exactly the
+        // timestamp the local settings row would send, so reason 1 is false.
+        let alreadySynced = "2026-09-17T12:00:00.000Z"
+        let checkpoint = PaydaySyncState.Snapshot(settingsClientUpdatedAt: alreadySynced)
+
+        #expect(
+            PaydaySyncService.settingsNeedUpload(
+                checkpointSettingsClientUpdatedAt: checkpoint.settingsClientUpdatedAt,
+                localSettingsClientUpdatedAt: alreadySynced,
+                adoptedPoliciesAwaitingUpload: false
+            ) == false,
+            "this is the pre-fix behaviour, and the reason the column stayed NULL"
+        )
+        #expect(
+            PaydaySyncService.settingsNeedUpload(
+                checkpointSettingsClientUpdatedAt: checkpoint.settingsClientUpdatedAt,
+                localSettingsClientUpdatedAt: alreadySynced,
+                adoptedPoliciesAwaitingUpload: store.adoptedPoliciesAwaitingUpload
+            ),
+            "the adoption is owed one write"
+        )
+
+        // Exactly one: once the write lands, the flag is gone and the next
+        // pass is quiet again.
+        store.acknowledgePolicyUpload()
+        #expect(
+            PaydaySyncService.settingsNeedUpload(
+                checkpointSettingsClientUpdatedAt: checkpoint.settingsClientUpdatedAt,
+                localSettingsClientUpdatedAt: alreadySynced,
+                adoptedPoliciesAwaitingUpload: store.adoptedPoliciesAwaitingUpload
+            ) == false
+        )
+        // And a real settings edit still uploads on its own merits.
+        #expect(
+            PaydaySyncService.settingsNeedUpload(
+                checkpointSettingsClientUpdatedAt: checkpoint.settingsClientUpdatedAt,
+                localSettingsClientUpdatedAt: "2026-09-17T13:00:00.000Z",
+                adoptedPoliciesAwaitingUpload: false
+            )
+        )
+    }
+
+    /// A download that hands this device policies proves the server already
+    /// has them, so the forced write is dropped rather than clobbering a row
+    /// that is already correct.
+    @Test("a download of policies settles the pending upload instead of pushing over it")
+    func downloadedPoliciesSettleThePendingUpload() {
+        let defaults = freshDefaults()
+        let store = PolicyStore(defaults: defaults)
+        store.runMigrationsIfNeeded(
+            resolvedFirstWeekday: 2, earliestShiftDate: .now,
+            baseHourlyWageCents: 283, deviceTimeZone: PaydayTestZone.newYork
+        )
+        #expect(store.adoptedPoliciesAwaitingUpload)
+
+        store.replaceFromSupabase(store.policies)
+
+        #expect(store.adoptedPoliciesAwaitingUpload == false,
+                "an identical remote payload still means the server has them")
+        #expect(PaydaySettingsSyncClock.modifiedAt(in: defaults) == Date(timeIntervalSince1970: 0),
+                "a download is not an edit either")
+    }
+
     @Test("a user edit DOES advance the settings clock, so it wins over the server's copy")
     func userEditsTouchTheSettingsClock() {
         let defaults = freshDefaults()
@@ -276,6 +385,67 @@ struct PolicyStoreEditTests {
         )
         #expect(valuations[0].components.regularWagesCents == 1415)
         #expect(valuations[1].components.regularWagesCents == 2500)
+    }
+
+    /// The P0 from PR 3's review, measured rather than reasoned about: a `0`
+    /// typed into "Rate changed on…" used to store a `.confirmed` $0.00/hr
+    /// policy, and the ledger then called an 8-hour shift VALUED at zero
+    /// cents with no diagnostic — $0.00 of wages on real worked hours,
+    /// presented as a complete confirmed fact. `.rateNotSet` is the only
+    /// honest answer, and "zero means the wage feature is off" has to be one
+    /// rule across both entry points.
+    @Test("a dated rate change of zero stores no policy, and the shift reads rateNotSet rather than a valued $0.00")
+    func zeroDatedRateChangeStoresNothing() {
+        let store = migratedStore(rate: nil)
+        #expect(store.policies.rates.isEmpty, "no legacy wage, so no rate policy exists yet")
+        let changeDay = CivilDay(year: 2026, month: 9, day: 28)
+
+        store.applyRateChange(hourlyRateCents: 0, effectiveFrom: changeDay)
+
+        #expect(store.policies.rates.isEmpty, "zero is not a rate")
+        #expect(store.currentHourlyRateCents == nil)
+
+        let shift = ShiftInput(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+            workDay: changeDay, period: .dinner, minutesWorked: 480
+        )
+        let output = CompensationLedger.evaluate(
+            [shift], rates: store.policies.rates, calendars: store.policies.calendars
+        )
+        let valuation = try! #require(output.valuations.first)
+        #expect(valuation.wage.isValued == false)
+        #expect(valuation.wage.unavailableReason == .rateNotSet)
+        #expect(valuation.components.regularWagesCents == 0)
+        #expect(output.wageFeatureEnabled == false)
+        #expect(output.completeness.shiftsWageValued == 0)
+    }
+
+    /// A real rate already on file must not be silently deleted by a typo
+    /// either: refusing the dated zero leaves the history exactly as it was.
+    @Test("a dated rate change of zero leaves an existing rate history untouched")
+    func zeroDatedRateChangeKeepsExistingHistory() {
+        let store = migratedStore()
+        let before = store.policies.rates
+
+        store.applyRateChange(hourlyRateCents: 0, effectiveFrom: CivilDay(year: 2026, month: 9, day: 28))
+
+        #expect(store.policies.rates == before)
+        #expect(store.currentHourlyRateCents == 283)
+    }
+
+    /// The Save button and the "$0.00" placeholder were the other half of the
+    /// same P0: the sheet gated Save on `cents != nil`, and `Int("0")` is 0.
+    @Test("the shared digits-to-rate rule reads zero as no rate at all")
+    func zeroDigitsParseToNoRate() {
+        #expect(PayrollSettingsSection.rateCents(fromDigits: "") == nil)
+        #expect(PayrollSettingsSection.rateCents(fromDigits: "0") == nil)
+        #expect(PayrollSettingsSection.rateCents(fromDigits: "00") == nil)
+        #expect(PayrollSettingsSection.rateCents(fromDigits: "0000") == nil)
+        #expect(PayrollSettingsSection.rateCents(fromDigits: "abc") == nil)
+        #expect(PayrollSettingsSection.rateCents(fromDigits: "283") == 283)
+        #expect(PayrollSettingsSection.rateCents(fromDigits: "0283") == 283)
+        // Still capped at $99.99/hr, digits past the fourth dropped.
+        #expect(PayrollSettingsSection.rateCents(fromDigits: "12345") == 1234)
     }
 
     @Test("confirming the rate history changes no cents, only the label")

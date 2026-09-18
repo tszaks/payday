@@ -505,10 +505,19 @@ struct PaydayCloudGate<Content: View>: View {
             MigrationRunner.runPending(in: modelContext)
             // The two compensation-policy migrations (Design 1). They run
             // AFTER MigrationRunner, so the earliest shift date they read is
-            // the repaired one, and BEFORE restore, so a first sync uploads
-            // the policies it just created. Neither touches the settings
-            // clock, so this cannot make an untouched install look newer
-            // than another device's real settings.
+            // the repaired one, and BEFORE restore, so the policies exist
+            // before the first sync of the launch.
+            //
+            // Running first is NOT what makes them upload, and an earlier
+            // version of this comment claimed it was. Neither migration
+            // touches the settings clock (a read-time bump would make an
+            // untouched install look newer than another device's real
+            // settings), and `PaydaySyncService.synchronize` gated the
+            // settings upload on that clock alone — so on an already-synced
+            // 1.0 device nothing was ever uploaded and
+            // `user_settings.compensation_policies` stayed NULL. What makes
+            // the upload happen is `PolicyStore.adoptedPoliciesAwaitingUpload`,
+            // which the adoption sets and `settingsNeedUpload` reads.
             adoptPolicyInputs()
             await cloudState.restore(
                 context: modelContext,

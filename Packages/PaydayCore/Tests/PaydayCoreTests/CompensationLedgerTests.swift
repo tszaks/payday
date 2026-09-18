@@ -409,6 +409,77 @@ struct CompensationLedgerTests {
         #expect(thursday.wage.components.overtimeWagesCents == 849)
     }
 
+    /// SURVIVING MUTATION, closed. The canonical lunch-before-dinner order
+    /// (Design 1, step 3) was written down in three places and measured in
+    /// none: swapping `ShiftPeriodTag.rank` — or negating both ranks — passed
+    /// the whole suite, because `seededRandomWeeksTelescope` compares the
+    /// engine to `roundCents` of its own accumulated units and
+    /// `shuffledInputIsIdentical` compares the engine to itself. Both hold
+    /// under either order, since the WEEK total is byte-identical (12169c
+    /// here) either way; what moves is which same-day shift eats the
+    /// overtime.
+    ///
+    /// This is the "test the disagreeing case" rule: an ordering rule needs
+    /// the input where the orderings disagree. With the rank swapped the
+    /// lunch shift below reads 120 regular / 120 overtime / 1415c and the
+    /// dinner shift 480 regular / 0 overtime / 2264c — 120 overtime minutes
+    /// and $2.83 move between two shifts on the same day. Those per-shift
+    /// cents are exactly what the calendar tiles, DayDetailSheet and
+    /// ShiftDayRow display, what PR 4's `EarningsSnapshot` persists and what
+    /// PR 6 exports to CSV, so the split is a user-visible fact.
+    ///
+    /// It is not hypothetical: `ShiftPeriodTag` is String-backed and
+    /// `CaseIterable`, and "dinner" sorts before "lunch", so any refactor
+    /// that sorts by `rawValue` or `allCases` flips it silently.
+    @Test("Lunch takes the threshold before dinner, and an untagged shift on the same day sorts last")
+    func lunchIsAllocatedBeforeDinnerOnTheSameDay() throws {
+        let thursday = Self.monday.adding(days: 3)
+        let shifts = [
+            Self.shift(1, Self.monday, minutes: 600),
+            Self.shift(2, Self.monday.adding(days: 1), minutes: 600),
+            Self.shift(3, Self.monday.adding(days: 2), minutes: 600),
+            // Deliberately handed to the engine dinner-first and untagged-
+            // first, so a passing run proves the ORDER and not the input.
+            Self.shift(6, thursday, minutes: 120, period: nil),
+            Self.shift(5, thursday, minutes: 480, period: .dinner),
+            Self.shift(4, thursday, minutes: 240, period: .lunch)
+        ]
+        let output = CompensationLedger.evaluate(
+            shifts, rates: [Self.rate(283)], calendars: [Self.calendarPolicy()]
+        )
+        let byID = Self.byID(output.valuations)
+
+        // 30 hours Mon-Wed, so 10 hours of the 40-hour threshold are left
+        // when Thursday starts. Lunch takes 4 of them whole.
+        let lunch = try #require(byID[shifts[5].id])
+        #expect(lunch.wage.components.regularMinutes == 240)
+        #expect(lunch.wage.components.overtimeMinutes == 0)
+        #expect(lunch.components.regularWagesCents == 1132)
+        #expect(lunch.components.overtimeWagesCents == 0)
+
+        // Dinner takes the remaining 6 and straddles: 2 hours at 1.5x.
+        let dinner = try #require(byID[shifts[4].id])
+        #expect(dinner.wage.components.regularMinutes == 360)
+        #expect(dinner.wage.components.overtimeMinutes == 120)
+        #expect(dinner.components.regularWagesCents == 1698)
+        #expect(dinner.components.overtimeWagesCents == 849)
+        #expect(dinner.components.wagesCents == 2547)
+
+        // Untagged sorts after both, so it is wholly past the threshold.
+        let untagged = try #require(byID[shifts[3].id])
+        #expect(untagged.wage.components.regularMinutes == 0)
+        #expect(untagged.wage.components.overtimeMinutes == 120)
+        #expect(untagged.components.overtimeWagesCents == 849)
+
+        // The week total is the number that does NOT move under a rank swap
+        // (12169c for Mon-Thursday's lunch+dinner, 13018c once the untagged
+        // shift's 849c of overtime is added), which is exactly why no
+        // telescoping or shuffle test could ever have caught this.
+        #expect(output.totalComponents.wagesCents == 13018)
+        #expect(output.totalComponents.regularWagesCents == 11320)
+        #expect(output.totalComponents.overtimeWagesCents == 1698)
+    }
+
     @Test("Two weeks bucket independently: 30 hours in each week is never overtime")
     func twoWeeksAreIndependent() {
         let firstWeek = (1...3).map { Self.shift($0, Self.monday.adding(days: $0 - 1), minutes: 600) }

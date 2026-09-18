@@ -8,6 +8,14 @@ public enum ShiftPeriodTag: String, Codable, CaseIterable, Sendable {
 
     /// Order within a workweek for the overtime threshold split
     /// (Design 1, step 3): lunch, dinner, then untagged.
+    ///
+    /// Pinned by number, not by prose: swapping these two values moves 120
+    /// overtime minutes and $2.83 between two shifts on the same day while
+    /// leaving the week total byte-identical, so only a same-day
+    /// lunch+dinner pair straddling the threshold can see it. That case is
+    /// `CompensationLedgerTests.lunchIsAllocatedBeforeDinnerOnTheSameDay`.
+    /// Do not derive this from `rawValue` or `allCases` — "dinner" sorts
+    /// before "lunch" alphabetically, which would flip it silently.
     public var rank: Int {
         switch self {
         case .lunch: return 0

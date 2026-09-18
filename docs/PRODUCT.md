@@ -273,6 +273,22 @@ screen that hands the wrapper one day or one month still splits the overtime
 threshold over only the shifts it passed in. That is PR 5's job, and until it
 lands a partial range can still under-report overtime.
 
+Two invariants from that list are worth separating, because one is closed and
+one is not:
+
+- **A day equals the sum of that day's shifts. CLOSED (PR 3.)** Every list
+  that shows shift rows under a total — DayDetailSheet, Period detail,
+  Dashboard — takes its per-row wage out of the same
+  `WageEstimate.centsPerShift` array its own wage total is the sum of, so
+  the two cannot round differently. `ShiftDayRow` no longer accepts an
+  hourly rate at all; it cannot compute a wage on its own, because overtime
+  and the cumulative rounding are properties of a workweek and not of one
+  shift. Measured in `DayHeroEqualsItsRowsTests`.
+- **A month equals the sum of its days. STILL OPEN, PR 5.** The calendar's
+  header asks the engine over the month and its tiles ask once per day, and
+  a single day can never see its week's overtime. Measured, not assumed:
+  `MonthEqualsSumOfItsDaysTests`.
+
 Guaranteed now:
 
 - A wage is integer arithmetic in units of 1/6000 cent, rounded half-up once
@@ -301,10 +317,29 @@ overclaims until these close. Each is a JSON fixture in
 specified expected value, detailed in docs/METRICS.md section 3:
 
 - W1 wages round per shift (2760c) instead of per workweek (2759c).
-  **CLOSED in the engine and in `WageEstimate` (PR 3): 1203 + 1556 = 2759.**
+  **CLOSED in the engine, in `WageEstimate`, and on the screens that show a
+  day or period next to its own shift rows (PR 3): the WAGE side of every
+  such screen is one `WageEstimate.centsPerShift` allocation, so the day's
+  rows carry 1203 and 1556 and the DayDetailSheet hero above them is
+  literally their sum — 2759, never 2760. The same array feeds the calendar
+  tile, the Period-detail rows and the Dashboard rows and reveal echo.**
+  (The Period-detail hero's TIP side comes from `StatsEngine` nights rather
+  than per-shift `TipBreakdown`, which is a separate, pre-existing basis
+  difference and is PR 5's; the claim here is about the wage cents only.)
+  Two per-shift captions still
+  round in isolation on purpose, because they have no sibling set to
+  allocate against: `LogTipSheet`'s live edit of a shift that is not saved
+  yet, and `StatsEngine`'s per-shift rate facts. Those are PR 5.
 - W2 month/period/YTD filter first, then compute overtime, losing $11.31 of
   a straddling 48h week (13585c vs 14716c). **Closed inside the ledger; the
-  consumers that pass a pre-filtered range are PR 5.**
+  consumers that pass a pre-filtered range are PR 5.** Specifically still
+  open, and now measured rather than assumed: `CalendarView` groups the
+  month `by: \.day` and asks the wrapper one day at a time, so **no calendar
+  tile carries overtime and a month does not equal the sum of its days.** On
+  a 48-hour week wholly inside October 2026 the month header reads 14716c of
+  wages and the five tiles read 13585c — 1131c apart on one screen. See
+  `MonthEqualsSumOfItsDaysTests`, whose parity assertion is wrapped in
+  `withKnownIssue` so it turns red the moment PR 5 closes it.
 - W3 the calendar-grid `firstWeekday` drives overtime bucketing.
   **CLOSED (PR 3): `PayrollCalendarPolicy.workweekStartWeekday` owns
   overtime and Settings > Calendar says the grid owns nothing else.**
