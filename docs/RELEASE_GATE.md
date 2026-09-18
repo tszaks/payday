@@ -119,6 +119,29 @@ violation in a non-allowlisted file was caught on all three of its patterns,
 and an allowlisted file made artificially clean tripped the ratchet. A lint
 nobody has watched fail is a lint nobody should trust.
 
+## Merge-commit CI — and what a green tick here does not earn
+
+The goal contract's first item reads "PRs 0-8 merged to `production` with CI green on each merge commit." As written, that line was **unfalsifiable**, and the reason is worth recording, because fixing it changed what the line can honestly claim.
+
+`ci.yml` keyed `concurrency.group` on `github.ref` with `cancel-in-progress: true`. For a pull request that is correct: the ref is the PR's head, so a new push should supersede the run it replaced. For a push to `production` the ref is a **constant** — every merge lands on `refs/heads/production` — so consecutive merge commits shared one slot and each cancelled its predecessor. Three commits in PRs 0-8's history carry no green verdict:
+
+| Commit | What it merged | Verdict | Cause |
+|---|---|---|---|
+| `8260f7d` | #28, the CSV hours fix | cancelled | next merge 105s later, same concurrency slot |
+| `852f36a` | #11 follow-up, PR 4 | cancelled | next merge 8s later, same slot |
+| `c800493` | #20, PR 5 wave 1 | failure | `Failed to resolve latest Supabase CLI release: rate limit exceeded`; its other four jobs were green |
+
+Neither cause is a code failure. Two were a race in our own workflow; one was a GitHub API rate limit while `supabase/setup-cli` resolved `version: latest`. Both are fixed: pushes key the concurrency group on `github.sha`, so no merge commit can cancel another, and the CLI is pinned to an explicit version so `supabase db reset` cannot change behaviour with no change in this repo.
+
+**The honest claim, and the only one a re-run earns.** Re-running those three commits runs them against the workflow **as it stands now**, not as it stood that afternoon. A green re-run therefore proves:
+
+> every PR-0-8 commit's tree passes CI on the current workflow
+
+and it does **not** prove "CI was green at the moment each commit merged." That verdict was cancelled or flaked, and it cannot be reconstructed. The current-tree claim is the one that matters for shipping, which is why it is the line below. The historical claim is not recoverable, and a green tick here must not be recorded as if it were.
+
+- [ ] Every merge commit in PRs 0-8's history has a completed, successful CI run **on the current workflow**. Record the run id per commit. `gh run list --branch production --limit 40 --json headSha,status,conclusion`
+- [ ] No merge commit's run is `cancelled`. A cancelled run is not a pass and not a failure; it is an absence, and in a listing an absence reads like neither.
+
 ## Human lines — Tyler only
 
 - [H] Clean install on a real device, release configuration, exercised for a full logging session.

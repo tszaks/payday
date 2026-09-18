@@ -23,6 +23,18 @@ final class PaydayCloudState {
     }
 
     private(set) var phase: Phase = .loading
+
+    /// The non-blocking wait, as a banner rather than a phase.
+    ///
+    /// Returns nil unless a conversion is actually outstanding. Deliberately
+    /// derived from `phase` rather than stored, so it cannot drift out of step
+    /// with the report it describes, and deliberately NOT a `Phase` case --
+    /// see `PaydayMigrationReport.conversionPending` for why making it one
+    /// takes the whole account offline.
+    var conversionBanner: PaydayConversionBanner? {
+        guard case .ready(let report) = phase, report.isConversionPending else { return nil }
+        return PaydayConversionBanner(remainingGroupCount: report.conversionPending ?? 0)
+    }
     private let client: SupabaseClient
     private let migrationService: PaydayMigrationService
     private let syncService: PaydaySyncService
@@ -693,5 +705,40 @@ private struct CloudMigrationErrorView: View {
         .padding(28)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(PaydayColor.background.ignoresSafeArea())
+    }
+}
+
+/// The copy for the conversion wait, in one place so two surfaces cannot word
+/// it differently.
+///
+/// The wait is longer here than in either predecessor design, because the
+/// device is waiting on an upload AND a server-side fold rather than on its
+/// own work. That is the whole reason this is a banner with a retry rather
+/// than a spinner: a spinner implies the device is doing something.
+struct PaydayConversionBanner: Equatable, Sendable {
+    let remainingGroupCount: Int
+
+    /// Verbatim from the design.
+    ///
+    /// "Nothing was changed or deleted" is only true because the conversion
+    /// never rewrites `public.tip_entries`. The copy and that invariant ship
+    /// together.
+    var message: String {
+        "Payday couldn't finish updating your shifts. Nothing was changed or deleted, and your shifts are exactly as they were."
+    }
+
+    var retryTitle: String { "Try again" }
+    var detailsTitle: String { "Details" }
+
+    /// Progress as a count rather than a percentage.
+    ///
+    /// A percentage needs a denominator that only the server knows and that
+    /// changes as the user logs more, so it would go backwards. A remaining
+    /// count only ever falls, and when it stops falling that is itself the
+    /// signal worth surfacing.
+    var progressDescription: String {
+        remainingGroupCount == 1
+            ? "1 shift left to update"
+            : "\(remainingGroupCount) shifts left to update"
     }
 }
