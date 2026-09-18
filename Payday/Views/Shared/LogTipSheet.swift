@@ -1760,6 +1760,10 @@ struct LogTipSheet: View {
         // here would survive a relaunch. The debounce above means this runs
         // once after the user pauses, not per keystroke, so a save per call
         // is exactly what the coalescing was for.
+        // Ids of rows this edit removes. Filled inside the transaction and
+        // acted on only after it commits: a rolled-back transaction must not
+        // leave a deletion queued for the server.
+        var queuedForServerDeletion: [UUID] = []
         do {
             try ShiftCommands.commit(in: modelContext) {
                 for kind in [TipKind.cash, .credit] {
@@ -1769,7 +1773,12 @@ struct LogTipSheet: View {
                             row.amountCents = cents          // never delete the anchor mid-edit
                             row.touch()
                         } else {
-                            PaydaySyncState.recordTipDeletions([row.id])
+                            // Collected, not queued yet. The queue is App
+                            // Group UserDefaults and these rows are
+                            // SwiftData, so `rollback()` would restore the
+                            // row and leave the id queued. See
+                            // DeletionQueueAtomicityTests.
+                            queuedForServerDeletion.append(row.id)
                             modelContext.delete(row)          // non-anchor row zeroed out
                             rows.removeAll { $0.id == row.id }
                         }
@@ -1810,6 +1819,13 @@ struct LogTipSheet: View {
             // details disagree, and the alert does work for the debounced case
             // while the sheet is open.
             saveFailed = true
+            return
+        }
+
+        // Only now. The save committed, so the rows really are gone locally
+        // and the server may safely be told.
+        if !queuedForServerDeletion.isEmpty {
+            PaydaySyncState.recordTipDeletions(queuedForServerDeletion)
         }
     }
 
@@ -1844,42 +1860,59 @@ struct LogTipSheet: View {
         // migration above exists to prevent.
         let survivingIDs = Set(survivingRows.map(\.id))
         let deletedRows = rows.filter { !survivingIDs.contains($0.id) }
-        try? ShiftCommands.commit(in: modelContext) {
-            ShiftDetails.write(
-                hoursWorked: resolved.hoursWorked,
-                tipOutCents: resolved.tipOutCents,
-                salesCents: resolved.salesCents,
-                shiftPeriod: resolved.shiftPeriod,
-                clockIn: resolved.clockIn,
-                clockOut: resolved.clockOut,
-                serverCount: resolved.serverCount,
-                receiptMetrics: resolved.receiptMetrics,
-                into: survivingRows
-            )
-            PaydaySyncState.recordTipDeletions(deletedRows.map(\.id))
-            for row in deletedRows {
-                modelContext.delete(row)
+        do {
+            try ShiftCommands.commit(in: modelContext) {
+                ShiftDetails.write(
+                    hoursWorked: resolved.hoursWorked,
+                    tipOutCents: resolved.tipOutCents,
+                    salesCents: resolved.salesCents,
+                    shiftPeriod: resolved.shiftPeriod,
+                    clockIn: resolved.clockIn,
+                    clockOut: resolved.clockOut,
+                    serverCount: resolved.serverCount,
+                    receiptMetrics: resolved.receiptMetrics,
+                    into: survivingRows
+                )
+                for row in deletedRows {
+                    modelContext.delete(row)
+                }
             }
+        } catch {
+            // Swallowed deliberately: this only ever runs during dismissal,
+            // where an alert cannot be seen. A rollback leaves the zero rows
+            // in place, which is untidy but loses nothing, and the next edit
+            // sweeps them. The cheaper sibling of issue #26.
+            //
+            // What must NOT be swallowed is a queued server deletion for rows
+            // the rollback just restored, so the queue write is below rather
+            // than inside the transaction.
+            return
         }
-        // `try?` deliberately: this only ever runs during dismissal, where an
-        // alert cannot be seen. A rollback leaves the zero rows in place,
-        // which is untidy but loses nothing, and the next edit sweeps them.
-        // The cheaper sibling of issue #26.
+
+        PaydaySyncState.recordTipDeletions(deletedRows.map(\.id))
     }
 
     private func delete() {
         if case .edit(let entry) = target {
             let rows = sameShiftEntries(around: entry)
+            let ids = rows.map(\.id)
             do {
+                // The queue write used to sit HERE, inside the body, under a
+                // comment claiming the two were "queued and deleted together,
+                // so the server cannot be told about a deletion the device
+                // then fails to make". Co-locating them does not achieve
+                // that and cannot: the queue is App Group UserDefaults and
+                // takes effect immediately, the rows are SwiftData, and
+                // `rollback()` reaches only the latter. The shipped shape
+                // therefore restored the rows and left them queued for
+                // server-side deletion. Asserted in
+                // DeletionQueueAtomicityTests.
                 try ShiftCommands.commit(in: modelContext) {
-                    // Queued and deleted together, so the server cannot be
-                    // told about a deletion the device then fails to make,
-                    // or the reverse.
-                    PaydaySyncState.recordTipDeletions(rows.map(\.id))
                     for row in rows {
                         modelContext.delete(row)
                     }
                 }
+                PaydaySyncState.recordTipDeletions(ids)
             } catch {
                 // Rolled back: the shift is still there, so do NOT dismiss on
                 // a deletion that did not happen.
