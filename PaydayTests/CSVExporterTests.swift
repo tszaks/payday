@@ -20,9 +20,42 @@ private func makeContext() throws -> ModelContext {
 
 @Suite("CSV export")
 struct CSVExporterTests {
+    /// Locate a cell by HEADER NAME, never by index.
+    ///
+    /// Fixture E1 requires this of readers, and for the reason the rest of
+    /// this file demonstrates: 25 assertions below still reach for
+    /// `fields[7]`, and they only survived this slice appending six columns
+    /// because the columns were appended at the END rather than inserted. The
+    /// next person who inserts one breaks all of them at once. New assertions
+    /// use this.
+    static func cell(_ csv: String, row: Int = 1, column: String) -> String? {
+        let lines = csv.split(separator: "\n", omittingEmptySubsequences: false)
+        guard lines.count > row else { return nil }
+        let headers = CSVExporter.header.split(separator: ",").map(String.init)
+        guard let index = headers.firstIndex(of: column) else { return nil }
+        let fields = lines[row].split(separator: ",", omittingEmptySubsequences: false).map(String.init)
+        guard fields.count > index else { return nil }
+        return fields[index]
+    }
+
     @Test("header names every documented column, in order")
     func headerColumns() {
-        #expect(CSVExporter.header == "Date,Shift,Cash,Credit,Gratuity-Fees,Tip-Out,Net,Hours,Start,End,Sales,Servers,Double,Note,Period,Paycheck")
+        // The six engine columns are APPENDED, not inserted, so an existing
+        // spreadsheet formula keyed on column position keeps working. See the
+        // comment on CSVExporter.header.
+        #expect(CSVExporter.header == "Date,Shift,Cash,Credit,Gratuity-Fees,Tip-Out,Net,Hours,Start,End,Sales,Servers,Double,Note,Period,Paycheck,Hours-Clock,Non-Wage-Earnings,Regular-Wages,Overtime-Wages,Earned-Income,Completeness")
+    }
+
+    /// The first sixteen columns keep both their names and their positions,
+    /// which is the promise "appended, never inserted" makes to a file
+    /// somebody already built on.
+    @Test("appending the engine columns did not move any existing column")
+    func existingColumnsDidNotMove() {
+        let shipped = ["Date", "Shift", "Cash", "Credit", "Gratuity-Fees", "Tip-Out",
+                       "Net", "Hours", "Start", "End", "Sales", "Servers", "Double",
+                       "Note", "Period", "Paycheck"]
+        let headers = CSVExporter.header.split(separator: ",").map(String.init)
+        #expect(Array(headers.prefix(shipped.count)) == shipped)
     }
 
     @Test("one row per shift, cash and credit merged, net already accounting for tip-out")
@@ -143,10 +176,17 @@ struct CSVExporterTests {
         ]
         let csv = CSVExporter.export(entries: entries, paycheckRecords: [], calculator: calculator)
         let fields = csv.split(separator: "\n")[1].split(separator: ",", omittingEmptySubsequences: false).map(String.init)
-        #expect(fields[5] == "15.00") // tip-out: credit's value, not 15+10
-        #expect(fields[7] == "5") // hours: credit's value, not 5+5
-        #expect(fields[10] == "430.00") // sales: credit's value, not 430+100
-        #expect(fields[6] == "103.00") // net: 8600+3200-1500, not -2500
+        _ = fields
+        // By header name, per E1's rule, rather than by index.
+        #expect(Self.cell(csv, column: "Tip-Out") == "15.00", "credit's value, not 15+10")
+        // "5.0000" and not "5": hours are now a fixed four decimal places, so
+        // the column has one width and a spreadsheet can compute on it. The
+        // old renderer trimmed trailing zeros AND rounded to the quarter hour,
+        // and it is the rounding that fixture E1 forbids.
+        #expect(Self.cell(csv, column: "Hours") == "5.0000", "credit's value, not 5+5")
+        #expect(Self.cell(csv, column: "Hours-Clock") == "5:00")
+        #expect(Self.cell(csv, column: "Sales") == "430.00", "credit's value, not 430+100")
+        #expect(Self.cell(csv, column: "Net") == "103.00", "8600+3200-1500, not -2500")
     }
 
     @Test("rows are ordered chronologically, oldest first")
@@ -237,5 +277,151 @@ struct PaycheckRecordStubDetailsTests {
         #expect(record.owedTipsCents == 2200)
         #expect(record.grossPayCents == 150000)
         #expect(record.netPayCents == 110000)
+    }
+}
+
+/// Fixture E1's CSV half, which had no assertion anywhere until now.
+///
+/// E1 was one of two golden fixtures the plan requires to pass "against the
+/// real production engine, never a test helper", and its only referencing
+/// test pinned cross-fixture invariants without running an engine. Its
+/// adapter half (383 minutes out of the legacy Double) was covered by
+/// `ShiftInputAdapterTests`; this is the exported row.
+///
+/// The wage here comes from `CompensationLedger` rather than a literal, so a
+/// change to the ledger's rounding fails this test instead of quietly
+/// disagreeing with it.
+@Suite("CSV export: fixture E1")
+struct CSVExporterE1Tests {
+    private static let shiftID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+
+    private static func date(_ year: Int, _ month: Int, _ day: Int) -> Date {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = PaydayTestZone.payroll
+        return calendar.date(from: DateComponents(year: year, month: month, day: day, hour: 17))!
+    }
+
+    /// 283c/h, the rate E1 declares, on a Monday-start workweek.
+    private static func policies() -> (rates: [PayRatePolicy], calendars: [PayrollCalendarPolicy]) {
+        (
+            [PayRatePolicy(
+                id: PolicyMigration.deterministicID("e1/rate"),
+                effectiveFrom: .distantPast,
+                hourlyRateCents: 283,
+                provenance: .confirmed
+            )],
+            [PayrollCalendarPolicy(
+                id: PolicyMigration.deterministicID("e1/calendar"),
+                effectiveFrom: .distantPast,
+                workweekStartWeekday: 2,
+                payrollTimeZone: PaydayTestZone.payroll
+            )]
+        )
+    }
+
+    @Test("E1: the exported row carries 6.3833, 6:23 and the engine's components")
+    func e1Row() throws {
+        // Non-wage 11500 as E1 declares it: cash 5000 + credit 6500, no
+        // gratuity, no tip-out.
+        let hours = 6.383333333333334
+        let entries = [
+            TipEntry(date: Self.date(2026, 9, 29), amountCents: 6_500, kind: .credit,
+                     hoursWorked: hours, shiftID: Self.shiftID),
+            TipEntry(date: Self.date(2026, 9, 29), amountCents: 5_000, kind: .cash,
+                     shiftID: Self.shiftID)
+        ]
+
+        // The REAL ledger, not a literal wage.
+        let policies = Self.policies()
+        let valuation = try #require(CompensationLedger.value(
+            [ShiftInput(
+                id: Self.shiftID,
+                workDay: CivilDay(year: 2026, month: 9, day: 29),
+                voluntaryCashCents: 5_000,
+                voluntaryCreditCents: 6_500,
+                minutesWorked: HoursFormatting.minutes(fromHours: hours)
+            )],
+            rates: policies.rates,
+            calendars: policies.calendars
+        ).first)
+
+        // E1 pins the pay period as 2026-09-21 to 2026-10-04, which is a
+        // SCHEDULE fact rather than an engine one, so the schedule is stated
+        // rather than left to `.fallback` (whose anchor is `.now` and would
+        // make this assertion depend on the day the suite runs).
+        let calculator = PayPeriodCalculator(
+            payrollTimeZone: PaydayTestZone.payroll,
+            schedule: PaySchedule(
+                frequency: .biweekly,
+                anchorPeriodEnd: Self.date(2026, 10, 4)
+            )
+        )
+        let csv = CSVExporter.export(
+            entries: entries,
+            paycheckRecords: [],
+            calculator: calculator,
+            valuations: [Self.shiftID: valuation]
+        )
+
+        // Located by header name, never index, which is E1's own rule.
+        #expect(CSVExporterTests.cell(csv, column: "Hours") == "6.3833")
+        #expect(CSVExporterTests.cell(csv, column: "Hours-Clock") == "6:23")
+        #expect(CSVExporterTests.cell(csv, column: "Non-Wage-Earnings") == "115.00")
+        #expect(CSVExporterTests.cell(csv, column: "Regular-Wages") == "18.06")
+        #expect(CSVExporterTests.cell(csv, column: "Overtime-Wages") == "0.00")
+        #expect(CSVExporterTests.cell(csv, column: "Earned-Income") == "133.06")
+        #expect(CSVExporterTests.cell(csv, column: "Completeness") == "complete")
+        // No paycheck recorded for this period, so the cell is empty.
+        #expect(CSVExporterTests.cell(csv, column: "Paycheck") == "")
+        // E1 also pins the pay period this shift falls in, which depends on
+        // the schedule rather than on the engine. Asserted so the fixture is
+        // covered cell for cell rather than mostly.
+        #expect(CSVExporterTests.cell(csv, column: "Period") == "2026-09-21 to 2026-10-04")
+    }
+
+    /// The three renderings E1 names as wrong, refused in the exported file
+    /// itself rather than only in the formatter's unit test. The shipped
+    /// exporter produced the first of them.
+    @Test("E1: the exported hours are never the quarter-hour answer")
+    func e1RefusesTheQuarterHour() {
+        let entries = [
+            TipEntry(date: Self.date(2026, 9, 29), amountCents: 6_500, kind: .credit,
+                     hoursWorked: 6.383333333333334, shiftID: Self.shiftID)
+        ]
+        let csv = CSVExporter.export(
+            entries: entries, paycheckRecords: [],
+            calculator: PayPeriodCalculator(
+                payrollTimeZone: PaydayTestZone.payroll, schedule: .fallback)
+        )
+        let hours = CSVExporterTests.cell(csv, column: "Hours")
+        #expect(hours != "6.5", "what the shipped exporter wrote")
+        #expect(hours != "6.4")
+        #expect(hours != "6.38")
+        #expect(hours == "6.3833")
+    }
+
+    /// A shift with no engine answer leaves the five engine columns EMPTY, not
+    /// zero. In a file someone may take to a payroll dispute, a blank saying
+    /// "not computed" and a zero saying "you earned nothing" are not
+    /// interchangeable.
+    @Test("a shift with no valuation exports blanks, never zeros")
+    func noValuationExportsBlanks() {
+        let entries = [
+            TipEntry(date: Self.date(2026, 9, 29), amountCents: 6_500, kind: .credit,
+                     hoursWorked: 6.0, shiftID: Self.shiftID)
+        ]
+        let csv = CSVExporter.export(
+            entries: entries, paycheckRecords: [],
+            calculator: PayPeriodCalculator(
+                payrollTimeZone: PaydayTestZone.payroll, schedule: .fallback))
+
+        for column in ["Non-Wage-Earnings", "Regular-Wages", "Overtime-Wages",
+                       "Earned-Income", "Completeness"] {
+            #expect(CSVExporterTests.cell(csv, column: column) == "",
+                    "\(column) must be blank, not 0.00")
+        }
+        // The hours still export, because those are a logged fact and not an
+        // engine result.
+        #expect(CSVExporterTests.cell(csv, column: "Hours") == "6.0000")
     }
 }
