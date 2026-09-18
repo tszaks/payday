@@ -118,6 +118,12 @@ targets:
       # policies — and therefore the same frozen payroll time zone — the app
       # does, out of the shared App Group defaults.
       - path: Payday/Models/PolicyStore.swift
+      # The widget recomputes its own snapshot rather than reading a file
+      # the app wrote (Design 2, "Out-of-process: recompute, do not read a
+      # file"), so it compiles the adapter and EarningsStore.buildOnce. Both
+      # are extension-safe: neither touches UIApplication.
+      - path: Payday/Earnings/ShiftInputAdapter.swift
+      - path: Payday/Earnings/EarningsStore.swift
       - path: Payday/Utilities/PayPeriod.swift
       - path: Payday/Utilities/TipBreakdown.swift
       - path: Payday/Utilities/StatsEngine.swift

@@ -10,6 +10,11 @@ import Foundation
 /// both sides of the rate (H1 fixture).
 public struct EarningsResult: Hashable, Codable, Sendable {
     public var metric: MetricID
+    /// The question this result answers, as asked, before the `asOf` clamp
+    /// (metric registry: every result carries `scope`). Nil only on the
+    /// scopeless `empty(metric:)` placeholder; every query on
+    /// `EarningsSnapshot` fills it.
+    public var scope: EarningsScope?
     /// The selection, already clamped by `asOf`. Nil for a query with no range (e.g. a single shift).
     public var range: DayRange?
     /// The clamp that was applied, if any.
@@ -24,16 +29,21 @@ public struct EarningsResult: Hashable, Codable, Sendable {
     /// The selected shifts, in the engine's canonical order.
     public var shiftIDs: [UUID]
     /// `InputManifest.currentEngineVersion` of the engine that produced this
-    /// result. PR 1 types carry the current constant; `EarningsSnapshot` (PR 4)
-    /// stamps it from the snapshot that answered the query.
+    /// result. Every query on `EarningsSnapshot` stamps it from
+    /// `snapshot.stamp.engineVersion`, so a result computed by an older
+    /// engine and a result computed by this one are distinguishable rather
+    /// than merely unequal.
     public var engineVersion: Int
     /// `InputManifest.digest` of the inputs this result was computed from, so
-    /// two consumers can prove they are showing the same dataset. Nil until
-    /// `EarningsSnapshot` (PR 4) fills it; the shell type has no snapshot yet.
+    /// two consumers can prove they are showing the same dataset. Every
+    /// query on `EarningsSnapshot` fills it from
+    /// `snapshot.stamp.manifest.digest`; it stays nil only on the
+    /// `empty(metric:)` placeholder, which no snapshot produced.
     public var manifestDigest: String?
 
     public init(
         metric: MetricID,
+        scope: EarningsScope? = nil,
         range: DayRange?,
         asOf: CivilDay?,
         knownComponents: EarningsComponents,
@@ -47,6 +57,7 @@ public struct EarningsResult: Hashable, Codable, Sendable {
         manifestDigest: String? = nil
     ) {
         self.metric = metric
+        self.scope = scope
         self.range = range
         self.asOf = asOf
         self.knownComponents = knownComponents
@@ -70,8 +81,10 @@ public struct EarningsResult: Hashable, Codable, Sendable {
     /// Shifts covered by hours, for the "N of M shifts" caption.
     public var coveredShiftCount: Int { completeness.shiftsWithHours }
 
-    /// A result with nothing selected. `engineVersion` is the current engine,
-    /// `manifestDigest` is nil (no snapshot produced it; PR 4 fills both).
+    /// A result with nothing selected, for a consumer with no snapshot yet.
+    /// `engineVersion` is the current engine and `scope`/`manifestDigest`
+    /// are nil precisely because no snapshot produced it: a zero that no
+    /// dataset stands behind is identifiable as such.
     public static func empty(metric: MetricID) -> EarningsResult {
         EarningsResult(
             metric: metric,

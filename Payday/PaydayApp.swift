@@ -8,14 +8,35 @@ struct PaydayApp: App {
     // Home Screen long-press quick actions need windowScene(_:performActionFor:),
     // which only a UIKit scene delegate receives — see AppDelegate.swift.
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    @State private var scheduleStore = PayScheduleStore()
+    @Environment(\.scenePhase) private var scenePhase
+    // scheduleStore and policyStore are assigned in `init` instead of
+    // inline, because `earningsStore` reads both and a property's inline
+    // default cannot be handed to another property's default.
+    @State private var scheduleStore: PayScheduleStore
     @State private var insightsStore = InsightsStore()
     @State private var preferencesStore = UserPreferencesStore()
     @State private var moveLedgerStore = MoveLedgerStore()
-    @State private var policyStore = PolicyStore()
+    @State private var policyStore: PolicyStore
     @State private var onboardingStore = OnboardingStateStore()
+    /// The one earnings snapshot for this process. Built here and handed to
+    /// every screen through the environment so two surfaces cannot disagree
+    /// about the same fact (Design 2). PR 5 migrates the screens onto it.
+    @State private var earningsStore: EarningsStore
 
     init() {
+        // The stores this one reads must exist before it does, so they are
+        // built here rather than relying on property initialization order.
+        let policyStore = PolicyStore()
+        let scheduleStore = PayScheduleStore()
+        _policyStore = State(initialValue: policyStore)
+        _scheduleStore = State(initialValue: scheduleStore)
+        _earningsStore = State(initialValue: EarningsStore(
+            source: ModelContextEarningsInputSource(
+                container: SharedModelContainer.shared,
+                policyStore: policyStore,
+                scheduleStore: scheduleStore
+            )
+        ))
         try? Tips.configure([.displayFrequency(.immediate), .datastoreLocation(.applicationDefault)])
         UNUserNotificationCenter.current().delegate = NotificationDelegate.shared
     }
@@ -35,8 +56,20 @@ struct PaydayApp: App {
                 .environment(moveLedgerStore)
                 .environment(policyStore)
                 .environment(onboardingStore)
+                .environment(earningsStore)
                 .preferredColorScheme(preferencesStore.appearance.colorScheme)
                 .modelContainer(SharedModelContainer.shared)
+                .task { earningsStore.requestRebuild(reason: .initial) }
+                // Scene `.active` is the one Design 2 trigger the store
+                // cannot observe itself: `UIApplication` is unavailable to
+                // an app extension, and EarningsStore compiles into the
+                // widget too. Another process (an App Intent, a Control)
+                // may have written shifts while this one was backgrounded.
+                .onChange(of: scenePhase) { _, phase in
+                    if phase == .active {
+                        earningsStore.requestRebuild(reason: .sceneActive)
+                    }
+                }
                 // Lock Screen / StandBy accessory widgets can't host an
                 // interactive button (accessory families are rendered by the
                 // system, not the widget's own view) — widgetURL is the only

@@ -311,6 +311,41 @@ Guaranteed now:
   presented as an ESTIMATE, in Settings, next to the numbers it produces. It
   has not been validated by a payroll professional.
 
+**What PR 4 added, and what it deliberately did not (2026-09-18).**
+`EarningsSnapshot` now exists: one valued dataset, built once per input
+change, with a `SnapshotStamp` naming the inputs (a SHA-256 manifest digest
+plus sub-digests for shifts, paychecks, schedule and policies), the engine
+version, the `asOf` day and when it was computed. Every query on it —
+shift, day, month, pay period, year to date, arbitrary range, the per-day
+series a chart draws, and a recorded paycheck's period — returns an
+`EarningsResult` that carries that stamp, so two surfaces quoting the same
+number can prove they are quoting the same dataset. `EarningsStore` owns the
+current snapshot for the process, rebuilds on a save, a settings change, a
+policy change, a new civil day or a scene activation, coalesces a burst into
+one rebuild, skips the rebuild entirely when the digest has not moved, and
+discards a slow rebuild whose answer arrived after a newer one.
+
+What is still NOT true: **no screen reads it yet.** Every Facts struct, hero
+and tile is untouched, so the month-versus-days divergence below is exactly
+as open as it was after PR 3. PR 5 migrates the consumers; until then the
+snapshot is a correct engine that nothing is plugged into.
+
+Three smaller guarantees arrived with it, each measured:
+
+- A purged shift cache is never rendered as $0. A downgrade silently deletes
+  every `ShiftRecord` row and leaves the legacy tip rows, so an account
+  whose shifts are authoritative and whose shift count is zero is reported
+  as unavailable and asks the sync leg for a server baseline instead of
+  publishing an empty snapshot. (The detector is off until PR 2's
+  conversion lands, because before it every existing account legitimately
+  has zero shift records.)
+- A receipt payload that will not decode contributes no gratuity, and the
+  shift's id travels with the snapshot so Data health can name it. The
+  device never rewrites the payload; the server's generated column is
+  authoritative.
+- A paycheck's tips line enters the engine exactly as it was entered. The
+  ±100c repair the stored record can infer stays a proposal.
+
 **Known divergences under repair (PR 1, 2026-09-17).** The DONE above
 overclaims until these close. Each is a JSON fixture in
 `Packages/PaydayCore/Tests/PaydayCoreTests/Fixtures/` with an independently
