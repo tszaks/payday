@@ -17,29 +17,17 @@ struct PeriodTotalIntent: AppIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        // Device authentication is the platform's half. This is Payday's:
-        // the shared store still holds the cached earnings of whoever was
-        // last signed in, and speaking that total to a signed-out device
-        // would bypass the gate the app itself enforces.
-        guard PaydayAuthorizationState.allowsFinancialAccess else {
-            return .result(dialog: IntentDialog("Sign in to Payday first."))
-        }
-        guard let schedule = PayScheduleStore().schedule else {
-            return .result(dialog: IntentDialog("Set up your pay schedule in Payday first."))
-        }
-        let calculator = PayPeriodCalculator(payrollTimeZone: PolicyStore.storedPayrollTimeZone(), schedule: schedule)
-        let period = calculator.period(containing: .now)
-
-        let entries = try SharedModelContainer.shared.mainContext.fetch(FetchDescriptor<TipEntry>())
-        let engine = StatsEngine(payrollTimeZone: PolicyStore.storedPayrollTimeZone(), records: entries.map(TipRecord.init))
-        let tipsTotal = engine.periodToDateTotal(period: period, asOf: .now)
-
-        // Same wage-inclusive total the dashboard hero shows — the spoken
-        // number must match what's on screen.
-        let periodEntries = entries.filter { $0.date >= period.start && $0.date <= period.end }
-        let wages = PeriodIncome.wages(payrollTimeZone: PolicyStore.storedPayrollTimeZone(), entries: periodEntries, wageCentsPerHour: AppGroup.baseHourlyWageCents, firstWeekday: schedule.firstWeekday)
-        let total = tipsTotal + (wages?.totalCents ?? 0)
-
-        return .result(dialog: IntentDialog("You've made \(Money.string(fromCents: total)) so far this pay period."))
+        // Every decision here -- the authorization gate, the schedule check,
+        // the engine query, the label, and therefore the sentence -- lives in
+        // AmbientPeriodFigure, which the widget also calls. That is what makes
+        // "Siri == widget" structural: there is one path, so there is nothing
+        // for the two to disagree about.
+        //
+        // What this replaced built a second StatsEngine and added wages from a
+        // scalar rate with the CALENDAR's first weekday, so the spoken number
+        // could differ from the number on screen. On a spoken surface that is
+        // the worst place for it: there is no caption, and the user cannot
+        // re-read it.
+        .result(dialog: IntentDialog(stringLiteral: AmbientPeriodFigure.spokenAnswer()))
     }
 }
