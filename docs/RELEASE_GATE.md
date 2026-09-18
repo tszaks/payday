@@ -142,6 +142,94 @@ editing `N2.json`'s gratuity now fails a test.
 - **The honesty-of-state lines** that need a debug build or a device are not
   machine-checkable here and belong with the human lines below.
 
+## Criterion 1, measured rather than taken from the status line (2026-09-18)
+
+`docs/PAYDAYCORE_GOAL.md` says "(0, 1 done; PR 2 is 3 of 13 slices)". That
+described the tree when the contract was written and is now stale in the
+UNDERSTATING direction -- the same artifact-rot family this file records
+elsewhere, this time in a status line rather than a test or a doc.
+
+Measured against `production` at `c77bb57`:
+
+| PR | State | Evidence |
+|---|---|---|
+| 0, 1 | merged | package, CI, metric registry |
+| 2 | S1-S9 landed; S10 reclassified to PR 8; S11, S12 done; **S13's VIEW remains** | `ShiftRecord`, the flip, the sync leg, `agent_api_shifts_test.sql`, `ScreenNumberParityTests` |
+| 3 | merged | `CompensationLedger`, `PolicyStore` |
+| 4 | merged | `EarningsSnapshot`, `EarningsStore` |
+| 5 | merged | 14 views read the engine |
+| 6 | mostly merged; **group 2.14 unbuilt** | widget and Siri reach `buildOnce`; CSV uses `HoursFormatting`; but `earnings_snapshots`, `upsert_earnings_snapshot` and `SnapshotUploader` do not exist |
+| 7 | not started | atomic save landed with S9; the rest is open |
+| 8 | gated | behind the catch-count entry condition above |
+
+**So criterion 1's remainder is four things, not ten slices:**
+
+1. **PR 6 group 2.14**, the snapshot upload. The largest buildable piece:
+   `earnings_snapshots`, `upsert_earnings_snapshot` with the
+   server-revision acceptance rule, `SnapshotUploader`, and `/v1/summary`
+   reading the stored payload with `stale`. **Nothing of it exists**, including
+   `dataset_revision` itself.
+
+   Corrected within the hour: an earlier line here said "`dataset_revision`
+   exists". It does not. `grep -rl dataset_revision supabase/migrations/`
+   returns one file, and the match is a COMMENT in the S8 change-feed
+   migration explaining that the keyset cursor "is not interchangeable with
+   the snapshot design's `dataset_revision` watermark -- they solve
+   different problems. This is the missing half."
+
+   Fourth instance of the same instrument error in one session, and the
+   first caught inside an hour of committing it, by drilling into the match
+   instead of counting files. `grep -l` answers "does this string appear",
+   which is not "does this thing exist" -- the same invalid inference as
+   "no match, therefore untested", pointed the other way.
+2. **PR 7**, lifecycle hardening.
+3. **PR 8**, the deletions, behind the catch-count condition.
+4. **S13's view**, which the slice gates on "a design review on renders
+   before done" -- its state, copy and tests are already built and green
+   (`PaydayConversionBanner`, `ConversionBannerTests`), so what remains is
+   the render and the review, and the review needs Tyler.
+
+## Machine-line status, measured on `production` at `c77bb57` (2026-09-18)
+
+Re-run rather than re-read, per rule 4 — production moved four times today.
+A box is ticked only where a command and its number are recorded, and where
+the check has been shown to FAIL on purpose at least once.
+
+### GREEN, with the command and the number
+
+| Line | Evidence |
+|---|---|
+| PaydayCore green | `swift test --package-path Packages/PaydayCore` → `250 tests in 32 suites passed` |
+| App suite green, at/above baseline | `1141 tests in 200 suites passed`; baseline 1082/192 |
+| 14 fixtures vs the real engine | mutation sweep: **14/14 money-gated** (was 8/14). Gates call `CompensationLedger.evaluate`, `PaycheckReconciler.proposal`, `HoursFormatting.*`; grep for test-local cents arithmetic returns nothing |
+| Release gate armed | `PAYDAYCORE_RELEASE_GATE=1` green, `knownIssueCountIsZero` passed, `KnownIssues.json` = `[]`. Proven BOTH ways: planting `["W1"]` fails with `Release blocked` |
+| Dashboard == History == period detail | per-arm mutation; records 2 suites/14 tests, legacy 5/32 |
+| Calendar day == detail == Σ shifts == chart point | four-way identity on records, `ScreenNumberParityTests` + `FlipGates3And4Tests` |
+| Month == Σ its days; YTD clips | snapshot-level and arm-independent: `EarningsSnapshotTests` "range equals the sum of its days", "month plus month equals the containing range", "year to date clips a pay period that crosses the year boundary" |
+| Siri == widget == app | ambient `asOf` mutation fails the records arm, the legacy arm AND `AmbientParityTests` |
+| Money-boundary lint green and PROVEN to fire | `design-lint.sh` 30 PASS / 0 FAIL; a planted probe fires 3 representative rules and leaves prose alone |
+| Package imports | `grep -rh '^import ' Packages/PaydayCore/Sources/` → exactly `CryptoKit`, `Foundation` |
+| Pillar 8 truthful | four contradictions closed; zero active-false statements; the overtime guarantee stated exactly once |
+
+### NOT green, and why — none of these is a note
+
+| Line | Why it is open |
+|---|---|
+| Every superseded path deleted | **PR 8**, and it now has a numeric entry condition above: the records arm must reach the legacy arm's catch count (currently 5 suites/32 tests against 2/14) before deletion is permitted, because deleting legacy deletes the 32 with it |
+| Data lifecycle (interrupted save, replay, offline, account switch, rollover, timezone) | PR 7, not started |
+| Downgrade purges `ShiftRecord` and re-baselines without `$0` | needs a device |
+| Production migrations applied with row counts | needs the production database |
+| Shadow comparison, every inventory number, no unexplained cent | PR 8 |
+
+### Machine lines that need a DEVICE, so no CI run can close them
+
+Honesty-of-state is machine-checkable in principle and not from here: breaking
+the widget's store access to see "Couldn't load" rather than `$0`, removing
+hours from one shift to read `.partial` never saying "Total", the estimated-rate
+caption, and the overtime disclaimer all require a build on hardware. They are
+listed under the machine lines below because a debug build CAN verify them —
+just not this session.
+
 ## Machine lines
 
 ### Engine correctness
