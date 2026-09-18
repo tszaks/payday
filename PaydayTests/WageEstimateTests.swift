@@ -132,8 +132,23 @@ struct WageEstimateCentsSummedPerShiftTests {
     @Test("allocates each shift its slice of the week, so the parts sum to the week's 2759 and never 2760")
     func telescopesToTheWeekTotal() {
         // $2.83/hr: a 4.25h shift and a 5.5h shift, in one workweek.
-        let shiftOne = [TipEntry(date: Date(timeIntervalSinceReferenceDate: 0), amountCents: 5000, kind: .credit, hoursWorked: 4.25)]
-        let shiftTwo = [TipEntry(date: Date(timeIntervalSinceReferenceDate: 0), amountCents: 6000, kind: .credit, hoursWorked: 5.5)]
+        //
+        // On two DIFFERENT days on purpose. The first version of this test
+        // put both at `Date(timeIntervalSinceReferenceDate: 0)`, a shape no
+        // live caller produces: `CalendarView` groups the month `by: \.day`
+        // and calls this once per day, and `DayDetailSheet` passes a single
+        // day, so the multi-shift input a real screen hands this function is
+        // a multi-shift DAY, and the multi-day input is what `PeriodIncome`
+        // hands it. One day per shift also makes the allocation order
+        // deterministic (the canonical order is work day first), so the two
+        // per-shift figures below can be asserted by number at all.
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = PaydayTestZone.payroll
+        // Mon 2026-09-28 and Tue 2026-09-29, one Monday-start workweek.
+        let monday = calendar.date(from: DateComponents(year: 2026, month: 9, day: 28, hour: 17))!
+        let tuesday = calendar.date(from: DateComponents(year: 2026, month: 9, day: 29, hour: 17))!
+        let shiftOne = [TipEntry(date: monday, amountCents: 5000, kind: .credit, hoursWorked: 4.25, shiftPeriod: .dinner, shiftID: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!)]
+        let shiftTwo = [TipEntry(date: tuesday, amountCents: 6000, kind: .credit, hoursWorked: 5.5, shiftPeriod: .dinner, shiftID: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!)]
         let cents = WageEstimate.centsSummedPerShift(payrollTimeZone: PaydayTestZone.payroll, workweekStartWeekday: 2, shiftGroups: [shiftOne, shiftTwo], wageCentsPerHour: 283)
         #expect(cents == 2759, "W1's golden number")
         #expect(cents != 2760, "the superseded per-shift rounding")
@@ -142,10 +157,68 @@ struct WageEstimateCentsSummedPerShiftTests {
         // rounded half-up ONCE.
         #expect(cents == CompensationLedger.roundCents(283 * 255 * 100 + 283 * 330 * 100))
 
-        // Each shift on its own is unchanged: only the sum stopped
-        // double-counting the half cents.
+        // The per-shift slices the ROWS now display, and they sum to the
+        // figure above by construction rather than by luck.
+        let perShift = WageEstimate.centsPerShift(payrollTimeZone: PaydayTestZone.payroll, workweekStartWeekday: 2, shiftGroups: [shiftOne, shiftTwo], wageCentsPerHour: 283)
+        #expect(perShift == [1203, 1556])
+        #expect(perShift.reduce(0, +) == cents)
+
+        // `cents(wageCentsPerHour:hours:)` still rounds a lone shift on its
+        // own — 1557, not 1556 — which is why no list may call it for a row
+        // that has to add up to a total. It survives only for the surfaces
+        // that hold one shift and no sibling set (LogTipSheet's live edit,
+        // StatsEngine's per-shift rate facts); PR 5 moves those too.
         #expect(WageEstimate.cents(wageCentsPerHour: 283, hours: 4.25) == 1203)
         #expect(WageEstimate.cents(wageCentsPerHour: 283, hours: 5.5) == 1557)
+        #expect(perShift[1] != WageEstimate.cents(wageCentsPerHour: 283, hours: 5.5))
+    }
+
+    /// The shape `CalendarView` and `DayDetailSheet` actually produce: two
+    /// shifts on ONE day. Where the old per-shift rounding is visibly wrong
+    /// and the new allocation is visibly right, on one screen.
+    @Test("two shifts on the same day allocate 1203 and 1556, so the rows sum to the hero")
+    func sameDayShiftsTelescope() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = PaydayTestZone.payroll
+        let day = calendar.date(from: DateComponents(year: 2026, month: 9, day: 28, hour: 11))!
+        let lunch = [TipEntry(date: day, amountCents: 5000, kind: .credit, hoursWorked: 4.25, shiftPeriod: .lunch, shiftID: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!)]
+        let dinner = [TipEntry(date: day.addingTimeInterval(6 * 3600), amountCents: 6000, kind: .credit, hoursWorked: 5.5, shiftPeriod: .dinner, shiftID: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!)]
+
+        let perShift = WageEstimate.centsPerShift(payrollTimeZone: PaydayTestZone.payroll, workweekStartWeekday: 2, shiftGroups: [lunch, dinner], wageCentsPerHour: 283)
+        #expect(perShift == [1203, 1556], "lunch takes the threshold first")
+        #expect(perShift.reduce(0, +) == 2759)
+        #expect(perShift.reduce(0, +) != 2760)
+    }
+
+    @Test("centsPerShift is aligned with its input, group for group, even when a group cannot be valued")
+    func perShiftStaysAligned() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = PaydayTestZone.payroll
+        let day = calendar.date(from: DateComponents(year: 2026, month: 9, day: 28, hour: 17))!
+        let withHours = [TipEntry(date: day, amountCents: 5000, kind: .credit, hoursWorked: 5, shiftPeriod: .dinner, shiftID: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!)]
+        let withoutHours = [TipEntry(date: day, amountCents: 4000, kind: .cash, shiftPeriod: .lunch, shiftID: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!)]
+        let empty: [TipEntry] = []
+
+        let perShift = WageEstimate.centsPerShift(
+            payrollTimeZone: PaydayTestZone.payroll,
+            workweekStartWeekday: 2,
+            shiftGroups: [withoutHours, empty, withHours],
+            wageCentsPerHour: 283
+        )
+        // Position for position: the un-valuable groups are 0 and the valued
+        // one keeps its own slice, wherever it sat in the input.
+        #expect(perShift == [0, 0, 1415])
+        #expect(perShift.count == 3)
+
+        // And with no rate at all the array is still input-shaped, so a
+        // caller zipping it against its rows cannot silently misalign.
+        let noRate = WageEstimate.centsPerShift(
+            payrollTimeZone: PaydayTestZone.payroll,
+            workweekStartWeekday: 2,
+            shiftGroups: [withoutHours, empty, withHours],
+            wageCentsPerHour: nil
+        )
+        #expect(noRate == [0, 0, 0])
     }
 
     @Test("a week past the threshold carries its overtime, which the old base-rate-only sum dropped")

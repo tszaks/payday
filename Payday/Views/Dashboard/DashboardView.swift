@@ -51,6 +51,11 @@ private struct DashboardFacts {
     let paydayPhase: PaydayMoment.Phase?
     let shiftCount: Int
     let shiftDays: [(day: Date, shiftID: UUID, items: [TipEntry])]
+    /// Each listed shift's ledger-allocated wages, keyed by `shiftDays`' own
+    /// ids: the row prints its slice of the workweek allocation, never its
+    /// own independent rounding, so the rows and the hero's wage line are one
+    /// number source (PR 3 review, P0).
+    let wagesByShiftID: [UUID: Int]
     /// Calendar days that hold 2+ shifts — a "double" — so a row can label
     /// itself "Today · Lunch" / "Today · Dinner" only when it needs to.
     let multiShiftDays: Set<Date>
@@ -83,6 +88,12 @@ private struct DashboardFacts {
         breakdown = TipBreakdown.total(of: periodEntries)
         daysRemaining = calculator.daysRemaining(from: now)
         shiftDays = ShiftDays.groupedByShift(periodEntries, shiftID: \.shiftID, date: \.date, period: \.shiftPeriod)
+        wagesByShiftID = WageEstimate.centsByShiftID(
+            payrollTimeZone: payrollTimeZone,
+            workweekStartWeekday: schedule?.firstWeekday ?? calendar.firstWeekday,
+            shifts: shiftDays,
+            wageCentsPerHour: wageCentsPerHour
+        )
         // A "shift" now counts closeouts, not calendar days.
         shiftCount = shiftDays.count
         // Days that hold more than one shift — the emergent doubles.
@@ -235,7 +246,13 @@ private struct DashboardFacts {
             // that same wage-inclusive basis via its own StatsEngine. The
             // main engine remains wage-exclusive; its earnings totals already
             // include any employee gratuity captured for the shift.
-            let shiftWageCents = details.hoursWorked.flatMap { WageEstimate.cents(wageCentsPerHour: wageCentsPerHour, hours: $0) }
+            // Read the SAME slice the shift's own row prints, not an
+            // independently-rounded `rate x hours`: "the echo and the row
+            // must reconcile on sight" is only true if both come out of one
+            // allocation. nil still means "no wage to speak of" (feature off
+            // or hours never logged), which is what drives the copy below.
+            let hasWage = (wageCentsPerHour ?? 0) > 0 && (details.hoursWorked ?? 0) > 0
+            let shiftWageCents = hasWage ? (wagesByShiftID[latest.shiftID] ?? 0) : nil
             let revealCents = netCents + (shiftWageCents ?? 0)
             let revealEngine = StatsEngine(payrollTimeZone: payrollTimeZone, records: tipRecords, wageCentsPerHour: wageCentsPerHour)
             let result = revealEngine.reveal(forNightAt: today, cents: revealCents, period: period, shiftID: latest.shiftID)
@@ -818,7 +835,11 @@ struct DashboardView: View {
 
             ForEach(Array(facts.shiftDays.prefix(Self.maxShiftRows).enumerated()), id: \.element.shiftID) { index, group in
                 if index > 0 { Divider() }
-                shiftRow(for: group, multiShiftDays: facts.multiShiftDays)
+                shiftRow(
+                    for: group,
+                    multiShiftDays: facts.multiShiftDays,
+                    wageCents: facts.wagesByShiftID[group.shiftID] ?? 0
+                )
             }
             if facts.shiftDays.count > Self.maxShiftRows {
                 Divider()
@@ -842,7 +863,11 @@ struct DashboardView: View {
     }
 
     @ViewBuilder
-    private func shiftRow(for group: (day: Date, shiftID: UUID, items: [TipEntry]), multiShiftDays: Set<Date>) -> some View {
+    private func shiftRow(
+        for group: (day: Date, shiftID: UUID, items: [TipEntry]),
+        multiShiftDays: Set<Date>,
+        wageCents: Int
+    ) -> some View {
         let period = ShiftDetails.resolve(from: group.items).shiftPeriod
         let dayHasMultiple = multiShiftDays.contains(group.day)
         // A shift, single-entry or merged cash+credit, is one row now — the
@@ -856,7 +881,7 @@ struct DashboardView: View {
             Button {
                 sheetTarget = .edit(anchor)
             } label: {
-                ShiftDayRow(day: group.day, period: period, dayHasMultipleShifts: dayHasMultiple, entries: group.items, wageCentsPerHour: preferencesStore.baseHourlyWageCents)
+                ShiftDayRow(day: group.day, period: period, dayHasMultipleShifts: dayHasMultiple, entries: group.items, wageCents: wageCents)
                     .padding(.vertical, PaydaySpacing.p12)
                     .contentShape(Rectangle())
             }

@@ -34,6 +34,9 @@ final class PolicyStore {
     /// Set once the assumed rate policy has been considered, for reporting.
     /// It does NOT gate the work: see `runMigrationsIfNeeded`.
     private static let rateMigrationKey = "com.szakacsmedia.payday.policyMigration.assumedRate.v1"
+    /// Set when an adoption created a policy that has never been uploaded.
+    /// See `adoptedPoliciesAwaitingUpload`.
+    private static let awaitingUploadKey = "com.szakacsmedia.payday.policyMigration.awaitingUpload.v1"
 
     private let defaults: UserDefaults
 
@@ -140,7 +143,20 @@ final class PolicyStore {
     /// "Rate changed on…": a dated raise or cut. Adds a new `.confirmed`
     /// policy, which reprices only the shifts on or after that day — the
     /// weekly overtime threshold stays continuous across it.
+    ///
+    /// Zero is not a rate, here as in `applyRateEdit`: "zero means the wage
+    /// feature is off" is ONE rule and both entry points obey it. Without
+    /// this guard a `0` typed into the sheet stored a `.confirmed` $0.00/hr
+    /// policy, and MEASURED through the real ledger an 8-hour shift then read
+    /// back as `wage.isValued == true`, `regularWagesCents == 0`,
+    /// `shiftsWageValued == 1` and no diagnostics: $0.00 of wages on real
+    /// worked hours, presented as a confirmed complete fact instead of
+    /// `.rateNotSet`. A dated change to zero is also not expressible as a
+    /// removal (removal is not dated), so it is refused outright rather than
+    /// routed into `applyRateEdit`, which would wipe the real rate history a
+    /// typo was never asking to delete.
     func applyRateChange(hourlyRateCents: Int, effectiveFrom day: CivilDay) {
+        guard hourlyRateCents > 0 else { return }
         applyRate(PayRatePolicy(
             id: UUID(),
             effectiveFrom: day,
@@ -227,6 +243,10 @@ final class PolicyStore {
     /// A payload the sync decided is newer. Persists without touching the
     /// settings clock; the caller records the remote timestamp instead.
     func replaceFromSupabase(_ updated: CompensationPolicies) {
+        // The server evidently holds policies, so whatever this device
+        // adopted has nothing left to push: drop the pending-upload flag
+        // before the early return, so an identical payload settles it too.
+        acknowledgePolicyUpload()
         guard updated != policies else { return }
         policies = updated
         persist()
@@ -244,6 +264,7 @@ final class PolicyStore {
         defaults.removeObject(forKey: Self.key)
         defaults.removeObject(forKey: Self.calendarMigrationKey)
         defaults.removeObject(forKey: Self.rateMigrationKey)
+        defaults.removeObject(forKey: Self.awaitingUploadKey)
     }
 
     // MARK: The two one-time migrations (Design 1)
@@ -328,6 +349,16 @@ final class PolicyStore {
         guard outcome.changedAnything else { return outcome }
         policies = updated
         persist()
+        // An adoption is not a user edit, so it must not advance the settings
+        // clock — but it still has to REACH the server once, or the column
+        // the migration exists for stays NULL forever on exactly the
+        // population it was written for. The clock is what
+        // `PaydaySyncService.synchronize` compares to decide whether to
+        // upload settings at all, and on an already-synced device it is
+        // unchanged here, so this flag is the separate, explicit "there is an
+        // adopted policy the server has never seen" signal. See
+        // `PaydaySyncService.settingsNeedUpload`.
+        defaults.set(true, forKey: Self.awaitingUploadKey)
         // Deliberately no PaydaySettingsSyncClock.touch(): see the type note.
         #if !WIDGET_EXTENSION
         PaydayWidgetRefresh.request()
@@ -338,6 +369,30 @@ final class PolicyStore {
     /// Whether each migration has run, for the debug sheet and the tests.
     var migrationFlags: (calendar: Bool, rate: Bool) {
         (defaults.bool(forKey: Self.calendarMigrationKey), defaults.bool(forKey: Self.rateMigrationKey))
+    }
+
+    /// True when `runMigrationsIfNeeded` created a policy that has never been
+    /// uploaded, so the next sync owes the server one settings write.
+    ///
+    /// This closes the hole the PaydayCloudGate comment claimed was already
+    /// closed ("BEFORE restore, so a first sync uploads the policies it just
+    /// created"). It was not: `synchronize` gates the settings upload on
+    /// `checkpoint.settingsClientUpdatedAt != localSettings.clientUpdatedAt`,
+    /// `clientUpdatedAt` is derived solely from `PaydaySettingsSyncClock`, and
+    /// the adoption deliberately never touches that clock. On an already-
+    /// synced Payday 1.0 device — the exact population the migration exists
+    /// for — nothing differed, `upsertSettings` was never called, and
+    /// `user_settings.compensation_policies` stayed NULL until some unrelated
+    /// settings edit happened to fire.
+    var adoptedPoliciesAwaitingUpload: Bool {
+        defaults.bool(forKey: Self.awaitingUploadKey)
+    }
+
+    /// The server now holds these policies. Called after a successful
+    /// `upsertSettings`, and after a download hands this device policies (the
+    /// server clearly already has them, so there is nothing left to push).
+    func acknowledgePolicyUpload() {
+        defaults.removeObject(forKey: Self.awaitingUploadKey)
     }
 
     // MARK: Persistence

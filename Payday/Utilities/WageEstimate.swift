@@ -11,11 +11,21 @@ import Foundation
 enum WageEstimate {
     /// Pre-tax wages for ONE shift of `hours` at `wageCentsPerHour`.
     ///
-    /// Routed through the ledger, so a shift's wage is the same integer
-    /// arithmetic in units of 1/6000 cent that every other total uses:
-    /// 4.25h at 283c is 1203, not `Int((283 * 4.25).rounded())` by
-    /// coincidence. Returns nil when the rate isn't set or no hours were
-    /// logged — an estimate is never fabricated from a fallback.
+    /// Routed through the ledger's integer arithmetic in units of 1/6000
+    /// cent, so 4.25h at 283c is 1203 by rule and not by coincidence.
+    /// Returns nil when the rate isn't set or no hours were logged — an
+    /// estimate is never fabricated from a fallback.
+    ///
+    /// NOT for a row inside a list. This rounds ONE shift in isolation, and
+    /// a shift in isolation is not a shift inside a workweek: it carries no
+    /// overtime, and its half cents round on their own (5.5h at 283c is 1557
+    /// here, 1556 as the second shift of W1's day). A figure that has to add
+    /// up to a total alongside its siblings must come from
+    /// `centsPerShift`/`centsByShiftID`, which allocate all of them at once.
+    /// What is left for this function is the genuinely solitary shift: the
+    /// live in-progress edit in `LogTipSheet`, whose shift is not saved yet,
+    /// and `StatsEngine`'s per-shift rate facts. PR 5 moves both onto
+    /// `EarningsSnapshot`.
     static func cents(wageCentsPerHour: Int?, hours: Double) -> Int? {
         guard let wageCentsPerHour, wageCentsPerHour > 0, hours > 0 else { return nil }
         return CompensationLedger.roundCents(
@@ -67,13 +77,62 @@ enum WageEstimate {
         shiftGroups: [[TipEntry]],
         wageCentsPerHour: Int?
     ) -> Int {
-        guard wageCentsPerHour != nil else { return 0 }
-        return LegacyLedgerBridge.valuations(
+        centsPerShift(
+            payrollTimeZone: payrollTimeZone,
+            workweekStartWeekday: workweekStartWeekday,
+            shiftGroups: shiftGroups,
+            wageCentsPerHour: wageCentsPerHour
+        ).reduce(0, +)
+    }
+
+    /// The per-shift figures `centsSummedPerShift` is the sum of, in the
+    /// order the groups arrived — so a screen's rows and the total above them
+    /// are two views of ONE array and cannot be a cent apart.
+    ///
+    /// This is the fix for PR 3's review P0: `centsSummedPerShift` moved the
+    /// day/period total onto the ledger's cumulative allocation, but every
+    /// per-shift DISPLAY was still calling `cents(wageCentsPerHour:hours:)`,
+    /// which rounds each shift independently. One civil day with a 4.25h and
+    /// a 5.5h shift at 283c/hr read 2759 in the DayDetailSheet hero and
+    /// 1203 + 1557 = 2760 in the two rows listed directly beneath it.
+    ///
+    /// `cents(wageCentsPerHour:hours:)` remains for the surfaces that hold a
+    /// single shift with no sibling set to allocate against (LogTipSheet's
+    /// live in-progress edit, `StatsEngine`'s per-shift rate facts). Those
+    /// are still independently rounded and can still be 1c from this array;
+    /// PR 5 moves them onto `EarningsSnapshot`. See docs/PRODUCT.md Pillar 8.
+    static func centsPerShift(
+        payrollTimeZone: TimeZone,
+        workweekStartWeekday: Int,
+        shiftGroups: [[TipEntry]],
+        wageCentsPerHour: Int?
+    ) -> [Int] {
+        guard wageCentsPerHour != nil else { return Array(repeating: 0, count: shiftGroups.count) }
+        return LegacyLedgerBridge.wagesCentsPerShift(
             shiftGroups: shiftGroups,
             rateCents: wageCentsPerHour,
             payrollTimeZone: payrollTimeZone,
             workweekStartWeekday: workweekStartWeekday
-        ).reduce(0) { $0 + $1.components.wagesCents }
+        )
+    }
+
+    /// `centsPerShift` keyed by the caller's OWN shift ids, for a list that
+    /// renders rows out of `ShiftDays.groupedByShift` output. Pass the same
+    /// grouping the rows are built from; the key is that grouping's
+    /// `shiftID`, so a row can never look up another shift's slice.
+    static func centsByShiftID(
+        payrollTimeZone: TimeZone,
+        workweekStartWeekday: Int,
+        shifts: [(day: Date, shiftID: UUID, items: [TipEntry])],
+        wageCentsPerHour: Int?
+    ) -> [UUID: Int] {
+        let wages = centsPerShift(
+            payrollTimeZone: payrollTimeZone,
+            workweekStartWeekday: workweekStartWeekday,
+            shiftGroups: shifts.map(\.items),
+            wageCentsPerHour: wageCentsPerHour
+        )
+        return Dictionary(zip(shifts.map(\.shiftID), wages), uniquingKeysWith: +)
     }
 
     /// Exact hour label ("6h 23m") for every user-facing hours display — now

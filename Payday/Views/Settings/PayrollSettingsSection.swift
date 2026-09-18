@@ -48,7 +48,7 @@ struct PayrollSettingsSection: View {
         .onChange(of: wageDigitsText) { _, newValue in
             let filtered = String(newValue.filter(\.isNumber).prefix(Self.maxWageDigits))
             if filtered != newValue { wageDigitsText = filtered }
-            let cents = filtered.isEmpty ? nil : Int(filtered)
+            let cents = Self.rateCents(fromDigits: filtered)
             // MEASURED on the simulator: without this guard, `load()` writing
             // the current rate into `wageDigitsText` on appear fired this
             // handler, which called `applyRateEdit` and marked the policy
@@ -194,7 +194,24 @@ struct PayrollSettingsSection: View {
 
     // MARK: Helpers
 
-    private static let maxWageDigits = 4 // caps at $99.99/hr
+    static let maxWageDigits = 4 // caps at $99.99/hr
+
+    /// The one digits-to-rate rule, shared by the "Hourly wage" row and the
+    /// rate-change sheet so the two fields cannot disagree about what the
+    /// user typed.
+    ///
+    /// Nil for an empty field AND for zero. `Int("0")` is 0, not nil, and a
+    /// rate of zero is not a rate: nil has always meant "the wage feature is
+    /// off" and the ledger then reports `.rateNotSet` rather than a
+    /// fabricated `$0.00` on real worked hours. Returning nil here is what
+    /// keeps "$0.00" off the screen, keeps `baseHourlyWageCents` (still read
+    /// by the shipped 1.0 build, the widget and the Siri intent) from being
+    /// set to 0, and keeps the rate-change sheet's Save button disabled.
+    static func rateCents(fromDigits text: String) -> Int? {
+        let filtered = String(text.filter(\.isNumber).prefix(maxWageDigits))
+        guard let parsed = Int(filtered), parsed > 0 else { return nil }
+        return parsed
+    }
 
     private func load() {
         wageDigitsText = policyStore.currentHourlyRateCents.map(String.init) ?? ""
@@ -235,9 +252,14 @@ private struct RateChangeSheet: View {
     @State private var digitsText = ""
     @FocusState private var isFieldFocused: Bool
 
+    /// Nil for an empty field AND for zero, via the shared rule. Gating Save
+    /// on `cents != nil` alone let a typed `0` through as a `.confirmed`
+    /// $0.00/hr policy, because `Int("0")` is 0 and not nil. A dated change
+    /// to zero cannot express "the wage feature is off" (a removal has no
+    /// date), so the field simply has no value until a real rate is typed:
+    /// Save stays disabled and the row reads "Not set".
     private var cents: Int? {
-        let filtered = String(digitsText.filter(\.isNumber).prefix(4))
-        return filtered.isEmpty ? nil : Int(filtered)
+        PayrollSettingsSection.rateCents(fromDigits: digitsText)
     }
 
     var body: some View {
@@ -249,7 +271,10 @@ private struct RateChangeSheet: View {
                             .foregroundStyle(PaydayColor.textPrimary)
                         Spacer()
                         ZStack(alignment: .trailing) {
-                            Text(cents.map { Money.string(fromCents: $0) } ?? "$0.00")
+                            // "Not set", never "$0.00" — the same law the
+                            // wage row above states: a money screen that
+                            // prints $0.00 is claiming a rate of zero.
+                            Text(cents.map { Money.string(fromCents: $0) } ?? "Not set")
                                 .foregroundStyle(cents == nil ? PaydayColor.textSecondary : PaydayColor.textPrimary)
                                 .monospacedDigit()
                                 .accessibilityHidden(true)

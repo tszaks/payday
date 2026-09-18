@@ -56,23 +56,28 @@ enum LegacyLedgerBridge {
     /// work day is the earliest row's civil day in the PAYROLL zone, never
     /// the device's.
     static func shiftInputs(from shiftGroups: [[TipEntry]], payrollTimeZone: TimeZone) -> [ShiftInput] {
-        shiftGroups.compactMap { group in
-            guard let earliest = group.map(\.date).min() else { return nil }
-            let details = ShiftDetails.resolve(from: group)
-            let day = CivilDay(earliest, in: payrollTimeZone)
-            return ShiftInput(
-                id: group.compactMap(\.shiftID).first
-                    ?? PolicyMigration.deterministicID("legacy/bridge/shift/\(day.iso)/\(group.map(\.id.uuidString).sorted().joined(separator: "/"))"),
-                workDay: day,
-                period: tag(for: details.shiftPeriod),
-                recordedAt: group.compactMap(\.recordedAt).min(),
-                voluntaryCashCents: 0,
-                voluntaryCreditCents: 0,
-                gratuityFeesCents: 0,
-                tipOutCents: nil,
-                minutesWorked: details.hoursWorked.map(WorkedMinutes.minutes(fromHours:))
-            )
-        }
+        shiftGroups.compactMap { shiftInput(from: $0, payrollTimeZone: payrollTimeZone) }
+    }
+
+    /// One group's `ShiftInput`, or nil for an empty group (nothing to date
+    /// it by). Split out of `shiftInputs(from:)` so a caller can keep its own
+    /// per-group alignment — see `wagesCentsPerShift`.
+    static func shiftInput(from group: [TipEntry], payrollTimeZone: TimeZone) -> ShiftInput? {
+        guard let earliest = group.map(\.date).min() else { return nil }
+        let details = ShiftDetails.resolve(from: group)
+        let day = CivilDay(earliest, in: payrollTimeZone)
+        return ShiftInput(
+            id: group.compactMap(\.shiftID).first
+                ?? PolicyMigration.deterministicID("legacy/bridge/shift/\(day.iso)/\(group.map(\.id.uuidString).sorted().joined(separator: "/"))"),
+            workDay: day,
+            period: tag(for: details.shiftPeriod),
+            recordedAt: group.compactMap(\.recordedAt).min(),
+            voluntaryCashCents: 0,
+            voluntaryCreditCents: 0,
+            gratuityFeesCents: 0,
+            tipOutCents: nil,
+            minutesWorked: details.hoursWorked.map(WorkedMinutes.minutes(fromHours:))
+        )
     }
 
     /// Values `shiftGroups` through the real ledger.
@@ -92,6 +97,48 @@ enum LegacyLedgerBridge {
             rates: rates,
             calendars: calendars
         )
+    }
+
+    /// Each group's OWN wages, in the order the groups arrived, each one its
+    /// slice of the same workweek allocation the sum of this array is.
+    ///
+    /// This exists so a screen cannot disagree with itself. A list of shifts
+    /// and the total above it are now two views of one array: the hero is
+    /// `reduce(0, +)` of exactly the figures printed on the rows, so
+    /// "the day equals the sum of that day's shifts" is arithmetic rather
+    /// than a hope. Before PR 3's review this was the P0: the total came from
+    /// the ledger's cumulative allocation while every row still did its own
+    /// independent rounding, and W1's day read 2759 in the hero and
+    /// 1203 + 1557 = 2760 in the rows underneath it.
+    ///
+    /// A group the ledger cannot value (no entries, no hours, no rate)
+    /// contributes 0, which is what the row already showed for those cases.
+    static func wagesCentsPerShift(
+        shiftGroups: [[TipEntry]],
+        rateCents: Int?,
+        payrollTimeZone: TimeZone,
+        workweekStartWeekday: Int
+    ) -> [Int] {
+        let inputs = shiftGroups.map { shiftInput(from: $0, payrollTimeZone: payrollTimeZone) }
+        let (rates, calendars) = policies(
+            rateCents: rateCents,
+            payrollTimeZone: payrollTimeZone,
+            workweekStartWeekday: workweekStartWeekday
+        )
+        let valuations = CompensationLedger.value(
+            inputs.compactMap { $0 },
+            rates: rates,
+            calendars: calendars
+        )
+        // The ledger returns its own canonical order, so realign by id
+        // rather than by position.
+        let wagesByID = Dictionary(
+            valuations.map { ($0.id, $0.components.wagesCents) },
+            uniquingKeysWith: +
+        )
+        return inputs.map { input in
+            input.flatMap { wagesByID[$0.id] } ?? 0
+        }
     }
 
     private static func tag(for period: ShiftPeriod?) -> ShiftPeriodTag? {
