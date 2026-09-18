@@ -127,6 +127,52 @@ struct ShiftReceiptMetrics: Codable, Equatable, Hashable, Sendable {
         voluntaryTipsCents(fromStoredAmount: amountCents) + employeeGratuityFeesCents
     }
 
+    /// Converts a v1 shift's stored amounts to the v2 split: stored amounts
+    /// become voluntary tips only, and the gratuity becomes a separate
+    /// additive category.
+    ///
+    /// **This is a port of the READ path, not the edit path**, and the
+    /// distinction is worth real money. `TipBreakdown.total` resolves the one
+    /// row that owns the receipt and applies `voluntaryTipsCents` to **that
+    /// row only** — `max(0, amount - gratuity)`. `LogTipSheet`'s
+    /// `gratuityFeesBinding` instead moves the whole folded gratuity to the
+    /// other kind, which is a deliberate reassignment while a person is
+    /// editing and a different operation entirely.
+    ///
+    /// On the N4 shape (cash 5000, credit 2000, a v1 receipt on the credit row
+    /// carrying gratuity 4200, tip-out 1000) the read path gives cash 5000 /
+    /// credit 0 / gratuity 4200 / non-wage 8200, and the edit-path rule gives
+    /// cash 800 / credit 2000 / gratuity 4200 / non-wage 6000. That is $22.00
+    /// on one shift **and** a different cash-versus-credit split, and the
+    /// split is what drives the paycheck comparison.
+    ///
+    /// `owner` is which kind's stored amount the receipt was attached to, the
+    /// same resolution `TipBreakdown` performs (credit first, then cash).
+    ///
+    /// Idempotent: the guard returns v2 input unchanged, so folding twice
+    /// cannot subtract the gratuity twice. This file is the only one allowed
+    /// to touch `earningsSchemaVersion`; `design-lint.sh` enforces that.
+    static func normalizedToV2(
+        cashCents: Int,
+        creditCents: Int,
+        metrics: ShiftReceiptMetrics,
+        owner: TipKind
+    ) -> (cash: Int, credit: Int, metrics: ShiftReceiptMetrics) {
+        guard (metrics.earningsSchemaVersion ?? 1) < 2 else {
+            return (cashCents, creditCents, metrics)
+        }
+        let folded = metrics.employeeGratuityFeesCents
+        var cash = cashCents
+        var credit = creditCents
+        switch owner {
+        case .cash: cash = max(0, cash - folded)
+        case .credit: credit = max(0, credit - folded)
+        }
+        var out = metrics
+        out.earningsSchemaVersion = 2
+        return (cash, credit, out)
+    }
+
     /// Adds facts from a newer scan without letting an unreadable or cropped
     /// rescan erase values captured previously. A value that is actually
     /// present in the newer scan wins, including an explicit zero amount.

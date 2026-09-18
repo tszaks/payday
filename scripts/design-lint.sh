@@ -126,6 +126,269 @@ else
 fi
 
 echo ""
+echo "=== Shift representation invariants (PR 2) ==="
+echo ""
+
+# 11. The earnings schema version has ONE owner.
+#     ShiftReceiptMetrics.swift decides what v1 and v2 mean and is the only
+#     file allowed to relabel a payload. A second writer is a money bug: it
+#     marks a payload v2 without performing the subtraction that makes it v2,
+#     and every later reader then trusts the label.
+#
+#     LogTipSheet.swift:1053 is a pre-existing violation, excluded here and
+#     NOT forgiven. It is `gratuityFeesBinding`, the legacy two-row edit path,
+#     which S9 replaces with ShiftCommands.update. Delete this exclusion in
+#     S9 — the ban has no teeth against the edit path until then.
+run_check \
+  "earningsSchemaVersion is assigned only in ShiftReceiptMetrics.swift" \
+  'earningsSchemaVersion *=' \
+  'Utilities/ShiftReceiptMetrics\.swift|Views/Shared/LogTipSheet\.swift' \
+  "Go through ShiftReceiptMetrics.normalizedToV2. Relabelling a payload without subtracting its folded gratuity double-counts that money forever"
+
+# 12. The v1-to-v2 read rule has ONE caller surface.
+#     voluntaryTipsCents is the READ path's normalization. A new caller is how
+#     a second, subtly different version of the rule gets written (the edit
+#     path moves the WHOLE gratuity to the other kind; the read path subtracts
+#     it from the owner only — $22.00 apart on the N4 shape, and a different
+#     cash/credit split, which is what drives the paycheck comparison).
+#
+#     TipBreakdown.swift and StatsEngine.swift are the two permanent legacy
+#     read legs (tip_entries stays a write surface indefinitely, so the legacy
+#     projection never goes away) and are the "before" side of the section 11
+#     parity gate. They are excluded because they are the rule's existing
+#     consumers, not because a new one would be acceptable.
+run_check \
+  "voluntaryTipsCents( is called only from its own file and the two legacy read legs" \
+  'voluntaryTipsCents\(' \
+  'Utilities/ShiftReceiptMetrics\.swift|Utilities/TipBreakdown\.swift|Utilities/StatsEngine\.swift' \
+  "Read a shift's money through ShiftRecord/the projection, or add the case to ShiftReceiptMetrics.swift. Do not re-derive the v1 split"
+
+# 13. ShiftRecord.receiptMetrics is ENCODE-ONLY and has one writer.
+#     Assigning the decoded value moves no money by itself, which is exactly
+#     the hazard: cash/credit/receipt have to change together or the split
+#     drifts. ShiftRecord.applyEarnings is the atomic writer.
+#
+#     grep cannot type-check a receiver, so this bans the spelling everywhere
+#     except the files that legitimately write a TipEntry's payload. That is
+#     stricter than the rule as written (it also pins the legacy sites), which
+#     is the safe direction.
+run_check \
+  "No .receiptMetrics = outside ShiftRecord.swift and the legacy TipEntry writers" \
+  '\.receiptMetrics *=' \
+  'Models/ShiftRecord\.swift|Models/TipEntry\.swift|Utilities/ShiftDetails\.swift|Utilities/StatsEngine\.swift|Sync/PaydayRemoteModels\.swift|Sync/PaydaySyncService\.swift' \
+  "Use ShiftRecord.applyEarnings(cashCents:creditCents:metrics:metricsOwner:) so cash, credit and the payload change in one step"
+
+# 14. The gratuity rule has ONE implementation in SQL.
+#     private.receipt_gratuity_cents is read by two STORED generated columns,
+#     by the deriver's arithmetic and by the fold's sanitizer. A fourth
+#     hand-written `->> 'gratuityFeesCents'` is a copy of a money rule that
+#     drifts silently: CREATE OR REPLACE on the function does not recompute
+#     any stored row, so the copies and the stored values disagree with no
+#     error anywhere.
+#
+#     Allowed ONLY inside private.receipt_gratuity_cents' own body, and the
+#     exemption ENDS at that body's closing dollar-quote. An earlier version
+#     set the flag on the `create ... function` line and never cleared it, so
+#     every later line in the same file was forgiven — PROVEN: the real helper
+#     followed by
+#       bad_gratuity integer generated always as
+#         ((receipt_metrics ->> 'gratuityFeesCents')::integer) stored
+#     reported [PASS], which is the int4-space spelling 2.3 measured as
+#     aborting with 22003 inside a shipped 1.0 build's transaction.
+#
+#     The fold gets NO exemption and needs none: 2.5's sanitizer spells the
+#     key as a jsonb PATH, '{gratuityFeesCents}', which this pattern (the key
+#     followed by a closing quote) does not match at all, and the fold's
+#     arithmetic goes through the helper. A blanket exemption on
+#     private.fold_legacy_writes would buy nothing and permanently un-guard
+#     the one function that runs inside a 1.0 build's transaction.
+#
+#     20260904125000 predates public.shifts entirely and reads tip_entries, so
+#     it is excluded by name.
+SQL_GRAT_HITS=$(find supabase -name '*.sql' -print0 2>/dev/null \
+  | xargs -0 awk '
+      function scan_dollar_quotes(line,   rest, tag) {
+        rest = line
+        while (match(rest, /\$[A-Za-z_0-9]*\$/)) {
+          tag = substr(rest, RSTART, RLENGTH)
+          rest = substr(rest, RSTART + RLENGTH)
+          if (dq == "") {
+            dq = tag
+          } else if (tag == dq) {
+            dq = ""
+            fn = ""
+          }
+        }
+      }
+      FNR == 1 { fn = ""; dq = "" }
+      {
+        if (dq == "" && $0 ~ /^[[:space:]]*create[[:space:]]+(or[[:space:]]+replace[[:space:]]+)?function/) {
+          fn = ""
+          if (match($0, /private\.receipt_gratuity_cents/)) fn = "helper"
+        }
+        if ($0 ~ /gratuityFeesCents'"'"'/ && fn != "helper") {
+          printf "%s:%d: %s\n", FILENAME, FNR, $0
+        }
+        scan_dollar_quotes($0)
+        # A function body that is not dollar-quoted ends at its statement
+        # terminator. Without this the exemption would again outlive the body.
+        if (dq == "" && index($0, ";") > 0) fn = ""
+      }
+    ' 2>/dev/null \
+  | grep -v '20260904125000_optimize_payday_summary_and_shift_listing\.sql' || true)
+if [ -n "$SQL_GRAT_HITS" ]; then
+  FAIL=1
+  echo "[FAIL] gratuityFeesCents' appears in SQL outside private.receipt_gratuity_cents' body"
+  echo "$SQL_GRAT_HITS" | sed 's/^/   /'
+  echo "   -> Call private.receipt_gratuity_cents(receipt_metrics). It clamps in numeric space; a hand-written cast aborts with 22003 inside a shipped 1.0 build's transaction"
+  echo ""
+else
+  echo "[PASS] gratuityFeesCents' appears in SQL only inside the gratuity rule"
+fi
+
+# 15. No WHERE on an ON CONFLICT targeting public.shifts.
+#     MEASURED on PG 17: `insert ... on conflict (user_id,id) do update ...
+#     where deleted_at is null` against a matching-but-excluded row reports
+#     INSERT 0 0 and leaves the row untouched — no error. Under this shape
+#     that statement runs inside a shipped 1.0 build's transaction, so a
+#     silently-skipped upsert means the arriving legacy id is never recorded,
+#     and any raise afterwards rejects that build's write. The partition has to
+#     stay total, which means a CASE per column and never a predicate.
+#
+#     Checked as "a WHERE after the ON CONFLICT", so an ordinary
+#     `insert ... select ... where ... on conflict` source filter is fine.
+SQL_CONFLICT_HITS=$(find supabase -name '*.sql' -print0 2>/dev/null \
+  | xargs -0 awk '
+      FNR == 1 { stmt = ""; start = 0 }
+      {
+        line = tolower($0)
+        sub(/--.*$/, "", line)
+        if (stmt == "") start = FNR
+        stmt = stmt " " line
+        if (index(line, ";") > 0) {
+          if (index(stmt, "public.shifts") > 0) {
+            c = index(stmt, "on conflict")
+            if (c > 0 && index(substr(stmt, c), " where ") > 0) {
+              printf "%s:%d: statement beginning here has a WHERE after its ON CONFLICT\n", FILENAME, start
+            }
+          }
+          stmt = ""
+        }
+      }
+    ' 2>/dev/null || true)
+if [ -n "$SQL_CONFLICT_HITS" ]; then
+  FAIL=1
+  echo "[FAIL] ON CONFLICT with a WHERE on public.shifts"
+  echo "$SQL_CONFLICT_HITS" | sed 's/^/   /'
+  echo "   -> Remove the predicate and make the DO UPDATE total with a CASE per column. A skipped upsert here rejects a shipped 1.0 build's write"
+  echo ""
+else
+  echo "[PASS] No ON CONFLICT ... WHERE on public.shifts"
+fi
+
+# 16. Every hand-written Codable decoder in PaydaySyncState.swift is complete.
+#     A missing line in a hand-written init(from:) that uses decodeIfPresent is
+#     a SILENT default, not a throw: the field becomes write-only and always
+#     loads as its default. No checkpoint loss, no test failure, nothing in a
+#     log. A non-persisting pendingShiftRestores loses an undone shift; a
+#     non-persisting cursor re-baselines on every pass. A lint phrased as
+#     "fail any Codable with no init(from:)" can never fire on this file.
+SNAPSHOT_HITS=$(perl -e '
+  my $path = "Payday/Sync/PaydaySyncState.swift";
+  open(my $fh, "<", $path) or do { print "$path: cannot open\n"; exit 0 };
+  my (@stack, %props, %keys, %decoded, %hasdecoder, @order);
+  my ($depth, $cur, $inkeys, $keysdepth, $indecoder, $decoderdepth) = (0, "", 0, 0, 0, 0);
+  while (my $line = <$fh>) {
+    my $text = $line;
+    $text =~ s{//.*$}{};
+    if ($text =~ /^\s*(?:(?:private|fileprivate|internal|public|final|static)\s+)*(?:struct|class)\s+(\w+)/) {
+      $cur = $1;
+      push @order, $cur unless exists $props{$cur};
+      $props{$cur} ||= [];
+      push @stack, [$cur, $depth];
+    } elsif ($cur ne "" && $text =~ /^\s*(?:private\s+)?enum\s+CodingKeys\b/) {
+      $inkeys = 1; $keysdepth = $depth;
+    } elsif ($cur ne "" && $text =~ /\binit\s*\(\s*from\s+\w+\s*:/) {
+      $indecoder = 1; $decoderdepth = $depth; $hasdecoder{$cur} = 1;
+    } elsif ($inkeys && $text =~ /^\s*case\s+(.+)$/) {
+      my $rest = $1; $rest =~ s/\s//g;
+      for my $name (split /,/, $rest) { $name =~ s/=.*$//; $keys{$cur}{$name} = 1 if $name =~ /^\w+$/; }
+    } elsif ($indecoder && $text =~ /forKey:\s*\.(\w+)/) {
+      $decoded{$cur}{$1} = 1;
+    } elsif ($cur ne "" && !$inkeys && !$indecoder && $depth == $stack[-1][1] + 1
+             && $text =~ /^\s*(?:(?:private|fileprivate|internal|public)\s+)?(?:var|let)\s+(\w+)\s*(:[^={]*)?(=|\{\s*didSet|$|\s*$)/) {
+      my ($name, $tail) = ($1, $3);
+      next if $text =~ /\{\s*(get|$)/ && $text !~ /didSet/;
+      push @{ $props{$cur} }, $name;
+    }
+    my $open = ($text =~ tr/{//); my $close = ($text =~ tr/}//);
+    $depth += $open - $close;
+    if ($inkeys && $depth <= $keysdepth) { $inkeys = 0; }
+    if ($indecoder && $depth <= $decoderdepth) { $indecoder = 0; }
+    while (@stack && $depth <= $stack[-1][1]) { pop @stack; $cur = @stack ? $stack[-1][0] : ""; }
+  }
+  close $fh;
+  for my $type (@order) {
+    next unless $hasdecoder{$type};
+    for my $name (@{ $props{$type} }) {
+      print "$path: $type.$name is a stored property with no CodingKeys case\n" unless $keys{$type}{$name};
+      print "$path: $type.$name is never assigned in init(from:)\n" unless $decoded{$type}{$name};
+    }
+  }
+' 2>/dev/null || true)
+if [ -n "$SNAPSHOT_HITS" ]; then
+  FAIL=1
+  echo "[FAIL] A hand-written Codable in PaydaySyncState.swift is missing a key"
+  echo "$SNAPSHOT_HITS" | sed 's/^/   /'
+  echo "   -> Add the CodingKeys case AND the decodeIfPresent line. A missing line loads as the default with no throw and no test failure"
+  echo ""
+else
+  echo "[PASS] Every hand-written Codable in PaydaySyncState.swift decodes every stored property"
+fi
+
+# 17. Single-definition pins.
+#     Each of these is a fact that must have exactly one implementation,
+#     because a second one compiles cleanly and then disagrees:
+#
+#     shiftsAreAuthoritative — the reader's switch. The widget, both App
+#       Intents and the app all call it. A second definition (the tempting one
+#       is a fresh bool on AppGroup, which IS in the widget's sources and so
+#       would compile) leaves the Lock Screen printing pre-conversion numbers
+#       while the app prints post-conversion ones.
+#     recordTipDeletions — the durable deletion queue. A second writer is a
+#       deletion that reaches one queue and not the other.
+#     shiftCacheRequiresBaseline — the wiped-shift-cache detector of 7.4. The
+#       device may never derive a shift, so this fact decides whether a forced
+#       server baseline runs, and 7.2/7.3 make the Snapshot checkpoint its one
+#       durable store. S1 briefly implemented a second copy on standalone
+#       UserDefaults keys; the reader can then consult one copy while the sync
+#       leg clears the other, and only the checkpoint copy survives the
+#       measured downgrade purge for an account with no legacy rows at all.
+#     payday_shift_rollback_at — the rollback stamp every reader consults.
+#
+#     "At most one" rather than "exactly one": shiftsAreAuthoritative and
+#     shiftCacheRequiresBaseline land in S7 and payday_shift_rollback_at in
+#     S5, so zero is legal until then.
+pin_check() {
+  local name="$1" pattern="$2"; shift 2
+  local count
+  count=$(grep -rn -E "$pattern" "$@" 2>/dev/null | wc -l | tr -d ' ')
+  if [ "$count" -gt 1 ]; then
+    FAIL=1
+    echo "[FAIL] $name has $count definitions; it may have at most one"
+    grep -rn -E "$pattern" "$@" 2>/dev/null | sed 's/^/   /'
+    echo ""
+  else
+    echo "[PASS] $name has $count definition(s)"
+  fi
+}
+
+pin_check "shiftsAreAuthoritative" 'func +shiftsAreAuthoritative\b' Payday PaydayWidget --include=*.swift
+pin_check "recordTipDeletions" 'func +recordTipDeletions\b' Payday PaydayWidget --include=*.swift
+pin_check "shiftCacheRequiresBaseline" 'func +shiftCacheRequiresBaseline\b' Payday PaydayWidget --include=*.swift
+pin_check "payday_shift_rollback_at" 'create +(or +replace +)?function +[a-z_.]*payday_shift_rollback_at' supabase --include=*.sql
+
+echo ""
 if [ "$FAIL" -eq 1 ]; then
   echo "=== Design lint FAILED — see docs/DESIGN.md ==="
   exit 1
