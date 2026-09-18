@@ -6,6 +6,13 @@ import Foundation
 /// already known. Pure so the "which clauses, in what order" decision is
 /// unit-testable independent of the view.
 enum ShiftBeliefLine {
+    /// - Parameter tipOut: the draft shift's valuation, from the preview
+    ///   snapshot. The tip-out clause reads `components.tipOutCents` off it
+    ///   rather than taking the sheet's own binding, so the sentence and the
+    ///   header above it quote one dataset: row [LS-05] is the same
+    ///   `MetricID.tipOut` the header's figure netted out, and a nil valuation
+    ///   means the engine has no answer, which drops the clause instead of
+    ///   printing a number no snapshot stands behind.
     /// - Returns: clauses joined by " · " — the date, then whichever of
     ///   period/punch-range/tip-out are already known. When nothing beyond
     ///   the date is known yet, "add details" stands in for the rest.
@@ -14,7 +21,7 @@ enum ShiftBeliefLine {
         shiftPeriod: ShiftPeriod?,
         clockIn: Date?,
         clockOut: Date?,
-        tipOutCents: Int,
+        tipOut: ShiftValuation?,
         calendar: Calendar = .current,
         now: Date = .now
     ) -> String {
@@ -27,7 +34,7 @@ enum ShiftBeliefLine {
         if let clockIn, let clockOut {
             clauses.append(punchRangeClause(clockIn: clockIn, clockOut: clockOut))
         }
-        if tipOutCents > 0 {
+        if let tipOutCents = tipOut?.components.tipOutCents, tipOutCents > 0 {
             clauses.append("\(tippedOutAmount(cents: tipOutCents)) tipped out")
         }
 

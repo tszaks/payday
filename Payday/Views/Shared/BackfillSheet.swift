@@ -38,8 +38,14 @@ struct BackfillSheet: View {
         _selectedDate = State(initialValue: Calendar.current.startOfDay(for: yesterday))
     }
 
+    /// "Did the person type an amount", not a money figure. Spelled as two
+    /// comparisons rather than `cash + credit > 0` so there is no cents
+    /// addition in this view at all — the PR 5 contract's rule 1 bans `a + b`
+    /// on cents outside the engine, and a gate that happens to be true today
+    /// is exactly how the next `+` gets written. Same spelling LogTipSheet's
+    /// own `canSave` already used.
     private var canSave: Bool {
-        cashCents + creditCents > 0
+        cashCents > 0 || creditCents > 0
     }
 
     /// Informational only, never blocking — two shifts a day is a
