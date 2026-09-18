@@ -91,6 +91,25 @@ cleanup() {
 trap cleanup EXIT
 
 q() { "${PSQL[@]}" -v ON_ERROR_STOP=1 -tAc "$1"; }
+
+# q(), but as an authenticated account.
+#
+# Needed because public.fetch_shift_changes is security INVOKER and filters on
+# auth.uid(): called through q() it runs as `postgres` with no JWT claim, so it
+# correctly returns nothing and every assertion built on it reads as a code
+# failure. That cost one round of case 10.
+#
+# `set_config(..., false)` rather than true: -tAc sends each statement in its
+# own implicit transaction, so a transaction-local setting would be gone before
+# the query ran. Piping the three statements into ONE psql session is what
+# keeps them together, and tail -1 discards set_config's own output row.
+q_as() { # user_id sql
+  printf '%s\n' \
+    "select set_config('request.jwt.claim.sub', '$1', false);" \
+    "set role authenticated;" \
+    "$2;" \
+  | "${PSQL[@]}" -v ON_ERROR_STOP=1 -tA | tail -1
+}
 qq() { "${PSQL[@]}" -v ON_ERROR_STOP=1 -q -f "$1"; }
 
 check() { # name expected actual
@@ -218,7 +237,7 @@ SQL
 # the key after the function has returned, which is what makes both orders
 # expressible with real sessions instead of a simulation.
 
-echo "== S4/S5/S6 concurrency suite (scripts/db-test-race.sh)"
+echo "== S4/S5/S6/S8 concurrency suite (scripts/db-test-race.sh)"
 echo
 
 # ===========================================================================
@@ -1043,11 +1062,22 @@ send 7 "$(device_upsert_sql "$U7" '[{"id":"54000000-0000-0000-0000-000000000181"
 wait_state e "idle in transaction"
 
 # A later committed write, so the visible maximum moves past T1's stamp.
-q "$(shift_upsert_sql "$U7" '[{"id":"54000000-0000-0000-0000-000000000171","work_date":"2026-08-12","cash_tips_cents":222}]')" >/dev/null
+#
+# NOT through upsert_shifts, and this cost a hung run to learn: that RPC takes
+# the BLOCKING payday:shiftmig lock, which session e is holding inside its open
+# transaction, so the call would wait for a commit that the script itself is
+# blocked from issuing. A deadlock of the test's own making -- and incidentally
+# a live demonstration that the blocking lock chosen in S6 is real.
+#
+# A direct UPDATE takes no advisory lock, and shifts_touch_version stamps
+# updated_at = now() for this new transaction, which is what moves the visible
+# maximum past T1's start. That is all this step needs.
+q "update public.shifts set client_updated_at = client_updated_at
+    where user_id = '$U7' and id = '54000000-0000-0000-0000-000000000170'" >/dev/null
 
 # The client's pull, while T1 is still open. Capture BOTH cursors from the
 # one response: what an unclamped client would take, and what the fence gives.
-CURSORS=$(q "
+CURSORS=$(q_as "$U7" "
   with feed as (
     select public.fetch_shift_changes(null::timestamptz, null::uuid, 1000) as v
   )
@@ -1065,7 +1095,7 @@ UNCLAMPED="$(printf '%s' "$CURSORS" | cut -d'|' -f1)"
 CLAMPED="$(printf '%s' "$CURSORS" | cut -d'|' -f2)"
 PULLED="$(printf '%s' "$CURSORS" | cut -d'|' -f3)"
 
-check "theClientPullCannotSeeTheUncommittedFold" "2" "$PULLED"
+check "theClientPullCannotSeeTheUncommittedFold" "1" "$PULLED"
 
 # T1 commits. The folded shift becomes visible, still stamped at T1's start.
 send 7 "commit;"
@@ -1080,14 +1110,14 @@ check "theFoldedShiftIsStampedEarlierThanTheVisibleMaximum" "t" \
 
 # THE NEGATIVE CONTROL. Without the clamp the shift is gone for good.
 check "anUnclampedCursorPermanentlyMissesTheFoldedShift" "0" \
-  "$(q "select count(*) from jsonb_array_elements(
+  "$(q_as "$U7" "select count(*) from jsonb_array_elements(
           (public.fetch_shift_changes('$UNCLAMPED'::timestamptz, null::uuid, 1000)) -> 'rows') e
          where e ->> 'id' = '54000000-0000-0000-0000-000000000180'")"
 
 # THE FIX. The fence keeps the cursor behind the in-flight window, so the next
 # pass delivers it.
 check "theClampedCursorStillDeliversTheFoldedShift" "1" \
-  "$(q "select count(*) from jsonb_array_elements(
+  "$(q_as "$U7" "select count(*) from jsonb_array_elements(
           (public.fetch_shift_changes('$CLAMPED'::timestamptz, null::uuid, 1000)) -> 'rows') e
          where e ->> 'id' = '54000000-0000-0000-0000-000000000180'")"
 
@@ -1104,7 +1134,7 @@ q "delete from auth.users where id in ('$U','$U2')" >/dev/null
 
 echo
 if [ "$FAILED" = "1" ]; then
-  echo "== S4/S5/S6 concurrency suite FAILED"
+  echo "== S4/S5/S6/S8 concurrency suite FAILED"
   exit 1
 fi
-echo "== S4/S5/S6 concurrency suite passed"
+echo "== S4/S5/S6/S8 concurrency suite passed"
