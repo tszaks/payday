@@ -288,6 +288,27 @@ The **CSV export** writes exact minutes (`6.3833`) instead of quarter-hour
 rounding. The **money-boundary lint** is in place and ratchets, so a new
 money computation outside the engine fails CI.
 
+True now, on the STORED shape (PR 2 slices S14 and S15, 2026-09-18). A shift
+is one `ShiftRecord` rather than a cash row plus a credit row, and on an
+account the server has converted, every reader takes its shifts from that
+record: the calendar grid, History and its period detail, the Dashboard,
+Insights, the day sheet, the log sheet's reveal, the CSV export, the delete
+confirmation's shift count, the payday notification's spoken figure, the
+widget's pace baseline, and Siri's logging. A sweep found NINE of those
+reading the legacy rows with no switch at all, and every parity gate in the
+suite stayed green through all nine, because each surface was internally
+consistent with whatever it happened to read.
+
+The choice is no longer the screen's to make. A builder takes both stored
+shapes and resolves which to read itself, so a half-switched screen is not
+expressible, and `design-lint.sh` rule 23 fails the build on any app-code
+read that hands over only the legacy list.
+
+**This changes nothing for anyone today, and that is deliberate.** An account
+becomes authoritative only when the server reports its conversion complete,
+unrolled and conserved, and no account has one yet. So the flip ships as a
+no-op and stays one until the server's own conversion runs.
+
 Not true yet, and a reader should not assume otherwise:
 
 - **The `/v1` API reports non-wage figures only.** S11 deleted the backend's
@@ -302,21 +323,73 @@ Not true yet, and a reader should not assume otherwise:
   deployed edge function changes only when someone runs
   `supabase functions deploy payday-api`. Until then the live API is whatever
   was last deployed, regardless of what this file or the source says.
-- **The old calculation paths still exist.** `TipEntry` remains the legacy
-  write surface and is never rewritten, and `ShiftDetails`, `TipBreakdown`
-  and `ShiftDays.groupedByShift` are still live because the screens still
-  read through them. Deleting them is PR 8's job and it cannot start until
-  every reader has been switched to `ShiftRecord` and the writer flipped.
+- **The old calculation paths still exist**, but the REASON changed on
+  2026-09-18 and the old reason is worth correcting rather than leaving.
+  This bullet used to say they were live "because the screens still read
+  through them", and that deleting them "cannot start until every reader has
+  been switched to `ShiftRecord` and the writer flipped". That precondition
+  is now MET. `TipEntry` remains the legacy write surface and is never
+  rewritten, and `ShiftDetails`, `TipBreakdown` and `ShiftDays.groupedByShift`
+  are still live as the LEGACY ARM — the path an unconverted account still
+  takes, and every account is unconverted today. They go when legacy goes,
+  which is PR 8.
 - **PR 7's lifecycle hardening is not started.**
+
+---
+
+### Everything below this line is HISTORY, and some of it is false now
+
+**Read the status section above for what is true. Do not quote from below it
+without checking.**
+
+This pillar was written append-only: each PR added a dated block —
+"What PR 4 added", "Superseded 2026-09-18", "What is still NOT true,
+precisely" — without reconciling the blocks already there. By 2026-09-18 that
+produced flat contradictions about the same facts, a hundred lines apart:
+
+| Said above | Said below | Which is true |
+|---|---|---|
+| "the money-boundary lint is in place and ratchets" | "There is no money-boundary lint yet" | **Above.** `design-lint.sh` rule 4 exists and fires; it caught a `.netCents` in the CSV exporter on 2026-09-18. |
+| "the widget and Siri read the engine through one shared function" | "The widget, Siri and the CSV export still compute their own figures" | **Above.** Both reach `AmbientPeriodFigure`, which calls `EarningsStore.buildOnce`. |
+
+A reader asking "is my overtime right?" got opposite answers depending on
+which paragraph they reached. That is the precise failure this pillar's own
+heading correction was about, recurring in the body rather than the heading.
+
+**The rule this establishes, because patching the two sentences would not
+stop the third:** there is ONE current-state section, it is the one above,
+and a new PR EDITS it rather than appending a new dated block. Blocks below
+are kept because the reasoning in them is worth reading and because deleting
+a record of what was believed when is its own kind of dishonesty — but they
+are dated evidence, not status.
+
+---
 
 **What the engine actually guarantees as of PR 3 (2026-09-17).** Scope
 matters here: `CompensationLedger` now values every shift exactly once, and
 the two pre-engine wage helpers (`WageEstimate`, `PeriodIncome`) are thin
-wrappers over it, so there is one wage arithmetic in the app. What is NOT
+wrappers over it, so there is one wage arithmetic in the app.
+
+**DELETED 2026-09-18, not softened.** This paragraph continued: *"What is NOT
 yet true is that every consumer asks the engine over the WHOLE dataset: a
 screen that hands the wrapper one day or one month still splits the overtime
 threshold over only the shifts it passed in. That is PR 5's job, and until it
-lands a partial range can still under-report overtime.
+lands a partial range can still under-report overtime."*
+
+PR 5's three waves have merged, so it is false. It is deleted rather than
+reworded because a caveat about whether someone's OVERTIME is right is the
+worst thing in this file to leave half-true: while it stood, one paragraph
+said all three PR 5 waves were merged and this one said a partial range could
+still under-report overtime, and a reader could not tell which to trust about
+their own money.
+
+The overtime scope guarantee is stated in exactly ONE place: the second
+bullet under **Guaranteed now** below. It is deliberately not quoted here —
+quoting it would be the second copy this paragraph exists to argue against —
+so follow the reference. A restated claim is a second copy of a fact, and
+second copies rot independently. That is the same reasoning
+that made one definition of a record's money beat two that agreed, and the
+reason this pillar has now rotted twice.
 
 Two invariants from that list are worth separating, because one is closed and
 one is not:
@@ -383,7 +456,13 @@ month-versus-days divergence named above is closed.
 
 What is still NOT true, precisely:
 
-- **The widget, Siri and the CSV export still compute their own figures**,
+- ~~**The widget, Siri and the CSV export still compute their own figures**~~
+  **FALSE as of 2026-09-18 (PR 6 group 2.10/2.11/2.13 landed).** The widget
+  and Siri both reach `AmbientPeriodFigure`, which calls
+  `EarningsStore.buildOnce`, and the CSV writes exact minutes through
+  `HoursFormatting`. The backend half of this bullet is still accurate; see
+  the status section. Original text follows, as the record of what was
+  believed at the time:
   and the backend is a second, independently maintained money engine: the
   `/v1` API computes net per row in TypeScript and again in SQL, and has no
   wage concept at all, so it and the app answer "how much this period" with
@@ -392,7 +471,11 @@ What is still NOT true, precisely:
   `ShiftDetails`, `WageEstimate`, `PeriodIncome`, `PredictedPaycheck`,
   `PaycheckAudit`, `TipRecord` and `ShiftWriter` still exist, several as
   wrappers over the engine rather than as rival arithmetic, but they exist.
-- **There is no money-boundary lint yet**, so nothing structurally prevents a
+- ~~**There is no money-boundary lint yet**~~ **FALSE as of 2026-09-18.**
+  `scripts/design-lint.sh` rule 4 bans money arithmetic outside the engine
+  and ratchets; it caught a `.netCents` in `CSVExporter` on 2026-09-18, which
+  is the rule working on the person who wrote it. Original text follows:
+- **(historical)** There is no money-boundary lint yet, so nothing structurally prevents a
   new screen from computing its own total. Both of those are PR 8.
 
 Three smaller guarantees arrived with it, each measured:
@@ -434,15 +517,48 @@ specified expected value, detailed in docs/METRICS.md section 3:
   a straddling 48h week (13585c vs 14716c). **Closed inside the ledger; the
   consumers that pass a pre-filtered range are PR 5.** Specifically still
   open, and now measured rather than assumed: `CalendarView` groups the
-  month `by: \.day` and asks the wrapper one day at a time, so **no calendar
-  tile carries overtime and a month does not equal the sum of its days.** On
-  a 48-hour week wholly inside October 2026 the month header reads 14716c of
-  wages and the five tiles read 13585c — 1131c apart on one screen. See
-  `MonthEqualsSumOfItsDaysTests`, whose parity assertion is wrapped in
-  `withKnownIssue` so it turns red the moment PR 5 closes it.
+  month `by: \.day` and asks the wrapper one day at a time, so no calendar
+  tile carried overtime and a month did not equal the sum of its days. On a
+  48-hour week wholly inside October 2026 the month header read 14716c of
+  wages and the five tiles read 13585c — 1131c apart on one screen.
+
+  **CLOSED by PR 5, and this bullet was left false until 2026-09-18.** It
+  stated three things that stopped being true when PR 5 merged: that the
+  divergence was open, that the tiles read 13585c, and that
+  `MonthEqualsSumOfItsDaysTests`' parity assertion was "wrapped in
+  `withKnownIssue` so it turns red the moment PR 5 closes it". Measured: the
+  assertion is NOT wrapped — there are zero `withKnownIssue` wrappers in the
+  app suite — and it asserts 19716 both ways while explicitly asserting that
+  13585 is the superseded wrong answer. The gate is armed and the divergence
+  is closed.
+
+  Found while auditing criterion 5, AFTER the three contradictions above had
+  been fixed and criterion 7 called done. So that pass was incomplete: it
+  corrected the current-state section and the two bullets it contradicted,
+  and did not sweep the older per-finding list for claims PR 5 had since
+  falsified. Recorded rather than quietly amended, because "I fixed the
+  contradictions" was itself an overclaim by one.
 - W3 the calendar-grid `firstWeekday` drives overtime bucketing.
   **CLOSED (PR 3): `PayrollCalendarPolicy.workweekStartWeekday` owns
   overtime and Settings > Calendar says the grid owns nothing else.**
+**This per-finding list has NOT been swept item by item since PR 5, and at
+least one entry was false.** Added 2026-09-18 after W2's entry above was
+found stating a closed divergence as open, quoting the superseded 13585c as
+current, and describing an armed assertion as disarmed. The entries below
+carry no CLOSED marker, and the absence of one is not evidence either way —
+several are closed and simply never updated.
+
+What IS established for all of them: each finding has a golden fixture, and
+as of 2026-09-18 all 14 fixtures GATE their money against the real engine
+(measured by mutation: bump every `*Cents` under `expected` and the suite
+fails; it was 8 of 14 before `FixtureMoneyGateTests`). So the ENGINE side of
+each finding is pinned — the engine cannot drift back to the wrong number
+without a test failing.
+
+What is NOT established: a finding about a SCREEN needs its parity suite, not
+its fixture, and that per-item audit has not been done. Do not read the
+engine-side gate as closing a screen-side finding.
+
 - N1 CalendarView subtracts a duplicated tip-out twice (8000c vs 9000c).
 - N2 StatsEngine and TipBreakdown disagree on a duplicated receipt payload.
 - N3 the API cannot fetch a nil-shiftID shift grouped by day.
