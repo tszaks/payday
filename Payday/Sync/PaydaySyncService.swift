@@ -278,7 +278,8 @@ final class PaydaySyncService {
         context: ModelContext,
         scheduleStore: PayScheduleStore,
         preferencesStore: UserPreferencesStore,
-        moveLedgerStore: MoveLedgerStore
+        moveLedgerStore: MoveLedgerStore,
+        policyStore: PolicyStore
     ) async throws -> PaydaySyncOutcome {
         let userID = try await client.auth.session.user.id
         let repository = PaydayRemoteRepository(client: client)
@@ -290,7 +291,8 @@ final class PaydaySyncService {
             userID: userID,
             scheduleStore: scheduleStore,
             preferencesStore: preferencesStore,
-            moveLedgerStore: moveLedgerStore
+            moveLedgerStore: moveLedgerStore,
+            policyStore: policyStore
         )
         let checkpoint = PaydaySyncState.snapshot(for: userID)
         // Versions are content fingerprints, not clocks — see
@@ -480,6 +482,7 @@ final class PaydaySyncService {
                 scheduleStore: scheduleStore,
                 preferencesStore: preferencesStore,
                 moveLedgerStore: moveLedgerStore,
+                policyStore: policyStore,
                 force: PaydayRemoteDate.instant(PaydaySettingsSyncClock.modifiedAt)
                     == localSettings.clientUpdatedAt
             )
@@ -570,6 +573,7 @@ final class PaydaySyncService {
         scheduleStore: PayScheduleStore,
         preferencesStore: UserPreferencesStore,
         moveLedgerStore: MoveLedgerStore,
+        policyStore: PolicyStore,
         forceRemoteRows: Bool = false,
         forceRemoteSettings: Bool = false
     ) throws -> (tipIDs: Set<UUID>, paycheckIDs: Set<UUID>) {
@@ -580,6 +584,7 @@ final class PaydaySyncService {
             scheduleStore: scheduleStore,
             preferencesStore: preferencesStore,
             moveLedgerStore: moveLedgerStore,
+            policyStore: policyStore,
             force: forceRemoteSettings
         )
         try context.save()
@@ -770,6 +775,7 @@ final class PaydaySyncService {
         scheduleStore: PayScheduleStore,
         preferencesStore: UserPreferencesStore,
         moveLedgerStore: MoveLedgerStore,
+        policyStore: PolicyStore,
         force: Bool = false
     ) {
         guard let timestamp = PaydayRemoteDate.parseInstant(settings.clientUpdatedAt),
@@ -793,6 +799,19 @@ final class PaydaySyncService {
             scheduleStore.schedule = nil
         }
         moveLedgerStore.replaceFromSupabase(settings.moveLedger.compactMapValues(PaydayRemoteDate.parseInstant))
+        // Compensation policies are the one setting this device must NOT
+        // clear on the word of a row that has nothing to say about them.
+        // Payday 1.0 is shipped and writes no `compensation_policies`, so a
+        // newer row from an old build arrives with nil; treating that as "no
+        // policies" would delete this device's rate history — the migration
+        // flags are already set, so nothing would re-create it — and put
+        // every wage back to `.rateNotSet`. An explicitly empty payload is a
+        // real state (a user who cleared their wage on another device) but it
+        // is indistinguishable from a freshly migrated device that has not
+        // uploaded yet, so both nil and empty leave the local copy alone.
+        if let remotePolicies = settings.compensationPolicies, !remotePolicies.isEmpty {
+            policyStore.replaceFromSupabase(remotePolicies)
+        }
         PaydaySettingsSyncClock.acceptRemoteTimestamp(timestamp)
     }
 

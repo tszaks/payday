@@ -12,6 +12,7 @@ struct PaydayApp: App {
     @State private var insightsStore = InsightsStore()
     @State private var preferencesStore = UserPreferencesStore()
     @State private var moveLedgerStore = MoveLedgerStore()
+    @State private var policyStore = PolicyStore()
     @State private var onboardingStore = OnboardingStateStore()
 
     init() {
@@ -32,6 +33,7 @@ struct PaydayApp: App {
                 .environment(insightsStore)
                 .environment(preferencesStore)
                 .environment(moveLedgerStore)
+                .environment(policyStore)
                 .environment(onboardingStore)
                 .preferredColorScheme(preferencesStore.appearance.colorScheme)
                 .modelContainer(SharedModelContainer.shared)
