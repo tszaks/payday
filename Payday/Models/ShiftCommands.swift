@@ -346,3 +346,24 @@ enum ShiftCommands {
         return record
     }
 }
+
+/// The copy a failure alert shows, including for "no specific failure".
+///
+/// ONE definition, deliberately. `LogTipSheet`'s alert used to inline
+/// `(saveFailure ?? .saveFailed).message`, and the test written for it
+/// rebuilt that same expression -- so changing the view would have left the
+/// test green. That is the rebuild-the-arithmetic pattern the payday-card
+/// parity test refuses: a test holding its own copy of a mapping agrees
+/// with itself while disagreeing with the screen.
+///
+/// Defined on the Optional rather than on the sheet so a test can call it
+/// without constructing a `View`, and without loosening the access on a
+/// `@State` property to suit a test.
+///
+/// Nil means the GENERIC message, and that is load-bearing: claiming a sync
+/// is in progress when it is not would be the same defect pointed the other
+/// way. An under-informative message must not be fixed by making it
+/// over-confident.
+extension Optional where Wrapped == ShiftCommands.Failure {
+    var alertMessage: String { (self ?? .saveFailed).message }
+}
