@@ -375,6 +375,221 @@ struct SyncEditUploadTests {
         }
     }
 
+    /// One tip row exactly as PostgREST hands it over: snake_case keys, a
+    /// server `updated_at` with no fractional seconds, `recorded_at` /
+    /// `clock_in` / `clock_out` with an explicit offset rather than `Z`, and a
+    /// `receipt_metrics` JSONB object. Written as literal JSON rather than
+    /// encoded from a `RemoteTipEntry` so the test cannot agree with the app
+    /// by construction.
+    private static let wireTipJSON = """
+    {
+      "id": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+      "user_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "shift_id": "ffffffff-ffff-4fff-8fff-ffffffffffff",
+      "work_date": "2026-09-05",
+      "amount_cents": 8150,
+      "kind": "credit",
+      "note": "two walk-ins on 14",
+      "recorded_at": "2026-09-05T23:14:02.5-04:00",
+      "is_double": false,
+      "hours_worked": 7.25,
+      "tip_out_cents": 940,
+      "sales_cents": 132500,
+      "shift_period": "dinner",
+      "clock_in": "2026-09-05T16:02:00-04:00",
+      "clock_out": "2026-09-05T23:17:00-04:00",
+      "server_count": 5,
+      "receipt_metrics": {
+        "earningsSchemaVersion": 2,
+        "guestCount": 61,
+        "creditCheckCount": 24,
+        "tableCount": 19,
+        "tableCountSource": "printed",
+        "netSalesCents": 132500,
+        "taxCents": 10600,
+        "printedTipPercentHundredths": 2030,
+        "cashSalesCents": 4100,
+        "gratuityFeesCents": 2200,
+        "totalAmountCents": 151400,
+        "categorySales": [
+          { "name": "Food", "quantity": 88, "netSalesCents": 98200 },
+          { "name": "Beverage", "quantity": 41, "netSalesCents": 34300 }
+        ],
+        "tipSharing": [{ "role": "Bar", "amountCents": 640 }]
+      },
+      "client_updated_at": "2026-09-06T03:19:44.128Z",
+      "deleted_at": null,
+      "updated_at": "2026-09-06T03:19:45Z"
+    }
+    """
+
+    private static let wirePaycheckJSON = """
+    {
+      "id": "11111111-1111-4111-8111-111111111111",
+      "user_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "period_start": "2026-08-24",
+      "period_end": "2026-09-06",
+      "paid_tips_cents": 41200,
+      "note": "first check after the raise",
+      "hourly_rate_cents": 1100,
+      "owed_tips_cents": 0,
+      "gross_pay_cents": 92400,
+      "net_pay_cents": 71850,
+      "regular_wages_cents": 44000,
+      "overtime_wages_cents": 0,
+      "gratuity_cents": 7200,
+      "taxes_cents": 20550,
+      "client_updated_at": "2026-09-08T14:00:00.000Z",
+      "deleted_at": null,
+      "updated_at": "2026-09-08T14:00:01Z"
+    }
+    """
+
+    /// The equality both the one-time seeding and the post-migration
+    /// checkpoint are built on: the digest the app derives LOCALLY for a row,
+    /// after that row has been decoded off the wire and written by
+    /// `reconcile`, must equal the digest derived from the server row it came
+    /// from. If it does not, every acknowledgement seeded from a server row is
+    /// wrong and the whole history re-uploads on the next sync — content
+    /// identical, so nothing corrupts, but it is a silent full upload.
+    ///
+    /// Asserted twice, on purpose. The second assertion holds the work day
+    /// fixed and so is true in every time zone: it is the one that pins the
+    /// instant canonicalization (`recorded_at` and the clock pair arrive with
+    /// a `-04:00` offset and must fingerprint as the same instants the app
+    /// re-renders in UTC) and the `receipt_metrics` JSONB round trip. The
+    /// first also folds in the day render, which agrees exactly for the
+    /// offsets `PaydayRemoteDate.stableDay` covers; the two that it does not
+    /// are pinned by `outsideTheCoveredOffsets...` and are the reason
+    /// `PaydayMigrationService` seeds its checkpoint from local rows.
+    @Test("a wire row fingerprints identically after decode and reconcile")
+    func aWireRowFingerprintsIdenticallyAfterDecodeAndReconcile() throws {
+        let decodedTip = try JSONDecoder().decode(
+            RemoteTipEntry.self,
+            from: Data(Self.wireTipJSON.utf8)
+        )
+        let decodedPaycheck = try JSONDecoder().decode(
+            RemotePaycheckRecord.self,
+            from: Data(Self.wirePaycheckJSON.utf8)
+        )
+        // Proof the fixture really is wire-shaped and not a stand-in: the
+        // nested JSONB and the offset instants all arrived.
+        #expect(decodedTip.receiptMetrics?.categorySales?.count == 2)
+        #expect(decodedTip.receiptMetrics?.tableCountSource == .printed)
+        #expect(decodedTip.clockIn == "2026-09-05T16:02:00-04:00")
+        #expect(decodedPaycheck.gratuityCents == 7_200)
+
+        let context = try makeContext()
+        _ = try PaydaySyncService.reconcileTips([decodedTip], in: context, forceRemote: true)
+        _ = try PaydaySyncService.reconcilePaychecks(
+            [decodedPaycheck],
+            in: context,
+            forceRemote: true
+        )
+        try context.save()
+
+        guard let entry = try context.fetch(FetchDescriptor<TipEntry>()).first,
+              let record = try context.fetch(FetchDescriptor<PaycheckRecord>()).first else {
+            Issue.record("the reconciled wire rows could not be refetched")
+            return
+        }
+        #expect(entry.receiptMetrics == decodedTip.receiptMetrics)
+        // The instant legs have to actually survive the offset form, or the
+        // fingerprint equality below would hold trivially with both sides nil
+        // — and Payday would be dropping `recorded_at` on every reconcile.
+        #expect(entry.recordedAt != nil)
+        #expect(entry.clockIn != nil)
+        #expect(entry.clockOut != nil)
+
+        #expect(try PaydayRowFingerprint.value(entry) == (try decodedTip.contentFingerprint))
+        #expect(
+            try PaydayRowFingerprint.value(record) == (try decodedPaycheck.contentFingerprint)
+        )
+
+        let localTip = RemoteTipEntry(entry: entry, userID: Self.userID)
+        let localPaycheck = RemotePaycheckRecord(record: record, userID: Self.userID)
+        #expect(
+            try localTip.contentFingerprint(workDate: "2026-09-05")
+                == (try decodedTip.contentFingerprint(workDate: "2026-09-05"))
+        )
+        #expect(
+            try localPaycheck.contentFingerprint(periodStart: "2026-08-24", periodEnd: "2026-09-06")
+                == (try decodedPaycheck.contentFingerprint(
+                    periodStart: "2026-08-24",
+                    periodEnd: "2026-09-06"
+                ))
+        )
+    }
+
+    /// Why `PaydayMigrationService` seeds its checkpoint from the LOCAL rows
+    /// the reconcile just wrote instead of from the server rows they came
+    /// from, even though those rows hold identical content.
+    ///
+    /// Outside (UTC-10:30, UTC+13:30] the server's own digest and the app's
+    /// local digest render the same work day differently — the server holds
+    /// the day its client wrote, `stableDay` names the adjacent one — so a
+    /// checkpoint seeded from the server side acknowledges a version no local
+    /// row will ever produce, and the first sync after migrating re-uploads
+    /// every row in the history.
+    ///
+    /// Built by placing the row's stored instant at Pago Pago midnight
+    /// directly, which is what `reconcileTips` leaves behind on a device in
+    /// that zone. The zone is not switched process-wide: this suite runs
+    /// beside ~600 tests reading `Calendar.current`.
+    @Test("the post-migration checkpoint acknowledges every row in every time zone")
+    func thePostMigrationCheckpointAcknowledgesEveryRowInEveryTimeZone() throws {
+        let workDay = DateComponents(year: 2026, month: 9, day: 5)
+        let storedInPagoPago = try midnight(workDay, in: "Pacific/Pago_Pago")
+        let context = try makeContext()
+        let entry = TipEntry(
+            date: storedInPagoPago,
+            amountCents: 8_150,
+            kind: .credit,
+            recordedAt: storedInPagoPago
+        )
+        context.insert(entry)
+        try context.save()
+
+        // The server's copy of that same row: identical content, `work_date`
+        // as the writing device's own calendar rendered it.
+        let asServerHoldsIt = RemoteTipEntry(entry: entry, userID: Self.userID)
+        let wireDay = PaydayRemoteDate.day(
+            storedInPagoPago,
+            calendar: try calendar(in: "Pacific/Pago_Pago")
+        )
+        #expect(wireDay == "2026-09-05")
+        #expect(PaydayRemoteDate.stableDay(storedInPagoPago) == "2026-09-06")
+
+        let seededFromServer = [
+            entry.id: try asServerHoldsIt.contentFingerprint(workDate: wireDay)
+        ]
+        let seededFromLocalRows = try PaydayRowFingerprint.values(
+            try context.fetch(FetchDescriptor<TipEntry>())
+        )
+        let current = try tipVersions(in: context)
+
+        // The bug: a server-seeded checkpoint puts an untouched row straight
+        // back into the upload set.
+        #expect(PaydaySyncState.changedIDs(
+            current: current,
+            acknowledged: seededFromServer
+        ) == [entry.id])
+        // What `PaydayMigrationService` saves now.
+        #expect(PaydaySyncState.changedIDs(
+            current: current,
+            acknowledged: seededFromLocalRows
+        ).isEmpty)
+        // And it is still a real acknowledgement, not a blanket one: a genuine
+        // edit to the same row uploads.
+        entry.amountCents = 9_150
+        entry.touch()
+        try context.save()
+        #expect(PaydaySyncState.changedIDs(
+            current: try tipVersions(in: context),
+            acknowledged: seededFromLocalRows
+        ) == [entry.id])
+    }
+
     /// Where the device's delta cursor stood, and the two server stamps that
     /// sit either side of it.
     private static let pulledThrough = PaydaySyncState.ServerCursor(

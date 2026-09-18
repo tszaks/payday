@@ -54,6 +54,14 @@ enum PaydaySyncState {
         /// beside them, unused for change detection, so a build rolled back
         /// to the timestamp scheme still finds a checkpoint it understands
         /// instead of re-uploading everything.
+        ///
+        /// Four per-row dictionaries is the cost of that rollback safety net,
+        /// re-encoded into the app-group defaults on every sync. Kept rather
+        /// than trimmed to two because the deployed `upsert_tip_entries`
+        /// carries no clock predicate, so the full re-upload a rolled-back
+        /// build would perform could overwrite a newer edit from another
+        /// device. The size is paid for on the fingerprint side instead:
+        /// `PaydayMigrationHash.fingerprint` stores 16 hex characters, not 64.
         var tipContentFingerprint: [UUID: String]
         var paycheckContentFingerprint: [UUID: String]
         var versioningScheme: Int
