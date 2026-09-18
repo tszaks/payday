@@ -55,13 +55,21 @@ targets:
         CODE_SIGN_ENTITLEMENTS: Payday/Payday.entitlements
         SUPABASE_URL: https://bkkxunqqfkogxibyyjmc.supabase.co
         SUPABASE_PUBLISHABLE_KEY: sb_publishable_LLozFUScbNbnXuGXVwSLSQ_Brbpy1RD
-        # A Sentry DSN is a WRITE-ONLY ingest key, designed to be embedded in
-        # a shipped client, so it belongs here next to the publishable key
-        # rather than in the gitignored Secrets.local.xcconfig where the
-        # OpenAI key lives. Blank until the Sentry project exists: with no
-        # value, PaydayCrashReporting.start() does nothing at all -- no SDK,
-        # no network, no disk. See docs/SENTRY.md.
-        SENTRY_DSN: ""
+      # RELEASE ONLY, deliberately. A Sentry DSN is a WRITE-ONLY ingest key
+      # designed to be embedded in a shipped client, so committing it is normal
+      # practice and it belongs here next to the publishable key rather than in
+      # the gitignored Secrets.local.xcconfig where the real OpenAI secret
+      # lives. Those are different kinds of thing.
+      #
+      # It is scoped to Release rather than base so that Debug builds, unit
+      # tests and CI have NO DSN and are therefore completely inert -- no SDK,
+      # no network, no disk -- which is what PaydayCrashReporting.start()
+      # already keys off. Putting it in base would send every crash from every
+      # local debug run into the same project and bury the production signal
+      # this exists to read. See docs/SENTRY.md.
+      configs:
+        Release:
+          SENTRY_DSN: https://79f515cb21d214011bf6ae135fd38be1@o4510716101459968.ingest.us.sentry.io/4512107414028288
     info:
       path: Generated/Payday-Info.plist
       properties:
