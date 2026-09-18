@@ -37,11 +37,24 @@ struct InsightsView: View {
             // new calendar policy changes which civil day a late shift lands
             // on; without this the cache would keep serving figures computed
             // under the old zone until the entries happened to change.
-            payrollTimeZone: policyStore.payrollTimeZone.identifier
+            payrollTimeZone: policyStore.payrollTimeZone.identifier,
+            // In the key for the same reason the zone is: both are INPUTS to
+            // the chart's bars now, so a rate change has to invalidate the
+            // cache rather than wait for the entries to move. Wave 2 deletes
+            // this whole key in favour of `SnapshotStamp` (PR 5 adapter
+            // contract, rule 3); it cannot go yet because the key also
+            // covers the StatsEngine facts this screen still computes.
+            policies: policyStore.policies
         )
         let pageFacts = pageFactsCache?.key == key
             ? pageFactsCache!.facts
-            : InsightsPageFacts(allEntries: allEntries, ledger: moveLedgerStore.firstShownAt, payrollTimeZone: policyStore.payrollTimeZone, now: currentDay)
+            : InsightsPageFacts(
+                allEntries: allEntries,
+                ledger: moveLedgerStore.firstShownAt,
+                payrollTimeZone: policyStore.payrollTimeZone,
+                policies: policyStore.policies,
+                now: currentDay
+            )
         NavigationStack {
             Group {
                 if let facts = pageFacts.facts {
@@ -91,7 +104,7 @@ struct InsightsView: View {
     private func resultList(_ facts: InsightsFacts, pageFacts: InsightsPageFacts) -> some View {
         let moves = pageFacts.moves
         let followUps = pageFacts.followUps
-        let recentNights = pageFacts.recentNights
+        let chartFacts = pageFacts.chartFacts
         let plan = pageFacts.plan
         return ScrollViewReader { proxy in
         ScrollView {
@@ -220,7 +233,7 @@ struct InsightsView: View {
                 // keeps its card while everything else here goes flat. The
                 // chart owns its own label (it doubles as the scrub
                 // readout), so no separate header here.
-                NightlyEarningsChart(nights: recentNights)
+                NightlyEarningsChart(facts: chartFacts)
                     .paydayCard()
 
                 // A description of the week ahead at the reader's existing
@@ -484,10 +497,18 @@ private struct InsightsPageFacts {
     let facts: InsightsFacts?
     let moves: [Move]
     let followUps: [FollowUp]
-    /// Full history. NightlyEarningsChart owns progressive aggregation, so
-    /// more history produces fewer, more meaningful weekly/monthly/yearly
-    /// bars instead of an ever-denser row of daily marks.
-    let recentNights: [(date: Date, cents: Int)]
+    /// Full history, one engine query per bar. NightlyEarningsChart owns
+    /// progressive aggregation, so more history produces fewer, more
+    /// meaningful weekly/monthly/yearly bars instead of an ever-denser row
+    /// of daily marks.
+    ///
+    /// PR 5 wave 0: the bars used to be `StatsEngine.nightlyTotals`, which
+    /// is `nonWageEarnings` — so under a wage-inclusive page they were
+    /// short by every hour worked and had no way to say so (the M1 fixture's
+    /// defect). They are now `snapshot.day(_:)`, wage-inclusive and carrying
+    /// their own completeness. Everything ELSE on this screen is group
+    /// 2.6/2.7, WAVE 2, and still reads `StatsEngine`.
+    let chartFacts: EarningsChartFacts
     /// What unlocks next, and how close — see UnlockProgress.
     let unlocks: [Unlock]
     let shiftCount: Int
@@ -502,13 +523,34 @@ private struct InsightsPageFacts {
     /// facts and never in a view body.
     let forecastAccuracy: StatsEngine.ForecastAccuracy?
 
-    init(allEntries: [TipEntry], ledger: [String: Date], payrollTimeZone: TimeZone, now: Date = .now) {
+    init(
+        allEntries: [TipEntry],
+        ledger: [String: Date],
+        payrollTimeZone: TimeZone,
+        policies: CompensationPolicies,
+        now: Date = .now
+    ) {
         let records = allEntries.map(TipRecord.init)
         let statsEngine = StatsEngine(payrollTimeZone: payrollTimeZone, records: records)
         facts = statsEngine.insightsFacts(referenceDate: now)
         moves = statsEngine.moves(referenceDate: now)
         followUps = statsEngine.followUps(ledger: ledger, referenceDate: now)
-        recentNights = statsEngine.nightlyTotals()
+        chartFacts = EarningsChartFacts(
+            // The USER'S rate and workweek history, effective dates
+            // intact. This used to read
+            // `policyStore.latestCalendarPolicy?.workweekStartWeekday` while
+            // Dashboard and Period detail read `schedule?.firstWeekday` —
+            // two independent Settings controls, so setting them differently
+            // made this chart allocate overtime across different weeks than
+            // Period detail's chart did over the same days.
+            wholeOf: LegacySnapshotBridge.snapshot(
+                entries: allEntries,
+                policies: policies,
+                payrollTimeZone: payrollTimeZone,
+                asOf: now
+            ),
+            timeZone: payrollTimeZone
+        )
         // Use the same rotation PLAN names as "your usual nights."
         unlocks = UnlockProgress.nextUnlocks(
             records: records,
@@ -527,6 +569,10 @@ private struct InsightsPageFactsKey: Hashable {
     let ledgerRevision: Int
     let currentDay: Date
     let payrollTimeZone: String
+    /// The whole policy value, not a scalar view of it: a dated raise or a
+    /// queued workweek change moves every bar without moving
+    /// `currentHourlyRateCents`.
+    let policies: CompensationPolicies
 }
 
 private struct InsightsPageFactsCache {
