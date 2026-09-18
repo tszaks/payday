@@ -443,6 +443,25 @@ struct EarningsStorePreviewTests {
         #expect(snapshot.shifts.count == 2)
     }
 
+    /// The widget and the Siri intent must not read `$0` off a purged
+    /// cache either: `buildOnce` applies the same rule as the live pipeline.
+    @Test("buildOnce refuses a wiped cache rather than returning zeros")
+    func buildOnceRefusesAWipedCache() {
+        var empty = w1Inputs()
+        empty.shifts = []
+        let source = FakeSource(inputs: empty, legacyTipEntryCount: 42)
+        let result = EarningsStore.buildOnce(source: source, shiftsAreAuthoritative: true)
+        guard case .failure(.shiftCacheWiped) = result else {
+            Issue.record("expected .shiftCacheWiped, got \(result)")
+            return
+        }
+        // And before the conversion the same shape is ordinary.
+        guard case .success = EarningsStore.buildOnce(source: source) else {
+            Issue.record("pre-conversion emptiness must still build")
+            return
+        }
+    }
+
     @Test("buildOnce reports a fetch failure instead of an empty snapshot")
     func buildOnceFailsLoudly() {
         let source = FakeSource()
