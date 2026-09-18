@@ -73,6 +73,15 @@ struct RenderFactsPerformanceTests {
     /// fail, because the cause is systemic and the others passed on margin
     /// rather than on merit. The 1.0s Insights budget is untouched; if it
     /// starts creeping, the same reasoning applies to it.
+    ///
+    /// THIS RAISE IS A STOPGAP, and the real fix is scheduled rather than
+    /// implied: see docs/design/FOLLOWUP-release-perf-budget.md. PaydayCore's
+    /// thesis is moving hot loops onto generic engine paths, so every future
+    /// slice will slow Debug the same way and pass Release, and a Debug budget
+    /// raised once per slice ends up catching nothing. The follow-up moves the
+    /// tier to a Release-optimized measurement so the gate measures what users
+    /// feel. If the next genericization pushes Debug past 0.85s, that is the
+    /// follow-up becoming due -- not another number to move.
     static let budgetScale: Double = ProcessInfo.processInfo.environment["CI"] == nil ? 1 : 4
 
     /// Budget in seconds, scaled for the host, with the raw limit kept for the
