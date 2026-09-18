@@ -1322,97 +1322,55 @@ function money(row: JsonObject, field: string): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
-function tipFacts(
-  row: JsonObject,
-): { voluntary: number; gratuity: number; gross: number; net: number } {
-  const amount = money(row, "amount_cents");
-  const metrics = isRecord(row.receipt_metrics) ? row.receipt_metrics : {};
-  const gratuity = money(metrics, "gratuityFeesCents");
-  const version = money(metrics, "earningsSchemaVersion") || 1;
-  const voluntary = version >= 2 ? amount : Math.max(0, amount - gratuity);
-  const gross = voluntary + gratuity;
+/// A derived shift, as the API reports it.
+///
+/// **Reads, never computes.** This replaced `tipFacts` and `groupShifts`,
+/// which together were a THIRD implementation of the grouping and net rules
+/// after the Swift one and the SQL one -- and not a copy of either. They
+/// dated a shift by its LATEST row while iOS used the earliest, resolved
+/// shift-level detail as `credit ?? cash ?? canonical` (the pre-S3 rule that
+/// correction D6 replaced), and picked the receipt owner as "credit if it has
+/// metrics, else cash" rather than by the metrics rank the deriver uses, so a
+/// payload on a group's second credit row was invisible to them.
+///
+/// `public.shifts` already holds the deriver's answer, with
+/// `gratuity_fees_cents` and `non_wage_earnings_cents` as GENERATED columns.
+/// So the net rule now has exactly one implementation per language and this
+/// function does arithmetic in only one place: `gross`, which is the net plus
+/// the tip-out back, because "before tip-out" is a presentation of the same
+/// stored figure rather than a second derivation of it.
+function shiftResponse(row: JsonObject): JsonObject {
+  const netCents = money(row, "non_wage_earnings_cents");
+  const tipOutCents = money(row, "tip_out_cents");
   return {
-    voluntary,
-    gratuity,
-    gross,
-    net: gross - money(row, "tip_out_cents"),
+    id: row.id,
+    work_date: row.work_date,
+    shift_period: row.shift_period ?? null,
+    recorded_at: row.recorded_at ?? null,
+    cash_tip_cents: money(row, "cash_tips_cents"),
+    credit_tip_cents: money(row, "credit_tips_cents"),
+    gratuity_cents: money(row, "gratuity_fees_cents"),
+    gross_tip_earnings_cents: netCents + tipOutCents,
+    tip_out_cents: tipOutCents,
+    net_tip_earnings_cents: netCents,
+    sales_cents: row.sales_cents ?? null,
+    hours_worked: row.hours_worked ?? null,
+    clock_in: row.clock_in ?? null,
+    clock_out: row.clock_out ?? null,
+    server_count: row.server_count ?? null,
+    receipt_metrics: row.receipt_metrics ?? null,
+    note: row.note ?? null,
+    // Replaces the old `tip_entries` array, and this is a deliberate contract
+    // change rather than an omission. A shift is no longer assembled from
+    // rows at read time, so embedding them would be re-deriving the thing
+    // this slice exists to stop. Provenance is what a caller actually needed
+    // them for -- reconciling an id it obtained before the conversion -- and
+    // `payday_agent_shift_by_id` accepts any of these ids directly.
+    legacy_entry_ids: Array.isArray(row.legacy_entry_ids)
+      ? row.legacy_entry_ids
+      : [],
+    source: row.source ?? null,
   };
-}
-
-function groupShifts(rows: JsonObject[]): JsonObject[] {
-  const groups = new Map<string, JsonObject[]>();
-  for (const row of rows) {
-    const key = typeof row.shift_id === "string"
-      ? row.shift_id
-      : row.id as string;
-    groups.set(key, [...(groups.get(key) ?? []), row]);
-  }
-  return Array.from(groups, ([shiftID, groupedEntries]) => {
-    const entries = [...groupedEntries].sort((left, right) =>
-      String(left.id).localeCompare(String(right.id))
-    );
-    const credit = entries.find((row) => row.kind === "credit");
-    const cash = entries.find((row) => row.kind === "cash");
-    const canonical = credit ?? cash ?? entries[0];
-    const workDate = entries.reduce(
-      (latest, row) =>
-        typeof row.work_date === "string" && row.work_date > latest
-          ? row.work_date
-          : latest,
-      "",
-    );
-    const metricsOwner = credit?.receipt_metrics
-      ? credit
-      : cash?.receipt_metrics
-      ? cash
-      : undefined;
-    const detail = (field: string): unknown =>
-      credit?.[field] ?? cash?.[field] ?? canonical[field] ?? null;
-    const facts = entries.map((row) =>
-      tipFacts({
-        ...row,
-        receipt_metrics: row.id === metricsOwner?.id
-          ? metricsOwner?.receipt_metrics
-          : null,
-      })
-    );
-    return {
-      id: shiftID,
-      work_date: workDate || canonical.work_date,
-      shift_period: detail("shift_period"),
-      recorded_at: detail("recorded_at"),
-      cash_tip_cents: entries.reduce(
-        (sum, row, index) =>
-          sum + (row.kind === "cash" ? facts[index].voluntary : 0),
-        0,
-      ),
-      credit_tip_cents: entries.reduce(
-        (sum, row, index) =>
-          sum + (row.kind === "credit" ? facts[index].voluntary : 0),
-        0,
-      ),
-      gratuity_cents: facts.reduce((sum, item) => sum + item.gratuity, 0),
-      gross_tip_earnings_cents: facts.reduce(
-        (sum, item) => sum + item.gross,
-        0,
-      ),
-      tip_out_cents: Number(detail("tip_out_cents") ?? 0),
-      net_tip_earnings_cents: facts.reduce((sum, item) => sum + item.gross, 0) -
-        Number(detail("tip_out_cents") ?? 0),
-      sales_cents: detail("sales_cents"),
-      hours_worked: detail("hours_worked"),
-      clock_in: detail("clock_in"),
-      clock_out: detail("clock_out"),
-      server_count: detail("server_count"),
-      receipt_metrics: detail("receipt_metrics"),
-      note: detail("note"),
-      tip_entries: entries.map(stripOwner),
-    };
-  }).sort((a, b) =>
-    String(b.work_date).localeCompare(String(a.work_date)) ||
-    String(b.recorded_at ?? "").localeCompare(String(a.recorded_at ?? "")) ||
-    String(b.id).localeCompare(String(a.id))
-  );
 }
 
 async function summary(
@@ -1467,7 +1425,7 @@ async function listShifts(
   );
   const cursor = shiftCursor(args.cursor);
   const { data, error } = await ctx.admin.rpc(
-    "payday_agent_recent_tip_entries",
+    "payday_agent_recent_shifts",
     {
       p_user_id: ctx.key.user_id,
       p_start_date: start ?? null,
@@ -1485,7 +1443,9 @@ async function listShifts(
       "Unable to list shifts.",
     );
   }
-  const shifts = groupShifts((data ?? []) as JsonObject[]);
+  // One row per shift already, ordered by the query. No grouping, no
+  // re-sorting, no arithmetic.
+  const shifts = ((data ?? []) as JsonObject[]).map(shiftResponse);
   const hasMore = shifts.length > limit;
   const page = shifts.slice(0, limit);
   const last = page.at(-1);
@@ -1541,15 +1501,24 @@ async function getShift(
 ): Promise<JsonObject> {
   requireScope(ctx, "read");
   const id = uuid(idValue, "shift_id");
-  const { data, error } = await ctx.admin.from("tip_entries").select("*").eq(
-    "user_id",
-    ctx.key.user_id,
-  ).eq("shift_id", id).is("deleted_at", null);
+  // ALSO FIXES the shift_id-only filter this replaced. It matched
+  // `.eq("shift_id", id)` while every other path used
+  // `coalesce(shift_id, id)`, so a shift whose legacy rows carried no
+  // shift_id -- which the old listing reported under the ROW's id -- was
+  // invisible here. A caller could list a shift and then 404 fetching it.
+  //
+  // The RPC tries the shift's own id first and falls back to the legacy ids
+  // it absorbed, so an id obtained before the conversion still resolves.
+  const { data, error } = await ctx.admin.rpc("payday_agent_shift_by_id", {
+    p_user_id: ctx.key.user_id,
+    p_id: id,
+  });
   if (error) {
     throw new ApiError(500, "database_error", "Unable to retrieve the shift.");
   }
-  if (!data?.length) throw new ApiError(404, "not_found", "Shift not found.");
-  return { data: groupShifts(data as JsonObject[])[0] };
+  const rows = (data ?? []) as JsonObject[];
+  if (!rows.length) throw new ApiError(404, "not_found", "Shift not found.");
+  return { data: shiftResponse(rows[0]) };
 }
 
 async function listKeys(ctx: RequestContext): Promise<JsonObject> {
@@ -3139,13 +3108,12 @@ export const testing = {
   dateOnly,
   encodeAuditCursor,
   encodeShiftCursor,
-  groupShifts,
+  shiftResponse,
   moveLedger,
   publicPath,
   receiptMetrics,
   shiftCursor,
   timestamp,
-  tipFacts,
 };
 
 function handleREST(

@@ -97,116 +97,140 @@ Deno.test("move ledger requires timestamp string values", () => {
   );
 });
 
-Deno.test("shift summaries preserve v2 gratuity and canonical tip-out", () => {
-  const rows = [
-    {
-      id: "11111111-1111-4111-8111-111111111111",
-      user_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-      shift_id: "33333333-3333-4333-8333-333333333333",
-      work_date: "2026-08-31",
-      kind: "cash",
-      amount_cents: 1000,
-      version: 1,
-    },
-    {
-      id: "22222222-2222-4222-8222-222222222222",
-      user_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-      shift_id: "33333333-3333-4333-8333-333333333333",
-      work_date: "2026-08-31",
-      kind: "credit",
-      amount_cents: 2000,
-      tip_out_cents: 300,
-      receipt_metrics: {
-        earningsSchemaVersion: 2,
-        gratuityFeesCents: 500,
-      },
-      version: 1,
-    },
-  ];
-  const shift = testing.groupShifts(rows)[0];
+// These five tests used to exercise `groupShifts` and `tipFacts`, the API's
+// own grouping and net implementation. That implementation is deleted: the
+// deriver already answered, and a third copy of the net rule was the problem
+// rather than the coverage.
+//
+// The claims that are still THIS layer's job are kept below, now against
+// `shiftResponse`. Two are deliberately gone, and both were pinning
+// behaviour that was wrong:
+//
+//   "shift summaries use the database cursor's max work date" asserted that a
+//   shift is dated by its LATEST row. iOS dates it by the earliest, so that
+//   test pinned the divergence rather than catching it. Where a shift's day
+//   comes from is now the deriver's, and shift_deriver_test.sql owns it.
+//
+//   "shift details fall back field by field from credit to cash" asserted the
+//   pre-S3 `credit ?? cash` rule that correction D6 replaced with a detail
+//   rank. Also the deriver's, also tested in SQL.
+
+Deno.test("a shift response reads the derived money and never recomputes it", () => {
+  const shift = testing.shiftResponse({
+    id: "33333333-3333-4333-8333-333333333333",
+    work_date: "2026-08-31",
+    cash_tips_cents: 1000,
+    credit_tips_cents: 2000,
+    gratuity_fees_cents: 500,
+    tip_out_cents: 300,
+    // The generated column: cash + credit + gratuity - tip_out.
+    non_wage_earnings_cents: 3200,
+    receipt_metrics: { earningsSchemaVersion: 2, gratuityFeesCents: 500 },
+    legacy_entry_ids: [],
+    source: "device",
+  });
   assertEquals(shift.cash_tip_cents, 1000);
   assertEquals(shift.credit_tip_cents, 2000);
   assertEquals(shift.gratuity_cents, 500);
-  assertEquals(shift.gross_tip_earnings_cents, 3500);
   assertEquals(shift.net_tip_earnings_cents, 3200);
-  assertEquals(
-    (shift.tip_entries as Record<string, unknown>[])[0].user_id,
-    undefined,
-  );
-});
-
-Deno.test("legacy combined tips do not double-count gratuity", () => {
-  assertEquals(
-    testing.tipFacts({
-      amount_cents: 2500,
-      receipt_metrics: { gratuityFeesCents: 500 },
-    }),
-    { voluntary: 2000, gratuity: 500, gross: 2500, net: 2500 },
-  );
-});
-
-Deno.test("shift summaries use exactly one receipt-metrics owner", () => {
-  const metrics = { earningsSchemaVersion: 2, gratuityFeesCents: 500 };
-  const shift = testing.groupShifts([{
-    id: "11111111-1111-4111-8111-111111111111",
-    shift_id: "33333333-3333-4333-8333-333333333333",
-    work_date: "2026-08-31",
-    kind: "cash",
-    amount_cents: 1000,
-    receipt_metrics: metrics,
-  }, {
-    id: "22222222-2222-4222-8222-222222222222",
-    shift_id: "33333333-3333-4333-8333-333333333333",
-    work_date: "2026-08-31",
-    kind: "credit",
-    amount_cents: 2000,
-    receipt_metrics: metrics,
-  }])[0];
-  assertEquals(shift.gratuity_cents, 500);
+  // The one arithmetic left in this layer: the net plus the tip-out back.
+  // "Before tip-out" is a presentation of the stored figure, not a second
+  // derivation of it.
   assertEquals(shift.gross_tip_earnings_cents, 3500);
 });
 
-Deno.test("shift summaries use the database cursor's max work date", () => {
-  const shift = testing.groupShifts([{
-    id: "22222222-2222-4222-8222-222222222222",
-    shift_id: "33333333-3333-4333-8333-333333333333",
+Deno.test("the gross is derived from the stored net, not from the components", () => {
+  // Deliberately inconsistent input: the components would give 3500 but the
+  // stored net says 9000. The response must follow the STORED figure, because
+  // that is the deriver's answer and this layer does not get a vote. If this
+  // ever reports 3500 again, someone has reintroduced the component sum.
+  const shift = testing.shiftResponse({
+    id: "33333333-3333-4333-8333-333333333333",
     work_date: "2026-08-31",
-    kind: "credit",
-    amount_cents: 2000,
-  }, {
-    id: "11111111-1111-4111-8111-111111111111",
-    shift_id: "33333333-3333-4333-8333-333333333333",
-    work_date: "2026-09-01",
-    kind: "cash",
-    amount_cents: 1000,
-  }])[0];
+    cash_tips_cents: 1000,
+    credit_tips_cents: 2000,
+    gratuity_fees_cents: 500,
+    tip_out_cents: 300,
+    non_wage_earnings_cents: 9000,
+    legacy_entry_ids: [],
+  });
+  assertEquals(shift.net_tip_earnings_cents, 9000);
+  assertEquals(shift.gross_tip_earnings_cents, 9300);
+});
 
-  assertEquals(shift.id, "33333333-3333-4333-8333-333333333333");
-  assertEquals(shift.work_date, "2026-09-01");
-  assertEquals(
-    (shift.tip_entries as Record<string, unknown>[]).map((row) => row.id),
-    [
+Deno.test("a shift response never leaks the owning account or the idempotency key", () => {
+  const shift = testing.shiftResponse({
+    id: "33333333-3333-4333-8333-333333333333",
+    user_id: "11111111-1111-4111-8111-111111111111",
+    agent_idempotency_key: "secret-key",
+    work_date: "2026-08-31",
+    cash_tips_cents: 1000,
+    credit_tips_cents: 0,
+    gratuity_fees_cents: 0,
+    tip_out_cents: 0,
+    non_wage_earnings_cents: 1000,
+    legacy_entry_ids: [],
+  });
+  // The response is built from a named field list rather than by spreading the
+  // row and deleting keys, so a column added to public.shifts cannot leak by
+  // default. That is why this asserts absence rather than trusting a filter.
+  assertEquals(shift.user_id, undefined);
+  assertEquals(shift.agent_idempotency_key, undefined);
+});
+
+Deno.test("provenance replaces the embedded rows, and is always an array", () => {
+  const withProvenance = testing.shiftResponse({
+    id: "33333333-3333-4333-8333-333333333333",
+    work_date: "2026-08-31",
+    cash_tips_cents: 0,
+    credit_tips_cents: 0,
+    gratuity_fees_cents: 0,
+    tip_out_cents: 0,
+    non_wage_earnings_cents: 0,
+    legacy_entry_ids: [
       "11111111-1111-4111-8111-111111111111",
       "22222222-2222-4222-8222-222222222222",
     ],
-  );
+    source: "migration",
+  });
+  assertEquals((withProvenance.legacy_entry_ids as string[]).length, 2);
+  assertEquals(withProvenance.source, "migration");
+  // `tip_entries` is gone on purpose: a shift is no longer assembled from rows
+  // at read time, so embedding them would re-derive the thing this slice
+  // removes. Provenance is what a caller needed them for, and
+  // payday_agent_shift_by_id accepts any of these ids directly.
+  assertEquals(withProvenance.tip_entries, undefined);
+
+  // A natively authored shift has none, and must still report an array rather
+  // than null, so a caller can iterate without a guard.
+  const native = testing.shiftResponse({
+    id: "44444444-4444-4444-8444-444444444444",
+    work_date: "2026-08-31",
+    cash_tips_cents: 0,
+    credit_tips_cents: 0,
+    gratuity_fees_cents: 0,
+    tip_out_cents: 0,
+    non_wage_earnings_cents: 0,
+  });
+  assertEquals(native.legacy_entry_ids, []);
 });
 
-Deno.test("shift details fall back field by field from credit to cash", () => {
-  const shift = testing.groupShifts([{
-    id: "11111111-1111-4111-8111-111111111111",
-    shift_id: "33333333-3333-4333-8333-333333333333",
+Deno.test("absent optional fields report null rather than being omitted", () => {
+  const shift = testing.shiftResponse({
+    id: "33333333-3333-4333-8333-333333333333",
     work_date: "2026-08-31",
-    kind: "cash",
-    amount_cents: 1000,
-    hours_worked: 6.5,
-  }, {
-    id: "22222222-2222-4222-8222-222222222222",
-    shift_id: "33333333-3333-4333-8333-333333333333",
-    work_date: "2026-08-31",
-    kind: "credit",
-    amount_cents: 2000,
-    hours_worked: null,
-  }])[0];
-  assertEquals(shift.hours_worked, 6.5);
+    cash_tips_cents: 0,
+    credit_tips_cents: 0,
+    gratuity_fees_cents: 0,
+    tip_out_cents: 0,
+    non_wage_earnings_cents: 0,
+  });
+  // Explicit nulls, not missing keys: a consumer reading `shift.hours_worked`
+  // should get null rather than undefined, so "not recorded" and "field no
+  // longer exists" stay distinguishable.
+  for (const field of ["shift_period", "recorded_at", "sales_cents",
+                       "hours_worked", "clock_in", "clock_out",
+                       "server_count", "receipt_metrics", "note"]) {
+    assertEquals(shift[field], null, `${field} must be null, not omitted`);
+  }
 });
