@@ -51,6 +51,16 @@ Status legend: `[ ]` not yet, `[x]` green with evidence recorded below it, `[H]`
 ### Shadow comparison
 - [ ] Every inventory number computed by the pre-PaydayCore path and by the engine over the same store; every difference maps to a named fixture ID. No unexplained cent.
 
+## Tracked known-failing tests (each must be deleted, not skipped)
+
+A parity test written before its fix is the honest way to hold the line: it names the bug, names the PR that closes it, and fails until then. Every entry here must be GONE at release, with its `withKnownIssue` wrapper deleted rather than its assertion weakened.
+
+| Test | Why it fails today | Closes in |
+|---|---|---|
+| `EarningsParityTests` (the calendar-day parity assertion, `PaydayTests/EarningsParityTests.swift:235`) | `CalendarView` slices the ledger per day (`CalendarView.swift:49`), so a week's overtime never reaches a tile. This is the audit's original bug, now pinned by a test instead of a document. | PR 5, when every consumer reads `EarningsSnapshot` over the whole dataset |
+
+- [ ] Zero entries remain in this table, and `grep -rn withKnownIssue PaydayTests/` returns nothing.
+
 ## Human lines — Tyler only
 
 - [H] Clean install on a real device, release configuration, exercised for a full logging session.
