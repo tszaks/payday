@@ -47,6 +47,9 @@ struct ShiftAuthorityLegTests {
         return id
     }
 
+    /// A fully converted, unrolled, conserved account.
+    static let readyJSON = #"{"user_id":"00000000-0000-0000-0000-0000000000a1","migrated_at":"2026-09-18T12:00:00.000Z","rollback_at":null,"conservation_failed_at":null,"remaining_group_count":0}"#
+
     /// A converted account the server has since rolled back.
     static let rolledBackJSON = #"{"user_id":"00000000-0000-0000-0000-0000000000a1","migrated_at":"2026-09-18T12:00:00.000Z","rollback_at":"2026-09-18T13:00:00.000Z","conservation_failed_at":null,"remaining_group_count":0}"#
 
@@ -66,7 +69,7 @@ struct ShiftAuthorityLegTests {
          "conservation_failed_at":null,
          "remaining_group_count":0}
         """)
-        #expect(ShiftReadAuthority.isAuthoritative(row.authorityState))
+        #expect(ShiftReadAuthority.isAuthoritative(try row.authorityState()))
     }
 
     /// Each column that must REFUSE authority, parsed from real JSON rather
@@ -87,7 +90,7 @@ struct ShiftAuthorityLegTests {
     )
     func refusingColumnsRefuseAfterDecode(_ json: String) throws {
         let row = try decode(json)
-        #expect(!ShiftReadAuthority.isAuthoritative(row.authorityState))
+        #expect(!ShiftReadAuthority.isAuthoritative(try row.authorityState()))
     }
 
     /// The timestamps actually PARSE. Without this the suite above passes for
@@ -102,7 +105,7 @@ struct ShiftAuthorityLegTests {
          "conservation_failed_at":"2026-09-18T14:00:00.000Z",
          "remaining_group_count":0}
         """)
-        let state = row.authorityState
+        let state = try row.authorityState()
         #expect(state.migratedAt != nil, "migrated_at must parse")
         #expect(state.rollbackAt != nil, "rollback_at must parse, or a rollback reads as absent")
         #expect(state.conservationFailedAt != nil, "conservation_failed_at must parse")
@@ -236,38 +239,145 @@ struct ShiftAuthorityLegTests {
     func realWithdrawalStillDemotes() throws {
         let id = account(authoritative: true)
         let row = try decode(Self.rolledBackJSON)
-        let outcome = PaydaySyncState.applyShiftAuthority(row.authorityState, for: id)
+        let outcome = PaydaySyncState.applyShiftAuthority(try row.authorityState(), for: id)
         #expect(outcome == .demote)
         #expect(!PaydaySyncState.shiftsAreAuthoritative(for: id),
                 "a withdrawal on a real row must take effect, sheet or no sheet")
     }
 
-    /// The wiring itself, asserted at the SOURCE.
-    ///
-    /// The tests above prove the writer's round trip. They cannot prove that
-    /// `synchronize` maps `.deferPromotion` onto `requiresFollowUpSync`,
-    /// because reaching `synchronize` needs a live Supabase session -- and a
-    /// test that only asserts `.deferPromotion` came back would pass over a
-    /// caller that drops it, which is exactly the liveness bug.
-    ///
-    /// So this reads the source. Crude, and deliberately preferred over a
-    /// network mock: the mock would assert my model of the client rather than
-    /// the code, and the property at risk is one line of wiring.
-    @Test("synchronize feeds a deferred promotion into requiresFollowUpSync")
-    func legWiresDeferralToFollowUp() throws {
-        let url = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appendingPathComponent("Payday/Sync/PaydaySyncService.swift")
-        let source = try String(contentsOf: url, encoding: .utf8)
+    // MARK: - A present-but-unparseable timestamp must not read as absent
 
-        #expect(source.contains("outcome == .deferPromotion"),
-                "the leg must observe the deferral outcome")
-        #expect(source.contains("|| authorityDeferred"),
-                "and feed it into requiresFollowUpSync, or a deferral is terminal")
-        #expect(source.contains("if let row = try await repository.fetchShiftMigrationState"),
-                "an absent row must not reach applyShiftAuthority")
-        #expect(!source.contains("?? ShiftReadAuthority.State()"),
-                "substituting an empty state for a missing row demotes on a failed read")
+    /// **The field-level version of the absent-row hazard.**
+    ///
+    /// A non-null timestamp that will not parse used to collapse to nil, and
+    /// `isAuthoritative` opens with `guard migratedAt != nil` -- so it read as
+    /// "never converted" and DEMOTED a promoted account. The row exists, so
+    /// the leg\'s absent-row guard does not catch it.
+    ///
+    /// Severe rather than cosmetic: demoting a promoted account hides every
+    /// shift logged since promotion, because those exist only as
+    /// `ShiftRecord`s. And a server format change would fail to parse on
+    /// EVERY pass, making the demotion persistent rather than transient.
+    @Test("a present-but-unparseable timestamp throws instead of reading as absent")
+    func unparseableTimestampThrows() throws {
+        let row = try decode(#"{"user_id":"00000000-0000-0000-0000-0000000000a1","migrated_at":"not-a-timestamp","rollback_at":null,"conservation_failed_at":null,"remaining_group_count":0}"#)
+        #expect(throws: RemoteShiftMigrationState.UnparseableTimestamp.self) {
+            _ = try row.authorityState()
+        }
+    }
+
+    /// And a genuine SQL NULL still means absent, so the throw above is
+    /// narrow. Without this the fix could have been "throw on any nil".
+    @Test("a genuine null timestamp still means absent, not an error")
+    func genuineNullIsAbsentNotAnError() throws {
+        let row = try decode(#"{"user_id":"00000000-0000-0000-0000-0000000000a1","migrated_at":null,"rollback_at":null,"conservation_failed_at":null,"remaining_group_count":0}"#)
+        let state = try row.authorityState()
+        #expect(state.migratedAt == nil)
+        #expect(!ShiftReadAuthority.isAuthoritative(state))
+    }
+
+    /// End to end: the unparseable row reaches the leg and changes nothing,
+    /// because the throw lands in the existing catch.
+    @Test("the leg leaves an authoritative account alone when a timestamp will not parse")
+    func legUnparseableTimestampDoesNotDemote() async throws {
+        let id = account(authoritative: true)
+        let row = try decode(#"{"user_id":"00000000-0000-0000-0000-0000000000a1","migrated_at":"not-a-timestamp","rollback_at":null,"conservation_failed_at":null,"remaining_group_count":0}"#)
+
+        let deferred = await leg(userID: id, row: row)
+        #expect(!deferred)
+        #expect(PaydaySyncState.shiftsAreAuthoritative(for: id),
+                "an unreadable field is a failure to read, never a withdrawal")
+    }
+
+    // MARK: - The leg itself, driven
+
+    /// A supplied conversion row, so the REAL leg runs with no session.
+    private func leg(
+        userID: UUID,
+        row: RemoteShiftMigrationState?
+    ) async -> Bool {
+        await PaydaySyncService.applyShiftAuthorityLeg(userID: userID) { row }
+    }
+
+    /// A leg whose fetch THROWS, which is a different failure from a row
+    /// that is absent and must behave the same way.
+    private func throwingLeg(userID: UUID) async -> Bool {
+        struct ReadFailed: Error {}
+        return await PaydaySyncService.applyShiftAuthorityLeg(userID: userID) {
+            throw ReadFailed()
+        }
+    }
+
+    /// **The round trip, through the leg rather than through a grep.**
+    ///
+    /// Defer while a legacy-edit sheet is open, close it, and the NEXT pass
+    /// promotes. Asserting that `.deferPromotion` came back would pass over a
+    /// caller that drops it; this drives the code that maps it.
+    @Test("the leg defers while a sheet is open and promotes on the next pass")
+    func legDefersThenPromotes() async throws {
+        let id = account(authoritative: false)
+        let ready = try decode(Self.readyJSON)
+
+        LegacyEditSheetPresence.begin()
+        let deferred = await leg(userID: id, row: ready)
+        #expect(deferred, "the leg must report the deferral so a follow-up is requested")
+        #expect(!PaydaySyncState.shiftsAreAuthoritative(for: id))
+
+        LegacyEditSheetPresence.end()
+        let second = await leg(userID: id, row: ready)
+        #expect(!second, "a completed promotion needs no follow-up")
+        #expect(PaydaySyncState.shiftsAreAuthoritative(for: id),
+                "a deferral must be a delay, not a cancellation")
+    }
+
+    /// **An ABSENT row must not demote a converted account.** The P0.
+    @Test("the leg leaves an authoritative account alone when no row comes back")
+    func legAbsentRowDoesNotDemote() async {
+        let id = account(authoritative: true)
+        #expect(PaydaySyncState.shiftsAreAuthoritative(for: id))
+
+        let deferred = await leg(userID: id, row: nil)
+        #expect(!deferred)
+        #expect(PaydaySyncState.shiftsAreAuthoritative(for: id),
+                "an absent row is a failure to ask, never a withdrawal")
+    }
+
+    /// And a THROWN read, the other way the same question goes unanswered.
+    @Test("the leg leaves an authoritative account alone when the read throws")
+    func legThrownReadDoesNotDemote() async {
+        let id = account(authoritative: true)
+        let deferred = await throwingLeg(userID: id)
+        #expect(!deferred)
+        #expect(PaydaySyncState.shiftsAreAuthoritative(for: id),
+                "a thrown read must not flip the representation either")
+    }
+
+    /// The disagreeing case: a REAL withdrawal, on a real row, still demotes
+    /// through the leg — so the skip above is narrow rather than a blanket
+    /// refusal to ever demote.
+    @Test("the leg demotes on a real withdrawal row")
+    func legDemotesOnRealWithdrawal() async throws {
+        let id = account(authoritative: true)
+        let rolledBack = try decode(Self.rolledBackJSON)
+
+        let deferred = await leg(userID: id, row: rolledBack)
+        #expect(!deferred)
+        #expect(!PaydaySyncState.shiftsAreAuthoritative(for: id),
+                "a withdrawal signalled by a column must take effect")
+    }
+
+    /// A withdrawal demotes even with a sheet open, through the leg. The
+    /// asymmetry, end to end.
+    @Test("the leg demotes on a withdrawal even while a legacy-edit sheet is open")
+    func legDemotesThroughAnOpenSheet() async throws {
+        let id = account(authoritative: true)
+        let rolledBack = try decode(Self.rolledBackJSON)
+
+        LegacyEditSheetPresence.begin()
+        let deferred = await leg(userID: id, row: rolledBack)
+        LegacyEditSheetPresence.end()
+
+        #expect(!deferred)
+        #expect(!PaydaySyncState.shiftsAreAuthoritative(for: id))
     }
 }
