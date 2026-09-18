@@ -529,6 +529,17 @@ enum PaydayRowFingerprint {
     static func values(_ records: [PaycheckRecord]) throws -> [UUID: String] {
         try Dictionary(uniqueKeysWithValues: records.map { try ($0.id, value($0)) })
     }
+
+    @MainActor
+    static func value(_ record: ShiftRecord) throws -> String {
+        try RemoteShift(record: record, userID: placeholderUserID)
+            .contentFingerprint(workDate: PaydayRemoteDate.stableDay(record.workDate))
+    }
+
+    @MainActor
+    static func values(_ records: [ShiftRecord]) throws -> [UUID: String] {
+        try Dictionary(uniqueKeysWithValues: records.map { try ($0.id, value($0)) })
+    }
 }
 
 enum PaydayMigrationHash {
@@ -846,5 +857,106 @@ struct PaydayShiftFeedParameters: Encodable, Sendable {
         case afterUpdatedAt = "p_after_updated_at"
         case afterID = "p_after_id"
         case limit = "p_limit"
+    }
+}
+
+/// A shift reduced to exactly the fields a DEVICE can write.
+///
+/// Deliberately the same set `RemoteShift.encode(to:)` emits, and for the same
+/// reason: the fingerprint's job is to detect a local edit worth uploading, so
+/// it must cover everything the device can change and nothing it cannot. If it
+/// included a server-authored column, a refold or a conversion on the server
+/// would make every affected row look locally edited and re-upload the whole
+/// history; if it omitted a writable one, an edit to that field would be
+/// invisible to the upload set and silently never sync -- which is exactly the
+/// `didSet` failure in a different disguise.
+struct ShiftBusinessValue: Codable, Equatable, Sendable {
+    let id: UUID
+    let workDate: String
+    let shiftPeriod: String?
+    let cashTipsCents: Int
+    let creditTipsCents: Int
+    let tipOutCents: Int?
+    let salesCents: Int?
+    let hoursWorked: Double?
+    let clockIn: String?
+    let clockOut: String?
+    let serverCount: Int?
+    let receiptMetrics: ShiftReceiptMetrics?
+    let note: String?
+    let recordedAt: String?
+}
+
+extension RemoteShift {
+    /// Built from a local record, for upload.
+    ///
+    /// `workDate` uses the shipped day rendering so no row this build uploads
+    /// carries a date the shipped build would not have written; the VERSION
+    /// uses `stableDay` instead, via `contentFingerprint(workDate:)`. See
+    /// `RemoteTipEntry.businessValue(workDate:)` for why those two are
+    /// deliberately different renders of the same instant.
+    @MainActor
+    init(record: ShiftRecord, userID: UUID) {
+        self.init(
+            id: record.id,
+            userID: userID,
+            workDate: PaydayRemoteDate.day(record.workDate),
+            shiftPeriod: record.shiftPeriod?.rawValue,
+            cashTipsCents: record.cashTipsCents,
+            creditTipsCents: record.creditTipsCents,
+            tipOutCents: record.tipOutCents,
+            salesCents: record.salesCents,
+            hoursWorked: record.hoursWorked,
+            clockIn: record.clockIn.map(PaydayRemoteDate.instant),
+            clockOut: record.clockOut.map(PaydayRemoteDate.instant),
+            serverCount: record.serverCount,
+            receiptMetrics: record.receiptMetrics,
+            note: record.note,
+            recordedAt: record.recordedAt.map(PaydayRemoteDate.instant),
+            clientUpdatedAt: PaydayRemoteDate.instant(record.modifiedAt),
+            // Server-authored, never sent. Nil here rather than copied from
+            // the record, so this initializer cannot become a way to forge
+            // provenance on the way out.
+            source: nil,
+            legacyEntryIDs: nil,
+            nativeModifiedAt: nil,
+            deletedAt: nil,
+            deletedReason: nil,
+            gratuityFeesCents: nil,
+            nonWageEarningsCents: nil,
+            version: nil,
+            serverUpdatedAt: nil
+        )
+    }
+
+    func businessValue(workDate: String) -> ShiftBusinessValue {
+        ShiftBusinessValue(
+            id: id,
+            workDate: workDate,
+            shiftPeriod: shiftPeriod,
+            cashTipsCents: cashTipsCents,
+            creditTipsCents: creditTipsCents,
+            tipOutCents: tipOutCents,
+            salesCents: salesCents,
+            hoursWorked: hoursWorked,
+            clockIn: PaydayRemoteDate.canonicalInstant(clockIn),
+            clockOut: PaydayRemoteDate.canonicalInstant(clockOut),
+            serverCount: serverCount,
+            receiptMetrics: receiptMetrics,
+            note: note,
+            recordedAt: PaydayRemoteDate.canonicalInstant(recordedAt)
+        )
+    }
+
+    var businessValue: ShiftBusinessValue { businessValue(workDate: workDate) }
+
+    /// The right digest for a row decoded FROM the server, whose `workDate` is
+    /// already the day string the server holds.
+    var contentFingerprint: String {
+        get throws { try PaydayMigrationHash.fingerprint(businessValue) }
+    }
+
+    func contentFingerprint(workDate: String) throws -> String {
+        try PaydayMigrationHash.fingerprint(businessValue(workDate: workDate))
     }
 }
