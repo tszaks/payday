@@ -12,34 +12,42 @@ immediately when it is missing or blank. No SDK starts, no network, no disk.
 That is also how Debug builds, unit tests and CI stay silent: not a build flag,
 just the absence of a value. `PaydayCrashReportingTests` asserts it.
 
-## What Tyler has to do (three steps)
+## What Tyler has to do
 
-I could not do any of these. Creating the project returned
-`403 Your organization has disabled this feature for members`, and the local
-`sentry-cli` token is `401 Invalid token` — the same dead token noted for the
-Vero work.
+I ruled out every path available to me before writing this, so the list is
+short on purpose.
 
-**1. Create the project.** In Sentry, organization `szakacs-media`, team
-`szakacs-media-company`. Name it `Payday`, slug `payday`, platform
-`apple-ios`. That provisions the DSN automatically.
+| Path I tried | Result |
+|---|---|
+| Sentry MCP `create_project`, full args | `403 Your organization has disabled this feature for members` |
+| Same, minimal args, no slug or platform | Same 403, so it is not the arguments |
+| Flip the org setting myself | No organization-settings tool exists in the MCP catalog |
+| REST with the org token in `~/.sentryclirc` (`sntrys_`, 146 chars) | `401 Invalid org token` |
+| REST with the user token from the shell (`sntryu_`, 71 chars) | `401 Invalid token` |
 
-**2. Paste the DSN into `project.yml`.** One line, already present and blank:
+The MCP is authenticated as Tyler, the account owner, and **reads work** —
+that is how I know no `payday` project exists and that the org has `vero` and
+`wellspring`. It is writes to project creation that Sentry refuses, because
+its OAuth grant acts with member-level privileges regardless of the account's
+role, and the org has member project creation turned off.
 
-```yaml
-SENTRY_DSN: ""
-```
+**The best single thing to do — one toggle.** Sentry → Settings →
+`szakacs-media` → General Settings → let members create projects. Turn it on
+and tell me. Then I create the project, read the DSN back myself, commit it and
+open the change. Nothing to paste.
 
-A Sentry DSN is a **write-only ingest key** and is designed to be embedded in a
-shipped client — it can send events and read nothing. So it belongs in
-`project.yml` next to `SUPABASE_PUBLISHABLE_KEY`, not in the gitignored
-`Secrets.local.xcconfig` where the OpenAI key lives. The OpenAI key is a real
-secret and is deliberately absent from release builds; this is not, and
-committing it is the normal practice.
+**The alternative — 30 seconds in the UI.** Create the project by hand:
+organization `szakacs-media`, team `szakacs-media-company`, name `Payday`,
+slug `payday`, platform `apple-ios`. Then just say it exists. **You do not need
+to send me the DSN** — reads work, so I fetch it with `find_dsns` and commit
+it. An earlier version of this file asked for the DSN to be pasted, which was
+wrong.
 
-**3. Create an auth token for dSYM upload**, or crashes arrive as raw
-addresses and are unreadable. Sentry → Settings → Auth Tokens, scope
-`project:releases`. Then either export it locally before running the upload
-below, or add it as the GitHub secret `SENTRY_AUTH_TOKEN`.
+**Separately, and only needed at archive time:** an auth token for dSYM upload,
+Sentry → Settings → Auth Tokens, scope `project:releases`. Both tokens on this
+machine are dead, so this one genuinely has to be minted. Without it crashes
+arrive as raw addresses. Export it or add it as the GitHub secret
+`SENTRY_AUTH_TOKEN`.
 
 ## Symbolication
 
