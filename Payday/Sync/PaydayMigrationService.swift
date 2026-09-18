@@ -26,6 +26,22 @@ struct PaydayMigrationReport: Equatable, Sendable {
     ///
     /// So the phase stays `.ready`, everything else syncs normally, only the
     /// shift leg is skipped, and the wait is a BANNER.
+    ///
+    /// ## This parameter has NO DEFAULT, on purpose
+    ///
+    /// It had one (`= nil`), and that default is the entire reason the
+    /// banner shipped unreachable. Three sites build this report from server
+    /// data and every one of them silently accepted the default, so
+    /// `conversionPending` was nil for every account, `isConversionPending`
+    /// was false forever, and `conversionBanner` always returned nil. The
+    /// feature was fully built and fully tested and could not appear.
+    ///
+    /// A lint would have caught it. The compiler catches it BETTER, for free
+    /// and forever: with no default, a new construction site cannot omit the
+    /// question, it can only answer `nil` in writing. Same move as making
+    /// the earnings builders take a `ShiftRepresentation` -- hand the
+    /// enumeration to the type system rather than to a rule someone has to
+    /// write correctly and keep correct.
     var conversionPending: Int?
 
     init(
@@ -35,7 +51,7 @@ struct PaydayMigrationReport: Equatable, Sendable {
         remotePaycheckCount: Int,
         tipEntryHash: String,
         paycheckHash: String,
-        conversionPending: Int? = nil
+        conversionPending: Int?
     ) {
         self.localTipEntryCount = localTipEntryCount
         self.localPaycheckCount = localPaycheckCount
@@ -215,7 +231,11 @@ final class PaydayMigrationService {
             remoteTipEntryCount: remoteTips.count,
             remotePaycheckCount: remotePaychecks.count,
             tipEntryHash: tipHash,
-            paycheckHash: paycheckHash
+            paycheckHash: paycheckHash,
+            // The first-run migration verify reads tips and paychecks, never
+            // `shift_migration_state`. It has no basis for an answer, and
+            // `synchronize` supplies one on the pass that does.
+            conversionPending: nil
         )
     }
 

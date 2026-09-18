@@ -300,6 +300,48 @@ struct ShiftAuthorityLegTests {
                 "an unreadable field is a failure to read, never a withdrawal")
     }
 
+    // MARK: - The count the leg used to throw away
+
+    /// **The test that would have caught the unreachable banner.**
+    ///
+    /// The leg returned `Bool` -- the deferral alone -- and discarded
+    /// `remaining_group_count` one line after reading it. Nothing else in the
+    /// app read that column, so `PaydayMigrationReport.conversionPending` had
+    /// no producer, `isConversionPending` was false for every account, and
+    /// `PaydayCloudState.conversionBanner` always returned nil. The banner was
+    /// built, its copy was tested, and it could not appear.
+    ///
+    /// `ConversionBannerTests` was green throughout, because it builds the
+    /// report through the initializer with the count already in it. A test
+    /// that SUPPLIES the value it checks cannot discover that nothing
+    /// produces it. This one runs the real leg and reads what comes out.
+    @Test("the leg carries the server's remaining count out, not only the deferral")
+    func legReportsRemainingCount() async throws {
+        let id = UUID()
+        let row = try decode(#"{"user_id":"00000000-0000-0000-0000-0000000000a1","migrated_at":"2026-09-18T00:00:00Z","rollback_at":null,"conservation_failed_at":null,"remaining_group_count":7}"#)
+
+        let result = await PaydaySyncService.applyShiftAuthorityLeg(userID: id) { row }
+
+        #expect(result.remainingGroupCount == 7)
+        // And the account is NOT authoritative while groups remain, which is
+        // what makes the banner's "your totals are unchanged" sentence true.
+        #expect(!PaydaySyncState.shiftsAreAuthoritative(for: id))
+    }
+
+    /// nil and 0 are different answers. A pass that learned nothing must not
+    /// report "finished" -- that would hide a banner that should be up.
+    @Test("a missing row and a failed read both report an unknown count, never zero")
+    func unknownCountIsNilNotZero() async {
+        let absent = await PaydaySyncService.applyShiftAuthorityLeg(userID: UUID()) { nil }
+        #expect(absent.remainingGroupCount == nil)
+
+        struct ReadFailed: Error {}
+        let failed = await PaydaySyncService.applyShiftAuthorityLeg(userID: UUID()) {
+            throw ReadFailed()
+        }
+        #expect(failed.remainingGroupCount == nil)
+    }
+
     // MARK: - The leg itself, driven
 
     /// A supplied conversion row, so the REAL leg runs with no session.
@@ -307,7 +349,7 @@ struct ShiftAuthorityLegTests {
         userID: UUID,
         row: RemoteShiftMigrationState?
     ) async -> Bool {
-        await PaydaySyncService.applyShiftAuthorityLeg(userID: userID) { row }
+        await PaydaySyncService.applyShiftAuthorityLeg(userID: userID) { row }.deferred
     }
 
     /// A leg whose fetch THROWS, which is a different failure from a row
@@ -316,7 +358,7 @@ struct ShiftAuthorityLegTests {
         struct ReadFailed: Error {}
         return await PaydaySyncService.applyShiftAuthorityLeg(userID: userID) {
             throw ReadFailed()
-        }
+        }.deferred
     }
 
     /// **The round trip, through the leg rather than through a grep.**
