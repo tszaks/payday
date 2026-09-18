@@ -6,7 +6,27 @@ Drafted 2026-09-17 for autonomous sessions. This file is the contract. Read it b
 
 Every number Payday shows, speaks, exports, or serves comes from one engine, and no two surfaces can disagree about the same fact.
 
-Concretely: **PRs 0 through 8 of `~/.claude/plans/option-b-b-full-effervescent-kite.md` are merged to `production` with CI green, and the release gate in PR 8 passes.** PRs 0 and 1 are done. PR 2 is 2 of 13 slices in. Everything else is open.
+Concretely: **PRs 0 through 8 of `~/.claude/plans/option-b-b-full-effervescent-kite.md` are merged to `production` with CI green, and the release gate in PR 8 passes.**
+
+**Status, measured 2026-09-18 rather than estimated.** This sentence has been
+stale in both directions before, so it names what is merged rather than
+counting slices, which is the part that rots.
+
+Merged: PR 0, PR 1, PR 3, PR 4, and all three waves of PR 5. Of PR 2: S1-S9,
+S11 and S13, plus S9's second-half waves. Of PR 6: group 2.10 and 2.11 (the
+widget and Siri read the engine), 2.13 (the CSV writes exact minutes), and
+S11's deletion of the backend's duplicate money math. Of PR 8: the
+money-boundary lint, which ratchets.
+
+Open: PR 2's writer flip and the reader swaps it gates, S10 and S12; PR 6's
+group 2.14 (the device-published snapshot, which is the only thing that can
+give the `/v1` API a wage concept at all); PR 7 entirely; and PR 8's
+deletions, which cannot begin until the flip lands because the screens still
+read through the old paths.
+
+Criteria 2, 3, 4 and 5 are green as of this date, each measured by running it
+and recorded in `docs/RELEASE_GATE.md`. Criterion 6 is half done: the lint
+side is in, the deletion side is blocked behind the flip.
 
 The governing rule, which every PR is measured against:
 
@@ -66,7 +86,7 @@ So: take PR 8 as far as it goes, leave the device-and-soak checklist in `docs/RE
 
 ## Order of work, and what can run in parallel
 
-- **PR 2** (13 slices, 2 done): S3 the deriver, S4 the trigger, S5 the one-shot and rollback are serial. The rest, sync, ShiftCommands, the agent API, the views, the parity test, can overlap once S5 lands. Design: `docs/design/PR2-design-final.md`.
+- **PR 2** (13 slices; S1-S9, S11 and S13 merged as of 2026-09-18, leaving the writer flip, S10 and S12): S3 the deriver, S4 the trigger, S5 the one-shot and rollback were serial. The rest, sync, ShiftCommands, the agent API, the views, the parity test, can overlap once S5 lands. Design: `docs/design/PR2-design-final.md`.
 - **PR 3** (policies and the CompensationLedger) is pure Swift over fixtures already merged. It does **not** depend on PR 2 and should run in parallel from the start.
 - **PR 4** (the snapshot and its store) needs the ledger and `ShiftRecord`.
 - **PR 5** (every consumer) is the largest surface: 280 inventory rows in `docs/METRICS.md`. Migrate in the plan's order, screen by screen, re-running the completeness critic per screen, because the inventory is a floor and not a proven ceiling.
