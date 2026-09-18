@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 import SwiftData
 
@@ -52,6 +53,38 @@ struct RootView: View {
             default:
                 break
             }
+        }
+        // The payday notification's figure became POLICY-dependent in PR 5
+        // group 2.12: it used to be `PredictedPaycheck.tipsLineCents`
+        // (wage-EXCLUSIVE, so no rate edit could move it) and it is now
+        // `expectedPaycheckGross`, which includes wages. Every one of the
+        // other reschedule triggers is shift-shaped, so before this the
+        // pending request kept its pre-edit figure while the Dashboard card
+        // the tap lands on recomputed from `policyStore.policies` on every
+        // render — MEASURED at $150.00 on the lock screen against $310.00 on
+        // the card, over the same one shift, after nothing but setting an
+        // hourly rate in Settings (`PaydayPushSchedulerTests`,
+        // `policyEditMovesTheDecision`).
+        //
+        // Here rather than in `PayrollSettingsSection` next to the three
+        // `policyStore.apply…` calls, for the reason rule 3 of the adapter
+        // contract gives about hand-maintained dependency lists: this fires
+        // for every policy write there is, including `confirmRateHistory`
+        // (which moves the body's caption, not its cents), the launch
+        // migration, and a policy arriving from a sync download on a
+        // background thread — none of which are in Settings.
+        //
+        // `PolicyStore.didChange` alone and NOT `LegacySnapshotRevision`'s
+        // merged publisher, deliberately: that set includes
+        // `ModelContext.didSave`, and `@Query allEntries` has not
+        // necessarily caught up when a save posts. That is exactly why
+        // `LogTipSheet` and `BackfillSheet` hand `reschedule` `allEntries +
+        // newEntries` by hand. Subscribing to the save here would race those
+        // two call sites and could overwrite a correct decision with one
+        // computed from the pre-save entry list. A policy edit changes no
+        // shift, so `allEntries` is already current for this trigger.
+        .onReceive(NotificationCenter.default.publisher(for: PolicyStore.didChange)) { _ in
+            PaydayPushScheduler.reschedule(preferencesStore: preferencesStore, schedule: scheduleStore.schedule, allEntries: allEntries, paycheckRecords: paycheckRecords)
         }
         .task {
             // Backgrounding an already-running app arms the lock via the

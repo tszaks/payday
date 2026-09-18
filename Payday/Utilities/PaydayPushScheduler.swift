@@ -65,6 +65,33 @@ import UserNotifications
 ///
 /// `.estimated` DOES speak, because it has a caption that reads as a
 /// sentence, and it carries it.
+///
+/// ## A policy edit is a reschedule trigger, because the figure is policy-dependent
+///
+/// The old body was `PredictedPaycheck.tipsLineCents`, wage-EXCLUSIVE, so no
+/// rate or workweek edit could ever move it and the six reschedule triggers
+/// were all shift-shaped (foreground, any log, a paycheck save). The new body
+/// includes wages, and `performReschedule` reads
+/// `PolicyStore.storedPolicies()`. So a rate edit moves the number — and
+/// until this was added, nothing told the pending request.
+///
+/// MEASURED (`policyEditMovesTheDecision`, one 8h shift on 2026-07-15 with
+/// $150.00 of credit tips, weekly period closing 2026-07-19, paid 07-24): the
+/// body reads **$150.00** with the wage feature off, **$310.00** once $20/hr
+/// is set, and **$350.00** once that is corrected to $25/hr. None of those
+/// three edits touched a shift, so on the pre-fix tree the lock screen kept
+/// saying $150.00 while the Dashboard card the tap lands on recomputed from
+/// `policyStore.policies` on every render. Two totals under one question, on
+/// a lock screen, which is the exact defect class this group exists to close.
+/// It self-healed on the next `.active` scenePhase, which is why it was a P1
+/// and not a P0.
+///
+/// The trigger lives in `RootView` next to the scenePhase one, observing
+/// `PolicyStore.didChange` — the same signal `EarningsStore.triggerNames`
+/// carries — so it fires for every policy write there is (`applyRateEdit`,
+/// `applyRateChange`, `applyCalendarChange`, `confirmRateHistory`, the
+/// launch migration, and a policy arriving from a sync download), rather than
+/// for the three the next editor of `PayrollSettingsSection` remembers.
 @MainActor
 enum PaydayPushScheduler {
     nonisolated static let notificationIdentifier = "payday-moment"
@@ -87,12 +114,34 @@ enum PaydayPushScheduler {
         let figure: EarningsFigure?
     }
 
+    /// The pending coalesced reschedule. A burst of triggers costs ONE
+    /// ledger pass, and the LAST trigger is the one that wins.
+    private static var coalescedReschedule: Task<Void, Never>?
+
     /// Called from the same lifecycle moments SmartNudgeScheduler is: the
     /// app coming to the foreground, after every tip log (sheet, backfill,
     /// or Siri) — and, uniquely to this reminder, right after a paycheck
     /// gets recorded, since a verified period has nothing left to announce.
+    /// Plus, since this figure became policy-dependent, every
+    /// `PolicyStore.didChange` (`RootView`, and see the note there).
+    ///
+    /// **Coalesced on `EarningsStore.debounceNanoseconds`, the same 50 ms and
+    /// the same constant `EarningsStore` debounces this app's other
+    /// `PolicyStore.didChange` consumer on**, because the policy trigger
+    /// arrives PER KEYSTROKE: Settings' "Hourly wage" row calls
+    /// `applyRateEdit` on every digit, so typing `2500` is four real policy
+    /// edits. Without this, four full `DashboardEarnings.build` passes run on
+    /// the MainActor per rate typed — MEASURED at 0.447s each over a
+    /// 10,000-row history ([LN-01]'s cost note), so ~1.8s of hitching while
+    /// the field is being typed into — and four in-flight tasks each snapshot
+    /// the policies BEFORE their `await`, so whichever resumes last enqueues
+    /// its own figure. The one that resumed last could be the one holding
+    /// `$0.02`. Cancel-and-replace makes the last trigger the last word.
     static func reschedule(preferencesStore: UserPreferencesStore, schedule: PaySchedule?, allEntries: [TipEntry], paycheckRecords: [PaycheckRecord]) {
-        Task {
+        coalescedReschedule?.cancel()
+        coalescedReschedule = Task {
+            try? await Task.sleep(nanoseconds: EarningsStore.debounceNanoseconds)
+            guard !Task.isCancelled else { return }
             await performReschedule(preferencesStore: preferencesStore, schedule: schedule, allEntries: allEntries, paycheckRecords: paycheckRecords)
         }
     }
