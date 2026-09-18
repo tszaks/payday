@@ -325,3 +325,129 @@ struct OnboardingStateStoreTests {
         #expect(reloaded.quizPayFrequency == nil)
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  PR 5 group 2.9: the onboarding projection is intentionally NOT an engine
+//  figure.
+//
+//  `docs/METRICS.md` rows [OB-02]..[OB-05] are the only currency figures in
+//  the app with no `MetricID`, and that is a recorded decision rather than an
+//  omission — the screen runs before sign-in and before the first shift, so
+//  there is nothing for `EarningsSnapshot` to answer, and stamping a
+//  projection from two dropdown bands would make `EarningsResult`'s promise
+//  ("this came from records") stop meaning anything. See
+//  `OnboardingProjection`'s header for the full reasoning.
+//
+//  What these cases gate is that the decision stays honest: the arithmetic
+//  lives in ONE type that cannot be built from a snapshot, the figure is
+//  never asserted without both bands, and the basis is always spoken.
+// ═══════════════════════════════════════════════════════════════════════════
+@Suite("Onboarding projection is synthetic, and says so")
+struct OnboardingProjectionTests {
+
+    @Test("the projection is the two bands multiplied over a year, to the nearest $500")
+    func projectionIsTheTwoBands() {
+        // 5.5 shifts x $150 x 52 = $42,900 -> $43,000
+        let projection = OnboardingProjection.from(shifts: .fiveSix, tips: .hundredToTwo, cash: nil)
+        #expect(projection.annualTipsDollars == 43_000)
+        #expect(projection.cashDollars == nil)
+    }
+
+    @Test("the cash share is a share of that same projection, never a second derivation")
+    func cashIsAShareOfTheSameProjection() throws {
+        let projection = OnboardingProjection.from(shifts: .fiveSix, tips: .hundredToTwo, cash: .half)
+        #expect(projection.annualTipsDollars == 43_000)
+        #expect(projection.cashDollars == 21_500)
+        let cash = try #require(projection.cashDollars)
+        #expect(cash * 2 == projection.annualTipsDollars)
+    }
+
+    @Test("'almost none' yields no cash figure at all, rather than a zero one")
+    func almostNoneYieldsNoCashFigure() {
+        let projection = OnboardingProjection.from(shifts: .fiveSix, tips: .hundredToTwo, cash: .almostNone)
+        #expect(projection.cashDollars == nil)
+    }
+
+    /// The suppression rule, which is this type's analogue of
+    /// `EarningsFigure`'s "an unavailable read renders no currency": either
+    /// band missing means no figure, and `annualTipsText` is nil so the
+    /// reveal has nothing to render.
+    @Test("either band missing means no figure and no text")
+    func eitherBandMissingMeansNoText() {
+        for projection in [
+            OnboardingProjection.from(shifts: nil, tips: .twoToThree, cash: .half),
+            OnboardingProjection.from(shifts: .threeFour, tips: nil, cash: .quarter),
+            OnboardingProjection.from(shifts: nil, tips: nil, cash: nil)
+        ] {
+            #expect(projection.annualTipsDollars == 0)
+            #expect(projection.annualTipsText == nil)
+            #expect(projection.cashDollars == nil)
+        }
+        #expect(OnboardingProjection.unsubstantiated.annualTipsText == nil)
+    }
+
+    @Test("every band combination is round, clamped and rendered whole-dollar")
+    func everyCombinationIsRoundAndClamped() throws {
+        for shifts in ShiftLoad.allCases {
+            for tips in TipsPerShift.allCases {
+                let projection = OnboardingProjection.from(shifts: shifts, tips: tips, cash: .most)
+                #expect(projection.annualTipsDollars >= 3_000)
+                #expect(projection.annualTipsDollars <= 130_000)
+                #expect(projection.annualTipsDollars % 500 == 0)
+                let text = try #require(projection.annualTipsText)
+                // Whole dollars: a projection with cents would read as a
+                // measurement of something.
+                #expect(!text.contains("."))
+                #expect(text == OnboardingProjection.text(wholeDollars: projection.annualTipsDollars))
+            }
+        }
+    }
+
+    /// The count-up's intermediate frames are motion, not facts: they are
+    /// never whole-$500 like the target, VoiceOver reads `annualTipsText`
+    /// instead ([OB-04]), and the final frame lands exactly on the target.
+    @Test("a count-up frame is the same formatter and the last frame is the figure")
+    func countUpFramesUseOneFormatter() throws {
+        let projection = OnboardingProjection.from(shifts: .fiveSix, tips: .hundredToTwo, cash: nil)
+        let settled = try #require(projection.annualTipsText)
+        #expect(projection.countUpText(displayedDollars: Double(projection.annualTipsDollars)) == settled)
+        #expect(projection.countUpText(displayedDollars: 0) == "$0")
+        #expect(projection.countUpText(displayedDollars: 21_499.6) == OnboardingProjection.text(wholeDollars: 21_500))
+    }
+
+    /// The diagnosis is a facts struct, so it holds the projection and adds
+    /// no arithmetic of its own. Same value, both ways round.
+    @Test("the diagnosis reports the projection it was built from, unaltered")
+    func diagnosisReportsTheProjectionUnaltered() {
+        for shifts in ShiftLoad.allCases {
+            for tips in TipsPerShift.allCases {
+                for cash in CashShare.allCases {
+                    let diagnosis = PaydayOnboardingDiagnosis.compute(
+                        shifts: shifts, tips: tips, cash: cash, tracking: nil, goal: nil
+                    )
+                    let projection = OnboardingProjection.from(shifts: shifts, tips: tips, cash: cash)
+                    #expect(diagnosis.projection == projection)
+                    #expect(diagnosis.projectedAnnualTips == projection.annualTipsDollars)
+                }
+            }
+        }
+    }
+
+    /// The basis is always spoken next to a figure that exists, and never
+    /// claimed for one that does not. That sentence is the whole labelling
+    /// job: it is what stops "$43,000" reading as something Payday measured.
+    @Test("a figure always carries its basis, and no figure carries none")
+    func theBasisIsAlwaysSpoken() {
+        let substantiated = PaydayOnboardingDiagnosis.compute(
+            shifts: .fiveSix, tips: .hundredToTwo, cash: .half, tracking: nil, goal: nil
+        )
+        #expect(substantiated.projectionCaption == "in tips a year, at the pace you just described")
+        #expect(substantiated.projectionCaption.contains("at the pace you just described"))
+
+        let unsubstantiated = PaydayOnboardingDiagnosis.compute(
+            shifts: nil, tips: .hundredToTwo, cash: .half, tracking: nil, goal: nil
+        )
+        #expect(unsubstantiated.projectionCaption.isEmpty)
+        #expect(unsubstantiated.projection.annualTipsText == nil)
+    }
+}
