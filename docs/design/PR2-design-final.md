@@ -1730,10 +1730,30 @@ assume legacy is dead or dying?* **No, the opposite.** It specifies
 and `anAgentMovingARowBetweenShiftsRefoldsBothGroups`, both of which require
 legacy rows and a live fold trigger. Shape 3 keeping legacy alive is the
 condition this slice was written for.
-State: `index.ts` carries `listShifts` and uses `payday_agent_summary`, so
-the code half is in. `agent_shifts_test.ts` does not exist and
-`index_test.ts` covers neither `listShifts` nor `getShift`, so the shift
-paths of the agent API are **served without test coverage**.
+State, and the first version of this line was WRONG in a way worth keeping.
+It said the shift paths were "served without test coverage". That came from
+grepping `index_test.ts` for the strings `listShifts` and `getShift`, which
+returns nothing -- because the tests exercise BEHAVIOUR rather than naming
+internals. `index_test.ts` has five shift tests going through
+`testing.shiftResponse`, the real response-shaping path: the derived money
+is read and never recomputed, the gross comes from the stored net, the
+owning account does not leak, provenance replaces the embedded rows, and
+absent optionals report null rather than vanishing. Same instrument error as
+searching for a test SUITE by filename when it is a struct.
+
+Corrected, the two halves differ:
+
+- **Response shaping and the money: COVERED**, five tests, through the
+  production path.
+- **The query layer: NOT covered.** `getShift`'s step-2 lookup,
+  `coalesce(shift_id, id)` selection, and `get_shift` resolving a
+  pre-conversion nil-`shift_id` id via provenance have no test on either
+  side -- `agent_shifts_test.ts` does not exist and no SQL test in
+  `supabase/tests/` references `get_shift` or `list_shifts`.
+
+That narrower gap is the real S11 remainder, and it is the half where a
+defect is a shift the agent cannot find rather than a number it reports
+wrongly.
 
 **S11 (original).** Files: `index.ts` (`listShifts`, `getShift` with the step-2 lookup, `payday_agent_summary` on `shifts`, `CHANGE_TABLES`, the `createShift` corrections), `sql_corrections.ts`, `agent_shifts_test.ts`, `docs/PAYDAY_API.md`.
 Tests (C, plus E for the SQL side): the six corrections with fixtures; `tipOutIsResolvedOnceByBothImplementations`; `differentialAgainstGroupShifts` both directions; the identity vectors; the forced-stale replay; `anAgentMovingARowBetweenShiftsRefoldsBothGroups`; `get_shift` by a pre-conversion nil-`shift_id` id resolves via provenance. Gate: C and E. **Depends on S3.**
