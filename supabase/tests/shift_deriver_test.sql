@@ -65,16 +65,43 @@ $$;
 -- reading one counter. The trigger has its own suite, which drives it through
 -- the shipped 1.0 RPCs end to end: supabase/tests/shift_fold_test.sql.
 --
--- session_replication_role is set with is_local = true, so it reverts at the
--- end of the enclosing implicit transaction, i.e. at the end of the single
--- statement that called the helper. Nothing else in this file is affected --
--- in particular public.shifts' own version trigger keeps firing, which is
--- what aFoldFreezesVersionAndBumpsDerivedVersion and the native-write
--- assertions depend on.
+-- Suppression is per STATEMENT and names the three fold triggers, nothing
+-- else: public.shifts' own version trigger and tip_entries_touch_version keep
+-- firing, which is what aFoldFreezesVersionAndBumpsDerivedVersion and the
+-- native-write assertions depend on.
+--
+-- It is ALTER TABLE ... DISABLE TRIGGER, not session_replication_role, and
+-- that is a portability fact measured on CI rather than a preference:
+-- Supabase's `postgres` role is NOT a superuser, so `set
+-- session_replication_role = 'replica'` fails there with "permission denied to
+-- set parameter" even though it works on a local cluster whose postgres is a
+-- real superuser. Job E caught it; the local loop could not.
+--
+-- DDL is transactional in PostgreSQL and each `select pg_temp.unfolded(...)`
+-- is its own implicit transaction, so the disable is undone by the commit at
+-- the end of the statement AND by a rollback if the statement fails. The
+-- triggers can never be left off for a later test file.
+create function pg_temp.without_the_fold() returns void language plpgsql as $$
+begin
+  alter table public.tip_entries disable trigger tip_entries_fold_insert;
+  alter table public.tip_entries disable trigger tip_entries_fold_update;
+  alter table public.tip_entries disable trigger tip_entries_fold_delete;
+end;
+$$;
+
+create function pg_temp.with_the_fold() returns void language plpgsql as $$
+begin
+  alter table public.tip_entries enable trigger tip_entries_fold_insert;
+  alter table public.tip_entries enable trigger tip_entries_fold_update;
+  alter table public.tip_entries enable trigger tip_entries_fold_delete;
+end;
+$$;
+
 create function pg_temp.unfolded(p_sql text) returns void language plpgsql as $$
 begin
-  perform set_config('session_replication_role', 'replica', true);
+  perform pg_temp.without_the_fold();
   execute p_sql;
+  perform pg_temp.with_the_fold();
 end;
 $$;
 
@@ -87,12 +114,13 @@ create function pg_temp.legacy_row(
   p_sales integer default null, p_period text default null, p_note text default null)
 returns void language plpgsql as $$
 begin
-  perform set_config('session_replication_role', 'replica', true);
+  perform pg_temp.without_the_fold();
   insert into public.tip_entries (
     id, user_id, shift_id, work_date, amount_cents, kind, tip_out_cents,
     hours_worked, receipt_metrics, client_updated_at, sales_cents, shift_period, note)
   values (p_id, p_user, p_shift, p_date, p_amount, p_kind, p_tip_out,
           p_hours, p_receipt, p_cua, p_sales, p_period, p_note);
+  perform pg_temp.with_the_fold();
 end;
 $$;
 
