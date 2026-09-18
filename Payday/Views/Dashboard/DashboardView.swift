@@ -56,6 +56,16 @@ private struct DashboardFacts {
     /// own independent rounding, so the rows and the hero's wage line are one
     /// number source (PR 3 review, P0).
     let wagesByShiftID: [UUID: Int]
+    /// The engine's valuation of exactly the shifts `shiftDays` lists, so a
+    /// row can take a whole `ShiftValuation` (which knows the difference
+    /// between "earned nothing" and "not in the dataset") instead of a loose
+    /// `Int` (which cannot).
+    ///
+    /// Same ledger, same allocation, same cents as `wagesByShiftID` above:
+    /// PR 5 wave 0 changed where a ROW reads its figure from, not what the
+    /// figure is. `wagesByShiftID` survives here only because the hero, the
+    /// drawer and the reveal echo above it are group 2.1, WAVE 1.
+    let shiftSnapshot: EarningsSnapshot?
     /// Calendar days that hold 2+ shifts — a "double" — so a row can label
     /// itself "Today · Lunch" / "Today · Dinner" only when it needs to.
     let multiShiftDays: Set<Date>
@@ -88,11 +98,21 @@ private struct DashboardFacts {
         breakdown = TipBreakdown.total(of: periodEntries)
         daysRemaining = calculator.daysRemaining(from: now)
         shiftDays = ShiftDays.groupedByShift(periodEntries, shiftID: \.shiftID, date: \.date, period: \.shiftPeriod)
-        wagesByShiftID = WageEstimate.centsByShiftID(
+        let resolvedShiftSnapshot = LegacySnapshotBridge.snapshot(
+            shifts: shiftDays,
+            rateCents: wageCentsPerHour,
             payrollTimeZone: payrollTimeZone,
             workweekStartWeekday: schedule?.firstWeekday ?? calendar.firstWeekday,
-            shifts: shiftDays,
-            wageCentsPerHour: wageCentsPerHour
+            asOf: now
+        )
+        shiftSnapshot = resolvedShiftSnapshot
+        // Read off the snapshot rather than calling the ledger a second
+        // time: `WageEstimate.centsByShiftID` and the snapshot above run the
+        // SAME `CompensationLedger` over the same shift set, so taking both
+        // would be two identical valuations per render for one answer.
+        wagesByShiftID = Dictionary(
+            shiftDays.map { ($0.shiftID, resolvedShiftSnapshot?.valuation($0.shiftID)?.components.wagesCents ?? 0) },
+            uniquingKeysWith: +
         )
         // A "shift" now counts closeouts, not calendar days.
         shiftCount = shiftDays.count
@@ -835,11 +855,7 @@ struct DashboardView: View {
 
             ForEach(Array(facts.shiftDays.prefix(Self.maxShiftRows).enumerated()), id: \.element.shiftID) { index, group in
                 if index > 0 { Divider() }
-                shiftRow(
-                    for: group,
-                    multiShiftDays: facts.multiShiftDays,
-                    wageCents: facts.wagesByShiftID[group.shiftID] ?? 0
-                )
+                shiftRow(for: group, facts: facts)
             }
             if facts.shiftDays.count > Self.maxShiftRows {
                 Divider()
@@ -865,11 +881,8 @@ struct DashboardView: View {
     @ViewBuilder
     private func shiftRow(
         for group: (day: Date, shiftID: UUID, items: [TipEntry]),
-        multiShiftDays: Set<Date>,
-        wageCents: Int
+        facts: DashboardFacts
     ) -> some View {
-        let period = ShiftDetails.resolve(from: group.items).shiftPeriod
-        let dayHasMultiple = multiShiftDays.contains(group.day)
         // A shift, single-entry or merged cash+credit, is one row now — the
         // edit sheet is shaped like a shift regardless of how many TipEntry
         // rows it took to log it, so there's no separate "open this shift's
@@ -881,9 +894,16 @@ struct DashboardView: View {
             Button {
                 sheetTarget = .edit(anchor)
             } label: {
-                ShiftDayRow(day: group.day, period: period, dayHasMultipleShifts: dayHasMultiple, entries: group.items, wageCents: wageCents)
-                    .padding(.vertical, PaydaySpacing.p12)
-                    .contentShape(Rectangle())
+                ShiftDayRow(facts: ShiftDayRowFacts(
+                    valuation: facts.shiftSnapshot?.valuation(group.shiftID),
+                    wageFeatureEnabled: facts.shiftSnapshot?.wageFeatureEnabled ?? false,
+                    stamp: facts.shiftSnapshot?.stamp,
+                    day: group.day,
+                    period: ShiftDetails.resolve(from: group.items).shiftPeriod,
+                    dayHasMultipleShifts: facts.multiShiftDays.contains(group.day)
+                ))
+                .padding(.vertical, PaydaySpacing.p12)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .shiftContextMenu(group.items, sheetTarget: $sheetTarget, undoState: undoState, context: modelContext)

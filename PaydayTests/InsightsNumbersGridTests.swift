@@ -4,46 +4,78 @@ import Foundation
 
 @Suite("Earnings chart adaptive axis")
 struct EarningsChartAdaptiveAxisTests {
-    private let calendar = Calendar(identifier: .gregorian)
-    private let start = Date(timeIntervalSince1970: 1_700_000_000)
+    private let zone = TimeZone(secondsFromGMT: 0)!
+    private let start = CivilDay(year: 2023, month: 11, day: 14)
 
-    private func domain(days: Int) -> ClosedRange<Date> {
-        start...(calendar.date(byAdding: .day, value: days, to: start) ?? start)
+    /// A range holding exactly `days` civil days.
+    ///
+    /// PR 5 wave 0 moved the granularity choice from a `ClosedRange<Date>`
+    /// to a `DayRange`, and a `DayRange`'s `count` is INCLUSIVE where
+    /// `dateComponents([.day], from:to:)` was not. So the thresholds now
+    /// mean what they say: at most 21 bars stay daily, and a 22-day range is
+    /// the first weekly one. A real 14-day pay period is `.day` either way.
+    private func range(days: Int) -> DayRange {
+        DayRange(start: start, end: start.adding(days: days - 1))
     }
 
     @Test("weekday initials remain for short pay-period charts")
     func dayScale() {
-        #expect(EarningsChartAxisGranularity.forDomain(domain(days: 14), calendar: calendar) == .day)
-        #expect(EarningsChartAxisGranularity.forDomain(domain(days: 21), calendar: calendar) == .day)
+        #expect(EarningsChartAxisGranularity.forRange(range(days: 14)) == .day)
+        #expect(EarningsChartAxisGranularity.forRange(range(days: 21)) == .day)
     }
 
     @Test("longer histories step through weeks, months, then years")
     func longerScales() {
-        #expect(EarningsChartAxisGranularity.forDomain(domain(days: 22), calendar: calendar) == .week)
-        #expect(EarningsChartAxisGranularity.forDomain(domain(days: 120), calendar: calendar) == .week)
-        #expect(EarningsChartAxisGranularity.forDomain(domain(days: 121), calendar: calendar) == .month)
-        #expect(EarningsChartAxisGranularity.forDomain(domain(days: 730), calendar: calendar) == .month)
-        #expect(EarningsChartAxisGranularity.forDomain(domain(days: 731), calendar: calendar) == .year)
+        #expect(EarningsChartAxisGranularity.forRange(range(days: 22)) == .week)
+        #expect(EarningsChartAxisGranularity.forRange(range(days: 120)) == .week)
+        #expect(EarningsChartAxisGranularity.forRange(range(days: 121)) == .month)
+        #expect(EarningsChartAxisGranularity.forRange(range(days: 730)) == .month)
+        #expect(EarningsChartAxisGranularity.forRange(range(days: 731)) == .year)
     }
 
-    @Test("weekly and monthly bars combine their daily values")
-    func combinesBars() {
-        let monday = calendar.date(from: DateComponents(year: 2026, month: 8, day: 3))!
-        let tuesday = calendar.date(byAdding: .day, value: 1, to: monday)!
-        let nextMonday = calendar.date(byAdding: .day, value: 7, to: monday)!
-        let september = calendar.date(from: DateComponents(year: 2026, month: 9, day: 1))!
-        let nights = [
-            (date: monday, cents: 10_000),
-            (date: tuesday, cents: 20_000),
-            (date: nextMonday, cents: 40_000),
-            (date: september, cents: 80_000)
-        ]
+    @Test("weekly and monthly buckets partition the range, covering every day exactly once")
+    func bucketsPartitionTheRange() {
+        // Mon 3 Aug 2026 through Wed 2 Sep 2026.
+        let span = DayRange(
+            start: CivilDay(year: 2026, month: 8, day: 3),
+            end: CivilDay(year: 2026, month: 9, day: 2)
+        )
+        for granularity in [EarningsChartAxisGranularity.week, .month, .year] {
+            let buckets = granularity.buckets(of: span, timeZone: zone)
+            #expect(!buckets.isEmpty)
+            // No gap and no overlap: the first bucket starts where the range
+            // does, the last ends where it does, and each begins the day
+            // after the previous one ended. This is what makes
+            // `Σ bars == snapshot.range(span)` arithmetic instead of hope.
+            #expect(buckets.first?.start == span.start)
+            #expect(buckets.last?.end == span.end)
+            #expect(buckets.reduce(0) { $0 + $1.count } == span.count)
+            for (previous, next) in zip(buckets, buckets.dropFirst()) {
+                #expect(previous.end.adding(days: 1) == next.start)
+            }
+        }
+    }
 
-        let weeks = EarningsChartAxisGranularity.week.aggregate(nights, calendar: calendar)
-        #expect(weeks.map(\.cents) == [30_000, 40_000, 80_000])
+    @Test("a daily chart makes one bucket per day, in order")
+    func dailyBucketsAreOnePerDay() {
+        let span = range(days: 14)
+        let buckets = EarningsChartAxisGranularity.day.buckets(of: span, timeZone: zone)
+        #expect(buckets.count == 14)
+        #expect(buckets.allSatisfy { $0.count == 1 })
+        #expect(buckets.map(\.start) == span.days)
+    }
 
-        let months = EarningsChartAxisGranularity.month.aggregate(nights, calendar: calendar)
-        #expect(months.map(\.cents) == [70_000, 80_000])
+    @Test("weekly buckets break on the calendar week, so two days in one week are one bar")
+    func weeklyBucketsCombineDaysOfTheSameWeek() {
+        // Sun 2 Aug through Sat 15 Aug 2026: two whole Gregorian weeks
+        // (Sunday-start, which is what the Gregorian calendar uses here).
+        let span = DayRange(
+            start: CivilDay(year: 2026, month: 8, day: 2),
+            end: CivilDay(year: 2026, month: 8, day: 15)
+        )
+        let buckets = EarningsChartAxisGranularity.week.buckets(of: span, timeZone: zone)
+        #expect(buckets.count == 2)
+        #expect(buckets.map(\.count) == [7, 7])
     }
 }
 

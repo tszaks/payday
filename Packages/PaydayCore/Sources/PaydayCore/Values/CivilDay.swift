@@ -50,6 +50,29 @@ public struct CivilDay: Hashable, Comparable, Codable, Sendable {
         self.init(year: components.year!, month: components.month!, day: components.day!)
     }
 
+    /// Midnight at the start of this civil day in `timeZone`, the exact
+    /// inverse of `init(_:in:)`.
+    ///
+    /// It exists for the surfaces that have to hand a civil day to something
+    /// that only speaks `Date`: Swift Charts' x-axis, `Calendar`-based
+    /// formatting, `.dateTime` format styles. Those are PRESENTATION
+    /// consumers, and the round trip through a `Date` is the last thing that
+    /// happens before pixels. Nothing in the engine calls this — a wage that
+    /// went through a `Date` would be a wage a travelling device could move.
+    ///
+    /// Never optional: `DateComponents` with a valid Gregorian year, month
+    /// and day always resolves, and the `.distantPast` fallback would be a
+    /// silently wrong x-position rather than a visible failure.
+    public func date(in timeZone: TimeZone) -> Date {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        var components = DateComponents()
+        components.year = year
+        components.month = month
+        components.day = day
+        return calendar.date(from: components) ?? Date(timeIntervalSinceReferenceDate: 0)
+    }
+
     /// Parses exactly `"YYYY-MM-DD"` (four-digit year, zero-padded month and
     /// day, ASCII digits and hyphens). Anything else returns nil.
     public init?(iso: String) {

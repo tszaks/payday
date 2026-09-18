@@ -5,6 +5,30 @@ import UIKit
 /// Plain field snapshot of a TipEntry, captured right before deletion so
 /// Undo can rebuild it — the SwiftData model instance itself is gone from
 /// the context by the time Undo might be tapped.
+///
+/// ## Why this file is in PR 5's shared-component slice (METRICS [SC-10])
+///
+/// Like Duplicate, it shows no figure and is a PRODUCER of every stored
+/// money and hours figure of a whole shift — the only one that destroys
+/// them and then rewrites them verbatim. It is upstream of every consumer of
+/// those fields in BOTH directions, since a delete zeroes them and an undo
+/// restores them.
+///
+/// Its contract is that Undo is an EXACT INVERSE: the shift the engine
+/// values after a delete-then-undo is the shift it valued before, to the
+/// cent and to the minute. Two fields are deliberately not restored
+/// verbatim, and neither is money: `modifiedAt` moves to now (via `touch()`,
+/// so the sync leg knows the row changed) and the pending-deletion queue
+/// entry is cancelled.
+///
+/// **Wave 0 changed nothing here, and pinned it instead.**
+/// `SharedComponentSnapshotTests.undoIsAnExactInverseThroughTheEngine`
+/// values a shift, snapshots it, restores it, values it again, and asserts
+/// the two `ShiftValuation`s are equal. A field silently dropped from
+/// `DeletedTipSnapshot` — which is what this type's own header records
+/// happening once before, when hours, tip-out, sales, period, clock times
+/// and server count were all lost on undo — now fails a test instead of
+/// quietly changing someone's earnings.
 struct DeletedTipSnapshot {
     let id: UUID
     let date: Date
