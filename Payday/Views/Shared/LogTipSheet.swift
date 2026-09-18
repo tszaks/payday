@@ -207,21 +207,6 @@ struct LogTipSheet: View {
     @State private var isShowingEndShiftCancelDialog = false
     /// A save that did not happen must not look like one that did.
     @State private var saveFailed = false
-    /// WHICH failure, so the alert can say the accurate thing.
-    ///
-    /// The alert used to render `ShiftCommands.Failure.saveFailed.message`
-    /// unconditionally, discarding the case that was actually thrown. That
-    /// mattered once the flip made `.conversionPending` reachable: a shift
-    /// the server is mid-conversion on is refused by `mayMutate`, and the
-    /// person was told the generic "couldn't save" instead of the accurate
-    /// "Payday is still syncing this shift. Try again in a moment." The
-    /// second is ACTIONABLE -- wait and retry -- and the first is not, so
-    /// the copy already existed and was being thrown away.
-    ///
-    /// Nil means the generic case, which is still right for an unknown
-    /// error: claiming a sync is in progress when it is not would be the
-    /// same defect pointed the other way.
-    @State private var saveFailure: ShiftCommands.Failure?
     /// New-entry only: the details group opens collapsed behind a one-line
     /// belief sentence (ShiftBeliefLine) instead of every row at full volume.
     /// Editing never touches this — that flow keeps the card always open.
@@ -758,7 +743,7 @@ struct LogTipSheet: View {
                 // popover that hides the cancel option behind tap-outside.
                 // The centered box shows all three intents explicitly.
                 .alert(
-                    (saveFailure ?? .saveFailed).message,
+                    ShiftCommands.Failure.saveFailed.message,
                     isPresented: $saveFailed
                 ) {
                     Button("OK", role: .cancel) {}
@@ -1821,7 +1806,6 @@ struct LogTipSheet: View {
             // Rolled back, so the form still holds the night's figures and
             // the sheet stays open to try again. No reveal, because there is
             // nothing to celebrate.
-            saveFailure = error as? ShiftCommands.Failure
             saveFailed = true
             return
         }
@@ -2134,9 +2118,6 @@ struct LogTipSheet: View {
             } catch {
                 // Rolled back, or refused by `mayMutate`: the shift is still
                 // there, so do NOT dismiss on a deletion that did not happen.
-                // The refusal case is exactly why the alert needs to know
-                // WHICH failure this was.
-                saveFailure = error as? ShiftCommands.Failure
                 saveFailed = true
                 return
             }
@@ -2167,7 +2148,6 @@ struct LogTipSheet: View {
             } catch {
                 // Rolled back: the shift is still there, so do NOT dismiss on
                 // a deletion that did not happen.
-                saveFailure = error as? ShiftCommands.Failure
                 saveFailed = true
                 return
             }
