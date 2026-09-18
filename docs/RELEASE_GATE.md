@@ -14,6 +14,74 @@ Status legend: `[ ]` not yet, `[x]` green with evidence recorded below it, `[H]`
 - Build number: _MDDYY+seq_
 - Date: _fill in_
 
+## Evidence recorded 2026-09-18, against `production` at 5a5db7e
+
+Filled in per rule 1 of this document: the command and its output, not the
+word "verified". This is an interim record against `production` rather than a
+release candidate, so **rule 4 still applies** -- every line here must be
+re-run against the final candidate commit. It is recorded now because the
+measurements were otherwise living only in a session transcript.
+
+**Green, with output.**
+
+```
+$ swift test --package-path Packages/PaydayCore
+Test run with 246 tests in 31 suites passed
+
+$ xcodebuild test -scheme Payday -destination 'platform=iOS Simulator,id=E4FC6A8A-...'
+Test run with 1046 tests in 182 suites passed          # Swift Testing total, not "Executed N"
+
+$ cat Packages/PaydayCore/Tests/PaydayCoreTests/Fixtures/KnownIssues.json
+[]
+$ PAYDAYCORE_RELEASE_GATE=1 swift test --package-path Packages/PaydayCore --filter KnownIssuesGate
+Test run with 3 tests in 1 suite passed
+
+$ grep -rh '^import ' Packages/PaydayCore/Sources/ | sort -u
+import CryptoKit
+import Foundation
+
+$ ./scripts/design-lint.sh | tail -1
+=== Design lint passed ===        # 26 [PASS] rules
+```
+
+**The 14 fixtures, and which engine each runs against.** W1-W3, M1, H1, P1,
+S2, Z1, T1 and C1 run against the Swift ledger and snapshot. N1-N3 run against
+the real `private.derive_shifts` in `supabase/tests/shift_deriver_test.sql`,
+which names each of them. E1 runs against the real CSV exporter
+(`CSVExporterTests`, "E1: the exported row carries 6.3833, 6:23 and the
+engine's components"). None runs against a test helper.
+
+Four of them -- N1, N2, N3, E1 -- asserted their expected values in the
+language where their engine lives rather than reading the `.json`, so the file
+documented an expectation and gated nothing. `FixtureGateTests` closed that:
+editing `N2.json`'s gratuity now fails a test.
+
+**Parity, on real adapters**, by the suite that holds each clause:
+
+| Clause | Suite |
+|---|---|
+| calendar day == day detail == that day's rows == chart point | `CalendarSnapshotParityTests` (10) |
+| month == sum of its days | `CalendarSnapshotParityTests`, `EarningsParityTests` (9) |
+| Dashboard period == History row == period detail | `DashboardParityTests` (22), `HistoryParityTests` (27) |
+| Siri == widget == app | `AmbientParityTests` (6) |
+
+**NOT green, stated plainly rather than left ambiguous.**
+
+- **Every superseded calculation path deleted.** No. `PeriodIncome` has left
+  the shippable build (it is a frozen test-only oracle now, because six parity
+  suites use it as the reference for the number the engine must *not* return).
+  `TipEntry`, `ShiftDetails`, `TipBreakdown` and `ShiftDays.groupedByShift`
+  are still live, because the screens still read through them. They cannot go
+  until the writer flip lands. `WageEstimate` is down to one caller,
+  `StatsEngine:598`, and pairs with StatsEngine's own migration.
+- **Data lifecycle.** Not started; that is PR 7.
+- **Shadow comparison.** Not built.
+- **Production Supabase migrations applied.** Held for Tyler's own word.
+  Runbook staged at `~/payday-status/TONIGHT.md`: snapshot first, row counts
+  either side, one-line rollback.
+- **The honesty-of-state lines** that need a debug build or a device are not
+  machine-checkable here and belong with the human lines below.
+
 ## Machine lines
 
 ### Engine correctness
@@ -59,7 +127,13 @@ A parity test written before its fix is the honest way to hold the line: it name
 |---|---|---|
 | `EarningsParityTests` (the calendar-day parity assertion, `PaydayTests/EarningsParityTests.swift:235`) | `CalendarView` slices the ledger per day (`CalendarView.swift:49`), so a week's overtime never reaches a tile. This is the audit's original bug, now pinned by a test instead of a document. | PR 5, when every consumer reads `EarningsSnapshot` over the whole dataset |
 
-- [ ] Zero entries remain in this table, and `grep -rn withKnownIssue PaydayTests/` returns nothing.
+- [ ] Zero entries remain in this table, and no fixture is suppressed. Measure it with the JSON and the gate, NOT with a bare grep:
+      `cat Packages/PaydayCore/Tests/PaydayCoreTests/Fixtures/KnownIssues.json` must print `[]`, and
+      `PAYDAYCORE_RELEASE_GATE=1 swift test --package-path Packages/PaydayCore --filter KnownIssuesGate` must pass.
+      The grep this line used to name was wrong twice over: it searched `PaydayTests/` while the mechanism lives in
+      `Packages/PaydayCore/Tests/PaydayCoreTests/Support/KnownIssues.swift`, and it counted a COMMENT recording the
+      wrapper's own removal as a live suppression. A gate command that manufactures a positive is the same defect as
+      one that manufactures an absence (see the merge-commit section).
 
 ## The shift cursor fence — machine-checkable, and it blocks a ship
 
