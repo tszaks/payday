@@ -579,6 +579,51 @@ else
   echo "[PASS] No view saves with try? (every write path goes through the commit boundary)"
 fi
 
+# 20. A deletion is never queued for the server from INSIDE a transaction.
+#     The misconception this closes was written into the tree as a claim of
+#     safety. LogTipSheet.delete called recordTipDeletions inside a
+#     ShiftCommands.commit body under the comment "Queued and deleted
+#     together, so the server cannot be told about a deletion the device then
+#     fails to make, or the reverse."
+#
+#     Co-locating them does not achieve that and cannot. The pending-deletion
+#     queue is App Group UserDefaults -- recordTipDeletions ends in
+#     AppGroup.defaults.set, which takes effect at once -- while the rows are
+#     SwiftData. context.rollback() restores the rows and has no reach into
+#     the queue. So the shipped shape put the rows back on the device and left
+#     their ids queued for server-side deletion: the next sync removed money
+#     the user could still see. On the pruneZeroedRows path the enclosing
+#     `try?` meant nothing was reported either.
+#
+#     Asserted from the other direction in DeletionQueueAtomicityTests
+#     (rollbackDoesNotUndoTheQueueWrite): that test says the queue is not
+#     transactional, this rule says no call site may assume otherwise.
+#
+#     The checker lives in its own file rather than inline. An earlier draft
+#     embedded the perl in a shell string, the quoting mangled it, and it
+#     printed "[PASS]" while perl reported "Execution of -e aborted due to
+#     compilation errors" -- because an empty result from a BROKEN checker is
+#     indistinguishable from a clean one. Hence the exit-status check below:
+#     a checker that cannot run is a failure, never a pass.
+QUEUE_IN_TXN=$(perl scripts/lint-queue-in-transaction.pl 2>&1)
+QUEUE_IN_TXN_STATUS=$?
+if [ "$QUEUE_IN_TXN_STATUS" -ne 0 ]; then
+  FAIL=1
+  echo "[FAIL] rule 20's checker could not run, so the rule proved nothing"
+  printf '%s\n' "$QUEUE_IN_TXN" | sed 's/^/   /'
+  echo ""
+elif [ -n "$QUEUE_IN_TXN" ]; then
+  FAIL=1
+  echo "[FAIL] A deletion is queued for the server from inside a transaction"
+  printf '%s\n' "$QUEUE_IN_TXN" | sed 's/^/   /'
+  echo "   -> Move the record/cancel call AFTER the commit returns. A rollback"
+  echo "      restores the rows and does NOT unqueue the deletion, so a failed"
+  echo "      save would leave the server deleting a row the user still has."
+  echo ""
+else
+  echo "[PASS] No deletion is queued from inside a transaction"
+fi
+
 echo ""
 if [ "$FAIL" -eq 1 ]; then
   echo "=== Design lint FAILED — see docs/DESIGN.md ==="
