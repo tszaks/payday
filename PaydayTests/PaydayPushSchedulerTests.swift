@@ -166,6 +166,56 @@ struct PaydayPushSchedulerTests {
         #expect(decision.body == "Your check should show about $310.00 before tax. Card tips, gratuity and wages, less tip-out.")
     }
 
+    /// **The decision moves when NOTHING but the rate policy moves.**
+    ///
+    /// This is the gate on group 2.12's reschedule trigger. Before the
+    /// migration the body was `PredictedPaycheck.tipsLineCents`, wage-
+    /// EXCLUSIVE, so this test could not have failed and no rate edit could
+    /// ever have moved the pending notification — which is why all six
+    /// reschedule triggers were shift-shaped. The body now includes wages, so
+    /// a policy edit alone changes what the lock screen says, and something
+    /// has to tell the pending request: `RootView`'s `PolicyStore.didChange`
+    /// observer does.
+    ///
+    /// One shift, three policy sets, no shift touched between them. Each
+    /// spoken figure is asserted, so a revert to a wage-exclusive body fails
+    /// here (all three would read $150.00) and so does dropping wages out of
+    /// the figure.
+    @Test("the decision moves when only the rate policy moves")
+    func policyEditMovesTheDecision() throws {
+        // One 8h shift with $150.00 of credit tips, inside the weekly period
+        // closing Sunday 2026-07-19 and paid Friday 2026-07-24.
+        let entries = [TipEntry(
+            date: date(2026, 7, 15, hour: 17),
+            amountCents: 15_000,
+            kind: .credit,
+            hoursWorked: 8
+        )]
+        let now = date(2026, 7, 19, hour: 20)
+
+        func spokenBody(rateCents: Int?) throws -> String {
+            let decision = try #require(makeDecision(
+                now: now,
+                entries: entries,
+                policies: policies(rateCents: rateCents)
+            ))
+            // Same shift, same period, same payday every time: the ONLY
+            // thing moving is the policy.
+            #expect(decision.fireDate == date(2026, 7, 24, hour: 9))
+            return decision.body
+        }
+
+        // The wage feature off: tips only.
+        #expect(try spokenBody(rateCents: nil) == "Your check should show about $150.00 before tax. Card tips, gratuity and wages, less tip-out.")
+        // The user sets their rate for the first time in Settings > Payroll.
+        // $150.00 of tips + 8h at $20/hr.
+        #expect(try spokenBody(rateCents: 2_000) == "Your check should show about $310.00 before tax. Card tips, gratuity and wages, less tip-out.")
+        // Then corrects the typo to $25/hr. `applyRateEdit` rewrites the
+        // latest policy IN PLACE, so this is a correction and not a raise:
+        // $150.00 + 8h at $25/hr.
+        #expect(try spokenBody(rateCents: 2_500) == "Your check should show about $350.00 before tax. Card tips, gratuity and wages, less tip-out.")
+    }
+
     @Test("an estimated rate carries its caption instead of the basis line")
     func estimatedCarriesItsCaption() throws {
         let entry = TipEntry(
