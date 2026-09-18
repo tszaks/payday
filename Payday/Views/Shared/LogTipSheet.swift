@@ -406,6 +406,7 @@ struct LogTipSheet: View {
                 payrollTimeZone: policyStore.payrollTimeZone
             ),
             entries: allEntries,
+            records: shiftRecords,
             policies: policyStore.policies,
             payrollTimeZone: policyStore.payrollTimeZone
         )
@@ -439,6 +440,7 @@ struct LogTipSheet: View {
                 payrollTimeZone: policyStore.payrollTimeZone
             ),
             entries: allEntries,
+            records: shiftRecords,
             policies: policyStore.policies,
             payrollTimeZone: policyStore.payrollTimeZone,
             windowed: false
@@ -1802,7 +1804,7 @@ struct LogTipSheet: View {
         // `FlipGate1SessionLoggedTests`, whose counterexample test asserts
         // exactly this omission.
         SmartNudgeScheduler.reschedule(preferencesStore: preferencesStore, allEntries: allEntries + newEntries, shiftRecords: shiftRecords + newRecords)
-        PaydayPushScheduler.reschedule(preferencesStore: preferencesStore, schedule: scheduleStore.schedule, allEntries: allEntries + newEntries, paycheckRecords: paycheckRecords)
+        PaydayPushScheduler.reschedule(preferencesStore: preferencesStore, schedule: scheduleStore.schedule, allEntries: allEntries + newEntries, shiftRecords: shiftRecords + newRecords, paycheckRecords: paycheckRecords)
         if isFirstShiftEver {
             Task { await SmartNudgeScheduler.requestAuthorizationIfNeeded() }
         }

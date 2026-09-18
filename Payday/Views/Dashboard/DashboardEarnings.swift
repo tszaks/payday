@@ -84,6 +84,22 @@ enum DashboardEarnings {
     /// This is that swap, and it keeps the snapshot and the rows on the SAME
     /// representation so the hero cannot sit over rows drawn from the other
     /// one.
+    /// **The one entry point.** Both representations in, one resolved
+    /// dataset out; see `ShiftRepresentation`.
+    @MainActor
+    static func build(
+        entries: [TipEntry],
+        records: [ShiftRecord],
+        policies: CompensationPolicies,
+        payrollTimeZone: TimeZone,
+        calendar: Calendar,
+        representation: ShiftRepresentation = .automatic
+    ) -> Dataset {
+        representation.usesRecords
+            ? build(records: records, policies: policies, payrollTimeZone: payrollTimeZone)
+            : build(entries: entries, policies: policies, payrollTimeZone: payrollTimeZone, calendar: calendar)
+    }
+
     @MainActor
     static func build(
         records: [ShiftRecord],
