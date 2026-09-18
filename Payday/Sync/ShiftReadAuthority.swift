@@ -74,4 +74,68 @@ enum ShiftReadAuthority {
         guard state.conservationFailedAt == nil else { return false }
         return (state.remainingGroupCount ?? 0) == 0
     }
+
+    /// What to do with a freshly read server state, given what this device
+    /// currently believes and what is on screen.
+    enum Outcome: Equatable {
+        /// Start reading `public.shifts`.
+        case promote
+        /// Stop reading them. Never deferred; see `resolve`.
+        case demote
+        /// The server says authoritative, but a sheet editing a LEGACY row is
+        /// open, so the switch waits for the next sync pass.
+        case deferPromotion
+        case unchanged
+    }
+
+    /// The one place the flip is allowed to happen, and the one place it is
+    /// allowed to be held back.
+    ///
+    /// ## Why promotion defers
+    ///
+    /// The flag is re-read on every render, so a sync completing mid-session
+    /// re-renders every screen from the new source, which is correct. An open
+    /// sheet is mostly safe on its own terms too: `LogTipSheet` captures its
+    /// `target` at presentation and `deleteRoute`/`editingRecord` key on that
+    /// target's TYPE, so a legacy sheet keeps routing legacy. And a `.new`
+    /// sheet deliberately re-reads the flag at save time, so one opened before
+    /// a flip writes the NEW representation -- desirable, not a bug.
+    ///
+    /// One case is left, and it is the one that matters: a `.edit(TipEntry)`
+    /// sheet open across the flip commits through `commitLiveEdit` into the
+    /// legacy representation, which readers no longer read. The deriver runs
+    /// legacy-to-records only, so the edit is recovered on the next server
+    /// fold and pull rather than lost -- but for that interval the person
+    /// edited their shift and watched it revert. On a money app that presents
+    /// as the app losing their correction, which is the trust failure this
+    /// whole project exists to prevent, so it does not ship as a documented
+    /// caveat.
+    ///
+    /// Deferral REMOVES the case instead of handling it: no legacy-edit sheet
+    /// can straddle a promotion, because a promotion cannot occur while one is
+    /// open. The alternative considered was re-resolving a legacy target to its
+    /// `ShiftRecord` through `legacyEntryIDs` at save time, which handles the
+    /// straddle correctly but leaves it representable.
+    ///
+    /// ## Why demotion does NOT defer
+    ///
+    /// `rollbackAt` and `conservationFailedAt` are the server withdrawing its
+    /// own conversion -- the money did not add up, or the account was returned
+    /// to legacy. Holding a demotion back to protect an open sheet would keep
+    /// every screen reading a representation the server has just disowned,
+    /// which is strictly worse than the straddle it would be avoiding. So the
+    /// asymmetry is deliberate: the deferral only ever delays gaining trust,
+    /// never delays losing it.
+    static func resolve(
+        _ state: State,
+        currentlyAuthoritative: Bool,
+        legacyEditSheetPresented: Bool
+    ) -> Outcome {
+        let ready = isAuthoritative(state)
+        if currentlyAuthoritative {
+            return ready ? .unchanged : .demote
+        }
+        guard ready else { return .unchanged }
+        return legacyEditSheetPresented ? .deferPromotion : .promote
+    }
 }

@@ -672,6 +672,53 @@ enum PaydaySyncState {
         load(for: userID).shiftsAreAuthoritativeAt != nil
     }
 
+    /// **The one writer of `shiftsAreAuthoritativeAt`**, and therefore the one
+    /// place the flip can happen for an account.
+    ///
+    /// It takes the server-read conversion state and applies
+    /// `ShiftReadAuthority.resolve`, which decides three things this function
+    /// deliberately does not: whether the account is ready, whether a
+    /// promotion must wait for an open legacy-edit sheet, and the asymmetry
+    /// that a DEMOTION never waits. Read that function's header before
+    /// changing anything here.
+    ///
+    /// Returns the outcome so the caller can act on `.deferPromotion` --
+    /// which is not an error and not a no-op, but "ask again on the next
+    /// pass". Swallowing it would turn a few-seconds delay into a permanent
+    /// one, since nothing else would ever reconsider.
+    ///
+    /// Main actor because the deferral reads `LegacyEditSheetPresence`, which
+    /// is a fact about what is on screen.
+    @MainActor
+    @discardableResult
+    static func applyShiftAuthority(
+        _ state: ShiftReadAuthority.State,
+        for userID: UUID,
+        at date: Date = .now
+    ) -> ShiftReadAuthority.Outcome {
+        let outcome = ShiftReadAuthority.resolve(
+            state,
+            currentlyAuthoritative: shiftsAreAuthoritative(for: userID),
+            legacyEditSheetPresented: LegacyEditSheetPresence.isPresented
+        )
+        switch outcome {
+        case .promote:
+            mutate(userID: userID) {
+                $0.shiftsAreAuthoritativeAt = PaydayRemoteDate.instant(date)
+            }
+        case .demote:
+            // Cleared, not stamped with a "demoted at". The field's whole
+            // meaning is "may shifts be read", and a second timestamp for the
+            // negative case would be a second source of truth for one fact.
+            mutate(userID: userID) {
+                $0.shiftsAreAuthoritativeAt = nil
+            }
+        case .deferPromotion, .unchanged:
+            break
+        }
+        return outcome
+    }
+
     /// The same fact for whichever account is registered in THIS process.
     ///
     /// Exists because the readers that need it most are out of process. The
