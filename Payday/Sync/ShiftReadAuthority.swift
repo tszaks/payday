@@ -32,11 +32,35 @@ enum ShiftReadAuthority {
         /// Legacy groups the conversion has not folded yet.
         let remainingGroupCount: Int?
 
+        /// **No defaults, on purpose: `State()` must not compile.**
+        ///
+        /// `isAuthoritative` opens with `guard migratedAt != nil`, so an
+        /// all-nil `State` demotes a converted account. An earlier draft of
+        /// the sync leg wrote exactly `fetch() ?? State()` as a defensive
+        /// fallback for a missing row -- which, because RLS on this table
+        /// returns ZERO ROWS rather than an error for an unauthorised read,
+        /// would have flipped the representation on every auth blip.
+        ///
+        /// That draft was caught in review. Review is the weak instrument.
+        /// With no defaults the fallback does not compile, so it cannot be
+        /// reintroduced by someone who has not read the header explaining
+        /// why it is wrong.
+        ///
+        /// Tried first and REJECTED because it does not work: an
+        /// `@available(*, unavailable) init()` alongside a fully-defaulted
+        /// memberwise init. Swift resolves `State()` to the defaulted init
+        /// and builds clean. Probed rather than assumed -- the build
+        /// SUCCEEDED, which is the only reason this is the real fix and not
+        /// a comment claiming a guard that was never there.
+        ///
+        /// The cost is that every construction spells out four columns. That
+        /// is the intended cost: a caller who has not thought about
+        /// `rollbackAt` should not be able to omit it.
         init(
-            migratedAt: Date? = nil,
-            rollbackAt: Date? = nil,
-            conservationFailedAt: Date? = nil,
-            remainingGroupCount: Int? = nil
+            migratedAt: Date?,
+            rollbackAt: Date?,
+            conservationFailedAt: Date?,
+            remainingGroupCount: Int?
         ) {
             self.migratedAt = migratedAt
             self.rollbackAt = rollbackAt

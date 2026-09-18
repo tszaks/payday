@@ -131,7 +131,7 @@ struct ShiftAuthorityLegTests {
     /// conversion.
     @Test("an absent conversion row is non-authoritative")
     func absentRowIsNotAuthoritative() {
-        #expect(!ShiftReadAuthority.isAuthoritative(ShiftReadAuthority.State()))
+        #expect(!ShiftReadAuthority.isAuthoritative(ShiftReadAuthority.State.probe()))
     }
 
     // MARK: - Liveness
@@ -145,7 +145,7 @@ struct ShiftAuthorityLegTests {
     @Test("a deferred promotion completes on the next pass once the sheet closes")
     func deferredPromotionIsReattempted() {
         let id = account(authoritative: false)
-        let ready = ShiftReadAuthority.State(
+        let ready = ShiftReadAuthority.State.probe(
             migratedAt: Date(timeIntervalSince1970: 1_750_000_000),
             remainingGroupCount: 0
         )
@@ -180,7 +180,7 @@ struct ShiftAuthorityLegTests {
     @Test("an undeferred promotion needs no follow-up pass")
     func undeferredPromotionNeedsNoFollowUp() {
         let id = account(authoritative: false)
-        let ready = ShiftReadAuthority.State(
+        let ready = ShiftReadAuthority.State.probe(
             migratedAt: Date(timeIntervalSince1970: 1_750_000_000),
             remainingGroupCount: 0
         )
@@ -196,7 +196,7 @@ struct ShiftAuthorityLegTests {
     @Test("a steady authoritative account resolves unchanged and asks for nothing")
     func steadyStateAsksForNothing() {
         let id = account(authoritative: true)
-        let ready = ShiftReadAuthority.State(
+        let ready = ShiftReadAuthority.State.probe(
             migratedAt: Date(timeIntervalSince1970: 1_750_000_000),
             remainingGroupCount: 0
         )
@@ -214,7 +214,7 @@ struct ShiftAuthorityLegTests {
     /// `resolve` returns `.demote` on the `currentlyAuthoritative` branch
     /// whenever `isAuthoritative` is false, and `isAuthoritative` opens with
     /// `guard migratedAt != nil`. So an EMPTY `State` demotes a converted
-    /// account. The first draft substituted `ShiftReadAuthority.State()` for a
+    /// account. The first draft substituted `ShiftReadAuthority.State.probe()` for a
     /// missing row, which turns any read returning nothing into a
     /// representation flip for that user.
     ///
@@ -229,7 +229,7 @@ struct ShiftAuthorityLegTests {
         let id = account(authoritative: true)
         #expect(PaydaySyncState.shiftsAreAuthoritative(for: id))
         let outcome = ShiftReadAuthority.resolve(
-            ShiftReadAuthority.State(),
+            ShiftReadAuthority.State.probe(),
             currentlyAuthoritative: true,
             legacyEditSheetPresented: false
         )
