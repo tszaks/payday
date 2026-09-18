@@ -106,6 +106,13 @@ struct DashboardFacts: SnapshotFacts {
     let paydayPhase: PaydayMoment.Phase?
     let shiftCount: Int
     let shiftDays: [(day: Date, shiftID: UUID, items: [TipEntry])]
+    /// The same rows in the shift representation, filtered by the same civil
+    /// work-day rule. Empty unless the caller passed records, so the two are
+    /// never both populated.
+    ///
+    /// `[ShiftRecord]` and not a projection because these rows are the edit
+    /// and delete targets: `ProjectedShiftRow` is deliberately un-persistable.
+    let shiftRecordDays: [ShiftRecord]
     /// Calendar days that hold 2+ shifts — a "double" — so a row can label
     /// itself "Today · Lunch" / "Today · Dinner" only when it needs to.
     let multiShiftDays: Set<Date>
@@ -186,6 +193,9 @@ struct DashboardFacts: SnapshotFacts {
     init(
         snapshot: EarningsSnapshot?,
         allShifts: [(day: Date, shiftID: UUID, items: [TipEntry])],
+        /// Defaulted, so every existing caller is unchanged. The writer flip
+        /// passes records here instead of entries above.
+        allShiftRecords: [ShiftRecord] = [],
         schedule: PaySchedule?,
         now: Date,
         forcedPaydayPhase: PaydayMoment.Phase?,
@@ -214,9 +224,15 @@ struct DashboardFacts: SnapshotFacts {
             currentRange.contains(CivilDay($0.day, in: payrollTimeZone))
         }
         shiftDays = periodShifts
+        // The same civil-work-day membership rule, which is the engine's.
+        let periodRecords = allShiftRecords.filter {
+            currentRange.contains(CivilDay($0.workDate, in: payrollTimeZone))
+        }
+        shiftRecordDays = periodRecords
         periodEntries = periodShifts.flatMap(\.items)
-        // A "shift" counts closeouts, not calendar days.
-        shiftCount = periodShifts.count
+        // A "shift" counts closeouts, not calendar days. Either
+        // representation supplies it; only one is ever populated.
+        shiftCount = periodShifts.count + periodRecords.count
         // Days that hold more than one shift — the emergent doubles.
         var dayCounts: [Date: Int] = [:]
         for shift in periodShifts { dayCounts[shift.day, default: 0] += 1 }
