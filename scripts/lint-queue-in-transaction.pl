@@ -26,7 +26,12 @@ for my $f (sort @files) {
       last if $d == 0; $i++;
     }
     my $body = substr($src, $bodyStart, $i - $bodyStart + 1);
-    next unless $body =~ /\b(?:record|cancel)TipDeletions\b/;
+    # Widened 2026-09-18. The rule originally knew only the TIP queue symbols,
+    # and missed the identical bug in `ShiftCommands.delete` and `.restore`,
+    # which write the shift and legacy-entry queues inside `perform`. Any
+    # PaydaySyncState queue mutation counts: they all land in App Group
+    # UserDefaults, which `rollback()` cannot reach, whatever they are called.
+    next unless $body =~ /PaydaySyncState\.(?:record|cancel|clear|mark)\w*(?:Deletion|Deletions|Restore|Restores|Tombstone|Tombstones)\w*\s*\(/;
     my $line = 1 + (() = substr($src, 0, $bodyStart) =~ /\n/g);
     push @hits, "$f:$line";
   }

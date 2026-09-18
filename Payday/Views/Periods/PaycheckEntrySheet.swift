@@ -783,13 +783,19 @@ struct PaycheckEntrySheet: View {
     private func delete() {
         if let existing {
             do {
+                // The row first; the queue only once it is really gone. The
+                // comment that used to sit here claimed "queued and deleted in
+                // the same transaction, so a crash between them cannot leave
+                // the server holding a paycheck the device believes is gone",
+                // which is the same false claim that was on the tip and shift
+                // paths: the queue is App Group `UserDefaults` and
+                // `rollback()` has no reach into it, so a failed save left the
+                // paycheck on the device with its deletion queued for the
+                // server. See `design-lint.sh` rule 20.
                 try ShiftCommands.commit(in: modelContext) {
-                    // Queued and deleted in the same transaction, so a crash
-                    // between them cannot leave the server holding a paycheck
-                    // the device believes is gone.
-                    PaydaySyncState.recordPaycheckDeletion(existing.id)
                     modelContext.delete(existing)
                 }
+                PaydaySyncState.recordPaycheckDeletion(existing.id)
             } catch {
                 saveFailed = true
                 return
