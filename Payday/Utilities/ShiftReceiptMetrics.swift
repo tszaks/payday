@@ -146,8 +146,14 @@ struct ShiftReceiptMetrics: Codable, Equatable, Hashable, Sendable {
     /// on one shift **and** a different cash-versus-credit split, and the
     /// split is what drives the paycheck comparison.
     ///
-    /// `owner` is which kind's stored amount the receipt was attached to, the
-    /// same resolution `TipBreakdown` performs (credit first, then cash).
+    /// `owner` is which kind's stored amount the receipt was attached to. It
+    /// is the caller's job to resolve it through
+    /// `ShiftDetails.metricsOwner(of:)` -- a row carrying a decodable payload
+    /// first, then credit, then lowest id -- and NOT through
+    /// `first { $0.kind == .credit }`, which on a group holding two rows of
+    /// one kind is decided by array order and picks a different owner in a
+    /// different order. `ShiftDetails.metricsOwner` is the one spelling that
+    /// matches `private.derive_shifts`' `metrics_rank`.
     ///
     /// Idempotent: the guard returns v2 input unchanged, so folding twice
     /// cannot subtract the gratuity twice. This file is the only one allowed

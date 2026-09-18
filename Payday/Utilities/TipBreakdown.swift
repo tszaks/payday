@@ -46,9 +46,15 @@ struct TipBreakdown: Equatable {
 
         return shifts.reduce(into: .zero) { result, shift in
             let details = ShiftDetails.resolve(from: shift.items)
-            let credit = shift.items.first { $0.kind == .credit }
-            let cash = shift.items.first { $0.kind == .cash }
-            let metricsOwner = credit?.receiptMetrics != nil ? credit : (cash?.receiptMetrics != nil ? cash : nil)
+            // The receipt owner is resolved by metrics rank — a row that
+            // carries a decodable payload first, then credit, then lowest id
+            // — and by nothing else. The previous spelling
+            // (`first { kind == .credit }`, else `first { kind == .cash }`)
+            // could not see a payload on a group's SECOND credit row, which
+            // made this function return two different splits for the same
+            // rows in two different array orders and made it disagree with
+            // `private.derive_shifts` in both. See ShiftDetails' header.
+            let metricsOwner = ShiftDetails.metricsOwner(of: shift.items)
 
             for entry in shift.items {
                 // Receipt metrics describe the whole closeout and belong to
