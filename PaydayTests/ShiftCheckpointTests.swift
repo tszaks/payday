@@ -367,4 +367,82 @@ struct ShiftCheckpointTests {
     func shiftCursorSafetyWindowIsFiveMinutes() {
         #expect(PaydaySyncState.shiftCursorSafetyWindow == 300)
     }
+
+    // MARK: - The out-of-process accessor
+
+    /// The accessor the widget and the Siri intent read, and the wiring bug
+    /// it closes.
+    ///
+    /// `EarningsStore.init` documents that "S7 passes its single
+    /// `shiftsAreAuthoritative` in here". S7 shipped without doing it, so the
+    /// parameter kept its pre-S7 default of `false` at every production call
+    /// site and `.shiftCacheWiped` became unreachable in the shipped app. The
+    /// consequence is specific: `ModelContextEarningsInputSource.fetchInputs`
+    /// reads shifts from `ShiftRecord` ONLY and counts `TipEntry` purely as
+    /// `legacyTipEntryCount`, so a converted account whose shift cache was
+    /// purged computed from zero shifts while that count knew the data was
+    /// still there — and every surface rendered $0.
+    @Test("no registered account means shifts are not authoritative")
+    func signedOutIsNotAuthoritative() {
+        // `forget` clears `currentUserKey` when the account being forgotten
+        // is the registered one, which is the only way back to signed-out.
+        if let existing = PaydaySyncState.registeredUserID {
+            PaydaySyncState.forget(userID: existing)
+        }
+        #expect(PaydaySyncState.registeredUserID == nil)
+        #expect(!PaydaySyncState.shiftsAreAuthoritativeForCurrentAccount)
+    }
+
+    /// Registered but NOT yet converted. This is every existing user today,
+    /// and it must stay `false`: treating a pre-conversion account as a wiped
+    /// cache would blank every screen for everyone.
+    @Test("a registered account before conversion is not authoritative")
+    func registeredButUnconvertedIsNotAuthoritative() {
+        let userID = registeredAccount()
+        #expect(!PaydaySyncState.shiftsAreAuthoritativeForCurrentAccount)
+        #expect(!PaydaySyncState.shiftsAreAuthoritative(for: userID))
+    }
+
+    /// Registered AND converted. The accessor must agree with the per-account
+    /// function for the same account — one fact, one answer, whichever process
+    /// is asking.
+    @Test("a converted registered account is authoritative, and agrees with the per-account read")
+    func convertedRegisteredAccountIsAuthoritative() {
+        let userID = registeredAccount()
+        PaydaySyncState.mutate(userID: userID) {
+            $0.shiftsAreAuthoritativeAt = "2026-09-18T00:00:00.000Z"
+        }
+        #expect(PaydaySyncState.shiftsAreAuthoritativeForCurrentAccount)
+        #expect(PaydaySyncState.shiftsAreAuthoritative(for: userID) ==
+                PaydaySyncState.shiftsAreAuthoritativeForCurrentAccount)
+    }
+
+    /// The accessor must follow the REGISTERED account, not any account that
+    /// happens to have converted. Otherwise signing into a second, unconverted
+    /// account would inherit the first one's authority and read its empty
+    /// shift cache as real.
+    @Test("the accessor follows the registered account, not a converted stranger")
+    func accessorFollowsTheRegisteredAccount() {
+        let converted = registeredAccount()
+        PaydaySyncState.mutate(userID: converted) {
+            $0.shiftsAreAuthoritativeAt = "2026-09-18T00:00:00.000Z"
+        }
+        #expect(PaydaySyncState.shiftsAreAuthoritativeForCurrentAccount)
+
+        // Switch to a different, unconverted account. The accessor must go
+        // false: inheriting the previous account's authority would read its
+        // empty shift cache as real data for someone else.
+        let other = registeredAccount()
+        #expect(other != converted)
+        #expect(!PaydaySyncState.shiftsAreAuthoritativeForCurrentAccount)
+
+        // And the switch necessarily DISCARDS the old account's checkpoint,
+        // rather than leaving it dormant. `registerCurrentUser` refuses a
+        // switch while another account is registered (`canRegister`), so the
+        // only route to a different account is `forget`, which removes that
+        // account's snapshot key outright. Asserted because the first draft
+        // of this test assumed the opposite and expected the old fact to
+        // survive.
+        #expect(!PaydaySyncState.shiftsAreAuthoritative(for: converted))
+    }
 }

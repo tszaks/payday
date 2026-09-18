@@ -135,7 +135,10 @@ struct PaydayWidgetProvider: TimelineProvider {
             scheduleStore: scheduleStore
         )
         let snapshot: EarningsSnapshot
-        switch EarningsStore.buildOnce(source: source) {
+        switch EarningsStore.buildOnce(
+            source: source,
+            shiftsAreAuthoritative: PaydaySyncState.shiftsAreAuthoritativeForCurrentAccount
+        ) {
         case .success(let built):
             snapshot = built
         case .failure:
