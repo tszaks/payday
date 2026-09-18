@@ -247,6 +247,118 @@ extension PayFrequency {
     }
 }
 
+// MARK: - Projection
+
+/// The onboarding projection: a dollar figure that is **deliberately not an
+/// engine figure**, and the only place in Payday where that is true.
+///
+/// ## The decision, and why (PR 5 group 2.9, 2026-09-18)
+///
+/// `docs/METRICS.md` rows [OB-02], [OB-03], [OB-04] and [OB-05] are the only
+/// currency figures in the app with no `MetricID`. The choice was to route
+/// them through the engine or to keep them synthetic and label them as such.
+/// **They stay synthetic**, on purpose, for three reasons:
+///
+/// 1. **There is nothing for the engine to read.** This screen runs before
+///    sign-in and before the first shift exists: no `TipEntry`, no
+///    `ShiftRecord`, no `CompensationPolicies`, no `EarningsSnapshot`. The
+///    only way to produce an `EarningsResult` here would be to fabricate
+///    shifts out of two dropdown bands and hand them to
+///    `CompensationLedger`.
+/// 2. **That would make the engine attest a guess.** An `EarningsResult`
+///    carries a `SnapshotStamp` and a `Completeness`: it is the app's promise
+///    that a number came from records. `PAYDAYCORE_GOAL.md`'s governing rule
+///    is that one metric returns the same cents on every consumer — a
+///    projection from band midpoints is not a metric, it has no other
+///    consumer to agree with, and stamping it would make "this came from the
+///    engine" stop meaning anything.
+/// 3. **Nothing else in the app shows annual tips.** There is no surface this
+///    figure can contradict. The one figure that DOES have a twin — the
+///    payday notification against the Dashboard's card — is reconciled in
+///    `PaydayPushScheduler`, and it is reconciled because it has a twin.
+///
+/// So the labelling is the whole job, and it is structural rather than a
+/// comment: this type is the ONE place the projection arithmetic lives, it is
+/// the ONE place onboarding turns whole dollars into currency text, it cannot
+/// be constructed from an `EarningsSnapshot`, and it deliberately exposes no
+/// `stamp`, no `Completeness` and no `MetricID` — so a reviewer grepping for
+/// figures that bypassed the engine finds this type and its recorded reason
+/// rather than a loose `* 52` in a view.
+///
+/// Every figure it produces is spoken with its basis out loud ("in tips a
+/// year, at the pace you just described"), which is the substantiation rule
+/// this file's diagnosis already carried.
+struct OnboardingProjection: Equatable {
+    /// Projected annual tips in whole dollars. 0 means "the answers do not
+    /// substantiate a figure", and suppresses the count-up entirely.
+    let annualTipsDollars: Int
+    /// The cash share of the projection, in whole dollars. Nil when the
+    /// person said almost none arrives as cash, which is a sentence rather
+    /// than a figure.
+    let cashDollars: Int?
+
+    /// Not substantiated: either band is missing, so no figure is asserted.
+    static let unsubstantiated = OnboardingProjection(annualTipsDollars: 0, cashDollars: nil)
+
+    /// Their own two numbers multiplied out over a year, rounded to the
+    /// nearest $500 so it reads as the estimate it is, and clamped so a band
+    /// edge can never produce an absurd headline figure.
+    ///
+    /// This is the only multiplication in the onboarding flow. It is here,
+    /// and not in `PaydayOnboardingDiagnosis` (a facts struct) or in
+    /// `OnboardingRevealView` (a view), because those are the two places the
+    /// PR 5 adapter contract forbids money arithmetic outright.
+    static func from(shifts: ShiftLoad?, tips: TipsPerShift?, cash: CashShare?) -> OnboardingProjection {
+        guard let shifts, let tips else { return .unsubstantiated }
+        let raw = shifts.shiftsPerWeek * Double(tips.midpointDollars) * 52
+        let annual = min(max(roundedToHalfThousand(raw), 3_000), 130_000)
+        guard let cash, cash.fraction > 0 else {
+            return OnboardingProjection(annualTipsDollars: annual, cashDollars: nil)
+        }
+        return OnboardingProjection(
+            annualTipsDollars: annual,
+            cashDollars: roundedToHalfThousand(Double(annual) * cash.fraction)
+        )
+    }
+
+    private static func roundedToHalfThousand(_ dollars: Double) -> Int {
+        Int((dollars / 500).rounded()) * 500
+    }
+
+    // MARK: Text
+
+    /// The ONE place a whole-dollar onboarding figure becomes currency text.
+    ///
+    /// Not `EarningsFigure` — that type exists so a view cannot print a
+    /// figure it computed itself, and its whole contract (a `MetricID` from
+    /// the registry, a label the completeness rules allow, `nil` text for an
+    /// unavailable read) is about figures the engine answered. Borrowing it
+    /// for a projection would say the opposite of what this type is for. The
+    /// suppression rule here is the analogous one, stated in the type that
+    /// owns it: `annualTipsDollars == 0` renders no figure at all, which is
+    /// why `OnboardingRevealView` gates the count-up on it.
+    static func text(wholeDollars: Int) -> String {
+        Money.wholeDollarString(fromCents: wholeDollars * 100)
+    }
+
+    /// The settled figure, or nil when the answers substantiate none.
+    var annualTipsText: String? {
+        guard annualTipsDollars > 0 else { return nil }
+        return Self.text(wholeDollars: annualTipsDollars)
+    }
+
+    /// One frame of the count-up, from the view's animated progress.
+    ///
+    /// The easing is MOTION, so it stays in the view; turning an already
+    /// projected figure's frame into text is not a second figure and the
+    /// intermediate values are never a fact about anybody (they are never
+    /// whole-$500 like the target, and VoiceOver reads `annualTipsText`
+    /// instead — [OB-04]).
+    func countUpText(displayedDollars: Double) -> String {
+        Self.text(wholeDollars: Int(displayedDollars.rounded()))
+    }
+}
+
 // MARK: - Diagnosis
 
 /// A personalized, deterministic reading computed purely from quiz answers.
@@ -259,19 +371,29 @@ extension PayFrequency {
 /// `shifts per week × tips per shift × 52` — their own two numbers multiplied.
 /// When either is missing, the reveal stays qualitative rather than inventing
 /// a number the inputs don't support.
+///
+/// **It holds no money arithmetic.** Every figure on it comes from
+/// `OnboardingProjection`, which owns the multiplication and carries the
+/// recorded decision that these figures are intentionally not engine figures
+/// (PR 5 adapter contract, rule 1: a facts struct keeps only presentation).
+/// This struct's job is the words.
 struct PaydayOnboardingDiagnosis: Equatable {
     /// Headline above the figure. Never contains the figure itself — the
     /// count-up already says it (DESIGN.md rule 11, "say it once").
     let headline: String
-    /// Projected annual tip income in whole dollars. 0 means "not
-    /// substantiated" and suppresses the count-up entirely.
-    let projectedAnnualTips: Int
+    /// The synthetic projection this reading is written around. Not an
+    /// engine figure, by decision: see `OnboardingProjection`.
+    let projection: OnboardingProjection
     /// Caption under the figure, stating the basis out loud.
     let projectionCaption: String
     /// The cash reading — Payday's reason to exist.
     let cashLine: String?
     /// What the app will do about the goal they picked.
     let secondaryInsight: String?
+
+    /// Projected annual tip income in whole dollars. 0 means "not
+    /// substantiated" and suppresses the count-up entirely.
+    var projectedAnnualTips: Int { projection.annualTipsDollars }
 
     static func compute(
         shifts: ShiftLoad?,
@@ -280,44 +402,37 @@ struct PaydayOnboardingDiagnosis: Equatable {
         tracking: TipTrackingMethod?,
         goal: PaydayGoal?
     ) -> PaydayOnboardingDiagnosis {
-        guard let shifts, let tips else {
+        let projection = OnboardingProjection.from(shifts: shifts, tips: tips, cash: cash)
+        guard projection.annualTipsDollars > 0 else {
             return PaydayOnboardingDiagnosis(
                 headline: "Payday keeps the record of every shift, so you always know what you actually make.",
-                projectedAnnualTips: 0,
+                projection: projection,
                 projectionCaption: "",
                 cashLine: cash?.microInsight,
                 secondaryInsight: goal?.promise ?? tracking?.microInsight
             )
         }
 
-        // Their two numbers, multiplied out over a year. Rounded to the
-        // nearest $500 so it reads as the estimate it is, and clamped so a
-        // band edge can never produce an absurd headline figure.
-        let raw = shifts.shiftsPerWeek * Double(tips.midpointDollars) * 52
-        let rounded = Int((raw / 500).rounded()) * 500
-        let projected = min(max(rounded, 3_000), 130_000)
-
         return PaydayOnboardingDiagnosis(
             headline: "Here's what a year of your shifts looks like.",
-            projectedAnnualTips: projected,
+            projection: projection,
             projectionCaption: "in tips a year, at the pace you just described",
-            cashLine: makeCashLine(cash: cash, projectedAnnualTips: projected),
+            cashLine: makeCashLine(cash: cash, projection: projection),
             secondaryInsight: goal?.promise
         )
     }
 
     // MARK: - Static copy tables (deterministic)
 
-    private static func makeCashLine(cash: CashShare?, projectedAnnualTips: Int) -> String? {
-        guard let cash else { return nil }
-        guard cash.fraction > 0 else {
+    private static func makeCashLine(cash: CashShare?, projection: OnboardingProjection) -> String? {
+        guard cash != nil else { return nil }
+        guard let cashDollars = projection.cashDollars else {
             // Nothing to quantify: don't assert a cash figure for someone who
             // said they barely take any. The paycheck check is the real
             // promise for this person, and it ships.
             return "Almost all of it runs through your checks. Payday tells you when one of them comes up short."
         }
-        let cashDollars = Int(((Double(projectedAnnualTips) * cash.fraction) / 500).rounded()) * 500
-        let amount = Money.wholeDollarString(fromCents: cashDollars * 100)
+        let amount = OnboardingProjection.text(wholeDollars: cashDollars)
         return "Around \(amount) of that is cash. Cash leaves no pay stub behind it, so Payday is the only record you'll have of it."
     }
 }
