@@ -184,9 +184,69 @@ plant_positive "unmarked twin of the marked case" 'func f() {
     )
 }'
 
+# ------------------------------------------------- the rule's ROOTS have teeth
+# A rule's roots are as much a part of it as its pattern.
+#
+# Everything above plants violations in ONE directory, so it proved the rule
+# catches every SHAPE -- and it would have passed happily while the rule was
+# blind to an entire TARGET. That is not hypothetical: rule 23 shipped scoped
+# to `Payday` alone, leaving `PaydayWidget` -- a separate target that opens the
+# same App Group store and renders its own money -- completely unchecked by
+# the lint written to prevent exactly that class of miss. Gap 9 (the widget's
+# pace baseline reading `TipEntry` directly) was found by running the rule
+# against that root BY HAND.
+#
+# So this section plants one instance in EVERY root design-lint passes, and
+# asserts the rule reports each one. A future narrowing of the scope now fails
+# the build instead of waiting to be noticed.
+#
+# The roots are read out of design-lint.sh rather than restated here, because
+# a hand-copied list is the same drift problem one level up: the two would
+# diverge and this test would go back to proving less than it claims.
+ROOTS=$(sed -n 's/^SRC=(\(.*\))$/\1/p' "$REPO/scripts/design-lint.sh")
+
+# FIRST, and this is the check that actually catches gap 9's root cause.
+#
+# The per-root planting below invokes the perl script with every root
+# directly, so it proves the SCRIPT can scan a root when told to. It does NOT
+# prove design-lint TELLS it to -- and that was the whole defect: the script
+# was always capable, and the invocation passed `Payday` alone.
+#
+# Measured: with the invocation re-narrowed to `Payday`, the per-root section
+# below still passed. So that section, on its own, is another check inventing
+# its own answer -- the third instance of that family in this engagement, and
+# the second inside this rule's own test. This line is the one with teeth.
+INVOCATION=$(grep -n 'lint-representation-switch\.pl' "$REPO/scripts/design-lint.sh" \
+  | grep -v '^\s*#' | grep 'REPRESENTATION=')
+if ! printf '%s' "$INVOCATION" | grep -q '"\${SRC\[@\]}"'; then
+  echo "MISS (scope): design-lint does not pass \"\${SRC[@]}\" to rule 23."
+  echo "   found: $INVOCATION"
+  echo "   A hardcoded root list is how the widget target went unchecked (gap 9)."
+  fail=1
+fi
+
+if [ -z "$ROOTS" ]; then
+  echo "MISS: could not read SRC=(...) from design-lint.sh, so the roots are unproven"
+  fail=1
+else
+  for root in $ROOTS; do
+    ROOT_TMP=$(mktemp -d)
+    mkdir -p "$ROOT_TMP/$root/Nested"
+    # A legacy-only builder call, the plainest shape the rule exists to catch.
+    printf '%s\n' 'func f() { SomeEarnings.build(entries: allEntries, policies: p) }' \
+      > "$ROOT_TMP/$root/Nested/RootProbe.swift"
+    out=$(cd "$ROOT_TMP" && perl "$REPO/scripts/lint-representation-switch.pl" $ROOTS 2>&1)
+    if [ -z "$out" ]; then
+      echo "MISS (root not covered): a violation in '$root' was not reported"
+      fail=1
+    fi
+    rm -rf "$ROOT_TMP"
+  done
+fi
+
 if [ "$fail" -ne 0 ]; then
   echo "rule 23 self-test FAILED"
   exit 1
 fi
-echo "rule 23 proves itself: 9 defect shapes caught, 6 correct shapes left alone"
+echo "rule 23 proves itself: 9 defect shapes caught, 6 correct shapes left alone, every root covered"
 exit 0
