@@ -63,7 +63,12 @@ struct PaydayRemoteRepository {
         try await softDelete(pending, function: "soft_delete_paycheck_records")
     }
 
-    func fetchSnapshot(userID: UUID) async throws -> PaydayRemoteSnapshot {
+    /// Every tip and paycheck row the account has, tombstones included, with
+    /// no settings read. Split out of `fetchSnapshot` for the one-time
+    /// fingerprint seeding, which needs server CONTENT and must not fail on
+    /// an account whose `user_settings` row is somehow absent — that read is
+    /// `.single()` and would throw.
+    func fetchAllRows(userID: UUID) async throws -> (tips: [RemoteTipEntry], paychecks: [RemotePaycheckRecord]) {
         let tipRows: [RemoteTipEntry] = try await fetchChanged(
             table: "tip_entries",
             columns: tipColumns,
@@ -78,6 +83,15 @@ struct PaydayRemoteRepository {
             after: .beginning,
             cursor: { PaydaySyncState.ServerCursor(updatedAt: $0.serverUpdatedAt ?? "", id: $0.id) }
         )
+        // A row updated while a long baseline is paging can legitimately
+        // appear once at its old position and again at its newer server
+        // timestamp. Keep the last (newest) occurrence so migration counts
+        // and hashes describe one canonical row per UUID.
+        return (deduplicated(tipRows, id: \.id), deduplicated(paycheckRows, id: \.id))
+    }
+
+    func fetchSnapshot(userID: UUID) async throws -> PaydayRemoteSnapshot {
+        let rows = try await fetchAllRows(userID: userID)
         let settings: RemoteUserSettings = try await client
             .from("user_settings")
             .select(settingsColumns)
@@ -85,13 +99,7 @@ struct PaydayRemoteRepository {
             .single()
             .execute()
             .value
-        // A row updated while a long baseline is paging can legitimately
-        // appear once at its old position and again at its newer server
-        // timestamp. Keep the last (newest) occurrence so migration counts
-        // and hashes describe one canonical row per UUID.
-        let tips = deduplicated(tipRows, id: \.id)
-        let paychecks = deduplicated(paycheckRows, id: \.id)
-        return PaydayRemoteSnapshot(tips: tips, paychecks: paychecks, settings: settings)
+        return PaydayRemoteSnapshot(tips: rows.tips, paychecks: rows.paychecks, settings: settings)
     }
 
     /// Keyset pagination keeps steady-state downloads proportional to rows
@@ -274,10 +282,10 @@ final class PaydaySyncService {
     ) async throws -> PaydaySyncOutcome {
         let userID = try await client.auth.session.user.id
         let repository = PaydayRemoteRepository(client: client)
-        let localTips = try context.fetch(FetchDescriptor<TipEntry>())
-            .map { RemoteTipEntry(entry: $0, userID: userID) }
-        let localPaychecks = try context.fetch(FetchDescriptor<PaycheckRecord>())
-            .map { RemotePaycheckRecord(record: $0, userID: userID) }
+        let localTipEntries = try context.fetch(FetchDescriptor<TipEntry>())
+        let localPaycheckRecords = try context.fetch(FetchDescriptor<PaycheckRecord>())
+        let localTips = localTipEntries.map { RemoteTipEntry(entry: $0, userID: userID) }
+        let localPaychecks = localPaycheckRecords.map { RemotePaycheckRecord(record: $0, userID: userID) }
         let localSettings = RemoteUserSettings(
             userID: userID,
             scheduleStore: scheduleStore,
@@ -285,19 +293,51 @@ final class PaydaySyncService {
             moveLedgerStore: moveLedgerStore
         )
         let checkpoint = PaydaySyncState.snapshot(for: userID)
-        let localTipVersionsAtStart = Dictionary(uniqueKeysWithValues: localTips.map {
-            ($0.id, $0.clientUpdatedAt)
-        })
-        let localPaycheckVersionsAtStart = Dictionary(uniqueKeysWithValues: localPaychecks.map {
-            ($0.id, $0.clientUpdatedAt)
-        })
+        // Versions are content fingerprints, not clocks — see
+        // PaydayRowFingerprint. A row whose fields changed is in the upload
+        // set whether or not the write path remembered to touch() it.
+        let localTipVersionsAtStart = try PaydayRowFingerprint.values(localTipEntries)
+        let localPaycheckVersionsAtStart = try PaydayRowFingerprint.values(localPaycheckRecords)
+
+        // One sync per install: a checkpoint written under the shipped
+        // timestamp scheme has no fingerprints, so ask the server what it
+        // actually holds and let that be what "acknowledged" means. Costs one
+        // extra full read, once, and finds every correction the timestamp bug
+        // dropped. Deliberately NOT reused as this sync's download baseline:
+        // it was read before the upload, so reconciling against it could
+        // revert a row this sync just sent.
+        var acknowledgedTipVersions = checkpoint.tipContentFingerprint
+        var acknowledgedPaycheckVersions = checkpoint.paycheckContentFingerprint
+        if PaydaySyncState.requiresFingerprintSeeding(checkpoint: checkpoint) {
+            let serverRows = try await repository.fetchAllRows(userID: userID)
+            acknowledgedTipVersions = PaydaySyncState.seededVersions(
+                local: localTipVersionsAtStart,
+                localClientUpdatedAt: Dictionary(
+                    uniqueKeysWithValues: localTips.map { ($0.id, $0.clientUpdatedAt) }
+                ),
+                serverRows: try serverRows.tips.map { try $0.seedingRow },
+                pulledThrough: checkpoint.tipServerCursor
+            )
+            acknowledgedPaycheckVersions = PaydaySyncState.seededVersions(
+                local: localPaycheckVersionsAtStart,
+                localClientUpdatedAt: Dictionary(
+                    uniqueKeysWithValues: localPaychecks.map { ($0.id, $0.clientUpdatedAt) }
+                ),
+                serverRows: try serverRows.paychecks.map { try $0.seedingRow },
+                pulledThrough: checkpoint.paycheckServerCursor
+            )
+            Self.logger.notice(
+                "Sync fingerprint seeding against server content, for rows already pulled. serverTips=\(serverRows.tips.count) serverPaychecks=\(serverRows.paychecks.count) seededTips=\(acknowledgedTipVersions.count) seededPaychecks=\(acknowledgedPaycheckVersions.count)"
+            )
+        }
+
         let changedTipIDs = PaydaySyncState.changedIDs(
             current: localTipVersionsAtStart,
-            acknowledged: checkpoint.tipClientUpdatedAt
+            acknowledged: acknowledgedTipVersions
         )
         let changedPaycheckIDs = PaydaySyncState.changedIDs(
             current: localPaycheckVersionsAtStart,
-            acknowledged: checkpoint.paycheckClientUpdatedAt
+            acknowledged: acknowledgedPaycheckVersions
         )
         let changedTips = localTips.filter { changedTipIDs.contains($0.id) }
         let changedPaychecks = localPaychecks.filter { changedPaycheckIDs.contains($0.id) }
@@ -403,15 +443,11 @@ final class PaydaySyncService {
             "Sync download. baseline=\(needsServerBaseline) tips=\(remoteTips.count) paychecks=\(remotePaychecks.count) settings=\(remoteSettings.map { _ in 1 } ?? 0)"
         )
 
-        let tipVersionsBeforeReconcile = Dictionary(uniqueKeysWithValues:
-            try context.fetch(FetchDescriptor<TipEntry>()).map {
-                ($0.id, PaydayRemoteDate.instant($0.modifiedAt))
-            }
+        let tipVersionsBeforeReconcile = try PaydayRowFingerprint.values(
+            try context.fetch(FetchDescriptor<TipEntry>())
         )
-        let paycheckVersionsBeforeReconcile = Dictionary(uniqueKeysWithValues:
-            try context.fetch(FetchDescriptor<PaycheckRecord>()).map {
-                ($0.id, PaydayRemoteDate.instant($0.modifiedAt))
-            }
+        let paycheckVersionsBeforeReconcile = try PaydayRowFingerprint.values(
+            try context.fetch(FetchDescriptor<PaycheckRecord>())
         )
         let tipsChangedDuringSync = PaydaySyncState.IDsChangedDuringSync(
             captured: localTipVersionsAtStart,
@@ -455,10 +491,12 @@ final class PaydaySyncService {
         PaydaySyncState.clearTipDeletions(pendingTipDeletions.keys, for: userID)
         PaydaySyncState.clearPaycheckDeletions(pendingPaycheckDeletions.keys, for: userID)
 
-        let acknowledgedTips = try context.fetch(FetchDescriptor<TipEntry>())
-            .map { RemoteTipEntry(entry: $0, userID: userID) }
-        let acknowledgedPaychecks = try context.fetch(FetchDescriptor<PaycheckRecord>())
-            .map { RemotePaycheckRecord(record: $0, userID: userID) }
+        let reconciledTipEntries = try context.fetch(FetchDescriptor<TipEntry>())
+        let reconciledPaycheckRecords = try context.fetch(FetchDescriptor<PaycheckRecord>())
+        let acknowledgedTips = reconciledTipEntries.map { RemoteTipEntry(entry: $0, userID: userID) }
+        let acknowledgedPaychecks = reconciledPaycheckRecords.map { RemotePaycheckRecord(record: $0, userID: userID) }
+        let acknowledgedTipFingerprints = try PaydayRowFingerprint.values(reconciledTipEntries)
+        let acknowledgedPaycheckFingerprints = try PaydayRowFingerprint.values(reconciledPaycheckRecords)
         let tipCursor = PaydaySyncState.ServerCursor.advanced(
             from: checkpoint.tipServerCursor ?? .beginning,
             candidates: tipCursorRows.map { ($0.serverUpdatedAt, $0.id) }
@@ -481,6 +519,8 @@ final class PaydaySyncService {
             tipEntryIDs: Set(acknowledgedTips.map(\.id)),
             paycheckIDs: Set(acknowledgedPaychecks.map(\.id)),
             migrationVerified: true,
+            // Written for a possible rollback to the timestamp scheme only.
+            // Change detection compares the fingerprints below.
             tipClientUpdatedAt: PaydaySyncState.acknowledgedVersions(
                 current: Dictionary(uniqueKeysWithValues: acknowledgedTips.map {
                     ($0.id, $0.clientUpdatedAt)
@@ -493,6 +533,21 @@ final class PaydaySyncService {
                     ($0.id, $0.clientUpdatedAt)
                 }),
                 checkpoint: checkpoint.paycheckClientUpdatedAt,
+                changedDuringSync: paychecksChangedDuringSync
+            ),
+            // The prior versions here are the ones this sync actually compared
+            // against — the SEEDED map on a seeding sync — so a row edited
+            // while the network work was suspended stays eligible for the next
+            // upload instead of being acknowledged on the strength of a
+            // checkpoint that never held a fingerprint for it.
+            tipContentFingerprint: PaydaySyncState.acknowledgedVersions(
+                current: acknowledgedTipFingerprints,
+                checkpoint: acknowledgedTipVersions,
+                changedDuringSync: tipsChangedDuringSync
+            ),
+            paycheckContentFingerprint: PaydaySyncState.acknowledgedVersions(
+                current: acknowledgedPaycheckFingerprints,
+                checkpoint: acknowledgedPaycheckVersions,
                 changedDuringSync: paychecksChangedDuringSync
             ),
             settingsClientUpdatedAt: remoteSettings?.clientUpdatedAt
@@ -590,8 +645,8 @@ final class PaydaySyncService {
                     // was suspended.
                     if PaydaySyncState.localRowChangedDuringSync(
                         id: row.id,
-                        currentClientUpdatedAt: PaydayRemoteDate.instant(entry.modifiedAt),
-                        capturedClientUpdatedAt: localVersionsAtStart
+                        currentVersion: try PaydayRowFingerprint.value(entry),
+                        capturedVersions: localVersionsAtStart
                     ) {
                         activeIDs.insert(row.id)
                         continue
@@ -661,8 +716,8 @@ final class PaydaySyncService {
                 if let localVersionsAtStart {
                     if PaydaySyncState.localRowChangedDuringSync(
                         id: row.id,
-                        currentClientUpdatedAt: PaydayRemoteDate.instant(record.modifiedAt),
-                        capturedClientUpdatedAt: localVersionsAtStart
+                        currentVersion: try PaydayRowFingerprint.value(record),
+                        capturedVersions: localVersionsAtStart
                     ) {
                         activeIDs.insert(row.id)
                         continue

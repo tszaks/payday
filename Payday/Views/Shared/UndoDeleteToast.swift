@@ -45,7 +45,7 @@ struct DeletedTipSnapshot {
 
     func restored() -> TipEntry {
         let entry = TipEntry(id: id, date: date, amountCents: amountCents, kind: kind, note: note, recordedAt: recordedAt, hoursWorked: hoursWorked, tipOutCents: tipOutCents, salesCents: salesCents, shiftPeriod: shiftPeriod, shiftID: shiftID, clockIn: clockIn, clockOut: clockOut, serverCount: serverCount, receiptMetrics: receiptMetrics)
-        entry.modifiedAt = .now
+        entry.touch()
         return entry
     }
 }

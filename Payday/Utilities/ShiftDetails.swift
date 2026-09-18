@@ -38,7 +38,15 @@ enum ShiftDetails {
     /// more than one entry. clockIn/clockOut/serverCount default to nil so
     /// existing call sites (and tests) that only care about the earlier
     /// fields keep compiling.
-    static func write(hoursWorked: Double?, tipOutCents: Int?, salesCents: Int?, shiftPeriod: ShiftPeriod?, clockIn: Date? = nil, clockOut: Date? = nil, serverCount: Int? = nil, receiptMetrics: ShiftReceiptMetrics? = nil, into entries: [TipEntry]) {
+    ///
+    /// Every entry written here is `touch()`ed, because this is the shared
+    /// write path for every shift-level edit in the app (LogTipSheet's live
+    /// edit, ShiftWriter's insert, BackfillSheet, LogTipsIntent, the receipt
+    /// apply path, DebugSeeder) and a shift edit that does not advance
+    /// `modifiedAt` uploads a stale `client_updated_at`. Touching an entry
+    /// whose values happen to be unchanged is free — the upload set is chosen
+    /// by content fingerprint, not by the clock.
+    static func write(hoursWorked: Double?, tipOutCents: Int?, salesCents: Int?, shiftPeriod: ShiftPeriod?, clockIn: Date? = nil, clockOut: Date? = nil, serverCount: Int? = nil, receiptMetrics: ShiftReceiptMetrics? = nil, into entries: [TipEntry], at date: Date = .now) {
         guard let primary = entries.first(where: { $0.kind == .credit }) ?? entries.first else { return }
         for entry in entries where entry.id != primary.id {
             entry.hoursWorked = nil
@@ -49,6 +57,7 @@ enum ShiftDetails {
             entry.clockOut = nil
             entry.serverCount = nil
             entry.receiptMetrics = nil
+            entry.touch(at: date)
         }
         primary.hoursWorked = hoursWorked
         primary.tipOutCents = tipOutCents
@@ -58,5 +67,6 @@ enum ShiftDetails {
         primary.clockOut = clockOut
         primary.serverCount = serverCount
         primary.receiptMetrics = receiptMetrics
+        primary.touch(at: date)
     }
 }
