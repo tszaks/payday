@@ -543,6 +543,67 @@ pin_check "recordTipDeletions" 'func +recordTipDeletions\b' Payday PaydayWidget 
 pin_check "shiftCacheRequiresBaseline" 'func +shiftCacheRequiresBaseline\b' Payday PaydayWidget --include=*.swift
 pin_check "payday_shift_rollback_at" 'create +(or +replace +)?function +[a-z_.]*payday_shift_rollback_at' supabase --include=*.sql
 
+# 19. Every production reader of the engine passes shiftsAreAuthoritative.
+#     A bug class no test can catch, because the argument is DEFAULTED: omit
+#     it and the code compiles, every test still passes, and the behaviour
+#     silently reverts to the pre-conversion rule.
+#
+#     That is exactly what happened. `EarningsStore.init` documents "S7 passes
+#     its single shiftsAreAuthoritative in here" and S7 shipped without doing
+#     it, so all three production call sites -- PaydayApp, AmbientPeriodFigure
+#     (the one function the widget AND Siri share) and PaydayWidget -- kept the
+#     pre-S7 default of `false`, and `.shiftCacheWiped` was unreachable in the
+#     shipped app. Only the tests ever passed `true`, so the mechanism was
+#     covered while the product could not reach it.
+#
+#     The consequence was not cosmetic. `ModelContextEarningsInputSource
+#     .fetchInputs` reads shifts from `ShiftRecord` ONLY and counts TipEntry
+#     purely as `legacyTipEntryCount`, which exists solely to feed this check.
+#     So a converted account whose shift cache was purged computed from zero
+#     shifts while that count knew the data was still there, and the app, the
+#     Lock Screen and Siri all rendered $0.
+#
+#     Balances parentheses rather than grepping a line, because all three call
+#     sites span several lines and a line-oriented grep would pass them all.
+AUTHORITATIVE_OMISSIONS=$(perl -e '
+  use strict; use warnings; use File::Find;
+  my @files; my @hits;
+  find(sub { push @files, $File::Find::name if /\.swift$/ }, "Payday", "PaydayWidget");
+  for my $f (sort @files) {
+    open(my $fh, "<", $f) or next;
+    local $/; my $src = <$fh>; close $fh;
+    $src =~ s{/\*.*?\*/}{}gs;
+    $src =~ s{//[^\n]*}{}g;
+    while ($src =~ /\bEarningsStore(?:\.buildOnce)?\s*\(/g) {
+      my $start = pos($src) - 1;
+      my ($depth, $i, $len) = (0, $start, length($src));
+      while ($i < $len) {
+        my $c = substr($src, $i, 1);
+        $depth++ if $c eq "(";
+        $depth-- if $c eq ")";
+        last if $depth == 0;
+        $i++;
+      }
+      my $call = substr($src, $start, $i - $start + 1);
+      next if $call =~ /shiftsAreAuthoritative\s*:/;
+      my $line = 1 + (() = substr($src, 0, $start) =~ /\n/g);
+      push @hits, "$f:$line";
+    }
+  }
+  print "$_\n" for @hits;
+')
+if [ -n "$AUTHORITATIVE_OMISSIONS" ]; then
+  FAIL=1
+  echo "[FAIL] An engine reader omits shiftsAreAuthoritative, so it silently uses the pre-conversion rule"
+  printf '%s\n' "$AUTHORITATIVE_OMISSIONS" | sed 's/^/   /'
+  echo "   -> Pass shiftsAreAuthoritative: PaydaySyncState.shiftsAreAuthoritativeForCurrentAccount."
+  echo "      Omitting it defaults to false, which makes .shiftCacheWiped unreachable"
+  echo "      and renders \$0 for a converted account whose shift cache was purged."
+  echo ""
+else
+  echo "[PASS] Every engine reader passes shiftsAreAuthoritative"
+fi
+
 echo ""
 if [ "$FAIL" -eq 1 ]; then
   echo "=== Design lint FAILED — see docs/DESIGN.md ==="
