@@ -85,17 +85,63 @@ final class UndoDeleteToastState {
     private(set) var snapshots: [DeletedTipSnapshot] = []
     private var dismissTask: Task<Void, Never>?
 
+    /// The atomic write, injected so the FAILURE branch is reachable from a
+    /// test. Production passes the default and behaves exactly as before.
+    ///
+    /// Worth stating why this seam earns its keep, because the schema has no
+    /// `@Attribute(.unique)` and it is tempting to conclude `save()` cannot
+    /// fail. It can: a CloudKit conflict, disk pressure, or context
+    /// validation all surface as a throw here. So the ordering this class
+    /// depends on — queue the server-side deletion only AFTER the local write
+    /// has persisted — is a live production path, and it is the one ordering
+    /// whose failure makes the app and the server disagree about whether the
+    /// user's money exists. `design-lint.sh` rule 18 keeps the shape; this is
+    /// what lets a test assert the behaviour.
+    typealias Committer = (ModelContext, () throws -> Void) throws -> Void
+
+    private let commitWrite: Committer
+
+    init(commitWrite: @escaping Committer = { try ShiftCommands.commit(in: $0, $1) }) {
+        self.commitWrite = commitWrite
+    }
+
     var snapshot: DeletedTipSnapshot? { snapshots.first }
 
+    /// Deletes through the atomic boundary, and queues the server-side
+    /// deletion only once the local delete has actually persisted.
+    ///
+    /// The order here is the whole point. The shipped version called
+    /// `recordTipDeletions` FIRST and then `try? context.save()`, so a failed
+    /// save left the rows on screen while their ids sat in the App Group's
+    /// pending-deletion queue. The next sync would then delete, on the server,
+    /// rows the user could still see — and the app and the server would
+    /// disagree about whether that money exists. `try?` made it silent.
+    ///
+    /// So: snapshot first (the properties are unreadable once the objects are
+    /// deleted), then mutate inside `ShiftCommands.commit`, which saves once
+    /// and rolls back on any throw, and only afterwards touch the queue and
+    /// the toast. If the save fails nothing is queued, nothing is dismissed,
+    /// and the rows stay visible — which is the truth.
     func delete(_ entries: [TipEntry], in context: ModelContext) {
         guard !entries.isEmpty else { return }
+        let taken = entries.map(DeletedTipSnapshot.init)
+        let ids = entries.map(\.id)
+
+        do {
+            try commitWrite(context) {
+                for entry in entries { context.delete(entry) }
+            }
+        } catch {
+            // Rolled back: the rows are still here and still the user's.
+            // Nothing queued, no toast, no haptic — the failure is visible as
+            // the row simply not going away.
+            return
+        }
+
         dismissTask?.cancel()
-        snapshots = entries.map(DeletedTipSnapshot.init)
-        PaydaySyncState.recordTipDeletions(entries.map(\.id))
-        for entry in entries { context.delete(entry) }
-        try? context.save()
+        PaydaySyncState.recordTipDeletions(ids)
+        snapshots = taken
         PaydayHaptics.medium()
-        PaydayWidgetRefresh.request()
         dismissTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(4))
             guard !Task.isCancelled else { return }
@@ -103,15 +149,35 @@ final class UndoDeleteToastState {
         }
     }
 
+    /// Restores through the same boundary, and un-queues the server deletion
+    /// only once the rows are actually back.
+    ///
+    /// Mirror of the hazard in `delete`. The shipped version called
+    /// `cancelTipDeletions` first, so a failed insert left the rows gone
+    /// locally with the server deletion cancelled: the row exists on the
+    /// server, is absent on the device, and the toast has already been
+    /// dismissed, so the user has no way back to it. Cancelling only after a
+    /// successful save means a failure leaves the deletion still queued and
+    /// the toast still up, so Undo can simply be tapped again.
     func undo(in context: ModelContext) {
         guard !snapshots.isEmpty else { return }
+        let restoring = snapshots
+
+        do {
+            try commitWrite(context) {
+                for snapshot in restoring { context.insert(snapshot.restored()) }
+            }
+        } catch {
+            // Rolled back, and deliberately NOT dismissed: the deletion is
+            // still queued and the toast is still on screen, so the one
+            // affordance that can recover this row is still reachable.
+            return
+        }
+
         dismissTask?.cancel()
-        PaydaySyncState.cancelTipDeletions(snapshots.map(\.id))
-        for snapshot in snapshots { context.insert(snapshot.restored()) }
-        try? context.save()
+        PaydaySyncState.cancelTipDeletions(restoring.map(\.id))
         snapshots = []
         PaydayHaptics.success()
-        PaydayWidgetRefresh.request()
     }
 }
 
