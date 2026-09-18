@@ -878,3 +878,95 @@ extension RemoteShift {
         try PaydayMigrationHash.fingerprint(businessValue(workDate: workDate))
     }
 }
+
+/// The account-level conversion record, as the device reads it.
+///
+/// Decode-only. `public.shift_migration_state` has `sms_read_own` RLS and a
+/// `select` grant to `authenticated`, and **no write grant at all** -- only
+/// the definer functions write it. So there is no `encode` here and there
+/// must never be one: a device asserting its own conversion state is the
+/// failure the server-sourced design exists to prevent.
+///
+/// Four of these columns are the four inputs to
+/// `ShiftReadAuthority.isAuthoritative`. The rest of the table is progress
+/// and diagnostics the predicate deliberately does not read, which is why
+/// this type names the four rather than mirroring the table: a column added
+/// later cannot silently change the rule.
+struct RemoteShiftMigrationState: Decodable, Equatable, Sendable {
+    let userID: UUID
+    /// The FIRST conversion instant, never moved by a re-run.
+    let migratedAt: String?
+    /// Set if the account was rolled back. Authority ends immediately.
+    let rollbackAt: String?
+    /// Set if the conversion failed its own conservation check.
+    let conservationFailedAt: String?
+    /// Legacy groups the conversion has not folded yet.
+    let remainingGroupCount: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case userID = "user_id"
+        case migratedAt = "migrated_at"
+        case rollbackAt = "rollback_at"
+        case conservationFailedAt = "conservation_failed_at"
+        case remainingGroupCount = "remaining_group_count"
+    }
+
+    /// The columns to select. Named explicitly rather than `*` so a column
+    /// added to the table does not start arriving unread.
+    static let columns = "user_id,migrated_at,rollback_at,conservation_failed_at,remaining_group_count"
+
+    /// A timestamp column that is present but will not parse.
+    ///
+    /// An error rather than a nil, which is the whole point -- see
+    /// `authorityState()`.
+    struct UnparseableTimestamp: Error {
+        let column: String
+        let value: String
+    }
+
+    /// The predicate's input, with timestamps parsed once here rather than at
+    /// the decision site.
+    ///
+    /// **Throwing, and that is the fix for a real defect.** The first version
+    /// was a computed property doing
+    /// `migratedAt.flatMap(PaydayRemoteDate.parseInstant)`, which collapses
+    /// two different facts into nil: the column was SQL NULL, and the column
+    /// held a string that would not parse.
+    ///
+    /// `isAuthoritative` opens with `guard state.migratedAt != nil`, so a
+    /// parse failure reads as "never converted" -- and on an already-promoted
+    /// account that is a DEMOTE. The row EXISTS in that case, so the leg's
+    /// absent-row guard does not catch it: that guard closed the ROW-level
+    /// collapse and this closes the FIELD-level one.
+    ///
+    /// The consequence is the severe class. Demoting a promoted account makes
+    /// every shift logged SINCE promotion invisible, because those exist only
+    /// as `ShiftRecord`s and the legacy view cannot see them -- the
+    /// missing-night-looks-like-a-night-not-worked failure
+    /// `remainingGroupCount` exists to prevent, arriving through a different
+    /// door. And worse than the auth blip in one respect: a format or
+    /// precision change on the server would fail to parse on EVERY pass, so
+    /// the demotion would be persistent rather than transient.
+    ///
+    /// Throwing routes it into the leg's existing `catch`, which changes
+    /// nothing. So "we failed to read it" and "it isn't set" stay
+    /// distinguishable at every level -- the invariant the row-level guard
+    /// established, restored at the field level, via the safe path that
+    /// already existed rather than a second one.
+    func authorityState() throws -> ShiftReadAuthority.State {
+        func parse(_ value: String?, _ column: String) throws -> Date? {
+            // A genuine SQL NULL. The only thing allowed to mean "absent".
+            guard let value else { return nil }
+            guard let parsed = PaydayRemoteDate.parseInstant(value) else {
+                throw UnparseableTimestamp(column: column, value: value)
+            }
+            return parsed
+        }
+        return ShiftReadAuthority.State(
+            migratedAt: try parse(migratedAt, "migrated_at"),
+            rollbackAt: try parse(rollbackAt, "rollback_at"),
+            conservationFailedAt: try parse(conservationFailedAt, "conservation_failed_at"),
+            remainingGroupCount: remainingGroupCount
+        )
+    }
+}

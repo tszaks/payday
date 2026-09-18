@@ -164,6 +164,28 @@ struct PaydayRemoteRepository {
         try await sendReturning(rows, function: "upsert_shifts")
     }
 
+    /// The account's conversion record, or nil when the account has none.
+    ///
+    /// Nil is the ordinary case, not an error: `shift_migration_state` has a
+    /// row only once the server has run a conversion for that account, so
+    /// every account today reads nil. `ShiftReadAuthority.State()` with all
+    /// four fields absent is correctly non-authoritative, so the caller can
+    /// treat nil as "not converted" without a special case.
+    ///
+    /// NOT `.single()`. That throws when no row exists, which would turn the
+    /// ordinary case into a sync failure -- the same trap
+    /// `fetchAllRows`' header records for the `user_settings` read.
+    func fetchShiftMigrationState(userID: UUID) async throws -> RemoteShiftMigrationState? {
+        let rows: [RemoteShiftMigrationState] = try await client
+            .from("shift_migration_state")
+            .select(RemoteShiftMigrationState.columns)
+            .eq("user_id", value: userID)
+            .limit(1)
+            .execute()
+            .value
+        return rows.first
+    }
+
     /// Tombstones shifts. The server stores the EARLIEST of the requested and
     /// the already-stored tombstone, so a replayed delete is a true no-op and
     /// a clock-skewed device cannot park a tombstone in the future.
@@ -733,12 +755,109 @@ final class PaydaySyncService {
             checkpointToWrite.paycheckServerCursor = paycheckCursor
             checkpointToWrite.settingsServerUpdatedAt = settingsServerUpdatedAt
         }
+        // The read-authority leg: the ONE caller of the ONE writer.
+        //
+        // Extracted to `applyShiftAuthorityLeg` so a test can drive the REAL
+        // leg -- the absent-row skip, the swallowed throw, the deferral
+        // mapping -- by supplying the fetch, without a Supabase session.
+        // Asserting the wiring by reading the source proved the wiring
+        // EXISTS; it could not prove a deferral actually produces a second
+        // attempt that promotes, and this is the slice that makes the flip
+        // live.
+        let authorityDeferred = await Self.applyShiftAuthorityLeg(userID: userID) {
+            try await repository.fetchShiftMigrationState(userID: userID)
+        }
+
         return PaydaySyncOutcome(
             report: try Self.cachedReport(context: context, userID: userID),
             requiresFollowUpSync: !tipsChangedDuringSync.isEmpty
                 || !paychecksChangedDuringSync.isEmpty
                 || settingsChangedDuringSync
+                // THE LIVENESS REQUIREMENT. Nothing inside the deferral
+                // re-arms it, so a caller treating `.deferPromotion` as a
+                // no-op would strand the account on the legacy representation
+                // for the rest of the session -- a guard against a
+                // few-seconds straddle turned into an indefinite one. Asking
+                // for a follow-up pass is what makes the deferral a DELAY
+                // rather than a cancellation.
+                || authorityDeferred
         )
+    }
+
+    /// The read-authority decision for one sync pass. Returns whether the
+    /// promotion was DEFERRED, which the caller maps onto
+    /// `requiresFollowUpSync`.
+    ///
+    /// `fetch` is injected with the real repository call supplied at the one
+    /// production call site, the same shape as `ShiftCommands.perform`'s
+    /// `saving` and the earnings builders' `representation`. It exists so the
+    /// behaviour below can be tested rather than grepped for.
+    ///
+    /// ## An absent row must NOT reach the predicate
+    ///
+    /// `resolve` returns `.demote` on the `currentlyAuthoritative` branch
+    /// whenever `isAuthoritative` is false, and `isAuthoritative` opens with
+    /// `guard migratedAt != nil`. So an EMPTY `State` demotes a converted
+    /// account, and an earlier draft of this leg substituted exactly that for
+    /// a missing row.
+    ///
+    /// "Missing row" is not a loud failure. RLS on this table is
+    /// `for select ... using (auth.uid() = user_id)`, so a request that fails
+    /// to authenticate as the owner yields ZERO ROWS rather than an error: an
+    /// auth blip is indistinguishable from "never converted" at the call
+    /// site, which is what makes a defensive `?? State()` look reasonable
+    /// while being a representation flip on every blip.
+    ///
+    /// Skipping is correct rather than merely cautious because of two facts
+    /// about how the server communicates, not because of caution:
+    ///
+    /// 1. Nothing in any migration deletes from `shift_migration_state`; it
+    ///    is rollback\'s only anchor.
+    /// 2. Withdrawal is signalled by SETTING a column (`rollback_at`,
+    ///    `conservation_failed_at`), never by removing the row.
+    ///
+    /// So an absent row can never legitimately mean "withdrawn", and skipping
+    /// it discards no real signal. This is the one place the demotion
+    /// asymmetry cuts the wrong way: never deferring a demotion is right when
+    /// the server has genuinely withdrawn, and exactly wrong when we merely
+    /// failed to ask.
+    ///
+    /// A thrown read is swallowed for the same reason, and additionally
+    /// because by this point in a pass the rows are reconciled and the
+    /// checkpoint written -- throwing would discard a successful sync over a
+    /// fact that is only ever an optimisation.
+    ///
+    /// ## What the liveness guarantee actually is
+    ///
+    /// Precisely: **a deferral requests a retry UNLESS the next read fails.**
+    /// Not "a deferral always produces a retry".
+    ///
+    /// The `catch` returns false, so if a follow-up pass's own migration-state
+    /// read fails, no further follow-up is requested and the deferred
+    /// promotion waits for the next natural sync instead. That is benign --
+    /// legacy is the safe fallback and the account simply stays there a while
+    /// longer -- but it is a weaker guarantee than the unconditional one, and
+    /// stating it unconditionally is how a caveat becomes a surprise.
+    @MainActor
+    static func applyShiftAuthorityLeg(
+        userID: UUID,
+        fetch: () async throws -> RemoteShiftMigrationState?
+    ) async -> Bool {
+        do {
+            guard let row = try await fetch() else { return false }
+            // `authorityState()` THROWS on a present-but-unparseable
+            // timestamp rather than collapsing it to nil, so that lands in
+            // the catch below and changes nothing. See its header: a parse
+            // failure read as nil demotes a promoted account, and would do so
+            // on every pass rather than transiently.
+            return PaydaySyncState.applyShiftAuthority(try row.authorityState(), for: userID)
+                == .deferPromotion
+        } catch {
+            // Deliberately swallowed, and deliberately not `try?` at the call
+            // site: design-lint rule 19 bans `try?` on write paths, and
+            // spelling the catch out is what lets this comment exist.
+            return false
+        }
     }
 
     static func reconcile(
