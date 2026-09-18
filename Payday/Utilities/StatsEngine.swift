@@ -92,7 +92,11 @@ struct TipRecord: Sendable, Hashable {
 }
 
 extension TipRecord {
-    init(entry: TipEntry) {
+    /// Widened from `TipEntry` to the protocol in S9's reader-switch work.
+    /// A pure signature change: every property read below is already a
+    /// `LegacyShiftRow` requirement, so a `ProjectedShiftRow` built from a
+    /// `ShiftRecord` produces an identical `TipRecord`.
+    init(entry: some LegacyShiftRow) {
         self.init(date: entry.date, amountCents: entry.amountCents, kind: entry.kind, isDouble: entry.isDouble, recordedAt: entry.recordedAt, hoursWorked: entry.hoursWorked, tipOutCents: entry.tipOutCents, salesCents: entry.salesCents, shiftPeriod: entry.shiftPeriod, shiftID: entry.shiftID, clockIn: entry.clockIn, clockOut: entry.clockOut, serverCount: entry.serverCount, receiptMetrics: entry.receiptMetrics, note: entry.note)
     }
 }
