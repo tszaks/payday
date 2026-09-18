@@ -255,10 +255,39 @@ fi
 #     and any raise afterwards rejects that build's write. The partition has to
 #     stay total, which means a CASE per column and never a predicate.
 #
-#     Checked as "a WHERE after the ON CONFLICT", so an ordinary
-#     `insert ... select ... where ... on conflict` source filter is fine.
+#     Checked as "a WHERE belonging to the ON CONFLICT clause itself", which
+#     means the two WHEREs that are NOT the predicate have to be excluded:
+#
+#       * a source filter BEFORE it -- `insert ... select ... where ... on
+#         conflict ...` -- which the rule's first version already allowed by
+#         only looking forward from the `on conflict` token; and
+#       * a WHERE anywhere AFTER it that belongs to a different clause. S6's
+#         writer is one `with ... insert ... on conflict ... returning`
+#         statement whose other CTEs and whose final SELECT both filter, so
+#         looking forward for any WHERE at all flagged it with no predicate
+#         present. Same class of false positive as the first one, in the other
+#         direction.
+#
+#     So the scan is paren-depth aware: from the `on conflict` token it walks
+#     forward and reports a WHERE only at the depth the token itself sits at,
+#     stopping as soon as depth goes negative (the enclosing CTE or statement
+#     has closed). `on conflict (cols) where <index predicate> do update` and
+#     `do update set ... where <condition>` are both at that depth and are
+#     still caught; a WHERE inside a subquery in the SET list is not, which is
+#     correct -- it cannot skip the row.
 SQL_CONFLICT_HITS=$(find supabase -name '*.sql' -print0 2>/dev/null \
   | xargs -0 awk '
+      function conflict_predicate(text,    i, d, ch, rest) {
+        # text starts at the "on conflict" token. Depth 0 is the clause.
+        d = 0
+        for (i = 1; i <= length(text); i++) {
+          ch = substr(text, i, 1)
+          if (ch == "(") { d++; continue }
+          if (ch == ")") { d--; if (d < 0) return 0; continue }
+          if (d == 0 && substr(text, i, 7) == " where ") return 1
+        }
+        return 0
+      }
       FNR == 1 { stmt = ""; start = 0 }
       {
         line = tolower($0)
@@ -268,8 +297,8 @@ SQL_CONFLICT_HITS=$(find supabase -name '*.sql' -print0 2>/dev/null \
         if (index(line, ";") > 0) {
           if (index(stmt, "public.shifts") > 0) {
             c = index(stmt, "on conflict")
-            if (c > 0 && index(substr(stmt, c), " where ") > 0) {
-              printf "%s:%d: statement beginning here has a WHERE after its ON CONFLICT\n", FILENAME, start
+            if (c > 0 && conflict_predicate(substr(stmt, c))) {
+              printf "%s:%d: statement beginning here has a WHERE on its ON CONFLICT clause\n", FILENAME, start
             }
           }
           stmt = ""
@@ -278,7 +307,7 @@ SQL_CONFLICT_HITS=$(find supabase -name '*.sql' -print0 2>/dev/null \
     ' 2>/dev/null || true)
 if [ -n "$SQL_CONFLICT_HITS" ]; then
   FAIL=1
-  echo "[FAIL] ON CONFLICT with a WHERE on public.shifts"
+  echo "[FAIL] ON CONFLICT with a predicate WHERE on public.shifts"
   echo "$SQL_CONFLICT_HITS" | sed 's/^/   /'
   echo "   -> Remove the predicate and make the DO UPDATE total with a CASE per column. A skipped upsert here rejects a shipped 1.0 build's write"
   echo ""
