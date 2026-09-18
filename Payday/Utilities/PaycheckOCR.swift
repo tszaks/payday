@@ -27,28 +27,20 @@ enum PaycheckOCR {
                 .count
         }
 
-        /// Correct a small OCR error in the tips field when every printed
-        /// earnings component independently proves the intended value. Keep
-        /// larger differences untouched because they can represent a real,
-        /// uncaptured earnings row rather than a transposed digit.
-        func correctingSmallGrossMismatch() -> Self {
-            guard let tipsCents,
-                  let regularWagesCents,
-                  let overtimeWagesCents,
-                  let gratuityCents,
-                  let grossPayCents
-            else { return self }
-
-            var corrected = self
-            corrected.tipsCents = PaycheckRecord.reconciledTipsCents(
-                tipsCents: tipsCents,
-                regularWagesCents: regularWagesCents,
-                overtimeWagesCents: overtimeWagesCents,
-                gratuityCents: gratuityCents,
-                grossPayCents: grossPayCents
-            )
-            return corrected
-        }
+        // A scan is applied to the sheet's fields verbatim.
+        //
+        // `correctingSmallGrossMismatch()` used to rewrite `tipsCents` from
+        // the gross equation before the scan ever reached the sheet, so the
+        // person saw the inference in the field and never saw what the stub
+        // actually printed — fixture P1 lists
+        // `storedPaidTipsCentsAfterScanPrefill: 10000` and names this the
+        // second producer of the wrong answer. MEASURED on the Kooma stub: an
+        // 18c OCR slip (191102 read for a printed 191120) was silently
+        // replaced. It now stays 191102 in the field with "Looks like
+        // $1,911.20 (accept?)" beside it, one tap from being accepted; the
+        // proposal comes off the sheet's own
+        // `PaycheckReconciler.Observation`, built from the fields the scan
+        // filled.
     }
 
     enum ScanError: LocalizedError, Sendable {
@@ -144,7 +136,7 @@ enum PaycheckOCR {
     static func parse(image: UIImage) async throws -> ParsedPaycheck {
         if PaycheckAIParser.isConfigured {
             do {
-                return try await PaycheckAIParser.parse(image: image).correctingSmallGrossMismatch()
+                return try await PaycheckAIParser.parse(image: image)
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
@@ -153,7 +145,7 @@ enum PaycheckOCR {
             }
         }
 
-        return try await parseWithVision(image: image).correctingSmallGrossMismatch()
+        return try await parseWithVision(image: image)
     }
 
     private static func parseWithVision(image: UIImage) async throws -> ParsedPaycheck {

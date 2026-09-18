@@ -53,38 +53,27 @@ final class PaycheckRecord {
     /// Taxes withheld, as printed on the stub.
     var taxesCents: Int?
 
-    /// Repairs only cent-level OCR drift that the complete earnings equation
-    /// can prove. The stored value remains reviewable; opening and saving the
-    /// editor persists the reconciled value.
-    var reconciledPaidTipsCents: Int {
-        Self.reconciledTipsCents(
-            tipsCents: paidTipsCents,
-            regularWagesCents: regularWagesCents,
-            overtimeWagesCents: overtimeWagesCents,
-            gratuityCents: gratuityCents,
-            grossPayCents: grossPayCents
-        )
-    }
-
-    static func reconciledTipsCents(
-        tipsCents: Int,
-        regularWagesCents: Int?,
-        overtimeWagesCents: Int?,
-        gratuityCents: Int?,
-        grossPayCents: Int?
-    ) -> Int {
-        guard let regularWagesCents, let grossPayCents else { return tipsCents }
-        let inferredTipsCents = grossPayCents
-            - regularWagesCents
-            - (overtimeWagesCents ?? 0)
-            - (gratuityCents ?? 0)
-        let correctionCents = inferredTipsCents - tipsCents
-        guard inferredTipsCents >= 0,
-              correctionCents != 0,
-              abs(correctionCents) <= 100
-        else { return tipsCents }
-        return inferredTipsCents
-    }
+    // MARK: - What used to be computed here, and why nothing is
+    //
+    // This model carried `reconciledPaidTipsCents`, a computed property that
+    // returned the ±100c inference from the stub's gross equation INSTEAD of
+    // the stored tips line, and every in-app reader took it: the periods
+    // list's delta, period detail's "check paid", and this record's own
+    // editor prefill — so opening the sheet and tapping Save wrote the
+    // inference over the person's own figure. `MetricID.observedPaidTips` is
+    // "the stub field exactly as stored, no inference applied anywhere it is
+    // read, exported, or synced", and fixture P1 lists every one of those
+    // reads as a wrong answer (10050 where the stub said 10000).
+    //
+    // The inference lives on `PaycheckReconciler.proposal(for:)` now,
+    // labelled "Looks like $100.50 (accept?)" and applied only when a person
+    // taps it in `PaycheckEntrySheet`.
+    //
+    // Nothing derived replaced it, deliberately. A corrected figure this
+    // model exposes is a figure four surfaces will read, which is the whole
+    // history above; the stored fields below are the observation, and
+    // whoever needs to compare them builds one
+    // `PaycheckReconciler.Observation` at the point of use.
 
     init(
         id: UUID = UUID(),
