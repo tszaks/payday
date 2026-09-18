@@ -199,6 +199,29 @@ struct StatsEngine {
     /// separate even though operational tip analytics combine voluntary tips
     /// and auto-grat.
     private let wageCentsPerHour: Int?
+    /// The ledger's own valuation of each shift, keyed by `shiftID` — the
+    /// SAME cents the shift's row renders and the same cents that shift
+    /// contributed to the hero above it.
+    ///
+    /// Set by a PR 5-migrated caller (Dashboard's tonight echo) and nil
+    /// everywhere else. When it holds a shift's id, `revealCents(of:)` reads
+    /// it verbatim instead of pricing the shift itself.
+    ///
+    /// Why it exists: `revealCents(of:)`'s fallback is
+    /// `WageEstimate.cents(wageCentsPerHour:hours:)`, which rounds one shift
+    /// in isolation and knows nothing about the workweek. So the figure the
+    /// echo SHOWS (the engine's, workweek-allocated, carrying overtime) and
+    /// the figures it is COMPARED against (per-shift base-rate roundings)
+    /// were two different derivations — W1's 1556-vs-1557 cent and W2's
+    /// missing 41st-hour overtime, on both sides of a "topping your previous
+    /// record of $Y" claim. `docs/METRICS.md` [DB-25] states the requirement:
+    /// "inputs should be earnedIncome per shift".
+    ///
+    /// Not defaulted to a dictionary the engine builds itself: a shift's
+    /// wage is a property of its whole workweek, and this engine is handed
+    /// records, not policies. Only a caller holding an `EarningsSnapshot`
+    /// can answer it, which is exactly why it is passed in.
+    private let valuedShiftCents: [UUID: Int]?
 
     /// - Parameters:
     ///   - payrollTimeZone: the FROZEN payroll zone, from the calendar policy
@@ -210,13 +233,22 @@ struct StatsEngine {
     ///     timezone").
     ///   - calendar: the grid calendar, for week and month arithmetic. Its
     ///     own time zone is ignored; `payrollTimeZone` replaces it.
-    init(payrollTimeZone: TimeZone, records: [TipRecord], calendar: Calendar = .current, wageCentsPerHour: Int? = nil) {
+    ///   - valuedShiftCents: the ledger's `earnedIncome` per shift, when the
+    ///     caller holds an `EarningsSnapshot`. See the property.
+    init(
+        payrollTimeZone: TimeZone,
+        records: [TipRecord],
+        calendar: Calendar = .current,
+        wageCentsPerHour: Int? = nil,
+        valuedShiftCents: [UUID: Int]? = nil
+    ) {
         self.records = records
         self.payrollTimeZone = payrollTimeZone
         var cal = calendar
         cal.timeZone = payrollTimeZone
         self.calendar = cal
         self.wageCentsPerHour = wageCentsPerHour
+        self.valuedShiftCents = valuedShiftCents
     }
 
     /// Groups records into one ShiftFacts per closeout, keyed on shiftID —
@@ -499,6 +531,10 @@ struct StatsEngine {
     /// caller in this file reads shiftFacts/netCents directly and never
     /// sees a wage.
     private func revealCents(of shift: ShiftFacts) -> Int {
+        // The engine's own answer for this shift, when the caller has one.
+        // Not added to anything here: `earnedIncome` is already non-wage
+        // earnings plus that shift's slice of the workweek allocation.
+        if let valued = valuedShiftCents?[shift.shiftID] { return valued }
         guard let wageCentsPerHour,
               let hours = shift.hoursWorked,
               let wage = WageEstimate.cents(wageCentsPerHour: wageCentsPerHour, hours: hours)
