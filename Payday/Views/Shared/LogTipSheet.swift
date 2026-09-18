@@ -1801,12 +1801,14 @@ struct LogTipSheet: View {
             // Rolled back, so the shift is left exactly as it was rather than
             // half-edited.
             //
-            // Known gap, stated rather than hidden: this also runs as the
-            // flush on `.onDisappear`, and a failure there has nowhere to go
-            // -- the sheet is already leaving, so the alert cannot be seen and
-            // the user's last edit is silently reverted. Reverting whole is
-            // still better than persisting half, and the alert does work for
-            // the debounced case while the sheet is open.
+            // Known gap, tracked in issue #26 rather than living only here:
+            // this also runs as the flush on `.onDisappear`, and a failure
+            // there has nowhere to go -- the sheet is already leaving, so the
+            // alert cannot be seen and the user's last edit is silently
+            // reverted. Reverting whole is still better than persisting half,
+            // which would leave a shift whose cash, credit and shift-level
+            // details disagree, and the alert does work for the debounced case
+            // while the sheet is open.
             saveFailed = true
         }
     }
@@ -1862,6 +1864,7 @@ struct LogTipSheet: View {
         // `try?` deliberately: this only ever runs during dismissal, where an
         // alert cannot be seen. A rollback leaves the zero rows in place,
         // which is untidy but loses nothing, and the next edit sweeps them.
+        // The cheaper sibling of issue #26.
     }
 
     private func delete() {
