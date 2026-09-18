@@ -12,6 +12,32 @@ rate-limited, revocable, and audited.
 - Health: `/v1/health`
 - MCP Streamable HTTP: `/mcp`
 
+> **Contract change, 2026-09-18.** A shift is now **read** from the derived
+> `public.shifts` table rather than assembled from tip rows at request time.
+> Two things changed for callers, both deliberate:
+>
+> - **`tip_entries` is gone from a shift response**, replaced by
+>   `legacy_entry_ids` and `source`. A shift is no longer built from rows, so
+>   embedding them would mean re-deriving the figure the database already
+>   computed. If you were reading that array to reconcile an id you obtained
+>   earlier, `GET /v1/shifts/{id}` now accepts any of those ids directly.
+> - **`GET /v1/shifts/{id}` resolves more ids than before, not fewer.** It
+>   previously filtered on `shift_id` alone, so a shift whose legacy rows
+>   carried no `shift_id` — which the listing reported under the *row's* id —
+>   returned 404. You could list a shift and then fail to fetch it. Both that
+>   id and the shift's own now resolve.
+>
+> Why: the API was computing net earnings in TypeScript, the app computed them
+> in Swift, and the database computed them in SQL — three implementations that
+> disagreed about a shift's date, its detail precedence and its receipt owner.
+> There is now one, in SQL, and this layer reads it.
+>
+> **Wages are still not reported.** A wage is a property of a workweek under a
+> rate policy, not of a row, so no figure here includes one. The app's
+> wage-inclusive totals will reach the API through a device-published
+> snapshot; until then a period figure from this API and one from the app are
+> the same *non-wage* number and are not comparable as totals.
+
 REST resources include summaries, grouped shifts, raw tip entries, paychecks,
 settings, incremental changes, agent keys, and the audit log. The MCP endpoint
 publishes matching tools.

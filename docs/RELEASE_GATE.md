@@ -91,6 +91,34 @@ sets so a present-but-stale shift never forces a re-baseline.
 is the guard; migration ordering is not, because the clamp is client code and
 the migration only supplies a timestamp.
 
+## The money boundary — machine-checkable, and it is what makes item 6 real
+
+Added 2026-09-18. `design-lint.sh` rule 15c fails on money computed outside
+`Packages/PaydayCore`, across five patterns drawn from divergences that
+actually happened: `.netCents` summed row by row, `cashTipsCents +` assembling
+a total, `tipOutCents ??` defaulting a tip-out locally, `* 1.5` applying an
+overtime multiplier, and `/ 100 / hours` deriving a rate.
+
+The rule landed BEFORE the deletions, with the tree's existing violators
+allowlisted, so it was written against real violations rather than fitted to
+an already-clean tree. **The allowlist ratchets:** an entry that no longer
+violates anything is itself a failure, so it cannot quietly stop shrinking
+into permanent permission.
+
+- [ ] `bash scripts/design-lint.sh` passes with the money-boundary allowlist
+      **empty**. Seven files remain as of 2026-09-18: `TipEntry`,
+      `LegacyShiftRow`, `ShiftRecord`, `PaycheckAudit`, `TipBreakdown`,
+      `StatsEngine`, `LogTipSheet`.
+- [ ] The ten old calculation paths are deleted, not merely wrapped:
+      `TipEntry`, `TipBreakdown`, `ShiftDetails`, `ShiftDays.groupedByShift`,
+      `WageEstimate`, `PeriodIncome`, `PredictedPaycheck`, `PaycheckAudit`,
+      `TipRecord`, `ShiftWriter`.
+
+Both were verified to FAIL when they should, not merely to pass: a synthetic
+violation in a non-allowlisted file was caught on all three of its patterns,
+and an allowlisted file made artificially clean tripped the ratchet. A lint
+nobody has watched fail is a lint nobody should trust.
+
 ## Human lines — Tyler only
 
 - [H] Clean install on a real device, release configuration, exercised for a full logging session.
