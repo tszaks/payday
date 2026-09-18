@@ -517,15 +517,48 @@ specified expected value, detailed in docs/METRICS.md section 3:
   a straddling 48h week (13585c vs 14716c). **Closed inside the ledger; the
   consumers that pass a pre-filtered range are PR 5.** Specifically still
   open, and now measured rather than assumed: `CalendarView` groups the
-  month `by: \.day` and asks the wrapper one day at a time, so **no calendar
-  tile carries overtime and a month does not equal the sum of its days.** On
-  a 48-hour week wholly inside October 2026 the month header reads 14716c of
-  wages and the five tiles read 13585c — 1131c apart on one screen. See
-  `MonthEqualsSumOfItsDaysTests`, whose parity assertion is wrapped in
-  `withKnownIssue` so it turns red the moment PR 5 closes it.
+  month `by: \.day` and asks the wrapper one day at a time, so no calendar
+  tile carried overtime and a month did not equal the sum of its days. On a
+  48-hour week wholly inside October 2026 the month header read 14716c of
+  wages and the five tiles read 13585c — 1131c apart on one screen.
+
+  **CLOSED by PR 5, and this bullet was left false until 2026-09-18.** It
+  stated three things that stopped being true when PR 5 merged: that the
+  divergence was open, that the tiles read 13585c, and that
+  `MonthEqualsSumOfItsDaysTests`' parity assertion was "wrapped in
+  `withKnownIssue` so it turns red the moment PR 5 closes it". Measured: the
+  assertion is NOT wrapped — there are zero `withKnownIssue` wrappers in the
+  app suite — and it asserts 19716 both ways while explicitly asserting that
+  13585 is the superseded wrong answer. The gate is armed and the divergence
+  is closed.
+
+  Found while auditing criterion 5, AFTER the three contradictions above had
+  been fixed and criterion 7 called done. So that pass was incomplete: it
+  corrected the current-state section and the two bullets it contradicted,
+  and did not sweep the older per-finding list for claims PR 5 had since
+  falsified. Recorded rather than quietly amended, because "I fixed the
+  contradictions" was itself an overclaim by one.
 - W3 the calendar-grid `firstWeekday` drives overtime bucketing.
   **CLOSED (PR 3): `PayrollCalendarPolicy.workweekStartWeekday` owns
   overtime and Settings > Calendar says the grid owns nothing else.**
+**This per-finding list has NOT been swept item by item since PR 5, and at
+least one entry was false.** Added 2026-09-18 after W2's entry above was
+found stating a closed divergence as open, quoting the superseded 13585c as
+current, and describing an armed assertion as disarmed. The entries below
+carry no CLOSED marker, and the absence of one is not evidence either way —
+several are closed and simply never updated.
+
+What IS established for all of them: each finding has a golden fixture, and
+as of 2026-09-18 all 14 fixtures GATE their money against the real engine
+(measured by mutation: bump every `*Cents` under `expected` and the suite
+fails; it was 8 of 14 before `FixtureMoneyGateTests`). So the ENGINE side of
+each finding is pinned — the engine cannot drift back to the wrong number
+without a test failing.
+
+What is NOT established: a finding about a SCREEN needs its parity suite, not
+its fixture, and that per-item audit has not been done. Do not read the
+engine-side gate as closing a screen-side finding.
+
 - N1 CalendarView subtracts a duplicated tip-out twice (8000c vs 9000c).
 - N2 StatsEngine and TipBreakdown disagree on a duplicated receipt payload.
 - N3 the API cannot fetch a nil-shiftID shift grouped by day.
