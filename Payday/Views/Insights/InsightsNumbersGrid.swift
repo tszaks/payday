@@ -1,9 +1,14 @@
 import Foundation
 
 /// One tile in Insights' Numbers grid — a green uppercase label, a big
-/// value, and a short context line. Built straight off InsightsFacts, never
-/// off narration, so it's on screen instantly and never waits on the
-/// network.
+/// value, and a short context line. Built from already-computed figures, so
+/// it's on screen instantly and never waits on the network.
+///
+/// No tile performs arithmetic on cents except the two per-shift averages
+/// that divide an already-summed total by its own shift count (LUNCH,
+/// DINNER), which is the count that total was built from. The one figure that
+/// used to be a rate divided here is HOURLY, and it now arrives from
+/// `EarningsResult.hourlyRateCents` — see `rows(for:hourly:excluding:)`.
 struct InsightsNumberTile: Identifiable, Equatable {
     let id: String
     let label: String
@@ -21,8 +26,10 @@ struct InsightsNumberTile: Identifiable, Equatable {
 /// StatsEngine only ever populates with both sides present (see
 /// lunchDinnerFacts/doublesSoloFacts's own guards).
 enum InsightsNumbersGrid {
-    /// Matches the early-read hedge InsightsService's prompt enforces for
-    /// narration, applied here too since the grid makes the same claims.
+    /// Below three shifts a tile's caption says so outright, not just by
+    /// printing a small count. It was the hedge the deleted narration prompt
+    /// enforced ([ID-12] onward); the grid makes the same claims, so it keeps
+    /// the same hedge.
     private static let earlyReadSuffix = " · early read"
     /// A tile's own sample count stops earning a place in its caption once
     /// it clears this bar — below it, the count IS the honesty signal
@@ -33,15 +40,29 @@ enum InsightsNumbersGrid {
     /// applied here to captions instead of Moves' dollar projections.
     private static let minimumShiftsForFullSample = 8
 
+    /// - Parameters:
+    ///   - hourly: `MetricID.hourlyRate` as the ENGINE answered it, from
+    ///     `InsightsEarnings.hourlyRate(...)`. Passed in rather than read off
+    ///     `facts.rate` because a $/hr figure is a division this grid has no
+    ///     business performing: [IL-13] recorded the old tile as
+    ///     "nonWage/hour" against a registry `hourlyRate` that is
+    ///     `earnedIncome`-based, and its denominator was a shift COUNT used
+    ///     only to hedge the caption while the value was a mean of per-shift
+    ///     rates. `EarningsResult.hourlyRateCents` is `coveredComponents`
+    ///     over `minutes`, both taken over the covered shifts only, so a
+    ///     shift with tips and no hours is excluded from BOTH sides instead
+    ///     of inflating the numerator. Nil when the engine cannot answer, and
+    ///     then the tile is absent — never a fabricated `$0/hr`.
     static func rows(
         for facts: InsightsFacts,
+        hourly: InsightsEarnings.HourlyRate?,
         excluding excludedTileIDs: Set<String> = []
     ) -> [[InsightsNumberTile]] {
         var rows: [[InsightsNumberTile]] = []
 
         var rateRow: [InsightsNumberTile] = []
-        if let rate = facts.rate {
-            rateRow.append(hourlyTile(rate))
+        if let hourly {
+            rateRow.append(hourlyTile(hourly))
         }
         if let sales = facts.sales {
             rateRow.append(tipPercentTile(sales))
@@ -85,12 +106,25 @@ enum InsightsNumbersGrid {
             .filter { !$0.isEmpty }
     }
 
-    private static func hourlyTile(_ rate: RateFacts) -> InsightsNumberTile {
+    /// The engine's `hourlyRateCents`, with the coverage it can honestly
+    /// claim.
+    ///
+    /// Its caption is NOT run through `hedged(...)`, which is the one
+    /// deliberate departure from every other tile here. `hedged` drops a
+    /// tile's sample count once it clears eight shifts, on the reasoning that
+    /// "across 160 shifts" restated on every tile says nothing new. Coverage
+    /// is a different claim: "across 141 of 160 shifts" says nineteen shifts
+    /// have no hours logged and are in neither half of this division, and
+    /// that stays true and material at any sample size. `docs/METRICS.md`'s
+    /// presentation rules require it — `.partial` "makes $/hr show 'N of M
+    /// shifts'" — so `HourlyRate.coverage` suppresses the fraction when, and
+    /// only when, there is no shortfall to disclose.
+    private static func hourlyTile(_ hourly: InsightsEarnings.HourlyRate) -> InsightsNumberTile {
         InsightsNumberTile(
             id: "hourly",
             label: "HOURLY",
-            value: "\(Money.wholeDollarString(fromCents: Int((rate.overallDollarsPerHour * 100).rounded())))/hr",
-            context: hedged("", count: rate.nightsWithHours, countPhrase: "across \(shiftsPhrase(rate.nightsWithHours))")
+            value: "\(Money.wholeDollarString(fromCents: hourly.rateCents))/hr",
+            context: hourly.coverage
         )
     }
 
@@ -130,23 +164,24 @@ enum InsightsNumbersGrid {
     }
 
     /// Per-shift average, never the raw total — the shift counts differ
-    /// between lunch and dinner, same rule InsightsFactsCopy follows.
+    /// between lunch and dinner. The division is
+    /// `LunchDinnerFacts.lunchPerShiftCents`, computed beside the counts it
+    /// divides by rather than here: a view that divides cents is a view that
+    /// can compute (adapter contract, rule 1).
     private static func lunchTile(_ facts: LunchDinnerFacts) -> InsightsNumberTile {
-        let average = facts.lunchCents / facts.lunchShiftCount
-        return InsightsNumberTile(
+        InsightsNumberTile(
             id: "lunch",
             label: "LUNCH",
-            value: "\(Money.wholeDollarString(fromCents: average))/shift",
+            value: "\(Money.wholeDollarString(fromCents: facts.lunchPerShiftCents))/shift",
             context: hedged("", count: facts.lunchShiftCount, countPhrase: shiftsPhrase(facts.lunchShiftCount))
         )
     }
 
     private static func dinnerTile(_ facts: LunchDinnerFacts) -> InsightsNumberTile {
-        let average = facts.dinnerCents / facts.dinnerShiftCount
-        return InsightsNumberTile(
+        InsightsNumberTile(
             id: "dinner",
             label: "DINNER",
-            value: "\(Money.wholeDollarString(fromCents: average))/shift",
+            value: "\(Money.wholeDollarString(fromCents: facts.dinnerPerShiftCents))/shift",
             context: hedged("", count: facts.dinnerShiftCount, countPhrase: shiftsPhrase(facts.dinnerShiftCount))
         )
     }
@@ -189,8 +224,8 @@ enum InsightsNumbersGrid {
     }
 
     private static func startTimesTile(_ facts: StartTimeFacts) -> InsightsNumberTile {
-        let bestRate = Money.wholeDollarString(fromCents: Int((facts.bestDollarsPerHour * 100).rounded()))
-        let worstRate = Money.wholeDollarString(fromCents: Int((facts.worstDollarsPerHour * 100).rounded()))
+        let bestRate = Money.wholeDollarString(fromCents: facts.bestRateCents)
+        let worstRate = Money.wholeDollarString(fromCents: facts.worstRateCents)
         let sampleCount = min(facts.bestShiftCount, facts.worstShiftCount)
         return InsightsNumberTile(
             id: "startTimes",

@@ -6,7 +6,13 @@ import SwiftUI
 /// and count-up choreography.
 ///
 /// Takes a plain `PaydayOnboardingDiagnosis` value. No SwiftData, no stores,
-/// no network: every figure here is arithmetic on the quiz answers.
+/// no network: every figure here is `OnboardingProjection`'s, which is
+/// deliberately NOT an engine figure and says so in its own header.
+///
+/// No money arithmetic lives in this view (PR 5 adapter contract, rule 4).
+/// The count-up's easing does — that is motion over a `Double`, and the
+/// frame it produces becomes text through `projection.countUpText`, which is
+/// the one place onboarding dollars are formatted.
 struct OnboardingRevealView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -22,11 +28,13 @@ struct OnboardingRevealView: View {
     private let countUpDuration: Double = 1.4
 
     private var projectionText: String {
-        Money.wholeDollarString(fromCents: Int(displayedAmount.rounded()) * 100)
+        diagnosis.projection.countUpText(displayedDollars: displayedAmount)
     }
 
-    private var finalProjectionText: String {
-        Money.wholeDollarString(fromCents: diagnosis.projectedAnnualTips * 100)
+    /// Nil when the answers substantiate no figure, which is the same gate
+    /// `showAmount` is under: the block this labels is not rendered then.
+    private var finalProjectionText: String? {
+        diagnosis.projection.annualTipsText
     }
 
     var body: some View {
@@ -87,7 +95,7 @@ struct OnboardingRevealView: View {
                     // Only ever shown when the answers actually produced a
                     // figure. Never count up to a number the inputs don't
                     // substantiate.
-                    if showAmount, diagnosis.projectedAnnualTips > 0 {
+                    if showAmount, let settled = finalProjectionText {
                         VStack(spacing: PaydaySpacing.xxs) {
                             Text(projectionText)
                                 .font(PaydayFont.displayHero)
@@ -112,7 +120,7 @@ struct OnboardingRevealView: View {
                         .transition(.opacity.combined(with: .scale(scale: 0.88)))
                         // VoiceOver reads the settled figure, not the rolling digits.
                         .accessibilityElement(children: .ignore)
-                        .accessibilityLabel("\(finalProjectionText) \(diagnosis.projectionCaption)")
+                        .accessibilityLabel("\(settled) \(diagnosis.projectionCaption)")
                     }
 
                     if showDetails {

@@ -3,8 +3,8 @@ import SwiftUI
 import SwiftData
 
 /// Entirely deterministic. Every number and every sentence on this page is
-/// computed by StatsEngine from local records, so the page renders the same
-/// offline as on, instantly, with no spinner and no failure state.
+/// computed from local records, so the page renders the same offline as on,
+/// instantly, with no spinner and no failure state.
 ///
 /// It used to narrate through a model. That came off because the one job a
 /// model could do here that arithmetic cannot — reading a written shift
@@ -12,11 +12,28 @@ import SwiftData
 /// rarely-used feature. What remained was a model forbidden from doing
 /// arithmetic, choosing among facts the engine already ranks, in exchange
 /// for latency, a network dependency, a failure mode, and wording that
-/// changed between visits.
+/// changed between visits. PR 5 group 2.7 finished that removal:
+/// `InsightsService`, its prompt's sixteen money figures, and
+/// `InsightsFactsCopy`'s ten prose sections are deleted, not dormant.
 ///
-/// InsightsService, InsightsStore, and NarrationRefresh are all still on
-/// disk and still tested, simply unreferenced here. Reversible if notes
-/// ever become real behavior.
+/// ## A PR 5 wave 2 adapter (groups 2.6 and 2.7)
+///
+/// To the contract in `Payday/Earnings/SnapshotFacts.swift`: presentation on
+/// the facts struct, every money figure derived from one `EarningsSnapshot`,
+/// no `Key` struct and no `dataRevision`, and no arithmetic in the view.
+///
+/// **What it fixes.** This view built its `StatsEngine` with no wage rate at
+/// all, so every fact, chart point, typical range, trend, forecast and Move
+/// on the page was `nonWageEarnings` while the hero on every other screen —
+/// and the word "earnings" in this page's own section headers — was
+/// wage-inclusive `earnedIncome`. `docs/METRICS.md` rows [IL-01] through
+/// [IL-27] all carried "basis nonWageEarnings" for that reason. The engine is
+/// now fed `InsightsEarnings.pricing(...)`, the ledger's own per-shift
+/// `earnedIncome`, so one basis runs through every comparison on the page —
+/// and that basis is DECLARED, once, by `InsightsBasis.note`, including when
+/// it has to fall back to tips because some shift cannot be priced. Read
+/// `InsightsEarnings`' header for why the fall-back is the whole page rather
+/// than the offending comparison.
 struct InsightsView: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(MoveLedgerStore.self) private var moveLedgerStore
@@ -24,35 +41,69 @@ struct InsightsView: View {
     @Query(sort: \TipEntry.date, order: .reverse) private var allEntries: [TipEntry]
 
     @State private var isShowingBackfillSheet = false
-    @State private var pageFactsCache: InsightsPageFactsCache?
-    @State private var dataRevision = 0
-    @State private var currentDay = Calendar.current.startOfDay(for: .now)
+    @State private var renderCache: InsightsRenderCache?
+    /// Bumped by `LegacySnapshotRevision` — `EarningsStore`'s own rebuild
+    /// triggers — so the cached snapshot is rebuilt when, and only when, an
+    /// input to it moved. Replaces the `@State private var dataRevision`
+    /// this screen carried, which watched `ModelContext.didSave` alone: a
+    /// queued policy change or a midnight rollover left the page serving
+    /// figures computed under the old inputs. Gone entirely when PR 2 slice
+    /// S7 lets this read `earningsStore.snapshot`.
+    @State private var snapshotRevision = 0
+    /// Any instant on the current civil day. The DAY itself is derived in
+    /// `body` through the payroll calendar, not stored: a stored
+    /// `Calendar.current.startOfDay` was the DEVICE's day, so a person who
+    /// flew somewhere read a different reference date from the one the
+    /// engine buckets by.
+    @State private var dayTick = Date.now
 
     var body: some View {
-        let key = InsightsPageFactsKey(
-            entriesRevision: dataRevision,
-            ledgerRevision: moveLedgerStore.revision,
-            currentDay: currentDay,
-            // In the key because it is an INPUT to every number below it. A
-            // new calendar policy changes which civil day a late shift lands
-            // on; without this the cache would keep serving figures computed
-            // under the old zone until the entries happened to change.
-            payrollTimeZone: policyStore.payrollTimeZone.identifier,
-            // In the key for the same reason the zone is: both are INPUTS to
-            // the chart's bars now, so a rate change has to invalidate the
-            // cache rather than wait for the entries to move. Wave 2 deletes
-            // this whole key in favour of `SnapshotStamp` (PR 5 adapter
-            // contract, rule 3); it cannot go yet because the key also
-            // covers the StatsEngine facts this screen still computes.
-            policies: policyStore.policies
+        let payrollTimeZone = policyStore.payrollTimeZone
+        let payrollCalendar = PayrollCalendar.gridCalendar(in: payrollTimeZone)
+        let currentDay = payrollCalendar.startOfDay(for: dayTick)
+        // The half of the render cache the snapshot's digest cannot cover,
+        // because none of it is an input to the engine. Rule 3 deleted
+        // `InsightsPageFactsKey`, which listed the inputs this screen THOUGHT
+        // could move a number — the policies, the payroll zone, a
+        // `dataRevision` counter. Every one of those is inside
+        // `SnapshotStamp.digest` now, a SHA-256 over the complete input set.
+        // What is left is genuinely presentational: which civil day it is,
+        // and how many Moves have been shown.
+        let selection = InsightsSelection(
+            day: currentDay,
+            ledgerRevision: moveLedgerStore.revision
         )
-        let pageFacts = pageFactsCache?.key == key
-            ? pageFactsCache!.facts
-            : InsightsPageFacts(
-                allEntries: allEntries,
-                ledger: moveLedgerStore.firstShownAt,
-                payrollTimeZone: policyStore.payrollTimeZone,
+        // ONE grouping and ONE snapshot built from it, over the WHOLE history
+        // — the recent-window scoping this page applies is a query argument,
+        // never a property of the dataset, because the ledger allocates the
+        // overtime threshold across a complete workweek and a windowed slice
+        // cannot price the forty-first hour of a week that began before the
+        // window. `InsightsEarnings` holds the pair together and its header
+        // carries the two defects that come from doing either one twice.
+        //
+        // `LegacySnapshotBridge` and not `earningsStore.snapshot`: nothing
+        // writes `ShiftRecord` on a device until PR 2 slice S7, so the
+        // store's snapshot is empty and a screen on it would show a person
+        // with years of shifts a blank page. The swap is inside
+        // `InsightsEarnings.build`.
+        let dataset = renderCache?.revision == snapshotRevision
+            ? renderCache!.dataset
+            : InsightsEarnings.build(
+                entries: allEntries,
                 policies: policyStore.policies,
+                payrollTimeZone: payrollTimeZone,
+                calendar: payrollCalendar
+            )
+        // Rule 3: the facts are keyed on the dataset's own digest, the
+        // complete computed key, plus this screen's presentational selection.
+        let pageFacts = renderCache?.digest == dataset.snapshot?.stamp.digest
+            && renderCache?.selection == selection
+            ? renderCache!.facts
+            : InsightsPageFacts(
+                dataset: dataset,
+                ledger: moveLedgerStore.firstShownAt,
+                payrollTimeZone: payrollTimeZone,
+                calendar: payrollCalendar,
                 now: currentDay
             )
         NavigationStack {
@@ -83,22 +134,22 @@ struct InsightsView: View {
                 }
             }
         }
-        .task(id: key) {
-            pageFactsCache = InsightsPageFactsCache(key: key, facts: pageFacts)
+        .task(id: InsightsCacheIdentity(revision: snapshotRevision, selection: selection)) {
+            renderCache = InsightsRenderCache(
+                revision: snapshotRevision,
+                dataset: dataset,
+                digest: dataset.snapshot?.stamp.digest,
+                selection: selection,
+                facts: pageFacts
+            )
         }
-        .onReceive(NotificationCenter.default.publisher(for: ModelContext.didSave)) { _ in
-            dataRevision &+= 1
-        }
+        .legacySnapshotRevision($snapshotRevision)
         .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)) { _ in
-            refreshCurrentDay()
+            dayTick = .now
         }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active { refreshCurrentDay() }
+            if phase == .active { dayTick = .now }
         }
-    }
-
-    private func refreshCurrentDay() {
-        currentDay = Calendar.current.startOfDay(for: .now)
     }
 
     private func resultList(_ facts: InsightsFacts, pageFacts: InsightsPageFacts) -> some View {
@@ -113,7 +164,35 @@ struct InsightsView: View {
                 let primaryMove = moves.first
                 let supportingMoves = Array(moves.dropFirst().prefix(2))
                 let excludedTileIDs = InsightsPresentation.redundantMetricIDs(for: moves)
-                let numberRows = InsightsNumbersGrid.rows(for: facts, excluding: excludedTileIDs)
+                let numberRows = InsightsNumbersGrid.rows(
+                    for: facts,
+                    hourly: pageFacts.hourly,
+                    excluding: excludedTileIDs
+                )
+
+                // The basis, said ONCE, above every figure it governs.
+                //
+                // This is the plan's rule ("every comparison declares its
+                // basis") satisfied by declaring it for the page, because the
+                // page is on one basis by construction — `StatsEngine` reads
+                // a shift's money in exactly one place and the whole engine
+                // was handed one pricing. Thirty tiles each restating it
+                // reads as a form letter and eats the first screen, which is
+                // the same call this screen already made for the
+                // interquartile qualifier two sections down ("Said once here
+                // instead of five times below").
+                //
+                // The four tiles that are deliberately NOT on the page basis
+                // — TIP PERCENT, SPEND / GUEST, TIPS / TABLE, CASH NIGHTS —
+                // each name theirs in their own caption, because a wage is
+                // not a tip and folding one in would make "tipped 16.7% of
+                // sales" false. See `InsightsEarnings`' header.
+                if let note = pageFacts.basis.note {
+                    Text(note)
+                        .font(PaydayFont.caption)
+                        .foregroundStyle(PaydayColor.textSecondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
 
                 // Reliability leads the page. A server already knows the
                 // SHAPE of their week — that Friday is good and Monday is
@@ -277,10 +356,9 @@ struct InsightsView: View {
                 }
 
                 // No DATA NOTE section, no spinner, no error caption: this
-                // page is now entirely deterministic and renders the same
-                // offline as on. The narration service is still on disk and
-                // still tested, just unreferenced — see the type comment on
-                // InsightsService for why it came off the page.
+                // page is entirely deterministic and renders the same offline
+                // as on. PR 5 group 2.7 deleted the narration service rather
+                // than leaving it dormant on disk — see this view's header.
 
                 Color.clear.frame(height: PaydaySpacing.p8).id("insights-bottom")
             }
@@ -489,11 +567,52 @@ struct InsightsView: View {
 
 }
 
-/// Every number Insights shows, computed once per render — see the
-/// Dashboard's own DashboardFacts for the same fix applied there first.
-/// StatsEngine construction (mapping every entry to a TipRecord) is a real
-/// cost that doesn't need paying three separate times a render.
-private struct InsightsPageFacts {
+/// Every number Insights shows, computed once per render.
+///
+/// A PR 5 adapter: presentation and already-computed figures only. The two
+/// things it adds over the pre-wave-2 version are the reason group 2.6
+/// exists — `basis`, the page's declared metric, and `hourly`, the one $/hr
+/// figure, taken from the engine rather than divided here.
+///
+/// It carries `stamp` (contract rule 3) so a disagreement with another
+/// screen is diffable: same digest means same dataset, by construction. A nil
+/// stamp means no dataset stands behind the page at all, and then `basis` is
+/// `.unavailable` and every figure below refuses rather than reading zero.
+///
+/// **Internal, not private**, for the reason `DashboardFacts`,
+/// `PeriodsPageFacts`, `PeriodDetailFacts`, `DayDetailFacts` and
+/// `LogShiftFacts` are: the plan's completion rule 2 is "its parity test
+/// passes against the real adapter, not a helper." While this was private the
+/// suite could not reach it, restated the construction in a helper of its
+/// own, and therefore did not gate the screen at all — with
+/// `valuedShiftCents` patched to nil here, reverting the whole page to
+/// tips-only under wage-inclusive headers, the full app suite still reported
+/// `Test run with 855 tests in 154 suites passed`.
+struct InsightsPageFacts: SnapshotFacts {
+    let stamp: SnapshotStamp?
+    /// What every money figure on this page is, in one value. Rendered as a
+    /// sentence above the figures by `resultList`.
+    let basis: InsightsBasis
+    /// `MetricID.hourlyRate` over the same recent window the grid covers,
+    /// with its coverage. Nil when the engine cannot answer — never a
+    /// fabricated `$0/hr` — **and nil whenever the page is not on a
+    /// wage-inclusive basis**, because `hourlyRate` is `earnedIncome` over
+    /// minutes by registry definition (`EarningsResult.hourlyRateCents`
+    /// divides `coveredComponents.earnedIncomeCents`) and there is no
+    /// tips-only rate in the registry to fall back to. A $/hr tile under
+    /// "Every figure below is tips only" would be the one wage-inclusive
+    /// number left on a tips-only page.
+    ///
+    /// The consequence, stated rather than hidden: a wage-inclusive basis
+    /// means every shift in the dataset is wage-valued, which means every
+    /// shift has hours, so `HourlyRate.coverage`'s "across 5 of 6 shifts"
+    /// fraction is now unreachable FROM THIS SCREEN. It stays because
+    /// `docs/METRICS.md`'s presentation rules require it of the metric and
+    /// History's caption for the same metric still reaches it. Whether
+    /// Insights should instead show a tips-only $/hr — which needs a
+    /// registry metric, not a division here — is a decision for Tyler,
+    /// flagged the same way the whole-history completeness gate is.
+    let hourly: InsightsEarnings.HourlyRate?
     let facts: InsightsFacts?
     let moves: [Move]
     let followUps: [FollowUp]
@@ -506,8 +625,20 @@ private struct InsightsPageFacts {
     /// is `nonWageEarnings` — so under a wage-inclusive page they were
     /// short by every hour worked and had no way to say so (the M1 fixture's
     /// defect). They are now `snapshot.day(_:)`, wage-inclusive and carrying
-    /// their own completeness. Everything ELSE on this screen is group
-    /// 2.6/2.7, WAVE 2, and still reads `StatsEngine`.
+    /// their own completeness, each bar rendering an `EarningsFigure`. Wave 2
+    /// put everything ELSE on this screen on the same basis, via
+    /// `StatsEngine`'s pricing.
+    ///
+    /// And then the bars follow the PAGE basis rather than being
+    /// wage-inclusive by construction. Wave 2's first cut hard-coded
+    /// `EarningsFigure.earnedIncome` in `EarningsChartPoint`, so on a
+    /// `.partial` dataset — the ordinary case, since every shift added through
+    /// "Add Past Shifts" is hours-less — the bars read 26,500c / 24,000c /
+    /// 7,500c / 25,800c / 25,500c over the same five days the tiles, the
+    /// typical range, the plan and the day totals read 10,500c / 9,000c /
+    /// 7,500c / 9,800c / 10,500c, under a note saying every figure below was
+    /// tips only and a bar label saying "Total". `basis.chartMetric` is what
+    /// closes that.
     let chartFacts: EarningsChartFacts
     /// What unlocks next, and how close — see UnlockProgress.
     let unlocks: [Unlock]
@@ -523,33 +654,61 @@ private struct InsightsPageFacts {
     /// facts and never in a view body.
     let forecastAccuracy: StatsEngine.ForecastAccuracy?
 
+    /// - Parameters:
+    ///   - dataset: the page's ONE snapshot and the grouping it was built
+    ///     from. The records below are flattened out of that same grouping
+    ///     rather than passed in alongside it, so the engine and the snapshot
+    ///     cannot be looking at two different sets of rows.
+    ///   - calendar: the GRID calendar in the frozen payroll zone, the SAME
+    ///     one `InsightsEarnings.build` grouped with. It has to be: a legacy
+    ///     `TipEntry` with `shiftID == nil` takes a deterministic id derived
+    ///     from `calendar.startOfDay(...)`, so two calendars mint two ids for
+    ///     one shift and the pricing map misses.
     init(
-        allEntries: [TipEntry],
+        dataset: InsightsEarnings.Dataset,
         ledger: [String: Date],
         payrollTimeZone: TimeZone,
-        policies: CompensationPolicies,
+        calendar: Calendar,
         now: Date = .now
     ) {
-        let records = allEntries.map(TipRecord.init)
-        let statsEngine = StatsEngine(payrollTimeZone: payrollTimeZone, records: records)
+        let snapshot = dataset.snapshot
+        stamp = snapshot?.stamp
+        // ONE decision, from the dataset's own `Completeness`, before any
+        // figure is computed — and then every money surface below reads it.
+        // Group 2.6 first shipped with only `StatsEngine` governed by it,
+        // which left the chart and the HOURLY tile wage-inclusive under a
+        // note reading "Every figure below is tips only": one day was
+        // $265.00 on the chart and $105.00 in the tiles beside it.
+        let basis = InsightsEarnings.basis(for: snapshot)
+        self.basis = basis
+        let records = dataset.shiftDays.flatMap(\.items).map(TipRecord.init)
+        // The engine is built by `InsightsEarnings.engine`, not here, so the
+        // parity suite gates this wiring instead of restating it. See that
+        // function's header for the measurement that made it a function.
+        let statsEngine = InsightsEarnings.engine(
+            for: dataset,
+            payrollTimeZone: payrollTimeZone,
+            calendar: calendar
+        )
         facts = statsEngine.insightsFacts(referenceDate: now)
+        // `hourlyRate` is `earnedIncome` over minutes by registry definition,
+        // so it is only askable on a wage-inclusive page. See the property.
+        hourly = basis.isWageInclusive
+            ? InsightsEarnings.hourlyRate(
+                snapshot,
+                referenceDate: now,
+                in: payrollTimeZone
+            )
+            : nil
         moves = statsEngine.moves(referenceDate: now)
         followUps = statsEngine.followUps(ledger: ledger, referenceDate: now)
         chartFacts = EarningsChartFacts(
-            // The USER'S rate and workweek history, effective dates
-            // intact. This used to read
-            // `policyStore.latestCalendarPolicy?.workweekStartWeekday` while
-            // Dashboard and Period detail read `schedule?.firstWeekday` —
-            // two independent Settings controls, so setting them differently
-            // made this chart allocate overtime across different weeks than
-            // Period detail's chart did over the same days.
-            wholeOf: LegacySnapshotBridge.snapshot(
-                entries: allEntries,
-                policies: policies,
-                payrollTimeZone: payrollTimeZone,
-                asOf: now
-            ),
-            timeZone: payrollTimeZone
+            wholeOf: snapshot,
+            timeZone: payrollTimeZone,
+            // The bars name the metric the page declared, so the peak
+            // callout, the scrub readout and the bar label are the same
+            // cents and the same noun as everything under the note.
+            metric: basis.chartMetric
         )
         // Use the same rotation PLAN names as "your usual nights."
         unlocks = UnlockProgress.nextUnlocks(
@@ -564,19 +723,44 @@ private struct InsightsPageFacts {
     }
 }
 
-private struct InsightsPageFactsKey: Hashable {
-    let entriesRevision: Int
+/// The presentational remainder the snapshot's digest cannot cover.
+///
+/// `day` because every window on this page (the 180-day facts window, the
+/// trend's two eight-week halves, the forecast's twelve weeks, the plan's
+/// coming week) is measured back from today. `ledgerRevision` because which
+/// Moves have already been SHOWN decides which follow-ups exist, and that is
+/// a record of what the person has seen rather than an input to any number.
+private struct InsightsSelection: Hashable {
+    let day: Date
     let ledgerRevision: Int
-    let currentDay: Date
-    let payrollTimeZone: String
-    /// The whole policy value, not a scalar view of it: a dated raise or a
-    /// queued workweek change moves every bar without moving
-    /// `currentHourlyRateCents`.
-    let policies: CompensationPolicies
 }
 
-private struct InsightsPageFactsCache {
-    let key: InsightsPageFactsKey
+private struct InsightsCacheIdentity: Hashable {
+    let revision: Int
+    let selection: InsightsSelection
+}
+
+/// One render's worth of work, kept so a `@State` change (presenting the
+/// backfill sheet, scrubbing the chart) does not redo it.
+///
+/// Two independent reuse tests, because the two halves cost different things,
+/// the same split `DashboardRenderCache` documents:
+///
+/// - The DATASET (the grouping and the snapshot built from it) is valid while
+///   `revision` has not moved. `LegacySnapshotBridge` costs 41.7 ms over
+///   1,000 shifts and 307.4 ms over 10,000 (MEASURED, iPhone 17 Pro
+///   simulator, 2026-09-18), so it must not run per `body`.
+/// - The FACTS are valid while the dataset digest and the selection have not
+///   moved. `digest` is the complete key; `selection` is the presentational
+///   remainder.
+private struct InsightsRenderCache {
+    let revision: Int
+    /// The grouping AND the snapshot built from it, together, because they
+    /// have to be the same pair every render: the grouping's `shiftID`s are
+    /// what index the snapshot, and what the pricing map is checked against.
+    let dataset: InsightsEarnings.Dataset
+    let digest: String?
+    let selection: InsightsSelection
     let facts: InsightsPageFacts
 }
 
@@ -584,12 +768,6 @@ private struct InsightsPageFactsCache {
 /// any arithmetic out of StatsEngine. Internal (rather than private) so the
 /// anti-duplication and caveat filters can be tested directly.
 enum InsightsPresentation {
-    private static let dataNoteTerms = [
-        "estimate", "estimated", "approximate", "unconfirmed", "not confirmed",
-        "missing", "incomplete", "outage", "carried", "comped", "split check",
-        "thin", "noisy", "partial", "limited data"
-    ]
-
     static func redundantMetricIDs(for moves: [Move]) -> Set<String> {
         var result: Set<String> = []
         if moves.contains(where: { $0.id == "startTimeLeader" }) {
@@ -608,13 +786,6 @@ enum InsightsPresentation {
             result += " \(sentence(hedge))"
         }
         return result
-    }
-
-    static func dataNotes(from sections: [InsightSection]) -> [InsightSection] {
-        Array(sections.filter { section in
-            let text = "\(section.title) \(section.body)".lowercased()
-            return dataNoteTerms.contains(where: text.contains)
-        }.prefix(2))
     }
 
     static func weekdayName(_ weekday: Int) -> String {

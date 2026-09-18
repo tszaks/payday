@@ -180,108 +180,6 @@ enum HistoryEarnings {
     }
 }
 
-/// What `PaycheckEntrySheet` audits a real pay stub against: the period's own
-/// `EarningsResult`, handed down by the screen that opened the sheet.
-///
-/// **Why this exists, MEASURED.** Period detail's expectation
-/// (`PeriodDetailFacts.expectedCheckCents`) moved onto the engine in wave 1
-/// while the sheet that screen opens kept building its own basis out of
-/// `allEntries.filter { $0.date >= period.start && $0.date <= period.end }`
-/// plus `PeriodIncome.wages(firstWeekday: scheduleStore.schedule?.firstWeekday)`.
-/// Two independent defects in one basis:
-///
-/// 1. `PayPeriod.end` is the START of the period's final day, so the entry-date
-///    filter dropped every shift logged at a real hour on that day.
-/// 2. `schedule?.firstWeekday` is the pay-period GRID's weekday, which PR 3
-///    severed from the workweek — so overtime was allocated across different
-///    weeks from the ones the screen behind the sheet used.
-///
-/// MEASURED on the fixture in `PaycheckAuditBasisParityTests`: five 10h days at
-/// $10/hr with the POLICY workweek starting Sunday and the GRID set to Monday,
-/// plus a 6h/$200 shift at 18:00 on the period's final day. The screen expected
-/// $1,310.00; the sheet audited against $1,000.00 — tips $700.00 against
-/// $500.00 (the final-day shift dropped) and wages $610.00 against $500.00 (the
-/// grid weekday losing $110.00 of overtime). `PaycheckAudit` then told the
-/// person their real check was $310.00 off against a number the screen behind
-/// the sheet does not use.
-///
-/// The fix is structural rather than a second correct computation: the sheet is
-/// HANDED this basis, so there is one expectation per period and the sheet
-/// cannot hold a different one. `PaycheckAuditBasisParityTests` pins it.
-///
-/// Group 2.5 owns `PaycheckEntrySheet` and `PaycheckAudit` in wave 2; this is
-/// only the basis, moved onto the engine so History's own migration does not
-/// ship a screen whose sheet contradicts it.
-struct PaycheckAuditBasis {
-    /// The period's own known components — the SAME ones the hero, the
-    /// drawer rows and `expectedCheckCents` read. Nil when no dataset stands
-    /// behind them, and then every figure below refuses rather than reading
-    /// zero.
-    let components: EarningsComponents?
-
-    /// The ledger's regular/overtime split for the same period.
-    ///
-    /// `PeriodIncome.Wages` is used as a plain four-field value here, not as
-    /// a computation: it is the shape `PaycheckAudit`'s copy is written
-    /// against ("Payday computes $X regular and $Y overtime"), and nothing
-    /// pre-policy runs to produce it. PR 8 deletes the type and this
-    /// construction with it.
-    let wages: PeriodIncome.Wages?
-
-    /// No dataset, so no expectation. Every audit check that needs one stays
-    /// silent; the stub-internal ones (gross vs. its own lines, net vs. gross
-    /// minus taxes) still run, because they need nothing from the engine.
-    static let unbacked = PaycheckAuditBasis(result: nil)
-
-    init(result: EarningsResult?) {
-        guard let result else {
-            components = nil
-            wages = nil
-            return
-        }
-        let known = result.knownComponents
-        components = known
-        // Nil under the same rule `PeriodIncome.wages` used, restated on the
-        // engine's own completeness: with wages off, or with no shift priced,
-        // there is no computed wage to audit a stub against, and the audit
-        // says nothing rather than reporting a stub as $X over zero.
-        if result.completeness.state == .off || result.completeness.shiftsWageValued == 0 {
-            wages = nil
-        } else {
-            wages = PeriodIncome.Wages(
-                regularCents: known.regularWagesCents,
-                overtimeCents: known.overtimeWagesCents,
-                hours: WorkedMinutes.hours(fromMinutes: result.minutes),
-                overtimeHours: WorkedMinutes.hours(fromMinutes: result.overtimeMinutes)
-            )
-        }
-    }
-
-    /// The stub's TIPS line as the engine expects it. Nil when no credit tips
-    /// were logged at all — a cash-only period is not a discrepancy, same
-    /// silence-over-nagging rule the sheet has always used.
-    var loggedCreditTipsCents: Int? {
-        guard let components, components.voluntaryCreditCents > 0 else { return nil }
-        return PredictedPaycheck.tipsLineCents(from: components)
-    }
-
-    /// The stub's GRATUITY line. Its own payroll category, compared
-    /// independently so an overage in one cannot hide a shortage in the other.
-    var loggedGratuityCents: Int? {
-        guard let components, components.gratuityFeesCents > 0 else { return nil }
-        return components.gratuityFeesCents
-    }
-
-    /// `MetricID.expectedPaycheckGross`. The same expression
-    /// `PeriodDetailFacts.expectedCheckCents` is, over the same components, so
-    /// the sheet and the screen behind it are one figure by construction and
-    /// not two that agree. Nil when no dataset stands behind it.
-    var expectedCheckCents: Int? {
-        guard let components else { return nil }
-        return PredictedPaycheck.cents(from: components)
-    }
-}
-
 /// A recorded paycheck next to what the engine expected for the same period.
 ///
 /// One type for both History surfaces. The list row's "checked" delta
@@ -292,14 +190,13 @@ struct PaycheckAuditBasis {
 /// detail's `PaycheckComparisonView` recomputed its own from a breakdown the
 /// view was handed. Both now read ONE `EarningsResult`.
 ///
-/// **What is still owed, and by whom.** `MetricID.reconciliationDelta` says
-/// the comparison belongs per COMPONENT ("observed - expected, per component,
-/// for one pay period"), and `MetricID.observedPaidTips` says the ±100c
-/// correction must be a proposal rather than a silent rewrite — today
-/// `PaycheckRecord.reconciledPaidTipsCents` still substitutes it (fixture
-/// P1). Both are group 2.5's `PaycheckReconciler`, wave 2. Wave 1 moved the
-/// EXPECTED side onto the engine and unified the two implementations; it did
-/// not invent 2.5's API.
+/// **Closed by group 2.5, wave 2.** `MetricID.reconciliationDelta` asks for
+/// the comparison per COMPONENT and `MetricID.observedPaidTips` asks for the
+/// ±100c correction to be a proposal rather than a silent rewrite. Both now
+/// live on `PaycheckReconciler`: this type's observed side is
+/// `paycheck.paidTipsCents` verbatim, and the per-component deltas are on
+/// `PaycheckReconciler.Reconciliation`. The whole-check figure below stays,
+/// because it is the comparison these two surfaces render.
 struct PeriodCheckComparison: Equatable {
     /// What this period's own `EarningsResult` says the stub's Tips and
     /// Gratuity lines should total.
@@ -337,16 +234,40 @@ struct PeriodCheckComparison: Equatable {
     /// every cold launch.
     init?(result: EarningsResult?, paycheck: PaycheckRecord?) {
         guard let result, let paycheck else { return nil }
+        // ONE expectation, built by the reconciler from this period's own
+        // result. The sheet this period opens holds the same value, so the
+        // expected side a person sees on the period and the expected side
+        // the sheet audits against are one answer and not two that agree
+        // (`PaycheckEntryFacts.expectedGross` reads the same property).
+        let expectation = PaycheckReconciler.Expectation(result: result, stamp: nil)
         let components = result.knownComponents
-        expectedTipsAndGratuityCents = PredictedPaycheck.tipsAndGratuityCents(from: components)
+        guard let expectedTipsAndGratuity = expectation.tipsAndGratuityCents else { return nil }
+        expectedTipsAndGratuityCents = expectedTipsAndGratuity
+        // `MetricID.observedPaidTips`: the stub field EXACTLY as stored.
+        // This read was `paycheck.reconciledPaidTipsCents` until group 2.5,
+        // which substituted the ±100c gross-equation inference — fixture P1
+        // lists `periodsListPaidTipEarningsCents: 10050` and
+        // `periodDetailCheckPaidCents: 10050` as wrong answers against a
+        // stub that says 10000, and names 10000 as
+        // `reconciliationObservedTipsSideCents`. The inference is now a
+        // proposal the sheet offers (`PaycheckReconciler.Proposal`), so this
+        // comparison reports the person's own figure.
         paidTipEarningsCents = PredictedPaycheck.paidTipEarningsCents(
-            tipsCents: paycheck.reconciledPaidTipsCents,
+            tipsCents: paycheck.paidTipsCents,
             gratuityCents: paycheck.gratuityCents
         )
-        deltaCents = PredictedPaycheck.reconciliationDeltaCents(
-            observedTipEarningsCents: paidTipEarningsCents,
-            expectedTipsAndGratuityCents: expectedTipsAndGratuityCents
+        // `MetricID.reconciliationDelta`, the tips-and-gratuity component,
+        // off the same reconciliation the sheet holds rather than a second
+        // subtraction here.
+        let reconciliation = PaycheckReconciler.Reconciliation(
+            expectation: expectation,
+            observation: PaycheckReconciler.Observation(
+                paidTipsCents: paycheck.paidTipsCents,
+                gratuityCents: paycheck.gratuityCents
+            )
         )
+        guard let delta = reconciliation.tipEarningsDeltaCents else { return nil }
+        deltaCents = delta
         usesCreditOnly = components.voluntaryCreditCents > 0
     }
 }

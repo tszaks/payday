@@ -53,8 +53,12 @@ struct PaycheckEntrySheet: View {
     /// (`PayPeriod.end` is that day's midnight) and allocated overtime by the
     /// pay-period GRID's weekday instead of the payroll calendar policy's.
     /// MEASURED divergence against period detail on one fixture: $310.00.
-    /// `PaycheckAuditBasis`'s header has the full measurement.
-    let auditBasis: PaycheckAuditBasis
+    /// `PaycheckReconciler.Expectation`'s header has the full measurement.
+    ///
+    /// It carries the snapshot's `stamp`, which is this sheet's cache key —
+    /// so a wage or workweek change made while the sheet is open re-derives
+    /// every CHECKS sentence instead of leaving them on the old numbers.
+    let expectation: PaycheckReconciler.Expectation
 
     @State private var amountCents: Int
     @State private var note: String
@@ -83,12 +87,24 @@ struct PaycheckEntrySheet: View {
     @State private var scanTask: Task<Void, Never>?
     @State private var scanScrollRequest = 0
     @State private var showManualTipsEntry: Bool
+    /// The adapter contract's rule-3 cache. Keyed on the snapshot's `stamp`
+    /// and this sheet's own input (the stub being typed), never on a
+    /// hand-written list of the things that can move a number.
+    @State private var factsCache: PaycheckEntryFacts?
 
-    init(period: PayPeriod, existing: PaycheckRecord?, auditBasis: PaycheckAuditBasis) {
+    init(period: PayPeriod, existing: PaycheckRecord?, expectation: PaycheckReconciler.Expectation) {
         self.period = period
         self.existing = existing
-        self.auditBasis = auditBasis
-        _amountCents = State(initialValue: existing?.reconciledPaidTipsCents ?? 0)
+        self.expectation = expectation
+        // `MetricID.observedPaidTips`: the editor opens on what the person
+        // entered, not on what Payday inferred. This read was
+        // `existing?.reconciledPaidTipsCents`, so opening the sheet and
+        // tapping Save wrote the ±100c inference over the stored stub —
+        // fixture P1's `paycheckEditorPrefillAmountCents: 10050` and
+        // `paidTipsCentsWrittenBackOnEditorSave: 10050`, both listed as wrong
+        // answers against a stub reading 10000. The inference is now offered
+        // as `facts.proposal` and applied only when tapped.
+        _amountCents = State(initialValue: existing?.paidTipsCents ?? 0)
         _note = State(initialValue: existing?.note ?? "")
         _regularWagesCents = State(initialValue: existing?.regularWagesCents ?? 0)
         _overtimeWagesCents = State(initialValue: existing?.overtimeWagesCents ?? 0)
@@ -120,9 +136,12 @@ struct PaycheckEntrySheet: View {
         "Tips line only"
     }
 
-    private var auditStub: PaycheckAudit.Stub {
-        PaycheckAudit.Stub(
-            tipsCents: amountCents > 0 ? amountCents : nil,
+    /// The stub as entered. Zero-means-nil, same convention as LogTipSheet:
+    /// "not entered" and "entered as zero" are different facts, and this
+    /// sheet never lets a field record the latter.
+    private var observation: PaycheckReconciler.Observation {
+        PaycheckReconciler.Observation(
+            paidTipsCents: amountCents > 0 ? amountCents : nil,
             regularWagesCents: regularWagesCents > 0 ? regularWagesCents : nil,
             overtimeWagesCents: overtimeWagesCents > 0 ? overtimeWagesCents : nil,
             gratuityCents: gratuityCents > 0 ? gratuityCents : nil,
@@ -132,37 +151,27 @@ struct PaycheckEntrySheet: View {
         )
     }
 
-    /// Recomputed on every field change — PaycheckAudit is pure and cheap,
-    /// so there's no reason to debounce or cache this.
+    /// Everything this sheet renders, derived once per `(stamp, stub)` pair.
     ///
-    /// The engine side needs no cache either, now that it arrives as
-    /// `auditBasis`: the filter-and-reprice pass this used to hold (three
-    /// passes over the whole history, the tip split rebuilt twice) was the
-    /// reason there was ever an `AuditContext` cache, a `.task` to fill it and
-    /// a `ModelContext.didSave` subscription to refresh it. All three are
-    /// gone; the parent screen rebuilds its snapshot on the same trigger and
-    /// hands a fresh basis down.
-    private var auditFindings: [PaycheckAudit.Finding] {
-        PaycheckAudit.run(
-            stub: auditStub,
-            loggedCreditTipsCents: auditBasis.loggedCreditTipsCents,
-            loggedGratuityCents: auditBasis.loggedGratuityCents,
-            computedWages: auditBasis.wages,
-            computedOvertimeHours: auditBasis.wages?.overtimeHours
+    /// The adapter contract's rule 3, and the reason it is a cache rather
+    /// than a plain computed property: `PaycheckAudit` is cheap, but the KEY
+    /// is the point. This sheet used to hold an `AuditContext` with no key at
+    /// all — filled by a `.task`, refreshed only on `ModelContext.didSave` —
+    /// so a wage or workweek-start change while the sheet was open was
+    /// invisible to every CHECKS sentence. `stamp.digest` is a SHA-256 over
+    /// every input that can move a result, the rate history and the workweek
+    /// included, so there is nothing left for a hand-written key to miss.
+    private var facts: PaycheckEntryFacts {
+        PaycheckEntryFacts.reusing(
+            factsCache,
+            expectation: expectation,
+            observation: observation
         )
     }
 
-    private var actionableAuditFindings: [PaycheckAudit.Finding] {
-        auditFindings.filter { finding in
-            switch finding.severity {
-            case .reconciles: false
-            case .note, .discrepancy: true
-            }
-        }
-    }
-
     var body: some View {
-        let findings = actionableAuditFindings
+        let facts = self.facts
+        let findings = facts.actionableFindings
         NavigationStack {
             ScrollViewReader { proxy in
                 ScrollView {
@@ -174,10 +183,14 @@ struct PaycheckEntrySheet: View {
                                 .foregroundStyle(PaydayColor.primary)
                             scanPaycheckSlot
                             tipsInput
+                            expectedFigureLine(facts.expectedTipsLine)
+                            proposalButton(facts.proposal)
                         }
                         .padding(.top, 8)
 
                         paycheckDetailsCard
+
+                        expectedFigureLine(facts.expectedGross)
 
                         if !findings.isEmpty {
                             checksSection(findings)
@@ -286,6 +299,9 @@ struct PaycheckEntrySheet: View {
             guard let item else { return }
             scanTask?.cancel()
             scanTask = Task { await scan(photoItem: item) }
+        }
+        .task(id: facts) {
+            factsCache = facts
         }
         .onDisappear {
             scanResetTask?.cancel()
@@ -404,6 +420,75 @@ struct PaycheckEntrySheet: View {
             PaycheckCurrencyField(cents: cents, field: field, focusedField: $focusedDetailField)
         }
         .padding(.vertical, 14)
+    }
+
+    /// One `EarningsFigure` under the field it verifies: the registry's own
+    /// label, the amount, and the completeness caption when there is one.
+    ///
+    /// Rule 4 of the adapter contract, rendered. An `.unavailable` figure —
+    /// the engine could not answer — renders NOTHING here rather than "$0.00"
+    /// under the word "Expected", which would be a sentence about money that
+    /// is not true. The whole line is withheld rather than showing an en dash
+    /// beside every field, on the same rule the CHECKS section already
+    /// follows: with no dataset there is no verdict to state.
+    ///
+    /// A `.partial` period does render, with the amount it knows plus "wages
+    /// missing for 1 shift", because an expected check that silently omits an
+    /// unpriced shift is the audit's headline defect under the word
+    /// "Expected". `figure.mayBeCalledATotal` is false there by construction.
+    ///
+    /// Rendered as a centred footnote, the same treatment as this sheet's
+    /// "Tips line only" explainer, and NOT as a label-left/amount-right row:
+    /// the raised object on this sheet is the person's own stub, and Payday's
+    /// expectation is a quiet second opinion beside the field it belongs to.
+    /// One money figure per line (Tyler's money-language law, 2026-07-27).
+    @ViewBuilder
+    private func expectedFigureLine(_ figure: EarningsFigure) -> some View {
+        if let amount = figure.text {
+            VStack(spacing: 2) {
+                Text("\(figure.label) \(amount)")
+                    .font(PaydayFont.footnote)
+                    .monospacedDigit()
+                    .foregroundStyle(PaydayColor.textSecondary)
+                if let caption = figure.caption {
+                    Text(caption)
+                        .font(PaydayFont.caption)
+                        .foregroundStyle(PaydayColor.textTertiary)
+                }
+            }
+            .multilineTextAlignment(.center)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal)
+        }
+    }
+
+    /// `MetricID.proposedPaidTipsCorrection`, as a proposal.
+    ///
+    /// The whole of applying the ±100c gross-equation correction is a person
+    /// tapping this. It used to be applied silently in four places — the
+    /// editor prefill, the periods list, period detail's "check paid", and
+    /// the scan path before the value ever reached the field — so the stub
+    /// figure a person had entered was replaced by Payday's inference and
+    /// then written back to the record on the next Save (fixture P1's
+    /// `wrongAnswers`). The label is the registry's, with the figure
+    /// substituted: "Looks like $100.50 (accept?)".
+    ///
+    /// Tapping sets the tips field, which makes the stub's own gross
+    /// equation balance, which is why the proposal then disappears on its
+    /// own rather than needing a second piece of state to remember the tap.
+    @ViewBuilder
+    private func proposalButton(_ proposal: PaycheckReconciler.Proposal?) -> some View {
+        if let proposal {
+            Button(proposal.label) {
+                PaydayHaptics.selection()
+                amountCents = proposal.proposedCents
+                showManualTipsEntry = true
+            }
+            .font(PaydayFont.footnote)
+            .foregroundStyle(PaydayColor.primary)
+            .buttonStyle(.plain)
+            .padding(.horizontal)
+        }
     }
 
     /// Flat list of what the audit found — no card, matching the sheet's

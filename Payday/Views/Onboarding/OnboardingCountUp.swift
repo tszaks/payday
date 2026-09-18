@@ -9,6 +9,15 @@ import SwiftUI
 ///
 /// The loop is one cancellable task rather than a fan-out of delayed closures,
 /// so leaving the screen mid-count stops every pending step.
+///
+/// **This is onboarding-only, and its figure is never an engine figure.** Its
+/// one live caller is `OnboardingWelcomeView`'s demo card, whose target is a
+/// literal $186 sample ([OB-05]); the reveal's projection is
+/// `OnboardingProjection`'s, also synthetic by decision. Both format through
+/// `OnboardingProjection.text(wholeDollars:)`, the one place onboarding turns
+/// whole dollars into currency, so a real earnings figure cannot arrive here
+/// by accident: a migrated screen renders `EarningsFigure`, and this view
+/// takes an `Int`.
 struct OnboardingCountUp: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -24,11 +33,11 @@ struct OnboardingCountUp: View {
     @State private var displayed: Double = 0
 
     private var settledText: String {
-        Money.wholeDollarString(fromCents: targetDollars * 100)
+        OnboardingProjection.text(wholeDollars: targetDollars)
     }
 
     var body: some View {
-        Text(Money.wholeDollarString(fromCents: Int(displayed.rounded()) * 100))
+        Text(OnboardingProjection.text(wholeDollars: Int(displayed.rounded())))
             .font(font)
             .monospacedDigit()
             .foregroundStyle(color)

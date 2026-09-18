@@ -227,6 +227,42 @@ public struct EarningsFigure: Hashable, Sendable {
         )
     }
 
+    /// The `nonWageEarnings` of one query result, labelled as tips.
+    ///
+    /// For a surface that has **declared** a tips-only basis and has to keep
+    /// every figure on it. `earnedIncome(_:)` is not that surface's figure:
+    /// it folds wages in for every state except `.off`, so on a `.partial`
+    /// selection it returns `knownComponents.earnedIncomeCents` under
+    /// "Known so far" — a wage-inclusive number on a page that just said
+    /// "every figure below is tips only". PR 5 wave 2 measured exactly that
+    /// on Insights: the chart drew 26,500c for a day the rest of the page
+    /// called 10,500c, under a bar labelled "Total".
+    ///
+    /// The label comes from `earnedIncomeLabel(.off, ...)` rather than being
+    /// spelled here, so it stays a member of `MetricID.nonWageEarnings
+    /// .allowedLabels` by the same route every other label does: "Tips", or
+    /// "Tips & gratuity" when the selection holds gratuity.
+    ///
+    /// No caption. `nonWageEarnings`' missing-data rule is "none" — every
+    /// shift has tips, so there is nothing about a tips figure to hedge, and
+    /// `CompletenessCopy.caption(.off)` is nil for the same reason. The
+    /// `completeness` is still carried whole: it is the wage picture of the
+    /// selection, which is what told the caller to be on this basis in the
+    /// first place, and a caller that wants to say so says it once.
+    public static func nonWageEarnings(_ result: EarningsResult) -> EarningsFigure {
+        let components = result.knownComponents
+        return EarningsFigure(
+            metric: .nonWageEarnings,
+            amount: .cents(components.nonWageEarningsCents),
+            label: CompletenessCopy.earnedIncomeLabel(
+                .off,
+                gratuityFeesCents: components.gratuityFeesCents
+            ),
+            caption: nil,
+            completeness: result.completeness
+        )
+    }
+
     /// One shift's own earned income, from `snapshot.valuation(id)`.
     ///
     /// Nil `valuation` means "this shift is not in the dataset", which is a
