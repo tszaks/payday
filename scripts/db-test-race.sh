@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The concurrency half of PR 2 slice S4's gate.
 #
-# Five facts about private.fold_legacy_writes() need two or three CONCURRENT
+# Seven facts about private.fold_legacy_writes() need two or three CONCURRENT
 # sessions, which a single psql script cannot produce, so they are here instead
 # of in supabase/tests/shift_fold_test.sql:
 #
@@ -11,6 +11,10 @@
 #   4. two sessions queueing the same group neither block-forever nor raise 23505
 #   5. the 40P01 deadlock row of the S-gate table
 #   6. the ONE-SHOT racing the trigger, in BOTH orders (S5)
+#   7. an abort whose HANDLER meets a concurrent uncommitted duplicate, with a
+#      timeout still armed -- the shape 1 to 6 structurally cannot reach, and
+#      the one that used to roll a shipped 1.0 build's write back
+#   8. that same handler does not WAIT for the other transaction either
 #
 # Both of 1 and 2 are recorded verbatim because the design's own table records
 # both, and because the shipping (try-) variant leaves the authoritative read
@@ -647,6 +651,182 @@ check "theWaitingOneShotReportedZeroTouchedAndZeroRemainingAndNoFlag" "0|0|f" \
   "${TOUCHED_B:-<no output>}"
 
 q "delete from auth.users where id in ('$U','$U2','$U3','$U4')" >/dev/null
+# 7. AN ABORT WHOSE HANDLER MEETS A CONCURRENT UNCOMMITTED DUPLICATE.
+#
+# The case cases 1 to 6 structurally cannot reach, and the one that was
+# broken: an abort that is NOT 57014, plus a concurrent uncommitted duplicate
+# backlog entry, plus a timeout that is still armed.
+#
+# Case 4 exercises the ON CONFLICT DO NOTHING wait only from the fold's MAIN
+# body, where `when query_canceled` catches a timeout, and it sets no timeout
+# at all. The fold's exception handler is the one place in the file where
+# nothing catches anything, and lock_timeout RE-ARMS on every lock
+# acquisition. So on the previous version of the migration:
+#
+#   C's main-body queue call waits on B, raises 55P03, is caught by `when
+#   others`, and private.record_fold_abort's own queue call then waits on the
+#   same index entry -- where the re-armed lock_timeout fires AGAIN, inside
+#   the handler, and escapes.
+#
+#   ERROR:  canceling statement due to lock timeout
+#   CONTEXT:  while inserting index tuple (0,1) in relation "shift_fold_backlog"
+#           SQL function "queue_fold_backlog" statement 1
+#           ... private.record_fold_abort ... private.fold_legacy_writes() ...
+#   ROLLBACK
+#
+# MEASURED on a pristine cluster with three ORDINARY 1.0 writes, no test
+# hook, no injected constraint and no hand-planted row: tip rows 2, C's row
+# landed 0, failure rows 0, backlog 1. A shipped 1.0 build contains no
+# handling for a rejected write, PaydaySyncService retries the identical
+# 500-row payload, and the device goes dark. It is the one outcome the entire
+# file exists to prevent.
+# ===========================================================================
+
+setup_account "$U"
+
+# A holds the per-account advisory lock with its transaction open.
+open_session a 3
+send 3 "begin;"
+wait_state a "idle in transaction"
+send 3 "$(device_upsert_sql "$U" '[{"id":"54000000-0000-0000-0000-000000000091","shift_id":"54000000-0000-0000-0000-000000000090","work_date":"2026-07-11","amount_cents":5000,"kind":"cash","client_updated_at":"2026-07-11T23:00:00Z"}]')"
+wait_state a "idle in transaction"
+
+# B loses the try-lock, queues group 90, and HOLDS its transaction open, so
+# the index entry for (user, 90) exists and is uncommitted.
+open_session b 4
+send 4 "begin;"
+wait_state b "idle in transaction"
+send 4 "$(device_upsert_sql "$U" '[{"id":"54000000-0000-0000-0000-000000000092","shift_id":"54000000-0000-0000-0000-000000000090","work_date":"2026-07-11","amount_cents":1000,"kind":"cash","client_updated_at":"2026-07-11T23:01:00Z"}]')"
+wait_state b "idle in transaction"
+
+# C: an ordinary 1.0 write on the same group, with a lock_timeout set. Nothing
+# else about it is special.
+cat > "$WORK/c_locktimeout.sql" <<SQL
+set lock_timeout = '500ms';
+$(device_upsert_sql "$U" '[{"id":"54000000-0000-0000-0000-000000000093","shift_id":"54000000-0000-0000-0000-000000000090","work_date":"2026-07-11","amount_cents":1500,"kind":"cash","client_updated_at":"2026-07-11T23:02:00Z"}]')
+SQL
+set +e
+PGAPPNAME=payday_race_c "${PSQL[@]}" -q -f "$WORK/c_locktimeout.sql" \
+  >"$WORK/c_locktimeout.out" 2>&1
+C_EXIT=$?
+set -e
+
+send 4 "commit;"
+wait_state b "idle"
+send 3 "commit;"
+wait_state a "idle"
+close_session 3
+close_session 4
+wait || true
+
+C_ERR="$(grep -c 'ERROR' "$WORK/c_locktimeout.out" || true)"
+
+# The rule, as a number: the 1.0 write COMMITTED. Everything else about this
+# case is secondary.
+check "aLockTimeoutInsideTheHandlerNeverRejectsTheLegacyWrite" \
+  "exit=0 errors=0 landed=1" \
+  "exit=$C_EXIT errors=$C_ERR landed=$(q "select count(*) from public.tip_entries
+     where user_id = '$U' and id = '54000000-0000-0000-0000-000000000093' and deleted_at is null")"
+
+# And the abort was RECORDED rather than swallowed. This is why
+# private.record_fold_abort needs TWO independent blocks per account and not
+# one: with a single block the queue call's 55P03 took the failure row down
+# with it in the same subtransaction rollback, so the write committed and
+# failure_rows went to 0 -- an abort with no record of it anywhere.
+check "theSwallowedLockTimeoutWasStillRecordedAsAFailureRow" \
+  "rows=1 state=55P03" \
+  "rows=$(q "select count(*) from private.shift_fold_failures where user_id = '$U'") state=$(q "select coalesce(string_agg(distinct sqlstate, ','), 'none') from private.shift_fold_failures where user_id = '$U'")"
+
+sed 's/^/      | /' "$WORK/c_locktimeout.out" | head -4
+
+# ===========================================================================
+# 7. THE HANDLER DOES NOT WAIT FOR THE OTHER TRANSACTION.
+#
+# statement_timeout does NOT re-arm after firing, and that is worse than
+# re-arming rather than better: a fold entered through `when query_canceled`
+# has no timer left at all, so its handler's ON CONFLICT DO NOTHING waits on a
+# concurrent uncommitted duplicate for as long as that transaction lives.
+# MEASURED on the previous version of the migration, in exactly this shape:
+# still waiting 15 minutes later. A 1.0 write that never returns is a
+# client-side timeout, which is a rejected write by a slower route.
+#
+# So private.record_fold_abort narrows lock_timeout to 50 ms for its own
+# duration and restores it. Losing that queue entry is very nearly free: a
+# session holding an uncommitted duplicate on (user_id, group_key) is BY
+# DEFINITION queueing that same key, so the key is in the backlog once it
+# commits -- which is what the last assertion here checks.
+#
+# B holds for 6 seconds, released by a background committer so that a
+# regression is a FAILURE and not a hung suite.
+# ===========================================================================
+
+setup_account "$U2"
+
+# A takes the advisory lock so that B loses the try-lock and queues, then
+# COMMITS, so that C can win the lock and reach the forced-abort hook.
+open_session a 3
+send 3 "begin;"
+wait_state a "idle in transaction"
+send 3 "$(device_upsert_sql "$U2" '[{"id":"54000000-0000-0000-0000-0000000000a1","shift_id":"54000000-0000-0000-0000-0000000000a0","work_date":"2026-07-12","amount_cents":5000,"kind":"cash","client_updated_at":"2026-07-12T23:00:00Z"}]')"
+wait_state a "idle in transaction"
+
+open_session b 4
+send 4 "begin;"
+wait_state b "idle in transaction"
+send 4 "$(device_upsert_sql "$U2" '[{"id":"54000000-0000-0000-0000-0000000000a2","shift_id":"54000000-0000-0000-0000-0000000000a0","work_date":"2026-07-12","amount_cents":1000,"kind":"cash","client_updated_at":"2026-07-12T23:01:00Z"}]')"
+wait_state b "idle in transaction"
+
+send 3 "commit;"
+wait_state a "idle"
+close_session 3
+
+# Release B after 6 seconds no matter what C does. The main shell still holds
+# B's write end open, so opening the FIFO again here does not EOF its psql.
+( sleep 6; printf 'commit;\n' > "$WORK/b.fifo" ) &
+RELEASER=$!
+
+# C wins the try-lock, sleeps past its own statement_timeout, is caught by
+# `when query_canceled`, and its handler meets B's uncommitted duplicate.
+cat > "$WORK/c_hang.sql" <<SQL
+set statement_timeout = '500ms';
+set payday.fold_test_abort = 'sleep';
+$(device_upsert_sql "$U2" '[{"id":"54000000-0000-0000-0000-0000000000a3","shift_id":"54000000-0000-0000-0000-0000000000a0","work_date":"2026-07-12","amount_cents":1500,"kind":"cash","client_updated_at":"2026-07-12T23:02:00Z"}]')
+SQL
+START=$(python3 -c 'import time; print(int(time.time()*1000))')
+set +e
+PGAPPNAME=payday_race_c "${PSQL[@]}" -q -f "$WORK/c_hang.sql" >"$WORK/c_hang.out" 2>&1
+C_EXIT=$?
+set -e
+C_MS=$(( $(python3 -c 'import time; print(int(time.time()*1000))') - START ))
+
+wait "$RELEASER" 2>/dev/null || true
+wait_state b "idle"
+close_session 4
+wait || true
+
+C_ERR="$(grep -c 'ERROR' "$WORK/c_hang.out" || true)"
+
+check "aTimedOutFoldsHandlerDoesNotWaitForTheOtherTransaction" \
+  "exit=0 errors=0 landed=1" \
+  "exit=$C_EXIT errors=$C_ERR landed=$(q "select count(*) from public.tip_entries
+     where user_id = '$U2' and id = '54000000-0000-0000-0000-0000000000a3' and deleted_at is null")"
+
+check_true "theHandlerReturnedWellInsideTheOtherTransactionsLifetime" \
+  "$([ "$C_MS" -lt 3000 ] && echo t || echo f)" \
+  "the 1.0 write returned in ${C_MS} ms while the other transaction held its uncommitted duplicate for 6000 ms"
+
+check "theTimedOutFoldRecordedFiveSevenZeroOneFour" "rows=1 state=57014" \
+  "rows=$(q "select count(*) from private.shift_fold_failures where user_id = '$U2'") state=$(q "select coalesce(string_agg(distinct sqlstate, ','), 'none') from private.shift_fold_failures where user_id = '$U2'")"
+
+# The queue entry the handler declined to wait for is present anyway, because
+# the session holding the uncommitted duplicate was queueing that same key.
+check "theKeyTheHandlerDidNotWaitForIsQueuedByTheOtherSessionAnyway" "1" \
+  "$(q "select count(*) from private.shift_fold_backlog
+         where user_id = '$U2' and group_key = '54000000-0000-0000-0000-0000000000a0'")"
+
+sed 's/^/      | /' "$WORK/c_hang.out" | head -4
+
+q "delete from auth.users where id in ('$U','$U2')" >/dev/null
 
 echo
 if [ "$FAILED" = "1" ]; then
