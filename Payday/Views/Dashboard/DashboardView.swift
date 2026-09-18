@@ -722,7 +722,7 @@ struct DashboardView: View {
                     if let banner = cloudState.conversionBanner {
                         PaydayConversionBannerView(banner: banner)
                             .padding(.horizontal, PaydaySpacing.p16)
-                            .padding(.top, 8)
+                            .padding(.top, PaydaySpacing.p8)
                     }
 
                     heroWithDrawer(facts)
