@@ -118,34 +118,78 @@ struct WageEstimateHoursLabelTests {
 
 @Suite("WageEstimate centsSummedPerShift")
 struct WageEstimateCentsSummedPerShiftTests {
-    @Test("rounds EACH shift's wage individually, then sums — not the other way around")
-    func roundsPerShiftNotPerTotal() {
-        // $2.83/hr: a 4.25h shift and a 5.5h shift.
-        // Per-shift-then-sum: round(283*4.25) + round(283*5.5) = 1203 + 1557 = 2760.
-        // Round-of-combined-hours would give round(283*9.75) = 2759 instead —
-        // this must produce the former, matching the sum of the same two
-        // shifts' own individually-displayed wage figures.
+    /// SUPERSEDES `roundsPerShiftNotPerTotal`, deliberately and by the plan
+    /// (PaydayCore Design 1, "Worked example A": "The old per-shift path gave
+    /// 2760. The golden fixture expects 2759. `roundsPerShiftNotPerTotal` is
+    /// superseded.").
+    ///
+    /// The old rule rounded each shift on its own and added the results, so a
+    /// 4.25h and a 5.5h shift at $2.83 came to 2760c here while the same two
+    /// shifts' WEEK came to 2759c: the app disagreed with itself by a cent
+    /// depending on the screen. The ledger allocates each shift its slice of
+    /// the week's running total instead, so these figures telescope exactly to
+    /// the week and each is still within 1c of its own naive rounding.
+    @Test("allocates each shift its slice of the week, so the parts sum to the week's 2759 and never 2760")
+    func telescopesToTheWeekTotal() {
+        // $2.83/hr: a 4.25h shift and a 5.5h shift, in one workweek.
         let shiftOne = [TipEntry(date: Date(timeIntervalSinceReferenceDate: 0), amountCents: 5000, kind: .credit, hoursWorked: 4.25)]
         let shiftTwo = [TipEntry(date: Date(timeIntervalSinceReferenceDate: 0), amountCents: 6000, kind: .credit, hoursWorked: 5.5)]
-        let cents = WageEstimate.centsSummedPerShift(shiftGroups: [shiftOne, shiftTwo], wageCentsPerHour: 283)
-        #expect(cents == 2760)
-        #expect(cents != 2759)
+        let cents = WageEstimate.centsSummedPerShift(payrollTimeZone: PaydayTestZone.payroll, workweekStartWeekday: 2, shiftGroups: [shiftOne, shiftTwo], wageCentsPerHour: 283)
+        #expect(cents == 2759, "W1's golden number")
+        #expect(cents != 2760, "the superseded per-shift rounding")
+
+        // The exact sum is 1202.75 + 1556.50 = 2759.25, and the week is that
+        // rounded half-up ONCE.
+        #expect(cents == CompensationLedger.roundCents(283 * 255 * 100 + 283 * 330 * 100))
+
+        // Each shift on its own is unchanged: only the sum stopped
+        // double-counting the half cents.
+        #expect(WageEstimate.cents(wageCentsPerHour: 283, hours: 4.25) == 1203)
+        #expect(WageEstimate.cents(wageCentsPerHour: 283, hours: 5.5) == 1557)
+    }
+
+    @Test("a week past the threshold carries its overtime, which the old base-rate-only sum dropped")
+    func carriesOvertime() {
+        // Mon 2026-09-28 through Fri 2026-10-02, 48 hours: W2's week.
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = PaydayTestZone.payroll
+        let minutes = [615.0, 585, 630, 690, 360]
+        let groups = minutes.enumerated().map { index, m in
+            [TipEntry(
+                date: calendar.date(from: DateComponents(year: 2026, month: 9, day: 28 + index, hour: 17))!,
+                amountCents: 1000,
+                kind: .credit,
+                hoursWorked: m / 60,
+                shiftPeriod: .dinner,
+                shiftID: UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", index + 1))!
+            )]
+        }
+        let cents = WageEstimate.centsSummedPerShift(
+            payrollTimeZone: PaydayTestZone.payroll,
+            workweekStartWeekday: 2,
+            shiftGroups: groups,
+            wageCentsPerHour: 283
+        )
+        // W2: regular 11320 + overtime 3396. The old implementation returned
+        // 13584 here, because it priced all 48 hours at the base rate.
+        #expect(cents == 14716)
+        #expect(cents != 13584)
     }
 
     @Test("nil wage rate sums to zero")
     func nilRateIsZero() {
         let shift = [TipEntry(date: Date(timeIntervalSinceReferenceDate: 0), amountCents: 5000, kind: .credit, hoursWorked: 5)]
-        #expect(WageEstimate.centsSummedPerShift(shiftGroups: [shift], wageCentsPerHour: nil) == 0)
+        #expect(WageEstimate.centsSummedPerShift(payrollTimeZone: PaydayTestZone.payroll, workweekStartWeekday: 2, shiftGroups: [shift], wageCentsPerHour: nil) == 0)
     }
 
     @Test("a shift with no logged hours contributes zero")
     func noHoursContributesZero() {
         let shift = [TipEntry(date: Date(timeIntervalSinceReferenceDate: 0), amountCents: 5000, kind: .cash)]
-        #expect(WageEstimate.centsSummedPerShift(shiftGroups: [shift], wageCentsPerHour: 283) == 0)
+        #expect(WageEstimate.centsSummedPerShift(payrollTimeZone: PaydayTestZone.payroll, workweekStartWeekday: 2, shiftGroups: [shift], wageCentsPerHour: 283) == 0)
     }
 
     @Test("empty input sums to zero")
     func emptyInputIsZero() {
-        #expect(WageEstimate.centsSummedPerShift(shiftGroups: [], wageCentsPerHour: 283) == 0)
+        #expect(WageEstimate.centsSummedPerShift(payrollTimeZone: PaydayTestZone.payroll, workweekStartWeekday: 2, shiftGroups: [], wageCentsPerHour: 283) == 0)
     }
 }

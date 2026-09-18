@@ -61,6 +61,7 @@ struct PeriodsPageFacts {
                 period: period,
                 breakdown: TipBreakdown.total(of: entries),
                 wages: PeriodIncome.wages(
+                    payrollTimeZone: payrollTimeZone,
                     entries: entries,
                     wageCentsPerHour: wageCentsPerHour,
                     firstWeekday: schedule?.firstWeekday
@@ -75,6 +76,7 @@ struct PeriodsPageFacts {
         }
         yearToDateNights = StatsEngine(payrollTimeZone: payrollTimeZone, records: yearEntries.map(TipRecord.init)).nightlyTotals()
         yearToDateWages = PeriodIncome.wages(
+            payrollTimeZone: payrollTimeZone,
             entries: yearEntries,
             wageCentsPerHour: wageCentsPerHour,
             firstWeekday: schedule?.firstWeekday

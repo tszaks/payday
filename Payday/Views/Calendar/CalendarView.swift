@@ -24,7 +24,8 @@ struct CalendarMonthFacts {
         displayedMonth: Date,
         calendar: Calendar,
         wageCentsPerHour: Int?,
-        firstWeekday: Int?
+        firstWeekday: Int?,
+        payrollTimeZone: TimeZone
     ) {
         let monthEntries = allEntries.filter {
             calendar.isDate($0.date, equalTo: displayedMonth, toGranularity: .month)
@@ -46,6 +47,8 @@ struct CalendarMonthFacts {
             let shiftsByDay = Dictionary(grouping: monthShiftGroups, by: \.day)
             let wagesByDay = shiftsByDay.mapValues {
                 WageEstimate.centsSummedPerShift(
+                    payrollTimeZone: payrollTimeZone,
+                    workweekStartWeekday: firstWeekday ?? calendar.firstWeekday,
                     shiftGroups: $0.map(\.items),
                     wageCentsPerHour: wageCentsPerHour
                 )
@@ -62,6 +65,7 @@ struct CalendarMonthFacts {
 
         let tipsCents = monthEntries.reduce(0) { $0 + $1.netCents }
         let wages = PeriodIncome.wages(
+            payrollTimeZone: payrollTimeZone,
             entries: monthEntries,
             wageCentsPerHour: wageCentsPerHour,
             firstWeekday: firstWeekday
@@ -104,6 +108,7 @@ private struct CalendarMonthFactsCache {
 struct CalendarView: View {
     @Environment(PayScheduleStore.self) private var scheduleStore
     @Environment(UserPreferencesStore.self) private var preferencesStore
+    @Environment(PolicyStore.self) private var policyStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Query private var allEntries: [TipEntry]
 
@@ -117,6 +122,10 @@ struct CalendarView: View {
     private var calendar: Calendar {
         var c = Calendar.current
         c.firstWeekday = scheduleStore.schedule?.resolvedFirstWeekday ?? c.firstWeekday
+        // The grid draws civil days in the PAYROLL zone, so a tile and the
+        // shift on it cannot disagree about which day it was while the phone
+        // is somewhere else.
+        c.timeZone = policyStore.payrollTimeZone
         return c
     }
 
@@ -198,7 +207,8 @@ struct CalendarView: View {
             displayedMonth: displayedMonth,
             calendar: calendar,
             wageCentsPerHour: preferencesStore.baseHourlyWageCents,
-            firstWeekday: scheduleStore.schedule?.firstWeekday
+            firstWeekday: scheduleStore.schedule?.firstWeekday,
+            payrollTimeZone: policyStore.payrollTimeZone
         )
     }
 

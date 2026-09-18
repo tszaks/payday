@@ -126,6 +126,9 @@ targets:
       # "cannot find 'NumberWords' in scope".
       - path: Payday/Utilities/NumberWords.swift
       - path: Payday/Utilities/WageEstimate.swift
+      # WageEstimate and PeriodIncome are thin wrappers over
+      # CompensationLedger as of PR 3, and the bridge is how they reach it.
+      - path: Payday/Utilities/LegacyLedgerBridge.swift
       - path: Payday/Utilities/ShiftDays.swift
       - path: Payday/Utilities/ShiftDetails.swift
       - path: Payday/Utilities/ShiftReceiptMetrics.swift

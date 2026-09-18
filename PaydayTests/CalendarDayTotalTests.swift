@@ -20,7 +20,7 @@ struct CalendarDayTotalTests {
     private func dayTotalCents(entries: [TipEntry], wageCentsPerHour: Int?) -> Int {
         let tipsNet = TipBreakdown.total(of: entries).netTotalCents
         let shifts = ShiftDays.groupedByShift(entries, shiftID: \.shiftID, date: \.date, period: \.shiftPeriod)
-        let wageCents = WageEstimate.centsSummedPerShift(shiftGroups: shifts.map(\.items), wageCentsPerHour: wageCentsPerHour)
+        let wageCents = WageEstimate.centsSummedPerShift(payrollTimeZone: PaydayTestZone.payroll, workweekStartWeekday: 2, shiftGroups: shifts.map(\.items), wageCentsPerHour: wageCentsPerHour)
         return tipsNet + wageCents
     }
 
