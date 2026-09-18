@@ -109,6 +109,23 @@ struct EarningsSnapshotAdditivityTests {
         #expect(snap.range(range("2026-09-28", "2026-10-02")).knownComponents.earnedIncomeCents == 14716)
     }
 
+    /// A chart point and the day sheet behind it must be the SAME result,
+    /// not two results that happen to agree: `days(in:)` is `day(_:)` per
+    /// day of the clamped range, so Definition of Done #5's "calendar day
+    /// equals the chart point" is equality of values rather than of numbers.
+    @Test("each element of days(in:) is exactly day(_:) for that day")
+    func daysSeriesEqualsTheDayQuery() throws {
+        let snap = try snapshot("M1")
+        let month = YearMonth(year: 2026, month: 10).range
+        let series = snap.days(in: month)
+        let clamped = month.clamped(to: snap.stamp.asOf!)
+
+        #expect(series.count == clamped.count)
+        for (result, civilDay) in zip(series, clamped.days) {
+            #expect(result == snap.day(civilDay), "\(civilDay.iso)")
+        }
+    }
+
     /// W2's whole point: September 8632 + October 6084 == 14716, and the
     /// month-first recomputation that loses the overtime premium reads 13585.
     @Test("month plus month equals the containing range, and is not the month-first answer")
