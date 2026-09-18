@@ -543,6 +543,42 @@ pin_check "recordTipDeletions" 'func +recordTipDeletions\b' Payday PaydayWidget 
 pin_check "shiftCacheRequiresBaseline" 'func +shiftCacheRequiresBaseline\b' Payday PaydayWidget --include=*.swift
 pin_check "payday_shift_rollback_at" 'create +(or +replace +)?function +[a-z_.]*payday_shift_rollback_at' supabase --include=*.sql
 
+# 18. No silent save in a view. Every SwiftUI write path goes through
+#     ShiftCommands.commit, which saves ONCE and rolls back on any throw.
+#
+#     `try? context.save()` was the shipped idiom, and with
+#     `autosaveEnabled = false` it became actively dangerous rather than
+#     merely sloppy: the mutation is discarded and nothing says so. Two live
+#     bugs came from exactly this and are fixed in S9's second half.
+#
+#     UndoDeleteToast.delete recorded the server-side deletion BEFORE its
+#     `try? save()`, so a failed save left the rows on screen with their ids
+#     already in the App Group's pending-deletion queue. The next sync then
+#     deleted, on the server, rows the user could still see: the app and the
+#     server disagreeing about whether that money exists, which is the one
+#     thing this project is for.
+#
+#     ShiftContextMenu's duplicate fired PaydayHaptics.medium() unconditionally
+#     after its `try? save()`, so a failed duplicate buzzed success and
+#     produced nothing.
+#
+#     Scoped to Payday/Views. Payday/Debug/DebugSeeder.swift keeps its six,
+#     deliberately: it is debug-only seed data, it is not a user's money, and
+#     a seeding failure is meant to be loud in the console rather than
+#     recovered.
+SILENT_SAVE=$(grep -rn -E 'try\? +[A-Za-z_.]*\.save\(\)' Payday/Views --include=*.swift 2>/dev/null | grep -v '^\s*//' | grep -vE '^[^:]+:[0-9]+: *(///|//)')
+if [ -n "$SILENT_SAVE" ]; then
+  FAIL=1
+  echo "[FAIL] A view saves with try?, discarding the error silently"
+  printf '%s\n' "$SILENT_SAVE" | sed 's/^/   /'
+  echo "   -> Wrap the mutation in ShiftCommands.commit(in:) and act on the throw."
+  echo "      A failed save must not leave a queued server deletion, a success"
+  echo "      haptic, or a dismissed toast behind it."
+  echo ""
+else
+  echo "[PASS] No view saves with try? (every write path goes through the commit boundary)"
+fi
+
 echo ""
 if [ "$FAIL" -eq 1 ]; then
   echo "=== Design lint FAILED — see docs/DESIGN.md ==="
