@@ -36,6 +36,42 @@ import SwiftData
 /// (Design 1, step 4). The test asserts on the non-wage side for exactly
 /// that reason.
 extension View {
+    /// The same three actions on a `ShiftRecord`.
+    ///
+    /// The verbatim-copy contract above still holds, and gets simpler: one
+    /// record holds every stored field canonically, so Duplicate copies them
+    /// across with the same two substitutions -- a fresh id and
+    /// `recordedAt: .now` -- and there is no per-row canonical-owner rule to
+    /// preserve, because there are no rows to disagree.
+    ///
+    /// The wage caveat is unchanged and still deliberate: a duplicate adds
+    /// hours to the workweek, so a copy that pushes the week past the
+    /// overtime threshold is priced differently from its source, by rule.
+    func shiftContextMenu(
+        record: ShiftRecord,
+        sheetTarget: Binding<TipEntrySheetTarget?>,
+        undoState: UndoDeleteToastState,
+        context: ModelContext
+    ) -> some View {
+        contextMenu {
+            Button {
+                sheetTarget.wrappedValue = .editShift(record)
+            } label: {
+                Label("Edit", systemImage: "pencil")
+            }
+            Button {
+                duplicateShift(record, into: context)
+            } label: {
+                Label("Duplicate", systemImage: "plus.square.on.square")
+            }
+            Button(role: .destructive) {
+                undoState.delete(record, in: context)
+            } label: {
+                Label("Delete", systemImage: "trash")
+            }
+        }
+    }
+
     func shiftContextMenu(_ entries: [TipEntry], sheetTarget: Binding<TipEntrySheetTarget?>, undoState: UndoDeleteToastState, context: ModelContext) -> some View {
         contextMenu {
             Button {
@@ -56,6 +92,36 @@ extension View {
             }
         }
     }
+}
+
+/// Duplicates one record verbatim, through the command boundary.
+///
+/// `ShiftCommands.create` rather than a hand-rolled insert, so the copy goes
+/// through the same single-save-and-rollback path every other write uses, and
+/// so the haptic fires only on success -- the legacy sibling fired it
+/// unconditionally after a `try?` and buzzed success on a failed duplicate.
+@MainActor
+private func duplicateShift(_ record: ShiftRecord, into context: ModelContext) {
+    do {
+        _ = try ShiftCommands.create(
+            in: context,
+            workDate: record.workDate,
+            shiftPeriod: record.shiftPeriod,
+            cashTipsCents: record.cashTipsCents,
+            creditTipsCents: record.creditTipsCents,
+            tipOutCents: record.tipOutCents,
+            salesCents: record.salesCents,
+            hoursWorked: record.hoursWorked,
+            clockIn: record.clockIn,
+            clockOut: record.clockOut,
+            serverCount: record.serverCount,
+            receiptMetrics: record.receiptMetrics,
+            note: record.note
+        )
+    } catch {
+        return
+    }
+    PaydayHaptics.medium()
 }
 
 @MainActor

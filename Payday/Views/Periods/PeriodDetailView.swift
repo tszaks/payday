@@ -32,6 +32,13 @@ struct PeriodDetailFacts: SnapshotFacts {
     /// include it. Reading the selection back off the result makes the rows
     /// and the hero the same set by construction.
     let shiftDays: [(day: Date, shiftID: UUID, items: [TipEntry])]
+    /// The same rows in the shift representation, selected by the same engine
+    /// ids. Empty unless the caller passed records, so the two lists are never
+    /// both populated and a screen cannot render both representations.
+    ///
+    /// `[ShiftRecord]` and not a projection because these rows are the edit
+    /// and delete targets: `ProjectedShiftRow` is deliberately un-persistable.
+    let shiftRecordDays: [ShiftRecord]
     let multiShiftDays: Set<Date>
     /// The civil days this screen asked about, so a caller can see the scope
     /// as well as the cents.
@@ -100,6 +107,9 @@ struct PeriodDetailFacts: SnapshotFacts {
     init(
         snapshot: EarningsSnapshot?,
         shiftDays: [(day: Date, shiftID: UUID, items: [TipEntry])],
+        /// Defaulted, so every existing caller is unchanged. The writer flip
+        /// passes records here instead of entries above.
+        shiftRecordDays: [ShiftRecord] = [],
         paycheckRecords: [PaycheckRecord],
         period: PayPeriod,
         schedule: PaySchedule?,
@@ -122,8 +132,13 @@ struct PeriodDetailFacts: SnapshotFacts {
         let selected = Set(periodResult?.shiftIDs ?? [])
         let rows = shiftDays.filter { selected.contains($0.shiftID) }
         self.shiftDays = rows
+        // Selected by the SAME engine ids, so the record rows and the hero are
+        // one set by construction exactly as the legacy rows are.
+        let recordRows = shiftRecordDays.filter { selected.contains($0.id) }
+        self.shiftRecordDays = recordRows
         var shiftCounts: [Date: Int] = [:]
         for shift in rows { shiftCounts[shift.day, default: 0] += 1 }
+        for record in recordRows { shiftCounts[record.workDate, default: 0] += 1 }
         multiShiftDays = Set(shiftCounts.filter { $0.value >= 2 }.keys)
 
         if let periodResult {
@@ -196,6 +211,8 @@ struct PeriodDetailView: View {
     @Environment(PayScheduleStore.self) private var scheduleStore
     @Environment(PolicyStore.self) private var policyStore
     @Query private var allEntries: [TipEntry]
+    /// The other representation. `snapshotBuild()` picks one; never both.
+    @Query private var shiftRecords: [ShiftRecord]
     @Query private var paycheckRecords: [PaycheckRecord]
 
     let period: PayPeriod
@@ -216,6 +233,7 @@ struct PeriodDetailView: View {
         let facts = PeriodDetailFacts(
             snapshot: build.snapshot,
             shiftDays: build.shiftDays,
+            shiftRecordDays: build.shiftRecordDays,
             paycheckRecords: paycheckRecords,
             period: period,
             schedule: scheduleStore.schedule,
@@ -308,8 +326,13 @@ struct PeriodDetailView: View {
            cached.payrollTimeZone == zone {
             return cached.build
         }
+        // Both representations handed over; `HistoryEarnings.build` resolves
+        // which one and keeps the snapshot and the row list on the SAME one,
+        // which is what stops a total from one source sitting over rows from
+        // another.
         return HistoryEarnings.build(
             entries: allEntries,
+            records: shiftRecords,
             policies: policies,
             payrollTimeZone: zone
         )
@@ -348,7 +371,7 @@ struct PeriodDetailView: View {
 
     @ViewBuilder
     private func shiftsSection(_ facts: PeriodDetailFacts) -> some View {
-        if facts.shiftDays.isEmpty {
+        if facts.shiftDays.isEmpty, facts.shiftRecordDays.isEmpty {
             Text("No shifts in this period.")
                 .font(PaydayFont.bodyRegular)
                 .foregroundStyle(PaydayColor.textSecondary)
@@ -360,9 +383,14 @@ struct PeriodDetailView: View {
                     .foregroundStyle(PaydayColor.textSecondary)
                     .padding(.bottom, PaydaySpacing.p8)
 
+                // Exactly one of these is populated, by construction.
                 ForEach(Array(facts.shiftDays.enumerated()), id: \.element.shiftID) { index, group in
                     if index > 0 { Divider() }
                     shiftRow(for: group, facts: facts)
+                }
+                ForEach(Array(facts.shiftRecordDays.enumerated()), id: \.element.id) { index, record in
+                    if index > 0 { Divider() }
+                    shiftRow(for: record, facts: facts)
                 }
             }
         }
@@ -417,6 +445,30 @@ struct PeriodDetailView: View {
         if let hourlyRateCaption = facts.hourlyRateCaption { parts.append(hourlyRateCaption) }
         if let caption = facts.hero.caption { parts.append(caption) }
         return parts.joined(separator: ", ")
+    }
+
+    /// The record row. No `if let anchor` guard, because a record IS the
+    /// shift -- the legacy row has to reach for `items.first` and renders
+    /// nothing at all if the group is somehow empty.
+    private func shiftRow(
+        for record: ShiftRecord,
+        facts: PeriodDetailFacts
+    ) -> some View {
+        Button {
+            sheetTarget = .editShift(record)
+        } label: {
+            ShiftDayRow(facts: ShiftDayRowFacts(
+                snapshot: facts.snapshot,
+                shiftID: record.id,
+                day: record.workDate,
+                period: record.shiftPeriod,
+                dayHasMultipleShifts: facts.multiShiftDays.contains(record.workDate)
+            ))
+            .padding(.vertical, PaydaySpacing.p12)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .shiftContextMenu(record: record, sheetTarget: $sheetTarget, undoState: undoState, context: modelContext)
     }
 
     @ViewBuilder

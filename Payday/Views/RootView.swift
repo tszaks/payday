@@ -53,7 +53,7 @@ struct RootView: View {
                 lockController.armIfEnabled(preferencesStore)
             case .active:
                 SmartNudgeScheduler.reschedule(preferencesStore: preferencesStore, allEntries: allEntries, shiftRecords: shiftRecords)
-                PaydayPushScheduler.reschedule(preferencesStore: preferencesStore, schedule: scheduleStore.schedule, allEntries: allEntries, paycheckRecords: paycheckRecords)
+                PaydayPushScheduler.reschedule(preferencesStore: preferencesStore, schedule: scheduleStore.schedule, allEntries: allEntries, shiftRecords: shiftRecords, paycheckRecords: paycheckRecords)
             default:
                 break
             }
@@ -88,7 +88,7 @@ struct RootView: View {
         // computed from the pre-save entry list. A policy edit changes no
         // shift, so `allEntries` is already current for this trigger.
         .onReceive(NotificationCenter.default.publisher(for: PolicyStore.didChange)) { _ in
-            PaydayPushScheduler.reschedule(preferencesStore: preferencesStore, schedule: scheduleStore.schedule, allEntries: allEntries, paycheckRecords: paycheckRecords)
+            PaydayPushScheduler.reschedule(preferencesStore: preferencesStore, schedule: scheduleStore.schedule, allEntries: allEntries, shiftRecords: shiftRecords, paycheckRecords: paycheckRecords)
         }
         .task {
             // Backgrounding an already-running app arms the lock via the

@@ -167,7 +167,7 @@ struct SettingsView: View {
             }
             .onChange(of: isPaydayReminderEnabled) { _, newValue in
                 preferencesStore.isPaydayReminderEnabled = newValue
-                PaydayPushScheduler.reschedule(preferencesStore: preferencesStore, schedule: scheduleStore.schedule, allEntries: allEntries, paycheckRecords: paycheckRecords)
+                PaydayPushScheduler.reschedule(preferencesStore: preferencesStore, schedule: scheduleStore.schedule, allEntries: allEntries, shiftRecords: shiftRecords, paycheckRecords: paycheckRecords)
             }
             .onAppear {
                 firstName = preferencesStore.firstName ?? ""

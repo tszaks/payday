@@ -132,7 +132,64 @@ enum InsightsEarnings {
                 // baking into the data.
                 asOf: .distantFuture
             ),
-            shiftDays: shiftDays
+            tipRecords: shiftDays.flatMap(\.items).map(TipRecord.init),
+            shiftIDs: shiftDays.map(\.shiftID)
+        )
+    }
+
+    /// The same dataset from the new representation.
+    ///
+    /// The twin of `build(entries:)`, and the reason this screen can be
+    /// switched at all: `StatsEngine` still wants rows, so
+    /// `StatsRecordAdapter` shapes one record into the one or two rows it
+    /// came from while the snapshot is built from the records directly
+    /// through `ShiftInputAdapter` — the same adapter every other switched
+    /// screen uses, so Insights and Dashboard cannot price the same shift
+    /// differently.
+    ///
+    /// `shiftIDs` comes from the records rather than from the snapshot, on
+    /// purpose. `pricing` asks "is every shift the ENGINE holds priced by
+    /// the snapshot", so the question has to be asked of the engine's own
+    /// set; reading the ids back off the snapshot would make the check
+    /// tautological and it would pass while the page mixed bases, which is
+    /// the one thing it exists to catch.
+    /// **The one entry point.** Both representations in, one resolved
+    /// dataset out; see `ShiftRepresentation`.
+    @MainActor
+    static func build(
+        entries: [TipEntry],
+        records: [ShiftRecord],
+        policies: CompensationPolicies,
+        payrollTimeZone: TimeZone,
+        calendar: Calendar,
+        representation: ShiftRepresentation = .automatic
+    ) -> Dataset {
+        representation.usesRecords
+            ? build(records: records, policies: policies, payrollTimeZone: payrollTimeZone)
+            : build(entries: entries, policies: policies, payrollTimeZone: payrollTimeZone, calendar: calendar)
+    }
+
+    @MainActor
+    static func build(
+        records: [ShiftRecord],
+        policies: CompensationPolicies,
+        payrollTimeZone: TimeZone
+    ) -> Dataset {
+        let adapted = ShiftInputAdapter.adapt(records, calendars: policies.calendars)
+        let snapshot = try? EarningsSnapshot.build(EarningsInputs(
+            shifts: adapted.inputs,
+            rates: policies.rates,
+            calendars: policies.calendars,
+            // Unclamped, for the reason the legacy build above records: this
+            // page has never applied a to-date cutoff, and saying so once in
+            // the stamp beats passing it at every query site.
+            asOf: CivilDay(.distantFuture, in: payrollTimeZone),
+            unreadableReceiptShiftIDs: adapted.unreadableReceiptShiftIDs
+        ))
+        return Dataset(
+            snapshot: snapshot,
+            tipRecords: StatsRecordAdapter.tipRecords(from: records),
+            shiftIDs: records.map(\.id)
         )
     }
 
@@ -146,8 +203,24 @@ enum InsightsEarnings {
         /// Nil only when the inputs could not be canonically fingerprinted,
         /// which is a refusal and renders as unavailable, never as `$0.00`.
         let snapshot: EarningsSnapshot?
-        /// Newest day first, lunch before dinner — `ShiftDays`' order.
-        let shiftDays: [(day: Date, shiftID: UUID, items: [TipEntry])]
+        /// The rows `StatsEngine` analyses, already flattened out of
+        /// whichever representation built this dataset.
+        ///
+        /// Rows rather than the raw grouping, and `TipRecord` rather than
+        /// `TipEntry`, so that **no consumer can tell which representation
+        /// is underneath**. That is the whole point: this page reads the
+        /// legacy side before the server converts an account and the new
+        /// side after, and a consumer that could see the difference is a
+        /// consumer that could be switched half-way. The measured cost of
+        /// letting a caller reach past the builder is on the record — the
+        /// direct `entries:` call this type used to expose is exactly how
+        /// `PeriodsView` and this screen stayed unswitched while every
+        /// parity gate passed.
+        let tipRecords: [TipRecord]
+        /// Every shift id in the grouping the snapshot was built from, for
+        /// `pricing`'s totality check. Order is the grouping's: newest day
+        /// first, lunch before dinner.
+        let shiftIDs: [UUID]
     }
 
     // MARK: - The basis
@@ -229,7 +302,7 @@ enum InsightsEarnings {
         for valuation in snapshot.shifts {
             priced[valuation.id] = valuation.components.earnedIncomeCents
         }
-        for group in dataset.shiftDays where priced[group.shiftID] == nil {
+        for shiftID in dataset.shiftIDs where priced[shiftID] == nil {
             return nil
         }
         return priced
@@ -267,7 +340,7 @@ enum InsightsEarnings {
     ) -> StatsEngine {
         StatsEngine(
             payrollTimeZone: payrollTimeZone,
-            records: dataset.shiftDays.flatMap(\.items).map(TipRecord.init),
+            records: dataset.tipRecords,
             calendar: calendar,
             // The ledger's `earnedIncome` per shift, or nil to leave every
             // figure on tips. Never a scalar `wageCentsPerHour`: that prices

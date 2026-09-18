@@ -193,6 +193,10 @@ struct DayDetailSheet: View {
     @Environment(PolicyStore.self) private var policyStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Query private var allEntries: [TipEntry]
+    /// The other representation. Which one this screen reads is decided once,
+    /// below, by `shiftsAreAuthoritativeForCurrentAccount` -- never both, or a
+    /// converted shift counts twice.
+    @Query private var shiftRecords: [ShiftRecord]
 
     let date: Date
     @State private var sheetTarget: TipEntrySheetTarget?
@@ -209,12 +213,24 @@ struct DayDetailSheet: View {
     var body: some View {
         // No `Key` and no `dataRevision`: the facts carry the snapshot's
         // stamp, which is the computed dependency list (contract rule 3).
-        let facts = DayDetailFacts(
-            allEntries: allEntries,
-            date: date,
-            policies: policyStore.policies,
-            payrollTimeZone: policyStore.payrollTimeZone
-        )
+        // The representation switch for this screen, in ONE place. Both
+        // initializers are proven to agree on the total, the stamp digest and
+        // the selected ids (`DayDetailShiftFactsTests`), so this chooses a
+        // source and changes no arithmetic.
+        let authoritative = PaydaySyncState.shiftsAreAuthoritativeForCurrentAccount
+        let facts = authoritative
+            ? DayDetailFacts(
+                shiftRecords: shiftRecords,
+                date: date,
+                policies: policyStore.policies,
+                payrollTimeZone: policyStore.payrollTimeZone
+            )
+            : DayDetailFacts(
+                allEntries: allEntries,
+                date: date,
+                policies: policyStore.policies,
+                payrollTimeZone: policyStore.payrollTimeZone
+            )
         NavigationStack {
             List {
                 if facts.shifts.isEmpty {
@@ -230,6 +246,8 @@ struct DayDetailSheet: View {
                     .listRowSeparator(.hidden)
 
                     Section("Shifts") {
+                        // Exactly one of these is populated, by construction:
+                        // the facts leave the other empty.
                         ForEach(facts.shifts, id: \.shiftID) { group in
                             shiftRow(
                                 for: group,
@@ -237,6 +255,16 @@ struct DayDetailSheet: View {
                                     for: group,
                                     shiftCount: facts.shifts.count,
                                     note: Self.shiftNote(from: group.items)
+                                )
+                            )
+                        }
+                        ForEach(facts.shiftRecords, id: \.id) { record in
+                            shiftRow(
+                                for: record,
+                                rowFacts: facts.rowFacts(
+                                    for: record,
+                                    shiftCount: facts.shiftRecords.count,
+                                    note: record.note
                                 )
                             )
                         }
@@ -310,6 +338,29 @@ struct DayDetailSheet: View {
         .accessibilityLabel(
             figure.text.map { "\(figure.label). \($0)" } ?? "\(figure.label). Amount unavailable."
         )
+    }
+
+    /// The record row. Same three affordances as the legacy row, each taking
+    /// the LIVE record: this is why the class-B readers could not switch
+    /// before the writer, since `ProjectedShiftRow` is un-persistable and
+    /// neither `context.delete` nor the edit sheet can accept one.
+    private func shiftRow(
+        for record: ShiftRecord,
+        rowFacts: ShiftDayRowFacts
+    ) -> some View {
+        Button {
+            sheetTarget = .editShift(record)
+        } label: {
+            ShiftDayRow(facts: rowFacts)
+        }
+        .buttonStyle(.plain)
+        .swipeActions(edge: .trailing) {
+            Button(role: .destructive) {
+                undoState.delete(record, in: modelContext)
+            } label: {
+                Label("Delete", systemImage: "trash")
+            }
+        }
     }
 
     @ViewBuilder
