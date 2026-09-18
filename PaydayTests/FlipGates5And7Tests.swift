@@ -170,6 +170,73 @@ struct FlipGates5And7Tests {
         #expect(history.snapshot?.stamp.digest == dashboard.snapshot?.stamp.digest)
     }
 
+    /// **Gate 5 extended to Calendar**, because gap 7 switched it and nothing
+    /// asserted its record arm.
+    ///
+    /// The month grid is a primary money surface and it was the LAST
+    /// whole-screen reader still on a legacy-only path: `makeFacts` called
+    /// `shiftGroups(entries:)` with no switch, so after the flip the tiles
+    /// would have shown only pre-conversion shifts. Gate 5 covered the four
+    /// `HistoryEarnings` consumers and both facts types, but `CalendarEarnings`
+    /// reaches its money through its own builder, so the four-consumer
+    /// assertion said nothing about it.
+    ///
+    /// Same fixture, same day, same figure as History and Dashboard -- which
+    /// is the actual criterion 5 sentence for this surface ("calendar day =
+    /// day detail = sum of that day's shifts").
+    @Test("Calendar's record arm reports the same day figure as History and Dashboard")
+    func gate5CalendarAgreesOnRecords() throws {
+        _ = account(authoritative: true)
+        let policies = Self.policies()
+        let records = Self.records()
+
+        let history = HistoryEarnings.build(
+            records: records, policies: policies, payrollTimeZone: Self.zone
+        )
+        let calendar = CalendarEarnings.snapshot(
+            records: records, policies: policies, payrollTimeZone: Self.zone
+        )
+
+        let civil = CivilDay(Self.day(0), in: Self.zone)
+        let fromHistory = try #require(history.snapshot).day(civil)
+        let fromCalendar = try #require(calendar).day(civil)
+
+        #expect(fromHistory.knownComponents.earnedIncomeCents
+                == fromCalendar.knownComponents.earnedIncomeCents)
+        #expect(fromHistory.minutes == fromCalendar.minutes)
+        // Non-zero, so this is not two empty snapshots agreeing -- the exact
+        // way a parity assertion passes for the wrong reason.
+        #expect(fromCalendar.knownComponents.earnedIncomeCents > 0)
+        // And the same stamp, so the two surfaces are one dataset rather than
+        // two that happen to total the same.
+        #expect(history.snapshot?.stamp.digest == calendar?.stamp.digest)
+    }
+
+    /// Calendar's legacy arm, for the same reason the History/Dashboard pair
+    /// has one: an agreement that only holds on the record path is an
+    /// agreement about one arm, not about the switch.
+    @Test("Calendar's legacy arm reports the same day figure as History's")
+    func gate5CalendarAgreesOnLegacy() throws {
+        _ = account(authoritative: false)
+        let policies = Self.policies()
+        let entries = Self.mirroredEntries(Self.records())
+
+        let history = HistoryEarnings.build(
+            entries: entries, policies: policies, payrollTimeZone: Self.zone
+        )
+        let calendar = CalendarEarnings.snapshot(
+            entries: entries, records: [], policies: policies,
+            payrollTimeZone: Self.zone, representation: .legacy
+        )
+
+        let civil = CivilDay(Self.day(0), in: Self.zone)
+        let fromHistory = try #require(history.snapshot).day(civil)
+        let fromCalendar = try #require(calendar).day(civil)
+        #expect(fromHistory.knownComponents.earnedIncomeCents
+                == fromCalendar.knownComponents.earnedIncomeCents)
+        #expect(fromCalendar.knownComponents.earnedIncomeCents > 0)
+    }
+
     /// The legacy side of gate 5, so the agreement is not an artifact of the
     /// record path alone.
     @Test("one fixture reads the same on both builders through the legacy path too")

@@ -689,8 +689,13 @@ enum PaydaySyncState {
     ///
     /// Main actor because the deferral reads `LegacyEditSheetPresence`, which
     /// is a fact about what is on screen.
+    /// NOT `@discardableResult`, deliberately. The header above warns that
+    /// swallowing `.deferPromotion` "would turn a few-seconds delay into a
+    /// permanent one, since nothing else would ever reconsider" -- and an
+    /// attribute letting a caller ignore the result sat one line above that
+    /// warning. A comment asking a reader to notice an obligation is the
+    /// thing the compiler should be enforcing instead.
     @MainActor
-    @discardableResult
     static func applyShiftAuthority(
         _ state: ShiftReadAuthority.State,
         for userID: UUID,

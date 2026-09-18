@@ -155,6 +155,19 @@ enum CSVExporter {
         /// rather than the sum spelled out here, so this file adds no money
         /// arithmetic outside the engine (design-lint rule 4) and the Net
         /// column cannot disagree with every other reader of the same shift.
+        ///
+        /// `employeeGratuityFeesCents` is read RAW, with no v2 fold, and that
+        /// is the same choice `StatsRecordAdapter` makes for the same reason:
+        /// `ShiftRecord.nonWageEarningsCents` -- the model's own definition of
+        /// what a shift earned -- reads the field unguarded, so a reader that
+        /// folded first would be a second definition of a record's money.
+        ///
+        /// It is safe because a v1 payload cannot reach a `ShiftRecord`,
+        /// enforced at both write points: the server deriver's sanitizer
+        /// stamps `earningsSchemaVersion` to 2 with `create_missing = true`,
+        /// and on device the `receiptMetrics` setter asserts `>= 2` while
+        /// `design-lint` makes `applyEarnings` the only writer. Both halves
+        /// are needed; neither alone would do it.
         @MainActor
         init(record: ShiftRecord) {
             day = record.workDate
