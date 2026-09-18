@@ -31,9 +31,8 @@ final class PolicyStore {
     /// The migration itself is gated on there being no calendar policy at
     /// all, so a payload that arrives from another device satisfies it.
     private static let calendarMigrationKey = "com.szakacsmedia.payday.policyMigration.calendarFrozen.v1"
-    /// Gates the assumed rate policy. Flag-gated rather than content-gated
-    /// because a user who clears their wage has chosen to have no rate
-    /// policy, and a content gate would resurrect it on the next launch.
+    /// Set once the assumed rate policy has been considered, for reporting.
+    /// It does NOT gate the work: see `runMigrationsIfNeeded`.
     private static let rateMigrationKey = "com.szakacsmedia.payday.policyMigration.assumedRate.v1"
 
     private let defaults: UserDefaults
@@ -99,6 +98,125 @@ final class PolicyStore {
     /// Adds or replaces one calendar policy (by id) as a user edit.
     func applyCalendar(_ policy: PayrollCalendarPolicy) {
         apply(policies.adding(calendar: policy))
+    }
+
+    /// The plain "Hourly wage" row in Settings: the user is saying what their
+    /// rate IS, not that it changed on a date. It rewrites the LATEST rate
+    /// policy in place and marks it `.confirmed`, so correcting a typo never
+    /// invents a raise.
+    ///
+    /// With no rate policy on file it creates one effective from the distant
+    /// past, which is exactly what `baseHourlyWageCents` already did (it
+    /// priced every shift ever logged), so turning the wage on moves no
+    /// number relative to the shipped build.
+    ///
+    /// A nil or zero rate REMOVES every rate policy: nil has always meant
+    /// "the wage feature is off", never "$0/hr", and the ledger reports
+    /// `.rateNotSet` rather than a fabricated zero.
+    func applyRateEdit(hourlyRateCents: Int?) {
+        guard let cents = hourlyRateCents, cents > 0 else {
+            apply(CompensationPolicies(version: policies.version, rates: [], calendars: policies.calendars))
+            return
+        }
+        if var latest = policies.latestRate {
+            latest.hourlyRateCents = cents
+            latest.provenance = .confirmed
+            applyRate(latest)
+        } else {
+            applyRate(PayRatePolicy(
+                id: UUID(),
+                effectiveFrom: .distantPast,
+                hourlyRateCents: cents,
+                provenance: .confirmed
+            ))
+        }
+    }
+
+    /// "Rate changed on…": a dated raise or cut. Adds a new `.confirmed`
+    /// policy, which reprices only the shifts on or after that day — the
+    /// weekly overtime threshold stays continuous across it.
+    func applyRateChange(hourlyRateCents: Int, effectiveFrom day: CivilDay) {
+        applyRate(PayRatePolicy(
+            id: UUID(),
+            effectiveFrom: day,
+            hourlyRateCents: hourlyRateCents,
+            provenance: .confirmed
+        ))
+    }
+
+    /// "Yes, since I started": the legacy rate really has always been the
+    /// rate, so the assumption becomes a confirmation. Not a cent changes;
+    /// the "estimated" caption disappears.
+    func confirmRateHistory() {
+        guard policies.hasOnlyAssumedRates else { return }
+        var updated = policies
+        for policy in policies.rates where policy.provenance == .assumedFromLegacySetting {
+            var confirmed = policy
+            confirmed.provenance = .confirmed
+            updated = updated.adding(rate: confirmed)
+        }
+        apply(updated)
+    }
+
+    /// Applies a workweek-start or payroll-zone change as ONE not-yet-effective
+    /// calendar policy.
+    ///
+    /// Three rules, each there for a reason:
+    ///
+    /// 1. **It takes effect at the next workweek boundary STRICTLY AFTER
+    ///    today.** A policy that started this week would re-bucket days the
+    ///    user has already worked and silently move the overtime on them.
+    /// 2. **A second change before the first takes effect REPLACES it.**
+    ///    Settings drives this from a picker; stacking would mint a policy
+    ///    per scroll tick, and every one of them is a permanent row in the
+    ///    user's payroll history.
+    /// 3. **Reverting to what is already in effect removes the pending
+    ///    policy entirely** rather than writing a no-op one, so the history
+    ///    only ever records real changes.
+    ///
+    /// Returns the pending policy, or nil when the change was a revert.
+    @discardableResult
+    func applyCalendarChange(
+        workweekStartWeekday: Int,
+        payrollTimeZone: TimeZone,
+        today: CivilDay
+    ) -> PayrollCalendarPolicy? {
+        let settled = policies.calendars.filter { $0.effectiveFrom <= today }
+        let pending = policies.calendars.filter { $0.effectiveFrom > today }
+        let inEffect = settled.last
+
+        var kept = settled
+        if let inEffect,
+           inEffect.workweekStartWeekday == workweekStartWeekday,
+           inEffect.payrollTimeZone == payrollTimeZone {
+            apply(CompensationPolicies(version: policies.version, rates: policies.rates, calendars: kept))
+            return nil
+        }
+
+        let policy = PolicyMigration.calendarPolicy(
+            effectiveFrom: today.adding(days: 1),
+            workweekStartWeekday: workweekStartWeekday,
+            payrollTimeZone: payrollTimeZone,
+            previous: inEffect,
+            // Reuse the pending policy's id so this replaces it instead of
+            // adding a second future policy.
+            id: pending.first?.id ?? UUID()
+        )
+        kept.append(policy)
+        apply(CompensationPolicies(version: policies.version, rates: policies.rates, calendars: kept))
+        return policy
+    }
+
+    /// The calendar policy that is not in effect yet, if the user has queued
+    /// a change. Settings shows its date ("Takes effect Mon, Oct 5").
+    func pendingCalendarPolicy(today: CivilDay) -> PayrollCalendarPolicy? {
+        policies.calendars.last { $0.effectiveFrom > today }
+    }
+
+    /// The calendar policy in effect today, which is what actually values a
+    /// shift worked today.
+    func calendarPolicyInEffect(today: CivilDay) -> PayrollCalendarPolicy? {
+        policies.calendar(on: today)
     }
 
     /// A payload the sync decided is newer. Persists without touching the
@@ -176,21 +294,31 @@ final class PolicyStore {
             defaults.set(true, forKey: Self.calendarMigrationKey)
         }
 
-        if !defaults.bool(forKey: Self.rateMigrationKey) {
-            if let cents = baseHourlyWageCents, cents > 0, updated.rates.isEmpty {
-                let policy = PolicyMigration.assumedRatePolicy(
-                    hourlyRateCents: cents,
-                    earliestShiftDay: earliestShiftDate.map { CivilDay($0, in: payrollZone) }
-                )
-                updated = updated.adding(rate: policy)
-                outcome.createdRatePolicy = policy
-            }
-            // Marked run either way: a user with no wage set has no rate
-            // policy BY CHOICE, and the migration must not keep looking for
-            // one every launch and mint it the moment they type a number in
-            // (that is a user edit, and it is `.confirmed`).
-            defaults.set(true, forKey: Self.rateMigrationKey)
+        // CONTENT-gated, not flag-gated, and this is load-bearing.
+        //
+        // The first draft gated the rate on a "has this run" flag. Measured on
+        // the simulator: launch once with no wage set, the flag is written and
+        // no policy is made; set a wage afterwards and NO rate policy is ever
+        // created, so every wage in the app reads `.rateNotSet` and the
+        // totals silently lose the wage line. Several real paths write the
+        // legacy mirror without coming through Settings > Payroll: the
+        // shipped 1.0 build writing through `upsert_user_settings`, the
+        // first-run setup, the debug seeder.
+        //
+        // Gating on "there is a wage and no rate policy" instead makes this an
+        // ADOPTION rather than a one-shot migration, so every one of those
+        // paths converges. It cannot resurrect a deliberately cleared rate:
+        // clearing the rate in Payroll clears the legacy mirror with it, so
+        // there is nothing left to adopt.
+        if let cents = baseHourlyWageCents, cents > 0, updated.rates.isEmpty {
+            let policy = PolicyMigration.assumedRatePolicy(
+                hourlyRateCents: cents,
+                earliestShiftDay: earliestShiftDate.map { CivilDay($0, in: payrollZone) }
+            )
+            updated = updated.adding(rate: policy)
+            outcome.createdRatePolicy = policy
         }
+        defaults.set(true, forKey: Self.rateMigrationKey)
 
         guard outcome.changedAnything else { return outcome }
         policies = updated

@@ -509,11 +509,7 @@ struct PaydayCloudGate<Content: View>: View {
             // the policies it just created. Neither touches the settings
             // clock, so this cannot make an untouched install look newer
             // than another device's real settings.
-            policyStore.runMigrationsIfNeeded(
-                resolvedFirstWeekday: scheduleStore.schedule?.resolvedFirstWeekday ?? Calendar.current.firstWeekday,
-                earliestShiftDate: PolicyMigrationInputs.earliestShiftDate(in: modelContext),
-                baseHourlyWageCents: preferencesStore.baseHourlyWageCents
-            )
+            adoptPolicyInputs()
             await cloudState.restore(
                 context: modelContext,
                 scheduleStore: scheduleStore,
@@ -555,6 +551,24 @@ struct PaydayCloudGate<Content: View>: View {
             moveLedgerStore: moveLedgerStore,
             policyStore: policyStore,
             minimumInterval: minimumInterval
+        )
+        adoptPolicyInputs()
+    }
+
+    /// Run after every sync, not only at launch.
+    ///
+    /// A download can bring a `base_hourly_wage_cents` from a device that
+    /// knows nothing about policies — Payday 1.0 is shipped and writes the
+    /// legacy field only. Without this, that account's wage would be mirrored
+    /// into preferences while no rate policy existed, and every wage in the
+    /// app would read `.rateNotSet`: the wage line would vanish from every
+    /// total. `runMigrationsIfNeeded` is content-gated and idempotent, so
+    /// calling it again is either a no-op or exactly that repair.
+    private func adoptPolicyInputs() {
+        policyStore.runMigrationsIfNeeded(
+            resolvedFirstWeekday: scheduleStore.schedule?.resolvedFirstWeekday ?? Calendar.current.firstWeekday,
+            earliestShiftDate: PolicyMigrationInputs.earliestShiftDate(in: modelContext),
+            baseHourlyWageCents: preferencesStore.baseHourlyWageCents
         )
     }
 
