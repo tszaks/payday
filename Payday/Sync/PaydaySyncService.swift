@@ -164,6 +164,28 @@ struct PaydayRemoteRepository {
         try await sendReturning(rows, function: "upsert_shifts")
     }
 
+    /// The account's conversion record, or nil when the account has none.
+    ///
+    /// Nil is the ordinary case, not an error: `shift_migration_state` has a
+    /// row only once the server has run a conversion for that account, so
+    /// every account today reads nil. `ShiftReadAuthority.State()` with all
+    /// four fields absent is correctly non-authoritative, so the caller can
+    /// treat nil as "not converted" without a special case.
+    ///
+    /// NOT `.single()`. That throws when no row exists, which would turn the
+    /// ordinary case into a sync failure -- the same trap
+    /// `fetchAllRows`' header records for the `user_settings` read.
+    func fetchShiftMigrationState(userID: UUID) async throws -> RemoteShiftMigrationState? {
+        let rows: [RemoteShiftMigrationState] = try await client
+            .from("shift_migration_state")
+            .select(RemoteShiftMigrationState.columns)
+            .eq("user_id", value: userID)
+            .limit(1)
+            .execute()
+            .value
+        return rows.first
+    }
+
     /// Tombstones shifts. The server stores the EARLIEST of the requested and
     /// the already-stored tombstone, so a replayed delete is a true no-op and
     /// a clock-skewed device cannot park a tombstone in the future.
@@ -733,11 +755,79 @@ final class PaydaySyncService {
             checkpointToWrite.paycheckServerCursor = paycheckCursor
             checkpointToWrite.settingsServerUpdatedAt = settingsServerUpdatedAt
         }
+        // The read-authority leg: the ONE caller of the ONE writer.
+        //
+        // Placed here, after the checkpoint write, deliberately. Promoting an
+        // account changes which representation every screen reads, so it must
+        // not happen until this pass has actually landed its rows -- a flip on
+        // a half-applied pull would point the readers at a store that is still
+        // being filled.
+        //
+        // A failure to read the conversion record must NOT fail the sync. The
+        // rows are already reconciled and the checkpoint already written by
+        // this point, so throwing here would discard a successful pass over a
+        // fact that is only ever an optimisation: staying on the legacy
+        // representation one pass longer is free, and every shipped account is
+        // there anyway.
+        var authorityDeferred = false
+        do {
+            // ONLY when a row actually came back. An absent row must NOT reach
+            // `applyShiftAuthority`, and this is the sharpest hazard in the
+            // leg, so the reasoning is here rather than in a design doc.
+            //
+            // `resolve` returns `.demote` on the `currentlyAuthoritative`
+            // branch whenever `isAuthoritative` is false, and
+            // `isAuthoritative` opens with `guard migratedAt != nil`. So an
+            // EMPTY `State` demotes an already-converted account. Substituting
+            // `ShiftReadAuthority.State()` for a missing row -- which the
+            // first draft of this leg did -- therefore turns any read that
+            // returns nothing into a representation flip for that user.
+            //
+            // And "returns nothing" is not rare or loud. RLS on this table is
+            // `for select ... using (auth.uid() = user_id)`, so a request that
+            // fails to authenticate as the owner yields ZERO ROWS rather than
+            // an error: an auth blip is indistinguishable from "never
+            // converted" at the query level.
+            //
+            // What makes skipping correct rather than merely cautious: the
+            // server signals withdrawal by SETTING A COLUMN, never by removing
+            // the row. Nothing in any migration deletes from
+            // `shift_migration_state` -- it is rollback's only anchor, and
+            // rollback works by stamping `rollback_at`. So an absent row can
+            // never legitimately mean "the conversion was withdrawn", and a
+            // missing row on an authoritative account is always a failure to
+            // ask rather than an answer.
+            //
+            // This is the one place the demotion asymmetry cuts the wrong way:
+            // never deferring a demotion is right when the server has genuinely
+            // withdrawn its conversion, and exactly wrong when we merely failed
+            // to ask. Both directions are gated in `ShiftAuthorityLegTests`.
+            if let row = try await repository.fetchShiftMigrationState(userID: userID) {
+                let outcome = PaydaySyncState.applyShiftAuthority(row.authorityState, for: userID)
+                authorityDeferred = outcome == .deferPromotion
+            }
+        } catch {
+            // Deliberately swallowed, and deliberately NOT `try?` at the call
+            // site: `design-lint` rule 19 bans `try?` on write paths, and
+            // spelling the catch out is what lets this comment exist. A thrown
+            // read leaves the flag exactly as it was, for the same reason an
+            // absent row does.
+            authorityDeferred = false
+        }
+
         return PaydaySyncOutcome(
             report: try Self.cachedReport(context: context, userID: userID),
             requiresFollowUpSync: !tipsChangedDuringSync.isEmpty
                 || !paychecksChangedDuringSync.isEmpty
                 || settingsChangedDuringSync
+                // THE LIVENESS REQUIREMENT. Nothing inside the deferral
+                // re-arms it, so a caller treating `.deferPromotion` as a
+                // no-op would strand the account on the legacy representation
+                // for the rest of the session -- a guard against a
+                // few-seconds straddle turned into an indefinite one. Asking
+                // for a follow-up pass is what makes the deferral a DELAY
+                // rather than a cancellation.
+                || authorityDeferred
         )
     }
 
