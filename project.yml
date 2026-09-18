@@ -138,6 +138,14 @@ targets:
       # widget, openingFailed is set, and the Lock Screen renders
       # "Couldn't load" while the app is perfectly healthy.
       - path: Payday/Models/ShiftRecord.swift
+      # The widget compiles ShiftDetails and TipBreakdown, and S9 makes both
+      # generic over LegacyShiftRow, so the protocol has to be in this target
+      # too or those two files no longer compile here. ShiftProjection comes
+      # with it because the widget reads shifts through the same projection
+      # the app does -- two surfaces resolving a shift differently is the
+      # whole class of bug this PR exists to remove.
+      - path: Payday/Models/LegacyShiftRow.swift
+      - path: Payday/Models/ShiftProjection.swift
       - path: Payday/Models/PayScheduleStore.swift
       # The widget values shifts too, so it reads the same compensation
       # policies — and therefore the same frozen payroll time zone — the app
