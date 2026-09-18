@@ -817,3 +817,34 @@ struct ShiftDeletionRow: Encodable, Equatable, Sendable {
         case deletedAt = "deleted_at"
     }
 }
+
+/// One page of shift changes, with the snapshot time that page was read at.
+///
+/// The timestamp and the rows arrive together because
+/// `public.fetch_shift_changes` returns them from one statement. Read
+/// separately they are two snapshots, and a transaction committing between the
+/// two reads with an earlier `updated_at` would be skipped by the cursor
+/// forever. That is the whole reason this type exists rather than a plain
+/// array.
+struct RemoteShiftPage: Decodable, Sendable {
+    let serverNow: String
+    let rows: [RemoteShift]
+
+    enum CodingKeys: String, CodingKey {
+        case serverNow = "server_now"
+        case rows
+    }
+}
+
+/// The parameters `public.fetch_shift_changes` takes.
+struct PaydayShiftFeedParameters: Encodable, Sendable {
+    let afterUpdatedAt: String?
+    let afterID: UUID?
+    let limit: Int
+
+    enum CodingKeys: String, CodingKey {
+        case afterUpdatedAt = "p_after_updated_at"
+        case afterID = "p_after_id"
+        case limit = "p_limit"
+    }
+}

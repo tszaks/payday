@@ -210,18 +210,6 @@ struct PaydayRemoteRepository {
         return outcomes
     }
 
-    /// Every shift the account has, tombstones included.
-    func fetchShiftSnapshot(userID: UUID) async throws -> [RemoteShift] {
-        let rows: [RemoteShift] = try await fetchChanged(
-            table: "shifts",
-            columns: shiftColumns,
-            userID: userID,
-            after: .beginning,
-            cursor: { PaydaySyncState.ServerCursor(updatedAt: $0.serverUpdatedAt ?? "", id: $0.id) }
-        )
-        return deduplicated(rows, id: \.id)
-    }
-
     /// Shifts changed since `cursor`, on the same `(updated_at, id)` keyset the
     /// tip leg uses.
     ///
@@ -233,18 +221,66 @@ struct PaydayRemoteRepository {
     /// those rows for good. That is exactly why Design 3's watermark is a
     /// server-issued monotonic `dataset_revision` and not a clock, and it
     /// lands with the snapshot work rather than being approximated here.
+    /// Shifts changed since `cursor`, read through `fetch_shift_changes` so
+    /// the page and the server's snapshot time arrive together.
+    ///
+    /// This replaces the plain table select S6 shipped. A keyset cursor over
+    /// `updated_at` alone is not safe here: `updated_at` is the TRANSACTION
+    /// timestamp and the fold runs at the end of a 1.0 build's batch, so a
+    /// shift can be stamped seconds before it becomes visible, and a cursor
+    /// that advanced past that stamp would filter the row out on every
+    /// subsequent pass, forever, on every device. See `clampedShiftCursor`.
+    ///
+    /// Returns the MINIMUM `server_now` across the pages it read, not the
+    /// last. Each page carries its own snapshot time and time moves forward,
+    /// so the earliest one is the only value that is behind every row this
+    /// call could have missed.
     func fetchShiftChanges(
-        userID: UUID,
-        cursor: PaydaySyncState.ServerCursor
-    ) async throws -> [RemoteShift] {
-        try await fetchChanged(
-            table: "shifts",
-            columns: shiftColumns,
-            userID: userID,
-            after: cursor,
-            cursor: { PaydaySyncState.ServerCursor(updatedAt: $0.serverUpdatedAt ?? "", id: $0.id) }
-        )
+        cursor: PaydaySyncState.ServerCursor?
+    ) async throws -> (rows: [RemoteShift], serverNow: Date) {
+        var collected: [RemoteShift] = []
+        var earliestServerNow: Date?
+        var after = cursor
+
+        while true {
+            let page: RemoteShiftPage = try await client
+                .rpc("fetch_shift_changes", params: PaydayShiftFeedParameters(
+                    afterUpdatedAt: after?.updatedAt,
+                    afterID: after?.id,
+                    limit: Self.shiftFeedPageSize
+                ))
+                .execute()
+                .value
+
+            guard let stamp = PaydayRemoteDate.parseInstant(page.serverNow) else {
+                // Without a readable snapshot time there is no safe fence, and
+                // advancing the cursor on a guess is the failure this whole
+                // path exists to prevent. Refuse rather than proceed.
+                throw PaydayMigrationError.invalidRemoteData
+            }
+            earliestServerNow = earliestServerNow.map { min($0, stamp) } ?? stamp
+
+            collected.append(contentsOf: page.rows)
+            guard page.rows.count == Self.shiftFeedPageSize,
+                  let last = page.rows.last,
+                  let lastUpdatedAt = last.serverUpdatedAt
+            else { break }
+            after = PaydaySyncState.ServerCursor(updatedAt: lastUpdatedAt, id: last.id)
+        }
+
+        guard let serverNow = earliestServerNow else {
+            throw PaydayMigrationError.invalidRemoteData
+        }
+        return (deduplicated(collected, id: \.id), serverNow)
     }
+
+    /// Every shift the account has, tombstones included, through the same
+    /// fenced feed.
+    func fetchShiftSnapshot() async throws -> (rows: [RemoteShift], serverNow: Date) {
+        try await fetchShiftChanges(cursor: nil)
+    }
+
+    static let shiftFeedPageSize = 1_000
 
     func fetchShifts(userID: UUID, ids: Set<UUID>) async throws -> [RemoteShift] {
         try await fetchByIDs(table: "shifts", columns: shiftColumns, userID: userID, ids: ids)
