@@ -16,6 +16,29 @@ import Testing
 /// So these tests use a FILE-BACKED container in a temporary directory and
 /// genuinely reopen it. An in-memory container cannot fail this way and would
 /// make the suite worthless.
+///
+/// THE WRITE PATHS THIS COVERS, named so a reviewer can check the set against
+/// the code rather than infer it. Every one of these persisted through
+/// autosave alone before this slice:
+///
+///   PaycheckEntrySheet.save      -> paycheckSurvivesReopen
+///   PaycheckEntrySheet.delete    -> exercised by ShiftCommands.commit, and
+///                                   asserted for behaviour in
+///                                   ShiftCommandsTests
+///   BackfillSheet.performSave    -> shiftSurvivesReopen (same commit path)
+///   LogTipSheet.saveNew          -> shiftSurvivesReopen
+///   LogTipSheet.commitLiveEdit   -> liveEditSurvivesReopen
+///   LogTipSheet.pruneZeroedRows  -> dismissal-only, `try?`; see its comment
+///   LogTipSheet.delete           -> rolledBackEditDoesNotPersist covers the
+///                                   rollback half
+///
+/// Already saving before this slice and therefore not converted:
+/// ShiftContextMenu, UndoDeleteToast, LogTipsIntent.
+///
+/// The two assertions that make the rest meaningful are
+/// `unsavedMutationDoesNotPersist` (which fails if autosave is still on) and
+/// `theRealSharedContextHasAutosaveOff` (which fails if the shipped app's own
+/// context still autosaves).
 @Suite("Persistence with autosave off", .serialized)
 @MainActor
 struct AutosaveOffPersistenceTests {
