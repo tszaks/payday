@@ -878,3 +878,51 @@ extension RemoteShift {
         try PaydayMigrationHash.fingerprint(businessValue(workDate: workDate))
     }
 }
+
+/// The account-level conversion record, as the device reads it.
+///
+/// Decode-only. `public.shift_migration_state` has `sms_read_own` RLS and a
+/// `select` grant to `authenticated`, and **no write grant at all** -- only
+/// the definer functions write it. So there is no `encode` here and there
+/// must never be one: a device asserting its own conversion state is the
+/// failure the server-sourced design exists to prevent.
+///
+/// Four of these columns are the four inputs to
+/// `ShiftReadAuthority.isAuthoritative`. The rest of the table is progress
+/// and diagnostics the predicate deliberately does not read, which is why
+/// this type names the four rather than mirroring the table: a column added
+/// later cannot silently change the rule.
+struct RemoteShiftMigrationState: Decodable, Equatable, Sendable {
+    let userID: UUID
+    /// The FIRST conversion instant, never moved by a re-run.
+    let migratedAt: String?
+    /// Set if the account was rolled back. Authority ends immediately.
+    let rollbackAt: String?
+    /// Set if the conversion failed its own conservation check.
+    let conservationFailedAt: String?
+    /// Legacy groups the conversion has not folded yet.
+    let remainingGroupCount: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case userID = "user_id"
+        case migratedAt = "migrated_at"
+        case rollbackAt = "rollback_at"
+        case conservationFailedAt = "conservation_failed_at"
+        case remainingGroupCount = "remaining_group_count"
+    }
+
+    /// The columns to select. Named explicitly rather than `*` so a column
+    /// added to the table does not start arriving unread.
+    static let columns = "user_id,migrated_at,rollback_at,conservation_failed_at,remaining_group_count"
+
+    /// The predicate's input, with timestamps parsed once here rather than at
+    /// the decision site.
+    var authorityState: ShiftReadAuthority.State {
+        ShiftReadAuthority.State(
+            migratedAt: migratedAt.flatMap(PaydayRemoteDate.parseInstant),
+            rollbackAt: rollbackAt.flatMap(PaydayRemoteDate.parseInstant),
+            conservationFailedAt: conservationFailedAt.flatMap(PaydayRemoteDate.parseInstant),
+            remainingGroupCount: remainingGroupCount
+        )
+    }
+}
