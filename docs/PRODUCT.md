@@ -271,13 +271,43 @@ overclaim from the other side: the app had shared helpers but not a shared
 INTERPRETATION, so the same stored shift produced different answers on
 different screens. The heading now matches the body, and the body is dated.
 
-**Status as of 2026-09-18, measured rather than asserted.** Merged: PR 0, 1,
-3, 4 and all three waves of PR 5, plus 8 of PR 2's 13 slices. Not started: PR
-6 (the backend's second money engine, the widget, Siri and CSV), PR 7
-(lifecycle hardening) and PR 8 (deleting the old paths and adding the
-money-boundary lint). So a reader should take everything below as true of the
-in-app screens and NOT of the widget, Siri, the CSV export or the `/v1`
-API, which still compute their own figures.
+**Status as of 2026-09-18, measured rather than asserted.** This paragraph
+is written functionally rather than as a count of merged slices, because the
+count is precisely what went stale last time -- and it had gone stale in BOTH
+directions, first overclaiming and then, once the work sped up, understating
+what had landed.
+
+True now, on the in-app screens: every figure comes from the one engine.
+PR 0, 1, 3 and 4 and all three waves of PR 5 are merged, so the screens read
+`EarningsSnapshot` rather than computing their own arithmetic.
+
+True now, beyond the screens: the **widget and Siri** read the engine through
+one shared function and label a wage-inclusive number correctly instead of
+calling it "TIPS"; a failed read renders "Couldn't load" rather than `$0`.
+The **CSV export** writes exact minutes (`6.3833`) instead of quarter-hour
+rounding. The **money-boundary lint** is in place and ratchets, so a new
+money computation outside the engine fails CI.
+
+Not true yet, and a reader should not assume otherwise:
+
+- **The `/v1` API reports non-wage figures only.** S11 deleted the backend's
+  duplicate money math, so the API no longer computes a *second* answer --
+  but it has no wage concept either, because a wage is a property of a
+  workweek under a rate history the server does not hold. Wage-inclusive
+  totals reach it only through a device-published snapshot, which is PR 6's
+  group 2.14 and is not built. `docs/PAYDAY_API.md` states this at the top of
+  its contract. An API total and an app total are the same *non-wage* number
+  and are not comparable as totals.
+- **That deletion is in the repository, not necessarily in production.** The
+  deployed edge function changes only when someone runs
+  `supabase functions deploy payday-api`. Until then the live API is whatever
+  was last deployed, regardless of what this file or the source says.
+- **The old calculation paths still exist.** `TipEntry` remains the legacy
+  write surface and is never rewritten, and `ShiftDetails`, `TipBreakdown`
+  and `ShiftDays.groupedByShift` are still live because the screens still
+  read through them. Deleting them is PR 8's job and it cannot start until
+  every reader has been switched to `ShiftRecord` and the writer flipped.
+- **PR 7's lifecycle hardening is not started.**
 
 **What the engine actually guarantees as of PR 3 (2026-09-17).** Scope
 matters here: `CompensationLedger` now values every shift exactly once, and
