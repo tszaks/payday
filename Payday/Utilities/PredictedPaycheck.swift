@@ -107,3 +107,51 @@ enum PredictedPaycheck {
         tipsCents + (gratuityCents ?? 0)
     }
 }
+
+// MARK: - The figure a view renders
+
+/// `MetricID.expectedPaycheckGross` as an `EarningsFigure`.
+///
+/// Deliberately a SEPARATE extension at the end of the file, and the only
+/// thing group 2.1 (Dashboard) adds here. The engine-basis functions above
+/// are group 2.4's (History), written once, in their shape, byte for byte:
+/// both groups needed the same four formulas and the plan's rule is that a
+/// shared change "does not get made twice". MEASURED why it matters: two
+/// independent additions of `tipsLineCents(from: EarningsComponents)` in
+/// different parts of this file merge with `git apply --3way` reporting
+/// "applied cleanly" and no conflict markers, and the duplicate declarations
+/// only surface as `error: ambiguous use of 'cents(from:)'` in
+/// `PeriodDetailView.swift` — a file neither worker touched. Identical text
+/// in the identical place merges to one copy; an append below it stays an
+/// append.
+extension PredictedPaycheck {
+    /// A nil `result` is a failed read, not a zero check, so it renders no
+    /// currency at all (PR 5 adapter contract, rule 4). A period whose wages
+    /// are `.partial` or `.estimated` carries the matching caption, because a
+    /// check figure that silently omits an unpriced shift is exactly the
+    /// audit's headline defect wearing a different label.
+    ///
+    /// The label is the registry's ("Expected", `MetricID
+    /// .expectedPaycheckGross.allowedLabels`). The card's own sentence —
+    /// "Your check should show" / "Today's check should show" — is
+    /// presentation the screen owns, and the registry has no row for it; see
+    /// `docs/METRICS.md` [DB-22].
+    static func figure(from result: EarningsResult?) -> EarningsFigure {
+        guard let result else {
+            return EarningsFigure(
+                metric: .expectedPaycheckGross,
+                amount: .unavailable,
+                label: "Expected",
+                caption: nil,
+                completeness: .empty
+            )
+        }
+        return EarningsFigure(
+            metric: .expectedPaycheckGross,
+            amount: .cents(cents(from: result.knownComponents)),
+            label: "Expected",
+            caption: CompletenessCopy.caption(result.completeness.state),
+            completeness: result.completeness
+        )
+    }
+}
