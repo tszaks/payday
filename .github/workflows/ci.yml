@@ -115,5 +115,12 @@ jobs:
             psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres" \
               -v ON_ERROR_STOP=1 -f "$f"
           done
+      - name: SQL concurrency tests
+        # Five facts about the on-arrival fold need two or three CONCURRENT
+        # sessions, which a psql script cannot produce: the two lock variants,
+        # the try-lock loser's non-blocking-ness, the concurrent duplicate
+        # backlog insert, and the 40P01 row of the S-gate. This drives real
+        # psql processes against the same local stack.
+        run: bash scripts/db-test-race.sh "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
       - name: supabase stop
         run: supabase stop
