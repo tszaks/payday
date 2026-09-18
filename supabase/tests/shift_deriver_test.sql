@@ -47,6 +47,37 @@ returns void language sql as $$
   insert into results (name, ok, detail) values (p_name, coalesce(p_ok, false), p_detail);
 $$;
 
+-- EVERY fixture mutation of public.tip_entries in this suite goes through
+-- pg_temp.legacy_row or pg_temp.unfolded, and both of them suppress the
+-- on-arrival fold trigger (S4, private.fold_legacy_writes) for the duration
+-- of that one statement.
+--
+-- This suite measures private.derive_shifts IN ISOLATION: it invokes the
+-- deriver explicitly and then counts derived_version, shift rows and
+-- shift_legacy_conflicts rows, and the trigger moves all three. Measured with
+-- the trigger installed and no suppression: theScopeFilterPrecedesTheGroupBy
+-- saw 2 shift rows instead of 1 (the trigger had legitimately folded the
+-- out-of-scope group from its own insert), aFoldFreezesVersionAndBumps
+-- DerivedVersion read derived_version = 3 instead of 1, and
+-- aMatchingLateArrivalDoesNotEraseAnEarlierDisagreement saw 4 conflict rows
+-- instead of 2 because each fixture UPDATE folded before the explicit call
+-- did. None of those is a defect in either object; they are two suites
+-- reading one counter. The trigger has its own suite, which drives it through
+-- the shipped 1.0 RPCs end to end: supabase/tests/shift_fold_test.sql.
+--
+-- session_replication_role is set with is_local = true, so it reverts at the
+-- end of the enclosing implicit transaction, i.e. at the end of the single
+-- statement that called the helper. Nothing else in this file is affected --
+-- in particular public.shifts' own version trigger keeps firing, which is
+-- what aFoldFreezesVersionAndBumpsDerivedVersion and the native-write
+-- assertions depend on.
+create function pg_temp.unfolded(p_sql text) returns void language plpgsql as $$
+begin
+  perform set_config('session_replication_role', 'replica', true);
+  execute p_sql;
+end;
+$$;
+
 -- Every fixture row is described by this one helper so a fixture reads as a
 -- table of facts rather than a wall of INSERT syntax.
 create function pg_temp.legacy_row(
@@ -54,12 +85,15 @@ create function pg_temp.legacy_row(
   p_tip_out integer default null, p_hours numeric default null,
   p_receipt jsonb default null, p_cua timestamptz default '2026-01-01 00:00:00+00',
   p_sales integer default null, p_period text default null, p_note text default null)
-returns void language sql as $$
+returns void language plpgsql as $$
+begin
+  perform set_config('session_replication_role', 'replica', true);
   insert into public.tip_entries (
     id, user_id, shift_id, work_date, amount_cents, kind, tip_out_cents,
     hours_worked, receipt_metrics, client_updated_at, sales_cents, shift_period, note)
   values (p_id, p_user, p_shift, p_date, p_amount, p_kind, p_tip_out,
           p_hours, p_receipt, p_cua, p_sales, p_period, p_note);
+end;
 $$;
 
 -- The one shift row of a group, as a jsonb blob, so an assertion can name
@@ -821,8 +855,9 @@ select pg_temp.expect('theConflictRowCarriesBothNumbersAndBothDirections',
 -- A DOWNWARD correction from an old build. greatest(0, ...) would report 0
 -- here and Data health would show nothing at all, and downward is the common
 -- shape of a correction, so unconverted_legacy_cents is abs().
-update public.tip_entries set amount_cents = 1000, client_updated_at = now()
- where id = 'c0000000-0000-4000-8000-000000000001';
+select pg_temp.unfolded($sql$update public.tip_entries set amount_cents = 1000,
+       client_updated_at = now()
+ where id = 'c0000000-0000-4000-8000-000000000001'$sql$);
 select private.derive_shifts('51000000-0000-4000-8000-000000000003',
   array['c1000000-0000-4000-8000-000000000001'::uuid]);
 
@@ -836,8 +871,9 @@ from pg_temp.shift_facts('51000000-0000-4000-8000-000000000003',
 -- A later arrival that happens to EQUAL the shift zeroes the per-shift
 -- magnitude, which is exactly why shift_legacy_conflicts is append-only and
 -- is the honest surface.
-update public.tip_entries set amount_cents = 4000, client_updated_at = now()
- where id = 'c0000000-0000-4000-8000-000000000001';
+select pg_temp.unfolded($sql$update public.tip_entries set amount_cents = 4000,
+       client_updated_at = now()
+ where id = 'c0000000-0000-4000-8000-000000000001'$sql$);
 select private.derive_shifts('51000000-0000-4000-8000-000000000003',
   array['c1000000-0000-4000-8000-000000000001'::uuid]);
 
@@ -863,8 +899,8 @@ select pg_temp.legacy_row('51000000-0000-4000-8000-000000000003',
   'c2000000-0000-4000-8000-000000000002', '2026-03-06', 5000, 'cash');
 select private.derive_shifts('51000000-0000-4000-8000-000000000003',
   array['c2000000-0000-4000-8000-000000000002'::uuid]);
-update public.tip_entries set deleted_at = now()
- where id = 'c0000000-0000-4000-8000-000000000003';
+select pg_temp.unfolded($sql$update public.tip_entries set deleted_at = now()
+ where id = 'c0000000-0000-4000-8000-000000000003'$sql$);
 select private.derive_shifts('51000000-0000-4000-8000-000000000003',
   array['c2000000-0000-4000-8000-000000000002'::uuid]);
 
@@ -883,8 +919,8 @@ from pg_temp.shift_facts('51000000-0000-4000-8000-000000000003',
 -- Arm 3: a legacy un-delete is a first-class live path (RemoteTipEntry
 -- hardcodes deletedAt = nil and upsert_tip_entries lost its staleness guard),
 -- so the shift must come back with its money.
-update public.tip_entries set deleted_at = null
- where id = 'c0000000-0000-4000-8000-000000000003';
+select pg_temp.unfolded($sql$update public.tip_entries set deleted_at = null
+ where id = 'c0000000-0000-4000-8000-000000000003'$sql$);
 select private.derive_shifts('51000000-0000-4000-8000-000000000003',
   array['c2000000-0000-4000-8000-000000000002'::uuid]);
 
@@ -930,8 +966,8 @@ select private.derive_shifts('51000000-0000-4000-8000-000000000003',
 update public.shifts set native_modified_at = now(), client_updated_at = now()
  where user_id = '51000000-0000-4000-8000-000000000003'
    and id = 'c4000000-0000-4000-8000-000000000004';
-update public.tip_entries set deleted_at = now()
- where id = 'c0000000-0000-4000-8000-000000000005';
+select pg_temp.unfolded($sql$update public.tip_entries set deleted_at = now()
+ where id = 'c0000000-0000-4000-8000-000000000005'$sql$);
 
 do $$
 declare v_out record;
