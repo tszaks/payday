@@ -120,6 +120,13 @@ final class PaydayMigrationService {
             migrationVerified: true,
             tipClientUpdatedAt: Dictionary(uniqueKeysWithValues: remoteTips.map { ($0.id, $0.clientUpdatedAt) }),
             paycheckClientUpdatedAt: Dictionary(uniqueKeysWithValues: remotePaychecks.map { ($0.id, $0.clientUpdatedAt) }),
+            // The reconcile above ran with forceRemoteRows, so every local row
+            // now holds the canonical server content and the server's own
+            // fingerprints are the honest acknowledgement. Recording them here
+            // is also what keeps a freshly migrated install off the one-time
+            // seeding read.
+            tipContentFingerprint: try Dictionary(uniqueKeysWithValues: remoteTips.map { try ($0.id, $0.contentFingerprint) }),
+            paycheckContentFingerprint: try Dictionary(uniqueKeysWithValues: remotePaychecks.map { try ($0.id, $0.contentFingerprint) }),
             settingsClientUpdatedAt: snapshot.settings.clientUpdatedAt,
             tipServerCursor: PaydaySyncState.ServerCursor.advanced(
                 from: .beginning,

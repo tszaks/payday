@@ -674,6 +674,9 @@ struct PaycheckEntrySheet: View {
             existing.grossPayCents = effectiveGrossPayCents
             existing.taxesCents = effectiveTaxesCents
             existing.netPayCents = effectiveNetPayCents
+            // A corrected stub is an edit to an already-synced record, which
+            // means it only uploads if this clock advances.
+            existing.touch()
             record = existing
         } else {
             record = PaycheckRecord(

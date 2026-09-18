@@ -143,13 +143,13 @@ struct PaydaySyncStateTests {
 
         #expect(!PaydaySyncState.localRowChangedDuringSync(
             id: id,
-            currentClientUpdatedAt: futureSkewedVersion,
-            capturedClientUpdatedAt: captured
+            currentVersion: futureSkewedVersion,
+            capturedVersions: captured
         ))
         #expect(PaydaySyncState.localRowChangedDuringSync(
             id: id,
-            currentClientUpdatedAt: "2099-01-01T00:00:01.000Z",
-            capturedClientUpdatedAt: captured
+            currentVersion: "2099-01-01T00:00:01.000Z",
+            capturedVersions: captured
         ))
     }
 

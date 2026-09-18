@@ -66,6 +66,9 @@ enum MigrationRunner {
             let id = existing ?? ShiftDays.deterministicShiftID(for: day, calendar: calendar)
             for row in nilRows {
                 row.shiftID = id
+                // The backfilled shift_id has to reach the server, or a
+                // second device keeps reading the row as ungrouped.
+                row.touch()
             }
         }
         do {
@@ -102,6 +105,7 @@ enum MigrationRunner {
             guard let exact = ShiftTimes.hours(clockIn: entry.clockIn, clockOut: entry.clockOut, calendar: calendar) else { continue }
             if entry.hoursWorked != exact {
                 entry.hoursWorked = exact
+                entry.touch()
             }
         }
         do {
