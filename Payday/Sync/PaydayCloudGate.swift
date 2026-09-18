@@ -71,7 +71,11 @@ final class PaydayCloudState {
                         remoteTipEntryCount: 0,
                         remotePaycheckCount: 0,
                         tipEntryHash: "",
-                        paycheckHash: ""
+                        paycheckHash: "",
+                        // Offline UI test: no server was consulted, so this
+                        // pass learned nothing about a conversion. nil, never
+                        // 0 -- 0 would assert "finished" on no evidence.
+                        conversionPending: nil
                     )
             )
             return
@@ -718,27 +722,83 @@ private struct CloudMigrationErrorView: View {
 struct PaydayConversionBanner: Equatable, Sendable {
     let remainingGroupCount: Int
 
-    /// Verbatim from the design.
+    /// Calm, and true for the interval it is shown.
     ///
-    /// "Nothing was changed or deleted" is only true because the conversion
-    /// never rewrites `public.tip_entries`. The copy and that invariant ship
-    /// together.
-    var message: String {
-        "Payday couldn't finish updating your shifts. Nothing was changed or deleted, and your shifts are exactly as they were."
-    }
-
-    var retryTitle: String { "Try again" }
-    var detailsTitle: String { "Details" }
-
-    /// Progress as a count rather than a percentage.
+    /// ## What this copy replaced, and why that was a defect
     ///
-    /// A percentage needs a denominator that only the server knows and that
-    /// changes as the user logs more, so it would go backwards. A remaining
-    /// count only ever falls, and when it stops falling that is itself the
-    /// signal worth surfacing.
-    var progressDescription: String {
-        remainingGroupCount == 1
-            ? "1 shift left to update"
-            : "\(remainingGroupCount) shifts left to update"
+    /// It read *"Payday couldn't finish updating your shifts. Nothing was
+    /// changed or deleted, and your shifts are exactly as they were"*, and it
+    /// offered a **Try again** button. That is failure copy, and the banner's
+    /// only presentation condition is `(conversionPending ?? 0) > 0` -- an
+    /// ordinary conversion that is *still running*. Every migrating account
+    /// would have been told the app had failed, and invited to retry
+    /// something that was working. A conservation failure is a different
+    /// state (`conservation_failed_at`), it is not what this banner reports,
+    /// and it needs its own surface rather than this one's words.
+    ///
+    /// ## Why the detail line is safe to assert
+    ///
+    /// `ShiftReadAuthority.isAuthoritative` returns false while
+    /// `remainingGroupCount > 0`, so a mid-conversion account reads the
+    /// LEGACY representation -- the same one it read before the conversion
+    /// started. Both numbers come from
+    /// `public.shift_migration_state.remaining_group_count`, so the banner
+    /// and the read predicate cannot disagree about whether a conversion is
+    /// outstanding.
+    ///
+    /// The scoping to *while this finishes* is load-bearing. An unqualified
+    /// "your totals will not change" would be a claim about the state AFTER
+    /// the fold, which this banner has no standing to make.
+    var title: String { "Updating in the background" }
+
+    var detail: String { "Your totals are unchanged while this finishes." }
+}
+
+/// The banner, rendered.
+///
+/// Neutral by design. `DESIGN.md` reserves green for things that act and
+/// makes caution and error semantic -- caution means watch out, error means
+/// problem -- so a benign background process gets neither. Tinting it amber
+/// would both misdescribe this and teach people to discount amber where it
+/// matters.
+///
+/// Solid `paydayCard`, not glass: glass is chrome and this is content. No SF
+/// Symbol, because text-forward is the rule and an icon here is clutter. SF
+/// Pro rather than Rounded, which is money only. Not dismissible -- the
+/// condition persists, so a dismissed banner would simply return, which is
+/// worse than never offering the control; it clears itself when the count
+/// reaches zero and `conversionBanner` goes nil.
+///
+/// ## It shows no count, and the reason is not a no-figures rule
+///
+/// `remaining_group_count` IS server-sourced, so a figure here would not be
+/// the unsourced-number error. It is dropped because the LABEL would not be
+/// true. The column's own comment states its contract: *"Progress as a
+/// number. The client re-invokes the one-shot only while this strictly
+/// decreases, which is what stops a hot loop of definer calls."* Its
+/// magnitude is an implementation detail of how the one-shot avoids
+/// hot-looping, and nothing establishes that one group is one shift a person
+/// would recognise. Rendering it as "47 shifts left to update" reuses a
+/// control value to answer a question it was not built to answer.
+///
+/// A falling count is genuinely what makes a long wait tolerable, so the
+/// follow-up is a progress value derived FOR that purpose with its own
+/// contract, labelled with what it actually counts -- not this one relabelled.
+struct PaydayConversionBannerView: View {
+    let banner: PaydayConversionBanner
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: PaydaySpacing.p4) {
+            Text(banner.title)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(PaydayColor.textPrimary)
+            Text(banner.detail)
+                .font(.footnote)
+                .foregroundStyle(PaydayColor.textSecondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .paydayCard(padding: PaydaySpacing.p16)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(banner.title). \(banner.detail)")
     }
 }

@@ -581,6 +581,7 @@ struct DashboardView: View {
     @Environment(PayScheduleStore.self) private var scheduleStore
     @Environment(PolicyStore.self) private var policyStore
     @Environment(TabRouter.self) private var tabRouter
+    @Environment(PaydayCloudState.self) private var cloudState
     @Environment(UserPreferencesStore.self) private var preferencesStore
     @Environment(\.modelContext) private var modelContext
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -713,6 +714,17 @@ struct DashboardView: View {
             // Vero's budget drawer stays smooth.
             ScrollView {
                 VStack(spacing: PaydaySpacing.p8) {
+                    // ABOVE the hero, inline in the scroll content, and not a
+                    // toast: a toast reports a completed action with an undo,
+                    // and this reports a condition that persists. Nil clears
+                    // it -- there is no dismiss, because dismissing a standing
+                    // condition only makes it come back.
+                    if let banner = cloudState.conversionBanner {
+                        PaydayConversionBannerView(banner: banner)
+                            .padding(.horizontal, PaydaySpacing.p16)
+                            .padding(.top, PaydaySpacing.p8)
+                    }
+
                     heroWithDrawer(facts)
                         .padding(.horizontal, PaydaySpacing.p16)
                         .padding(.top, 8)

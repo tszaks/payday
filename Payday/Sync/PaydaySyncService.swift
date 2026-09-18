@@ -456,7 +456,12 @@ final class PaydaySyncService {
             remoteTipEntryCount: tips.count,
             remotePaycheckCount: paychecks.count,
             tipEntryHash: try PaydayMigrationHash.value(tips),
-            paycheckHash: try PaydayMigrationHash.value(paychecks)
+            paycheckHash: try PaydayMigrationHash.value(paychecks),
+            // Built from the LOCAL store, which holds no conversion state.
+            // `synchronize` overwrites this with the value the shift-authority
+            // leg read; see its call site. Answering 0 here instead of nil
+            // would hide the banner on every pass that took this path.
+            conversionPending: nil
         )
     }
 
@@ -764,12 +769,19 @@ final class PaydaySyncService {
         // EXISTS; it could not prove a deferral actually produces a second
         // attempt that promotes, and this is the slice that makes the flip
         // live.
-        let authorityDeferred = await Self.applyShiftAuthorityLeg(userID: userID) {
+        let authority = await Self.applyShiftAuthorityLeg(userID: userID) {
             try await repository.fetchShiftMigrationState(userID: userID)
         }
 
+        // The ONE place the conversion count enters the report, and therefore
+        // the one place the banner gets a source. `cachedReport` builds from
+        // the local store and cannot know it; this is the only code in the
+        // app that has both the row and the report in scope.
+        var report = try Self.cachedReport(context: context, userID: userID)
+        report.conversionPending = authority.remainingGroupCount
+
         return PaydaySyncOutcome(
-            report: try Self.cachedReport(context: context, userID: userID),
+            report: report,
             requiresFollowUpSync: !tipsChangedDuringSync.isEmpty
                 || !paychecksChangedDuringSync.isEmpty
                 || settingsChangedDuringSync
@@ -780,7 +792,7 @@ final class PaydaySyncService {
                 // few-seconds straddle turned into an indefinite one. Asking
                 // for a follow-up pass is what makes the deferral a DELAY
                 // rather than a cancellation.
-                || authorityDeferred
+                || authority.deferred
         )
     }
 
@@ -839,24 +851,65 @@ final class PaydaySyncService {
     /// longer -- but it is a weaker guarantee than the unconditional one, and
     /// stating it unconditionally is how a caveat becomes a surprise.
     @MainActor
+    /// What one pass of the leg learned. Two facts, because the row carries
+    /// two and an earlier version returned only one.
+    ///
+    /// It returned `Bool` -- the deferral -- and DISCARDED
+    /// `remaining_group_count`. That is the whole reason
+    /// `PaydayMigrationReport.conversionPending` was never assigned anywhere
+    /// in the app: the only code that read the column threw the number away
+    /// one line after reading it, so the banner's producer had no source and
+    /// `isConversionPending` was false for every account forever. The banner
+    /// was fully built and fully tested and could not appear.
+    ///
+    /// A struct rather than a tuple so adding a third fact later cannot
+    /// silently reorder the two that exist.
+    struct ShiftAuthorityLegResult: Equatable {
+        /// Whether a promotion was held back; the caller maps this onto
+        /// `requiresFollowUpSync`.
+        let deferred: Bool
+        /// Legacy groups the server has not folded yet, or nil when this pass
+        /// learned nothing -- an absent row, or a read that failed.
+        ///
+        /// **nil and 0 are different answers and the banner treats them the
+        /// same way only by coincidence.** nil is "no information"; 0 is "the
+        /// server says it is finished". Collapsing nil to 0 would be
+        /// harmless here and wrong in the next reader, so the distinction is
+        /// kept at the type.
+        let remainingGroupCount: Int?
+
+        static let unknown = ShiftAuthorityLegResult(deferred: false, remainingGroupCount: nil)
+    }
+
     static func applyShiftAuthorityLeg(
         userID: UUID,
         fetch: () async throws -> RemoteShiftMigrationState?
-    ) async -> Bool {
+    ) async -> ShiftAuthorityLegResult {
         do {
-            guard let row = try await fetch() else { return false }
+            guard let row = try await fetch() else { return .unknown }
             // `authorityState()` THROWS on a present-but-unparseable
             // timestamp rather than collapsing it to nil, so that lands in
             // the catch below and changes nothing. See its header: a parse
             // failure read as nil demotes a promoted account, and would do so
             // on every pass rather than transiently.
-            return PaydaySyncState.applyShiftAuthority(try row.authorityState(), for: userID)
-                == .deferPromotion
+            let state = try row.authorityState()
+            let outcome = PaydaySyncState.applyShiftAuthority(state, for: userID)
+            return ShiftAuthorityLegResult(
+                deferred: outcome == .deferPromotion,
+                // Read from the PARSED state, not from `row`, so the count
+                // and the authority decision can never come from different
+                // readings of the same response.
+                remainingGroupCount: state.remainingGroupCount
+            )
         } catch {
             // Deliberately swallowed, and deliberately not `try?` at the call
             // site: design-lint rule 19 bans `try?` on write paths, and
             // spelling the catch out is what lets this comment exist.
-            return false
+            //
+            // `.unknown` rather than a zero count: a failed read must not
+            // announce "conversion finished" to the banner, for the same
+            // reason it must not demote the representation.
+            return .unknown
         }
     }
 
@@ -1272,7 +1325,10 @@ final class PaydaySyncService {
             remoteTipEntryCount: tips.count,
             remotePaycheckCount: paychecks.count,
             tipEntryHash: try PaydayMigrationHash.value(tips),
-            paycheckHash: try PaydayMigrationHash.value(paychecks)
+            paycheckHash: try PaydayMigrationHash.value(paychecks),
+            // A remote snapshot carries tips, paychecks and settings; the
+            // conversion row is fetched on its own leg and is not in it.
+            conversionPending: nil
         )
     }
 }
