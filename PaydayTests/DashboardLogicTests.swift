@@ -11,6 +11,7 @@ private func date(_ year: Int, _ month: Int, _ day: Int, hour: Int = 0) -> Date 
 @Suite("Period progress")
 struct PeriodProgressTests {
     let calculator = PayPeriodCalculator(
+        payrollTimeZone: PaydayTestZone.payroll,
         schedule: PaySchedule(frequency: .biweekly, anchorPeriodEnd: date(2026, 7, 19))
     )
 
@@ -94,6 +95,7 @@ struct PaydayMomentTests {
     // Weekly close on Sunday Jul 19, paid the following Friday (5-day lag).
     private func weeklyPaidFriday() -> PayPeriodCalculator {
         PayPeriodCalculator(
+            payrollTimeZone: PaydayTestZone.payroll,
             schedule: PaySchedule(frequency: .weekly, anchorPeriodEnd: date(2026, 7, 19), payDelayDays: 5, firstWeekday: nil)
         )
     }
@@ -183,6 +185,7 @@ struct PaydayMomentTests {
     @Test("with no payroll lag it shows on the last day itself, as check day")
     func noLagShowsLastDay() {
         let sameDay = PayPeriodCalculator(
+            payrollTimeZone: PaydayTestZone.payroll,
             schedule: PaySchedule(frequency: .weekly, anchorPeriodEnd: date(2026, 7, 19), payDelayDays: 0, firstWeekday: nil)
         )
         // Close day and check day collapse onto one date; verifying the money

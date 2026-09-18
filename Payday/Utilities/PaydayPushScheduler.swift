@@ -34,7 +34,7 @@ enum PaydayPushScheduler {
         let center = UNUserNotificationCenter.current()
         center.removePendingNotificationRequests(withIdentifiers: [notificationIdentifier])
 
-        let calculator = PayPeriodCalculator(schedule: schedule ?? .fallback)
+        let calculator = PayPeriodCalculator(payrollTimeZone: PolicyStore.storedPayrollTimeZone(), schedule: schedule ?? .fallback)
         guard let decision = decision(
             now: .now,
             calculator: calculator,

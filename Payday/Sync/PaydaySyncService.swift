@@ -278,7 +278,8 @@ final class PaydaySyncService {
         context: ModelContext,
         scheduleStore: PayScheduleStore,
         preferencesStore: UserPreferencesStore,
-        moveLedgerStore: MoveLedgerStore
+        moveLedgerStore: MoveLedgerStore,
+        policyStore: PolicyStore
     ) async throws -> PaydaySyncOutcome {
         let userID = try await client.auth.session.user.id
         let repository = PaydayRemoteRepository(client: client)
@@ -290,7 +291,8 @@ final class PaydaySyncService {
             userID: userID,
             scheduleStore: scheduleStore,
             preferencesStore: preferencesStore,
-            moveLedgerStore: moveLedgerStore
+            moveLedgerStore: moveLedgerStore,
+            policyStore: policyStore
         )
         let checkpoint = PaydaySyncState.snapshot(for: userID)
         // Versions are content fingerprints, not clocks — see
@@ -362,9 +364,17 @@ final class PaydaySyncService {
         try await repository.upsertPaychecks(changedPaychecks)
         try await repository.softDeleteTips(pendingTipDeletions)
         try await repository.softDeletePaychecks(pendingPaycheckDeletions)
-        let settingsChanged = checkpoint.settingsClientUpdatedAt != localSettings.clientUpdatedAt
+        let settingsChanged = Self.settingsNeedUpload(
+            checkpointSettingsClientUpdatedAt: checkpoint.settingsClientUpdatedAt,
+            localSettingsClientUpdatedAt: localSettings.clientUpdatedAt,
+            adoptedPoliciesAwaitingUpload: policyStore.adoptedPoliciesAwaitingUpload
+        )
         if settingsChanged {
             try await repository.upsertSettings(localSettings)
+            // Only after the write returned. A thrown upload leaves the flag
+            // set, so the next sync tries again rather than dropping the
+            // adoption on the floor.
+            policyStore.acknowledgePolicyUpload()
         }
 
         let remoteTips: [RemoteTipEntry]
@@ -480,6 +490,7 @@ final class PaydaySyncService {
                 scheduleStore: scheduleStore,
                 preferencesStore: preferencesStore,
                 moveLedgerStore: moveLedgerStore,
+                policyStore: policyStore,
                 force: PaydayRemoteDate.instant(PaydaySettingsSyncClock.modifiedAt)
                     == localSettings.clientUpdatedAt
             )
@@ -570,6 +581,7 @@ final class PaydaySyncService {
         scheduleStore: PayScheduleStore,
         preferencesStore: UserPreferencesStore,
         moveLedgerStore: MoveLedgerStore,
+        policyStore: PolicyStore,
         forceRemoteRows: Bool = false,
         forceRemoteSettings: Bool = false
     ) throws -> (tipIDs: Set<UUID>, paycheckIDs: Set<UUID>) {
@@ -580,6 +592,7 @@ final class PaydaySyncService {
             scheduleStore: scheduleStore,
             preferencesStore: preferencesStore,
             moveLedgerStore: moveLedgerStore,
+            policyStore: policyStore,
             force: forceRemoteSettings
         )
         try context.save()
@@ -765,11 +778,49 @@ final class PaydaySyncService {
         return activeIDs
     }
 
+    /// Whether this pass owes the server a `user_settings` write.
+    ///
+    /// Two independent reasons, and the second one is why this is a named
+    /// function rather than one inline comparison:
+    ///
+    /// 1. **The settings clock moved.** `clientUpdatedAt` comes from
+    ///    `PaydaySettingsSyncClock`, which only a user edit advances, so a
+    ///    checkpoint that disagrees with it means there is a local edit to
+    ///    push.
+    /// 2. **An adoption is waiting.** `PolicyStore.runMigrationsIfNeeded`
+    ///    deliberately does NOT touch that clock (a read-time bump would make
+    ///    untouched local defaults look newer than another device's real
+    ///    settings and clobber them), so reason 1 is blind to it. On an
+    ///    already-synced Payday 1.0 device the clock was therefore unchanged,
+    ///    `upsertSettings` was never called, and
+    ///    `user_settings.compensation_policies` stayed NULL indefinitely —
+    ///    the frozen payroll zone and rate history did not follow the user to
+    ///    a new phone, which is the whole reason the column exists. The flag
+    ///    forces exactly one write, with the clock left where it was.
+    ///
+    /// Leaving the clock alone is what keeps that forced write recoverable
+    /// rather than destructive: it does not win a future conflict, and a
+    /// device with a genuinely newer clock re-uploads on its next pass,
+    /// because its own checkpoint will then disagree with the value this
+    /// write left on the server.
+    /// Takes the two timestamps rather than the whole checkpoint and settings
+    /// row, so a test can state the already-synced case in one line instead
+    /// of standing up four stores to build a `RemoteUserSettings`.
+    nonisolated static func settingsNeedUpload(
+        checkpointSettingsClientUpdatedAt: String?,
+        localSettingsClientUpdatedAt: String,
+        adoptedPoliciesAwaitingUpload: Bool
+    ) -> Bool {
+        checkpointSettingsClientUpdatedAt != localSettingsClientUpdatedAt
+            || adoptedPoliciesAwaitingUpload
+    }
+
     private static func apply(
         _ settings: RemoteUserSettings,
         scheduleStore: PayScheduleStore,
         preferencesStore: UserPreferencesStore,
         moveLedgerStore: MoveLedgerStore,
+        policyStore: PolicyStore,
         force: Bool = false
     ) {
         guard let timestamp = PaydayRemoteDate.parseInstant(settings.clientUpdatedAt),
@@ -793,6 +844,19 @@ final class PaydaySyncService {
             scheduleStore.schedule = nil
         }
         moveLedgerStore.replaceFromSupabase(settings.moveLedger.compactMapValues(PaydayRemoteDate.parseInstant))
+        // Compensation policies are the one setting this device must NOT
+        // clear on the word of a row that has nothing to say about them.
+        // Payday 1.0 is shipped and writes no `compensation_policies`, so a
+        // newer row from an old build arrives with nil; treating that as "no
+        // policies" would delete this device's rate history — the migration
+        // flags are already set, so nothing would re-create it — and put
+        // every wage back to `.rateNotSet`. An explicitly empty payload is a
+        // real state (a user who cleared their wage on another device) but it
+        // is indistinguishable from a freshly migrated device that has not
+        // uploaded yet, so both nil and empty leave the local copy alone.
+        if let remotePolicies = settings.compensationPolicies, !remotePolicies.isEmpty {
+            policyStore.replaceFromSupabase(remotePolicies)
+        }
         PaydaySettingsSyncClock.acceptRemoteTimestamp(timestamp)
     }
 

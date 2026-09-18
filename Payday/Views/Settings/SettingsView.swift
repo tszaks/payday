@@ -9,10 +9,16 @@ struct SettingsView: View {
     @Environment(InsightsStore.self) private var insightsStore
     @Environment(UserPreferencesStore.self) private var preferencesStore
     @Environment(MoveLedgerStore.self) private var moveLedgerStore
+    @Environment(PolicyStore.self) private var policyStore
     @Environment(PaydayCloudState.self) private var cloudState
     @Environment(\.dismiss) private var dismiss
     @Query private var allEntries: [TipEntry]
     @Query private var paycheckRecords: [PaycheckRecord]
+    /// Only for "does this person have any history at all", which is what
+    /// gates the one-time rate-history prompt. Both representations count:
+    /// the server-side deriver lands in a later PR 2 slice, so a device may
+    /// hold history in either one.
+    @Query private var shiftRecords: [ShiftRecord]
 
     @State private var firstName: String
     @State private var isFaceIDLockEnabled: Bool = false
@@ -22,14 +28,11 @@ struct SettingsView: View {
     @State private var mostRecentPayday: Date
     @State private var periodEndDate: Date
     @State private var firstWeekday: Int
-    @State private var wageDigitsText: String = ""
-    @FocusState private var isWageFieldFocused: Bool
     @State private var isShowingBackfillSheet = false
     @State private var isConfirmingSignOut = false
     @State private var isShowingDeleteAccount = false
 
     private let weekdaySymbols = Calendar.current.weekdaySymbols // [Sunday…Saturday]
-    private static let maxWageDigits = 4 // caps at $99.99/hr
 
     /// Shown in About so a support email can say which build it came from.
     private static var versionString: String {
@@ -46,8 +49,14 @@ struct SettingsView: View {
         _firstName = State(initialValue: "")
     }
 
+    /// QA-only anchor, same reasoning as `-OpenDeleteAccount`: Payroll sits
+    /// below the fold and simctl can screenshot but not scroll, so the
+    /// section has to bring itself into view to be reviewable on a render.
+    static let payrollSectionID = "payroll"
+
     var body: some View {
         NavigationStack {
+            ScrollViewReader { proxy in
             Form {
                 Section("Profile") {
                     TextField("First name", text: $firstName)
@@ -69,64 +78,21 @@ struct SettingsView: View {
                 }
                 .listRowBackground(PaydayColor.fieldBackground)
 
-                Section("Pay Schedule") {
-                    Picker("Frequency", selection: $frequency) {
-                        ForEach(PayFrequency.allCases) { freq in
-                            Text(freq.displayName).tag(freq)
-                        }
-                    }
-                    DatePicker("Payday", selection: $mostRecentPayday, in: ...Date.now, displayedComponents: .date)
-                    DatePicker("Last day covered", selection: $periodEndDate, in: ...mostRecentPayday, displayedComponents: .date)
-                    if frequency == .twiceMonthly {
-                        Text("1st–15th and 16th–month end")
-                            .font(PaydayFont.footnote)
-                            .foregroundStyle(PaydayColor.textSecondary)
-                    }
-                    HStack {
-                        Text("Hourly wage")
-                            .foregroundStyle(PaydayColor.textPrimary)
-                        Spacer()
-                        ZStack(alignment: .trailing) {
-                            Text(preferencesStore.baseHourlyWageCents.map { Money.string(fromCents: $0) } ?? "$0.00")
-                                .foregroundStyle(preferencesStore.baseHourlyWageCents == nil ? PaydayColor.textSecondary : PaydayColor.textPrimary)
-                                .monospacedDigit()
-                                .accessibilityHidden(true)
-                            TextField("", text: $wageDigitsText)
-                                .keyboardType(.numberPad)
-                                .multilineTextAlignment(.trailing)
-                                .focused($isWageFieldFocused)
-                                .opacity(0.01)
-                                .frame(maxWidth: 90)
-                                .accessibilityLabel("Hourly wage")
-                                .accessibilityValue(preferencesStore.baseHourlyWageCents.map { Money.string(fromCents: $0) } ?? "Not set")
-                        }
-                    }
-                    .contentShape(Rectangle())
-                    .onTapGesture { isWageFieldFocused = true }
-                }
-                .listRowBackground(PaydayColor.fieldBackground)
-                .onChange(of: mostRecentPayday) { _, newValue in
-                    if periodEndDate > newValue { periodEndDate = newValue }
-                }
-                .onChange(of: wageDigitsText) { _, newValue in
-                    let filtered = String(newValue.filter(\.isNumber).prefix(Self.maxWageDigits))
-                    if filtered != newValue { wageDigitsText = filtered }
-                    preferencesStore.baseHourlyWageCents = filtered.isEmpty ? nil : Int(filtered)
-                }
+                payScheduleSection
+
+                // The rate moved out of Pay Schedule and into Payroll: it is
+                // not part of WHEN you get paid, it is part of what you are
+                // paid, and it now has a history and a workweek attached
+                // (PaydayCore Design 1, "Severing calendar from payroll").
+                PayrollSettingsSection(shiftCount: allEntries.count + shiftRecords.count)
+                    .id(Self.payrollSectionID)
 
                 Section("Data") {
                     Button("Add Past Shifts") { isShowingBackfillSheet = true }
                 }
                 .listRowBackground(PaydayColor.fieldBackground)
 
-                Section("Calendar") {
-                    Picker("First day", selection: $firstWeekday) {
-                        ForEach(1...7, id: \.self) { day in
-                            Text(weekdaySymbols[day - 1]).tag(day)
-                        }
-                    }
-                }
-                .listRowBackground(PaydayColor.fieldBackground)
+                calendarGridSection
 
                 // Guideline 5.1.1(i) requires the privacy policy link to be
                 // reachable "within the app in an easily accessible manner",
@@ -164,7 +130,7 @@ struct SettingsView: View {
                         DebugSeeder.seedFollowUpDemoData(insightsStore: insightsStore, moveLedgerStore: moveLedgerStore)
                     }
                     Button("Clear all data", role: .destructive) {
-                        DebugSeeder.clearAll(scheduleStore: scheduleStore, insightsStore: insightsStore, moveLedgerStore: moveLedgerStore)
+                        DebugSeeder.clearAll(scheduleStore: scheduleStore, insightsStore: insightsStore, moveLedgerStore: moveLedgerStore, policyStore: policyStore)
                     }
                 }
                 .listRowBackground(PaydayColor.fieldBackground)
@@ -177,12 +143,6 @@ struct SettingsView: View {
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
-                }
-                if isWageFieldFocused {
-                    ToolbarItemGroup(placement: .keyboard) {
-                        Spacer()
-                        Button("Done") { isWageFieldFocused = false }
-                    }
                 }
             }
             .onChange(of: frequency) { _, _ in save() }
@@ -214,7 +174,6 @@ struct SettingsView: View {
                 isFaceIDLockEnabled = preferencesStore.isFaceIDLockEnabled
                 isSmartNudgeEnabled = preferencesStore.isSmartNudgeEnabled
                 isPaydayReminderEnabled = preferencesStore.isPaydayReminderEnabled
-                wageDigitsText = preferencesStore.baseHourlyWageCents.map(String.init) ?? ""
             }
             .sheet(isPresented: $isShowingBackfillSheet) {
                 BackfillSheet().paydayAppearance()
@@ -246,9 +205,61 @@ struct SettingsView: View {
                     isShowingDeleteAccount = true
                 }
             }
+            .onAppear {
+                if ProcessInfo.processInfo.arguments.contains("-ScrollSettingsPayroll") {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                        withAnimation { proxy.scrollTo(Self.payrollSectionID, anchor: .top) }
+                    }
+                }
+            }
             #endif
+            }
         }
         .presentationBackground(PaydayColor.background)
+    }
+
+    /// Extracted from `body` because the Form outgrew the type checker once
+    /// Payroll joined it ("unable to type-check this expression in reasonable
+    /// time"), not for style.
+    @ViewBuilder
+    private var payScheduleSection: some View {
+        Section("Pay Schedule") {
+            Picker("Frequency", selection: $frequency) {
+                ForEach(PayFrequency.allCases) { freq in
+                    Text(freq.displayName).tag(freq)
+                }
+            }
+            DatePicker("Payday", selection: $mostRecentPayday, in: ...Date.now, displayedComponents: .date)
+            DatePicker("Last day covered", selection: $periodEndDate, in: ...mostRecentPayday, displayedComponents: .date)
+            if frequency == .twiceMonthly {
+                Text("1st–15th and 16th–month end")
+                    .font(PaydayFont.footnote)
+                    .foregroundStyle(PaydayColor.textSecondary)
+            }
+        }
+        .listRowBackground(PaydayColor.fieldBackground)
+        .onChange(of: mostRecentPayday) { _, newValue in
+            if periodEndDate > newValue { periodEndDate = newValue }
+        }
+    }
+
+    @ViewBuilder
+    private var calendarGridSection: some View {
+        Section {
+            Picker("First day", selection: $firstWeekday) {
+                ForEach(1...7, id: \.self) { day in
+                    Text(weekdaySymbols[day - 1]).tag(day)
+                }
+            }
+        } header: {
+            Text("Calendar")
+        } footer: {
+            // This used to decide overtime bucketing as a side effect, so
+            // changing how the grid LOOKED could move money. It is grid-only
+            // now; Payroll > Workweek starts owns the overtime week.
+            Text("How the calendar grid is drawn. Overtime is counted over the workweek set in Payroll.")
+        }
+        .listRowBackground(PaydayColor.fieldBackground)
     }
 
     private func save() {

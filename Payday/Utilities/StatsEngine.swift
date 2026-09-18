@@ -187,6 +187,8 @@ private struct ShiftFacts {
 struct StatsEngine {
     let records: [TipRecord]
     private let calendar: Calendar
+    /// The zone every bucket in this engine is a civil day in.
+    let payrollTimeZone: TimeZone
     /// The reveal pipeline's ONLY wage-aware surface (Tyler's ruling,
     /// 2026-07-27): "for a shift, we don't differentiate [tips vs wages] —
     /// it's 1 amount." When set, revealComparison's own record/average/
@@ -198,10 +200,21 @@ struct StatsEngine {
     /// and auto-grat.
     private let wageCentsPerHour: Int?
 
-    init(records: [TipRecord], calendar: Calendar = .current, wageCentsPerHour: Int? = nil) {
+    /// - Parameters:
+    ///   - payrollTimeZone: the FROZEN payroll zone, from the calendar policy
+    ///     in effect (`PolicyStore.payrollTimeZone`). Required, and never
+    ///     defaulted to `TimeZone.current`: every figure in here is bucketed
+    ///     by civil day, so reading the device's zone let a flight move a
+    ///     shift into a different day, week, and pay period, and repriced
+    ///     history that nobody had touched (Design 1, "Frozen payroll
+    ///     timezone").
+    ///   - calendar: the grid calendar, for week and month arithmetic. Its
+    ///     own time zone is ignored; `payrollTimeZone` replaces it.
+    init(payrollTimeZone: TimeZone, records: [TipRecord], calendar: Calendar = .current, wageCentsPerHour: Int? = nil) {
         self.records = records
+        self.payrollTimeZone = payrollTimeZone
         var cal = calendar
-        cal.timeZone = TimeZone.current
+        cal.timeZone = payrollTimeZone
         self.calendar = cal
         self.wageCentsPerHour = wageCentsPerHour
     }
@@ -1218,7 +1231,7 @@ struct StatsEngine {
             // Built WITHOUT a wage, so grading a wage-inclusive actual
             // against a wage-exclusive projection is structurally
             // impossible rather than merely avoided.
-            let asOfEngine = StatsEngine(records: available, calendar: calendar)
+            let asOfEngine = StatsEngine(payrollTimeZone: payrollTimeZone, records: available, calendar: calendar)
             guard let plan = asOfEngine.planForward(referenceDate: asOfReference) else { continue }
 
             // planForward returns weekdays, not dates. The mapping is
@@ -2487,7 +2500,7 @@ struct StatsEngine {
     /// targeting logic exactly, just returning the weekday instead of a
     /// formatted Move.
     private func targetWeekday(forMoveID id: String, shownAt: Date) -> Int? {
-        let engine = StatsEngine(records: records.filter { $0.date < shownAt }, calendar: calendar)
+        let engine = StatsEngine(payrollTimeZone: payrollTimeZone, records: records.filter { $0.date < shownAt }, calendar: calendar)
         switch id {
         case "weekdaySwap":
             let averages = engine.weekdayNightAverages(engine.nightlyTotals())

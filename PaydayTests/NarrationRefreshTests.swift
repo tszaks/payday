@@ -186,13 +186,13 @@ struct InsightsNoteRecencyTests {
         let asOf = Calendar(identifier: .gregorian).date(from: DateComponents(year: 2026, month: 8, day: 5))!
         var records = (10...20).map { record($0, note: nil) }
         records.append(record(17, note: "Toast error carried lunch tips into dinner"))
-        let facts = StatsEngine(records: records).insightsFacts(referenceDate: asOf)
+        let facts = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: records).insightsFacts(referenceDate: asOf)
         #expect(facts != nil)
         #expect(facts?.notes.contains { $0.text.contains("Toast") } == true)
 
         // Same note, now beyond the 30-day note window.
         let laterAsOf = Calendar(identifier: .gregorian).date(from: DateComponents(year: 2026, month: 9, day: 1))!
-        let laterFacts = StatsEngine(records: records).insightsFacts(referenceDate: laterAsOf)
+        let laterFacts = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: records).insightsFacts(referenceDate: laterAsOf)
         #expect(laterFacts?.notes.isEmpty == true)
         // The shifts themselves are still inside the 180-day facts window.
         #expect(laterFacts?.shiftCount == records.count)

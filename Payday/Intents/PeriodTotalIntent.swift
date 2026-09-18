@@ -27,17 +27,17 @@ struct PeriodTotalIntent: AppIntent {
         guard let schedule = PayScheduleStore().schedule else {
             return .result(dialog: IntentDialog("Set up your pay schedule in Payday first."))
         }
-        let calculator = PayPeriodCalculator(schedule: schedule)
+        let calculator = PayPeriodCalculator(payrollTimeZone: PolicyStore.storedPayrollTimeZone(), schedule: schedule)
         let period = calculator.period(containing: .now)
 
         let entries = try SharedModelContainer.shared.mainContext.fetch(FetchDescriptor<TipEntry>())
-        let engine = StatsEngine(records: entries.map(TipRecord.init))
+        let engine = StatsEngine(payrollTimeZone: PolicyStore.storedPayrollTimeZone(), records: entries.map(TipRecord.init))
         let tipsTotal = engine.periodToDateTotal(period: period, asOf: .now)
 
         // Same wage-inclusive total the dashboard hero shows — the spoken
         // number must match what's on screen.
         let periodEntries = entries.filter { $0.date >= period.start && $0.date <= period.end }
-        let wages = PeriodIncome.wages(entries: periodEntries, wageCentsPerHour: AppGroup.baseHourlyWageCents, firstWeekday: schedule.firstWeekday)
+        let wages = PeriodIncome.wages(payrollTimeZone: PolicyStore.storedPayrollTimeZone(), entries: periodEntries, wageCentsPerHour: AppGroup.baseHourlyWageCents, firstWeekday: schedule.firstWeekday)
         let total = tipsTotal + (wages?.totalCents ?? 0)
 
         return .result(dialog: IntentDialog("You've made \(Money.string(fromCents: total)) so far this pay period."))

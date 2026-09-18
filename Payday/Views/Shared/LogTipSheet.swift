@@ -138,6 +138,7 @@ struct LogTipSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
     @Environment(PayScheduleStore.self) private var scheduleStore
+    @Environment(PolicyStore.self) private var policyStore
     @Environment(UserPreferencesStore.self) private var preferencesStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Query(sort: \TipEntry.date, order: .reverse) private var allEntries: [TipEntry]
@@ -1430,8 +1431,8 @@ struct LogTipSheet: View {
         // nothing and the comparison comes out identical.
         let shiftID = UUID()
 
-        let statsEngine = StatsEngine(records: allEntries.map(TipRecord.init), wageCentsPerHour: wageCentsPerHour)
-        let calculator = PayPeriodCalculator(schedule: scheduleStore.schedule ?? .fallback)
+        let statsEngine = StatsEngine(payrollTimeZone: policyStore.payrollTimeZone, records: allEntries.map(TipRecord.init), wageCentsPerHour: wageCentsPerHour)
+        let calculator = PayPeriodCalculator(payrollTimeZone: policyStore.payrollTimeZone, schedule: scheduleStore.schedule ?? .fallback)
         let period = calculator.period(containing: normalizedDate)
         // The engine and the cents passed here share one basis — see
         // StatsEngine.reveal's doc. Passing this shift's id lets the

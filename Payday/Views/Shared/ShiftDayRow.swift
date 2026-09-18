@@ -17,11 +17,18 @@ struct ShiftDayRow: View {
     let period: ShiftPeriod?
     let dayHasMultipleShifts: Bool
     let entries: [TipEntry]
-    /// Base hourly rate, when the person has one set — folds this shift's
-    /// wages (rate x its canonical hours, never OT) into the trailing
-    /// amount. Nil means the wage feature is off; the row then reads exactly
-    /// as it always has.
-    var wageCentsPerHour: Int?
+    /// This shift's wages, already valued by the ledger as its slice of the
+    /// workweek allocation — `WageEstimate.centsByShiftID` over the SAME
+    /// shift grouping this list renders, so the sum of the rows is the total
+    /// above them by construction rather than by coincidence.
+    ///
+    /// Deliberately not a rate. The row used to take `wageCentsPerHour` and
+    /// do its own `rate x hours` rounding, which made a day's two rows come
+    /// to 2760c under a 2759c hero (PR 3 review, P0). It cannot compute this
+    /// alone: overtime and the cumulative rounding are properties of the
+    /// whole workweek, not of one shift. 0 when the wage feature is off or
+    /// the shift logged no hours, which is how the row has always read.
+    var wageCents: Int = 0
     /// The shift's own note, shown as a quiet caption under the label.
     ///
     /// Opt-in and nil by default so Dashboard is unchanged. The
@@ -40,15 +47,8 @@ struct ShiftDayRow: View {
         TipBreakdown.total(of: entries)
     }
 
-    /// This shift's base-rate wages, from its one canonical hoursWorked
-    /// value (ShiftDetails.resolve) — never per-entry, never OT.
-    private var wageCents: Int {
-        let hoursWorked = ShiftDetails.resolve(from: entries).hoursWorked ?? 0
-        return WageEstimate.cents(wageCentsPerHour: wageCentsPerHour, hours: hoursWorked) ?? 0
-    }
-
-    /// Net tips plus this shift's wages — matches the hero total, the
-    /// sheet's own total, and every other shift/day surface in the app.
+    /// Net tips plus this shift's wages. Sums to the hero above it exactly:
+    /// both are the same `WageEstimate.centsPerShift` array.
     private var netCents: Int {
         breakdown.netTotalCents + wageCents
     }

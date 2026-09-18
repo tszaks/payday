@@ -1,10 +1,12 @@
 import Foundation
 
-/// Base-wage + overtime math that becomes part of period INCOME (hero,
-/// drawer, period detail, periods list) — unlike WageEstimate, which provides
-/// per-shift wage math. It lives entirely on the wages side of the ledger and
-/// is added by callers; it is never folded into either voluntary tips or
-/// Toast employee gratuity.
+/// Period-level wage math (hero, drawer, period detail, periods list) for the
+/// surfaces that have not moved to `EarningsSnapshot` yet. As of PR 3 it is a
+/// thin wrapper over `CompensationLedger`; PR 5 migrates the callers and PR 8
+/// deletes this type.
+///
+/// It lives entirely on the wages side of the ledger and is added by callers;
+/// it is never folded into either voluntary tips or Toast employee gratuity.
 enum PeriodIncome {
     struct Wages {
         let regularCents: Int
@@ -15,51 +17,63 @@ enum PeriodIncome {
         var totalCents: Int { regularCents + overtimeCents }
     }
 
-    /// Wages for a set of entries, overtime computed per CALENDAR WORKWEEK
-    /// rather than per pay period: a shift's hours belong to the week its
-    /// day falls in (Calendar.current, firstWeekday overridden when given),
-    /// and hours beyond 40 in that week pay 1.5x — matching how overtime is
-    /// actually calculated on a paycheck, regardless of where the pay
-    /// period's own boundaries fall. Hours are the shift's one canonical
-    /// value (ShiftDetails.resolve), never summed per-row. Returns nil when
-    /// no rate is set or no hours were logged — like WageEstimate, an
-    /// estimate is never fabricated from a fallback.
+    /// Wages for a set of entries, with overtime computed per WORKWEEK rather
+    /// than per pay period: a shift's hours belong to the week its work day
+    /// falls in, and hours past the threshold pay 1.5x — matching how
+    /// overtime is actually calculated on a paycheck, regardless of where the
+    /// pay period's own boundaries fall.
+    ///
+    /// Every cent here now comes from `CompensationLedger`, so the per-shift
+    /// figures on a row and this period total are slices of the same
+    /// allocation and cannot disagree. Hours are the shift's one canonical
+    /// value (`ShiftDetails.resolve`), never summed per row. Returns nil when
+    /// no rate is set or no hours were logged — an estimate is never
+    /// fabricated from a fallback.
+    ///
+    /// - Parameters:
+    ///   - payrollTimeZone: the FROZEN payroll zone from the calendar policy.
+    ///     Required: it decides which civil day, and therefore which
+    ///     workweek, a late shift belongs to, and reading the device's zone
+    ///     let a flight move hours across the overtime threshold.
+    ///   - firstWeekday: the workweek start to bucket by. Still a parameter
+    ///     because the callers are pre-policy surfaces; PR 5 replaces it with
+    ///     `PayrollCalendarPolicy.workweekStartWeekday`, which is the thing
+    ///     that actually owns overtime (Design 1, "Severing calendar from
+    ///     payroll").
     static func wages(
+        payrollTimeZone: TimeZone,
         entries: [TipEntry],
         wageCentsPerHour: Int?,
         firstWeekday: Int? = nil,
         calendar sourceCalendar: Calendar = .current
     ) -> Wages? {
-        guard let wageCentsPerHour else { return nil }
+        guard let wageCentsPerHour, wageCentsPerHour > 0 else { return nil }
 
         var calendar = sourceCalendar
+        calendar.timeZone = payrollTimeZone
         if let firstWeekday { calendar.firstWeekday = firstWeekday }
 
-        let shifts = ShiftDays.groupedByShift(entries, shiftID: \.shiftID, date: \.date, period: \.shiftPeriod)
+        let shifts = ShiftDays.groupedByShift(
+            entries, shiftID: \.shiftID, date: \.date, period: \.shiftPeriod, calendar: calendar
+        )
+        let valuations = LegacyLedgerBridge.valuations(
+            shiftGroups: shifts.map(\.items),
+            rateCents: wageCentsPerHour,
+            payrollTimeZone: payrollTimeZone,
+            workweekStartWeekday: firstWeekday ?? calendar.firstWeekday
+        )
 
-        var weekHours: [Date: Double] = [:]
-        for shift in shifts {
-            let hours = ShiftDetails.resolve(from: shift.items).hoursWorked ?? 0
-            guard hours > 0 else { continue }
-            let weekStart = calendar.dateInterval(of: .weekOfYear, for: shift.day)?.start ?? shift.day
-            weekHours[weekStart, default: 0] += hours
-        }
+        let totalMinutes = valuations.compactMap(\.minutesWorked).reduce(0, +)
+        guard totalMinutes > 0 else { return nil }
 
-        let totalHours = weekHours.values.reduce(0, +)
-        guard totalHours > 0 else { return nil }
+        let components = valuations.reduce(EarningsComponents.zero) { $0 + $1.components }
+        let overtimeMinutes = valuations.reduce(0) { $0 + $1.wage.components.overtimeMinutes }
 
-        var regularCents = 0
-        var overtimeCents = 0
-        var totalOvertimeHours = 0.0
-
-        for hours in weekHours.values {
-            let regularHours = min(hours, 40)
-            let overtimeHours = max(0, hours - 40)
-            regularCents += Int((Double(wageCentsPerHour) * regularHours).rounded())
-            overtimeCents += Int((Double(wageCentsPerHour) * 1.5 * overtimeHours).rounded())
-            totalOvertimeHours += overtimeHours
-        }
-
-        return Wages(regularCents: regularCents, overtimeCents: overtimeCents, hours: totalHours, overtimeHours: totalOvertimeHours)
+        return Wages(
+            regularCents: components.regularWagesCents,
+            overtimeCents: components.overtimeWagesCents,
+            hours: WorkedMinutes.hours(fromMinutes: totalMinutes),
+            overtimeHours: WorkedMinutes.hours(fromMinutes: overtimeMinutes)
+        )
     }
 }

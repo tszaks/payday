@@ -62,11 +62,24 @@ struct PayPeriod: Hashable {
 struct PayPeriodCalculator {
     let schedule: PaySchedule
     private let calendar: Calendar
+    /// The zone every boundary in this calculator is a civil day in.
+    let payrollTimeZone: TimeZone
 
-    init(schedule: PaySchedule, calendar: Calendar = .current) {
+    /// - Parameters:
+    ///   - payrollTimeZone: the FROZEN payroll zone, from the calendar policy
+    ///     in effect (`PolicyStore.payrollTimeZone`). Required, and never
+    ///     defaulted to `TimeZone.current`: a pay period is a range of civil
+    ///     days someone gets paid for, and reading the device's zone made a
+    ///     flight redraw every boundary — the same day could fall in two
+    ///     different pay periods depending on where the phone was when the
+    ///     screen rendered (Design 1, "Frozen payroll timezone").
+    ///   - calendar: the grid calendar, for month lengths and `firstWeekday`.
+    ///     Its own time zone is ignored; `payrollTimeZone` replaces it.
+    init(payrollTimeZone: TimeZone, schedule: PaySchedule, calendar: Calendar = .current) {
         self.schedule = schedule
+        self.payrollTimeZone = payrollTimeZone
         var cal = calendar
-        cal.timeZone = TimeZone.current
+        cal.timeZone = payrollTimeZone
         self.calendar = cal
     }
 
