@@ -108,8 +108,8 @@ enum LegacySnapshotBridge {
     /// snapshot with no honest digest is a dataset nothing else can be
     /// compared against, and rule 4 says the screen renders placeholders
     /// rather than zeros for it.
-    static func snapshot(
-        shifts: [(day: Date, shiftID: UUID, items: [TipEntry])],
+    static func snapshot<Row: LegacyShiftRow>(
+        shifts: [(day: Date, shiftID: UUID, items: [Row])],
         policies: CompensationPolicies,
         payrollTimeZone: TimeZone,
         asOf: Date
@@ -125,8 +125,8 @@ enum LegacySnapshotBridge {
 
     /// One group's `ShiftInput`: the caller's id, the legacy bridge's work
     /// day / minutes / ordering, and `TipBreakdown`'s split of the money.
-    static func shiftInput(
-        for group: (day: Date, shiftID: UUID, items: [TipEntry]),
+    static func shiftInput<Row: LegacyShiftRow>(
+        for group: (day: Date, shiftID: UUID, items: [Row]),
         payrollTimeZone: TimeZone
     ) -> ShiftInput? {
         guard var input = LegacyLedgerBridge.shiftInput(from: group.items, payrollTimeZone: payrollTimeZone) else {
@@ -148,8 +148,8 @@ enum LegacySnapshotBridge {
     /// The same thing from ungrouped entries, for a caller that has not
     /// grouped yet. Grouping is `ShiftDays.groupedByShift`, the app's one
     /// grouping rule.
-    static func snapshot(
-        entries: [TipEntry],
+    static func snapshot<Row: LegacyShiftRow>(
+        entries: [Row],
         policies: CompensationPolicies,
         payrollTimeZone: TimeZone,
         asOf: Date
