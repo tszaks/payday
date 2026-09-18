@@ -672,6 +672,25 @@ enum PaydaySyncState {
         load(for: userID).shiftsAreAuthoritativeAt != nil
     }
 
+    /// The same fact for whichever account is registered in THIS process.
+    ///
+    /// Exists because the readers that need it most are out of process. The
+    /// widget and the Siri intent have no `userID` to hand and no session;
+    /// they have the App Group and nothing else. Without one accessor they
+    /// each grow their own, and then the Lock Screen and the app can hold
+    /// different opinions about whether shifts are authoritative -- which is
+    /// the precise failure `design-lint.sh` pins `shiftsAreAuthoritative` to a
+    /// single definition to prevent.
+    ///
+    /// Signed out is `false`, deliberately and for the same reason
+    /// `ShiftCommands.mayMutate` treats it that way: with no account there is
+    /// no conversion in flight, so there is no wiped cache to detect and
+    /// nothing to protect.
+    static var shiftsAreAuthoritativeForCurrentAccount: Bool {
+        guard let userID = registeredUserID else { return false }
+        return shiftsAreAuthoritative(for: userID)
+    }
+
     /// The shift half of `cacheRequiresBaseline`: a durable cursor must never
     /// outlive the replaceable cache it describes.
     ///
