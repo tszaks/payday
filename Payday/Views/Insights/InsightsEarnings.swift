@@ -235,21 +235,83 @@ enum InsightsEarnings {
         return priced
     }
 
+    // MARK: - The engine
+
+    /// **The page's `StatsEngine`, built in ONE place.**
+    ///
+    /// The same records the snapshot saw (flattened out of the same grouping,
+    /// so the engine and the snapshot cannot be looking at two different sets
+    /// of rows), the same grid calendar, and the pricing this dataset's own
+    /// basis produced.
+    ///
+    /// It is a function rather than a construction inlined in
+    /// `InsightsPageFacts.init` because of a measured gate failure. The parity
+    /// suite used to rebuild this wiring in a private `pageEngine(_:)` helper
+    /// of its own — "a test that rebuilds this by hand is a test that can
+    /// share the view's mistake", which `Dataset`'s header already says — and
+    /// with `valuedShiftCents` patched to nil in the VIEW, reverting the whole
+    /// page to tips-only under wage-inclusive headers, the full app suite
+    /// still reported `Test run with 855 tests in 154 suites passed`. Nothing
+    /// in 855 tests noticed the screen had stopped reading the snapshot.
+    /// Both the view and the suite call this now, so that patch fails.
+    ///
+    /// The basis is computed HERE from the dataset rather than passed in. A
+    /// `basis:` parameter would let a caller hand the engine one basis while
+    /// the page declared another, which is the mixed basis this whole file
+    /// exists to prevent; `basis(for:)` is pure, so computing it twice (here,
+    /// and once more for the note) cannot produce two answers.
+    static func engine(
+        for dataset: Dataset,
+        payrollTimeZone: TimeZone,
+        calendar: Calendar
+    ) -> StatsEngine {
+        StatsEngine(
+            payrollTimeZone: payrollTimeZone,
+            records: dataset.shiftDays.flatMap(\.items).map(TipRecord.init),
+            calendar: calendar,
+            // The ledger's `earnedIncome` per shift, or nil to leave every
+            // figure on tips. Never a scalar `wageCentsPerHour`: that prices
+            // a shift in isolation, so it rounds per shift and carries no
+            // workweek overtime. This one argument is the whole of group
+            // 2.6's fix — every fact, range, trend, forecast and Move below
+            // moves onto the same basis as the chart above them.
+            valuedShiftCents: pricing(basis(for: dataset.snapshot), dataset)
+        )
+    }
+
     // MARK: - Queries
 
     /// The civil days `StatsEngine.insightsFacts` selects, as a range on the
     /// snapshot.
     ///
-    /// The engine's own window is `records.filter { $0.date >= referenceDate -
-    /// insightsRecentWindowDays }`, which is a half-open interval on instants.
-    /// This is the same window expressed in the civil days the snapshot
-    /// selects by, in the FROZEN payroll zone — the zone the engine already
-    /// buckets in, so the two select the same shifts.
+    /// The engine's own window is `StatsEngine.recentWindow(referenceDate:)`,
+    /// a half-open interval of INSTANTS: `[startOfDay(reference) - 180 days,
+    /// startOfDay(reference) + 1 day)`. This is the same 181 civil days
+    /// expressed as the `DayRange` the snapshot selects by, in the FROZEN
+    /// payroll zone — the zone the engine already buckets in — so the two
+    /// select the same shifts.
     ///
     /// It exists so the HOURLY tile can be the snapshot's own
     /// `hourlyRateCents` over the SAME scope the rest of the grid covers. A
     /// tile fed the whole-history rate under a grid whose neighbours describe
     /// the last 180 days would be a scope change wearing a basis fix.
+    ///
+    /// **Both bounds are load-bearing, and both were once wrong.** Before
+    /// this was pinned, `insightsFacts` filtered `$0.date >= referenceDate -
+    /// 180 days` with no upper bound at all and no `startOfDay`, so two edges
+    /// disagreed with this range and the HOURLY tile's denominator described a
+    /// different set of shifts from the counts printed beside it:
+    ///
+    /// - a shift dated 2027-01-15 was inside the engine's window and outside
+    ///   this one, so the engine held 6 shifts where the tile held 5;
+    /// - with `referenceDate` at 2026-10-03 09:00, a shift on 2026-04-06 at
+    ///   08:00 — the 180-day boundary DAY, earlier in the clock than the
+    ///   reference instant — was inside this range and outside the engine's.
+    ///
+    /// The HOURLY caption is precisely a coverage claim ("across 5 of 6
+    /// shifts"), so a denominator over a different window from the counts next
+    /// to it is two answers to one question.
+    /// `InsightsWindowAgreementTests` measures both edges.
     static func recentRange(
         referenceDate: Date,
         in payrollTimeZone: TimeZone,
@@ -350,6 +412,24 @@ enum InsightsBasis: Equatable {
     var isWageInclusive: Bool {
         if case .earnedIncome = self { return true }
         return false
+    }
+
+    /// The chart's basis, which is the PAGE's.
+    ///
+    /// The chart is the one surface on Insights that renders engine answers
+    /// directly rather than a derivation of them, so it takes the basis as an
+    /// `EarningsChartMetric` instead of as a sentence. Wave 2 shipped without
+    /// this and measured the consequence: `EarningsChartPoint` was
+    /// `EarningsFigure.earnedIncome` unconditionally, so on a `.partial`
+    /// dataset the bars read 26,500c / 24,000c / 7,500c / 25,800c / 25,500c
+    /// over the same five days every other figure on the page read 10,500c /
+    /// 9,000c / 7,500c / 9,800c / 10,500c — under a note reading "Every
+    /// figure below is tips only" and bar labels reading "Total".
+    ///
+    /// `.unavailable` maps to `.nonWageEarnings` and it does not matter which
+    /// it maps to: with no dataset the chart yields no points at all.
+    var chartMetric: EarningsChartMetric {
+        isWageInclusive ? EarningsChartMetric.earnedIncome : EarningsChartMetric.nonWageEarnings
     }
 
     /// Which registry metric the page's figures are derived from, so a copy

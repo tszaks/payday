@@ -78,20 +78,43 @@ private func dataset(
     )
 }
 
-/// The engine exactly as `InsightsPageFacts.init` builds it: the same records
-/// the snapshot saw, the same grid calendar, and the pricing the page's own
-/// basis decision produced.
-private func pageEngine(
+/// `InsightsEarnings.engine` — the function `InsightsPageFacts.init` itself
+/// calls — with this suite's zone and grid calendar filled in. A FORWARDER,
+/// never a restatement.
+///
+/// Its predecessor here rebuilt the construction by hand, and so did not gate
+/// the screen: with `valuedShiftCents` patched to nil in the view, reverting
+/// the whole page to tips-only under wage-inclusive headers, the full app
+/// suite still reported `Test run with 855 tests in 154 suites passed`. That
+/// is the "a test that rebuilds this by hand is a test that can share the
+/// view's mistake" warning in `InsightsEarnings.Dataset`'s own header, paid
+/// for. The real gate is `InsightsPageFactsTests` below, which constructs the
+/// view's facts struct itself.
+private func insightsEngine(
     _ set: InsightsEarnings.Dataset,
-    payrollTimeZone: TimeZone = PaydayTestZone.payroll
+    in payrollTimeZone: TimeZone = PaydayTestZone.payroll
 ) -> StatsEngine {
-    StatsEngine(
+    InsightsEarnings.engine(
+        for: set,
         payrollTimeZone: payrollTimeZone,
-        records: set.shiftDays.flatMap(\.items).map(TipRecord.init),
+        calendar: PayrollCalendar.gridCalendar(in: payrollTimeZone)
+    )
+}
+
+/// The page's facts exactly as `InsightsView.body` computes them: the real
+/// `InsightsPageFacts`, over the real dataset, with the real grid calendar.
+private func pageFacts(
+    _ entries: [TipEntry],
+    _ compensation: CompensationPolicies,
+    now: Date,
+    payrollTimeZone: TimeZone = PaydayTestZone.payroll
+) -> InsightsPageFacts {
+    InsightsPageFacts(
+        dataset: dataset(entries, compensation, payrollTimeZone: payrollTimeZone),
+        ledger: [:],
+        payrollTimeZone: payrollTimeZone,
         calendar: PayrollCalendar.gridCalendar(in: payrollTimeZone),
-        valuedShiftCents: InsightsEarnings.pricing(
-            InsightsEarnings.basis(for: set.snapshot), set
-        )
+        now: now
     )
 }
 
@@ -150,7 +173,7 @@ struct InsightsSnapshotParityTests {
         let snapshot = try #require(set.snapshot)
         let range = fixtureRange()
 
-        let engineTotal = pageEngine(set).nightlyTotals()
+        let engineTotal = insightsEngine(set).nightlyTotals()
             .filter { range.contains(CivilDay($0.date, in: PaydayTestZone.payroll)) }
             .reduce(0) { $0 + $1.cents }
         let queried = snapshot.range(range, asOf: CivilDay.distantFuture)
@@ -233,7 +256,7 @@ struct InsightsSnapshotParityTests {
         #expect(InsightsEarnings.pricing(basis, set) == nil)
 
         let range = fixtureRange()
-        let engineTotal = pageEngine(set).nightlyTotals()
+        let engineTotal = insightsEngine(set).nightlyTotals()
             .filter { range.contains(CivilDay($0.date, in: PaydayTestZone.payroll)) }
             .reduce(0) { $0 + $1.cents }
         let queried = snapshot.range(range, asOf: CivilDay.distantFuture)
@@ -440,7 +463,7 @@ struct InsightsTileBasisTests {
         let set = dataset(entries, policies(rateCents: 2_000))
         let snapshot = try #require(set.snapshot)
         let facts = try #require(
-            pageEngine(set).insightsFacts(referenceDate: at(2026, 10, 3, hour: 9))
+            insightsEngine(set).insightsFacts(referenceDate: at(2026, 10, 3, hour: 9))
         )
         let lunch = try #require(facts.lunchDinner)
 
@@ -460,7 +483,7 @@ struct InsightsTileBasisTests {
 
         // And the row below is on the same basis, so the two can be read
         // against each other: three dinners at 8h.
-        let doubles = pageEngine(set).insightsFacts(referenceDate: at(2026, 10, 3, hour: 9))?.doublesSolo
+        let doubles = insightsEngine(set).insightsFacts(referenceDate: at(2026, 10, 3, hour: 9))?.doublesSolo
         #expect(lunch.dinnerCents == 34_500 + 36_000 + 36_000)
         #expect(doubles == nil, "no double day in this fixture, so nothing to compare against")
     }
@@ -512,7 +535,7 @@ struct InsightsDerivationBasisTests {
         let set = dataset(rhythm(), policies(rateCents: 2_000))
         let now = at(2026, 11, 9, hour: 9)
 
-        let priced = try #require(pageEngine(set).typicalRanges(referenceDate: now)?.overall)
+        let priced = try #require(insightsEngine(set).typicalRanges(referenceDate: now)?.overall)
         #expect(priced.lowCents == 26_000)
         #expect(priced.highCents == 26_000)
 
@@ -535,7 +558,7 @@ struct InsightsDerivationBasisTests {
         let set = dataset(rhythm(), policies(rateCents: 2_000))
         let now = at(2026, 11, 9, hour: 9)
 
-        let priced = try #require(pageEngine(set).planForward(referenceDate: now))
+        let priced = try #require(insightsEngine(set).planForward(referenceDate: now))
         let unpriced = try #require(
             StatsEngine(
                 payrollTimeZone: PaydayTestZone.payroll,
@@ -565,7 +588,7 @@ struct InsightsDerivationBasisTests {
         let set = dataset(entries, policies(rateCents: 2_000))
         let now = at(2026, 10, 3, hour: 9)
 
-        let priced = try #require(pageEngine(set).insightsFacts(referenceDate: now)?.sales)
+        let priced = try #require(insightsEngine(set).insightsFacts(referenceDate: now)?.sales)
         let unpriced = try #require(
             StatsEngine(
                 payrollTimeZone: PaydayTestZone.payroll,
@@ -677,5 +700,375 @@ struct InsightsAsOfTests {
         #expect(window.count == StatsEngine.insightsRecentWindowDays + 1)
         #expect(!window.contains(CivilDay(at(2027, 1, 15), in: PaydayTestZone.payroll)))
         #expect(window.contains(CivilDay(at(2026, 9, 28), in: PaydayTestZone.payroll)))
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  The gates below construct the REAL `InsightsPageFacts` — the struct
+//  `InsightsView.body` renders from — rather than any restatement of its
+//  wiring. That distinction is not academic. While `InsightsPageFacts` was
+//  private, this file rebuilt the construction in a helper of its own, and
+//  the suite therefore did not gate the screen: in a scratch copy with
+//  `valuedShiftCents: InsightsEarnings.pricing(basis, dataset)` replaced by
+//  `valuedShiftCents: nil` — the single line that reverts the whole page to
+//  tips-only under wage-inclusive headers — the full app suite still
+//  reported `Test run with 855 tests in 154 suites passed`, `** TEST
+//  SUCCEEDED **`, zero failures. Nothing in 855 tests noticed.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// **The page, as the view computes it.** Every money surface on
+/// `InsightsPageFacts` has to be on the ONE basis the same struct declares.
+@Suite("Insights page facts")
+struct InsightsPageFactsTests {
+    /// The wage-inclusive page: the note says wages, and the tiles, the
+    /// chart and the HOURLY tile all carry them.
+    ///
+    /// MEASURED on `wageCompleteFixture` at $20.00/hr: LUNCH 21,500c (one
+    /// $75.00 cash lunch plus 7h), DINNER 101,800c, together 123,300c — the
+    /// same cents `snapshot.range(fixtureRange)` answers, and the same total
+    /// the five chart bars sum to.
+    @Test("a wage-complete page puts the tiles, the chart and HOURLY on wages")
+    func aWageCompletePageIsWageInclusiveThroughout() throws {
+        let now = at(2026, 10, 3, hour: 9)
+        let facts = pageFacts(wageCompleteFixture(), policies(rateCents: 2_000), now: now)
+        let snapshot = try #require(dataset(wageCompleteFixture(), policies(rateCents: 2_000)).snapshot)
+        let queried = snapshot.range(fixtureRange(), asOf: CivilDay.distantFuture)
+
+        #expect(facts.basis == .earnedIncome(assumed: false))
+        #expect(facts.basis.note == "Every figure below includes your hourly wages.")
+
+        // The tiles. This is the assertion that fails if the view ever stops
+        // handing the engine the ledger's pricing: an unpriced page reads
+        // 7,500c and 39,800c over the same two rows.
+        let lunchDinner = try #require(facts.facts?.lunchDinner)
+        #expect(lunchDinner.lunchCents == 21_500)
+        #expect(lunchDinner.dinnerCents == 101_800)
+        #expect(lunchDinner.lunchCents + lunchDinner.dinnerCents
+                == queried.knownComponents.earnedIncomeCents)
+        #expect(lunchDinner.lunchCents != 7_500, "an unpriced page's LUNCH tile")
+
+        // The chart, on the same metric and summing to the same total.
+        #expect(facts.chartFacts.metric == .earnedIncome)
+        #expect(facts.chartFacts.points.map(\.cents) == [26_500, 24_000, 21_500, 25_800, 25_500])
+        #expect(facts.chartFacts.points.reduce(0) { $0 + $1.cents } == 123_300)
+        #expect(facts.chartFacts.points.allSatisfy { $0.figure.metric == .earnedIncome })
+
+        // And the HOURLY tile, which a wage-inclusive page may ask for.
+        let hourly = try #require(facts.hourly)
+        #expect(hourly.rateCents == 3_245)
+        #expect(hourly.rateCents == queried.hourlyRateCents)
+    }
+
+    /// **The fall-back, applied to every surface and not just the engine.**
+    ///
+    /// One of the same five shifts has no logged hours — the ordinary case,
+    /// since `BackfillSheet.performSave` writes no `hoursWorked` at all, so
+    /// every shift added through "Add Past Shifts" (the button on Insights'
+    /// own empty state) is hours-less. The page falls back to tips and says
+    /// so, and then the chart and the HOURLY tile have to obey that sentence.
+    ///
+    /// MEASURED before the fix: the note read "Every figure below is tips
+    /// only. 1 shift have no hours logged." while the chart directly beneath
+    /// it drew [26500, 24000, 7500, 25800, 25500] with scrub readouts
+    /// "$265.00" … "$255.00" and bar labels "You kept" / "Total" / "Known so
+    /// far", over the same five days every other figure on the page read
+    /// [10500, 9000, 7500, 9800, 10500].
+    @Test("a tips-only page's chart and HOURLY tile obey the note above them")
+    func aTipsOnlyPageIsTipsOnlyThroughout() throws {
+        let now = at(2026, 10, 3, hour: 9)
+        var entries = wageCompleteFixture()
+        entries[2] = TipEntry(
+            date: at(2026, 9, 30), amountCents: 7_500, kind: .cash,
+            hoursWorked: nil, shiftPeriod: .lunch, shiftID: shiftID(3)
+        )
+        let facts = pageFacts(entries, policies(rateCents: 2_000), now: now)
+        let snapshot = try #require(dataset(entries, policies(rateCents: 2_000)).snapshot)
+        let range = fixtureRange()
+        let queried = snapshot.range(range, asOf: CivilDay.distantFuture)
+
+        #expect(facts.basis == .nonWageEarnings(.incomplete(missingHours: 1, missingRate: 0)))
+        #expect(facts.basis.note == "Every figure below is tips only. 1 shift have no hours logged.")
+
+        // THE CHART. Bar for bar, the same cents the snapshot answers for
+        // the metric the note named.
+        #expect(facts.chartFacts.metric == .nonWageEarnings)
+        let barCents = facts.chartFacts.points.map(\.cents)
+        #expect(barCents == snapshot.days(in: range, asOf: CivilDay.distantFuture)
+                .map(\.knownComponents.nonWageEarningsCents))
+        #expect(barCents == [10_500, 9_000, 7_500, 9_800, 10_500])
+        #expect(barCents.reduce(0, +) == queried.knownComponents.nonWageEarningsCents)
+        #expect(barCents.reduce(0, +) == 47_300)
+
+        // The disagreeing case, asserted as what must NOT appear: the
+        // wage-inclusive numbers for the very same days.
+        let wageInclusive = snapshot.days(in: range, asOf: CivilDay.distantFuture)
+            .map(\.knownComponents.earnedIncomeCents)
+        #expect(wageInclusive == [26_500, 24_000, 7_500, 25_800, 25_500])
+        #expect(barCents != wageInclusive)
+        #expect(!barCents.contains(26_500))
+        #expect(barCents.reduce(0, +) != 109_300)
+
+        // And a tips bar never wears an earned-income noun. "Total" is the
+        // one Tyler's rule reserves for wage-inclusive figures.
+        #expect(facts.chartFacts.points.allSatisfy { $0.figure.metric == .nonWageEarnings })
+        #expect(facts.chartFacts.points.allSatisfy { $0.figure.label == "Tips" })
+        #expect(facts.chartFacts.points.allSatisfy { !$0.figure.mayBeCalledATotal })
+        // A tips figure has nothing missing from it, so no bar claims to be
+        // a partial reading of one.
+        #expect(facts.chartFacts.points.allSatisfy { !$0.isPartial })
+
+        // THE HOURLY TILE. `hourlyRateCents` divides
+        // `coveredComponents.earnedIncomeCents`, so on a tips-only page the
+        // page cannot honestly ask for it — and the engine would have
+        // answered if asked, which is what makes the suppression the fix
+        // rather than a coincidence.
+        #expect(facts.hourly == nil)
+        #expect(
+            InsightsEarnings.hourlyRate(snapshot, referenceDate: now, in: PaydayTestZone.payroll) != nil,
+            "the engine can still answer; it is the PAGE that must not ask"
+        )
+        #expect(InsightsNumbersGrid.rows(for: try #require(facts.facts), hourly: facts.hourly)
+                .flatMap { $0 }.allSatisfy { $0.id != "hourly" })
+
+        // The tiles are on tips too, which is what wave 2 already fixed and
+        // what the chart now joins.
+        let lunchDinner = try #require(facts.facts?.lunchDinner)
+        #expect(lunchDinner.lunchCents == 7_500)
+        #expect(lunchDinner.dinnerCents == 39_800)
+        #expect(lunchDinner.lunchCents + lunchDinner.dinnerCents == 47_300)
+    }
+
+    /// With no rate policy on file the page is `.off`: the same cents either
+    /// way, and only "tips" is an honest name for them. The chart follows,
+    /// and its labels come out the same on both paths — `.off` is the one
+    /// state `EarningsFigure.earnedIncome` already collapsed.
+    @Test("a wages-off page charts tips, and no bar says Total")
+    func aWagesOffPageChartsTips() throws {
+        let now = at(2026, 10, 3, hour: 9)
+        let facts = pageFacts(wageCompleteFixture(), policies(rateCents: nil), now: now)
+
+        #expect(facts.basis == .nonWageEarnings(.wagesOff))
+        #expect(facts.chartFacts.metric == .nonWageEarnings)
+        #expect(facts.chartFacts.points.map(\.cents) == [10_500, 9_000, 7_500, 9_800, 10_500])
+        #expect(facts.chartFacts.points.allSatisfy { !$0.figure.mayBeCalledATotal })
+        #expect(facts.hourly == nil)
+    }
+
+    /// No dataset: no basis, no bars, no rate, and nothing that could render
+    /// `$0.00` (contract rule 4).
+    @Test("an unbacked page states no basis and draws no bar")
+    func anUnbackedPageRefuses() {
+        let facts = pageFacts([], policies(rateCents: 2_000), now: at(2026, 10, 3, hour: 9))
+
+        #expect(facts.basis == .unavailable)
+        #expect(facts.basis.note == nil)
+        #expect(facts.facts == nil)
+        #expect(facts.hourly == nil)
+        #expect(facts.chartFacts.points.isEmpty)
+    }
+}
+
+/// **One window, read by both sides of the HOURLY tile's own caption.**
+///
+/// The caption is a coverage claim ("across 5 of 6 shifts") sitting next to
+/// tiles whose sample counts come from `StatsEngine.insightsFacts`. If the
+/// tile's denominator and its neighbours' counts are computed over different
+/// windows, the grid is two answers to one question.
+@Suite("Insights window agreement")
+struct InsightsWindowAgreementTests {
+    private func hoursShift(_ date: Date, _ index: Int) -> TipEntry {
+        TipEntry(date: date, amountCents: 5_000, kind: .credit, hoursWorked: 4,
+                 shiftPeriod: .dinner, shiftID: shiftID(index))
+    }
+
+    /// The reference instant both windows are measured back from, at 09:00 —
+    /// deliberately not midnight, because the two bounds that disagreed only
+    /// disagree when the reference has a time of day.
+    private let now = at(2026, 10, 3, hour: 9)
+
+    /// **The upper edge.** `insightsFacts` had no upper bound at all, so a
+    /// future-dated shift was in the engine's sample and outside the tile's
+    /// range: the engine held 6 shifts where `hourly.totalShiftCount` held 5.
+    @Test("a future-dated shift is outside both windows, not just the tile's")
+    func theUpperEdgeAgrees() throws {
+        var entries = wageCompleteFixture()
+        entries.append(hoursShift(at(2027, 1, 15), 9))
+        let set = dataset(entries, policies(rateCents: 2_000))
+        let facts = pageFacts(entries, policies(rateCents: 2_000), now: now)
+
+        let range = InsightsEarnings.recentRange(referenceDate: now, in: PaydayTestZone.payroll)
+        let window = insightsEngine(set).recentWindow(referenceDate: now)
+        #expect(!range.contains(CivilDay(at(2027, 1, 15), in: PaydayTestZone.payroll)))
+        #expect(!window.contains(at(2027, 1, 15)))
+
+        // Still in the DATASET — the cutoff is a query argument, never a
+        // property of the data (`InsightsAsOfTests`).
+        #expect(try #require(set.snapshot).shifts.count == 6)
+
+        let engineShiftCount = try #require(facts.facts?.shiftCount)
+        let hourly = try #require(facts.hourly)
+        #expect(engineShiftCount == hourly.totalShiftCount)
+        #expect(engineShiftCount == 5)
+        #expect(hourly.coverage == "across 5 shifts")
+    }
+
+    /// **The lower edge.** `insightsFacts` cut at `referenceDate - 180 days`
+    /// as an INSTANT, with no `startOfDay`, so a shift on the boundary day
+    /// but earlier in the clock than the reference was inside the tile's
+    /// range and outside the engine's: the engine held 5 where the tile
+    /// held 6. 2026-04-06 is exactly 180 civil days before 2026-10-03.
+    @Test("a shift on the boundary day before the reference hour is inside both windows")
+    func theLowerEdgeAgrees() throws {
+        var entries = wageCompleteFixture()
+        entries.append(hoursShift(at(2026, 4, 6, hour: 8), 9))
+        let set = dataset(entries, policies(rateCents: 2_000))
+        let facts = pageFacts(entries, policies(rateCents: 2_000), now: now)
+
+        let range = InsightsEarnings.recentRange(referenceDate: now, in: PaydayTestZone.payroll)
+        let window = insightsEngine(set).recentWindow(referenceDate: now)
+        #expect(range.start == CivilDay(at(2026, 4, 6), in: PaydayTestZone.payroll))
+        #expect(range.contains(CivilDay(at(2026, 4, 6), in: PaydayTestZone.payroll)))
+        #expect(window.contains(at(2026, 4, 6, hour: 8)))
+        #expect(window.lowerBound == at(2026, 4, 6, hour: 0))
+
+        let engineShiftCount = try #require(facts.facts?.shiftCount)
+        let hourly = try #require(facts.hourly)
+        #expect(engineShiftCount == hourly.totalShiftCount)
+        #expect(engineShiftCount == 6)
+    }
+
+    /// Both edges at once — the shape a real history has. The two errors used
+    /// to cancel in the COUNT here (6 against 6 for different reasons), which
+    /// is exactly why each edge gets its own test above.
+    @Test("with both edges present the engine and the tile select the same shifts")
+    func bothEdgesAgree() throws {
+        var entries = wageCompleteFixture()
+        entries.append(hoursShift(at(2027, 1, 15), 9))
+        entries.append(hoursShift(at(2026, 4, 6, hour: 8), 10))
+        let set = dataset(entries, policies(rateCents: 2_000))
+        let facts = pageFacts(entries, policies(rateCents: 2_000), now: now)
+
+        #expect(try #require(set.snapshot).shifts.count == 7)
+        let engineShiftCount = try #require(facts.facts?.shiftCount)
+        let hourly = try #require(facts.hourly)
+        #expect(engineShiftCount == hourly.totalShiftCount)
+        #expect(engineShiftCount == 6)
+    }
+
+    /// The window's upper bound is the end of TODAY, not the reference
+    /// instant: a shift logged at 11pm must not drop out of the sample
+    /// because the page happened to be rendered at 9am.
+    @Test("a shift later today is in the window the page was rendered at 9am with")
+    func todayIsWholeInTheWindow() throws {
+        var entries = wageCompleteFixture()
+        entries.append(hoursShift(at(2026, 10, 3, hour: 23), 9))
+        let set = dataset(entries, policies(rateCents: 2_000))
+        let facts = pageFacts(entries, policies(rateCents: 2_000), now: now)
+
+        let window = insightsEngine(set).recentWindow(referenceDate: now)
+        #expect(window.contains(at(2026, 10, 3, hour: 23)))
+        #expect(window.upperBound == at(2026, 10, 4, hour: 0))
+
+        let engineShiftCount = try #require(facts.facts?.shiftCount)
+        let hourly = try #require(facts.hourly)
+        #expect(engineShiftCount == hourly.totalShiftCount)
+        #expect(engineShiftCount == 6)
+    }
+}
+
+
+/// The second "overall $/hr" that survived the migration, and what its copy
+/// now says about its own scope.
+///
+/// `rateLeaderMove` compares one weekday's blended $/hr against the blended
+/// $/hr of ALL history — every Move in `StatsEngine` is all-history by
+/// design, and both sides of that one sentence are — while the HOURLY tile
+/// beside it is `EarningsResult.hourlyRateCents` over the 180-day
+/// `InsightsEarnings.recentRange`.
+/// `InsightsPresentation.redundantMetricIDs(for:)` only ever excludes the
+/// `startTimes` tile, so for anyone with more than 180 days of history the
+/// Move and the tile render together and differ, both naming an hourly rate.
+/// The Move names its scope, which makes them two answers to two questions
+/// instead of two answers to one.
+@Suite("Insights rate scope copy")
+struct InsightsRateScopeTests {
+    /// The lopsided-hours shape `StatsEngineTests.rateLeaderFires` uses: a
+    /// wide $/hr gap with a narrow $/night gap, so this fixture isolates
+    /// `rateLeader` rather than collapsing into `weekdaySwap`. Tuesday leads,
+    /// which is the expected-rank inversion the obviousness law allows.
+    private func rateLeaderFixture() -> [TipEntry] {
+        var entries: [TipEntry] = []
+        var index = 0
+        for week in 0..<3 {
+            index += 1
+            entries.append(
+                TipEntry(date: at(2026, 9, 1 + week * 7), amountCents: 10_000, kind: .credit,
+                         hoursWorked: 2, shiftPeriod: .dinner, shiftID: shiftID(index))
+            )
+            index += 1
+            entries.append(
+                TipEntry(date: at(2026, 9, 5 + week * 7), amountCents: 9_500, kind: .credit,
+                         hoursWorked: 5, shiftPeriod: .dinner, shiftID: shiftID(index))
+            )
+        }
+        return entries
+    }
+
+    @Test("the rateLeader Move names the scope its overall rate is measured over")
+    func theMoveNamesItsScope() throws {
+        let now = at(2026, 9, 25, hour: 9)
+        let entries = rateLeaderFixture()
+        let facts = pageFacts(entries, policies(rateCents: 2_000), now: now)
+        let move = try #require(
+            facts.moves.first { $0.id == "rateLeader" },
+            "the fixture stopped producing the Move this test is about"
+        )
+
+        #expect(move.body.contains("/hr across all your history."))
+        #expect(!move.body.contains("/hr overall."))
+        // The figure itself is unchanged — this is a scope DISCLOSURE, not a
+        // recomputation. Both sides of the Move's comparison stay
+        // all-history, because moving one of them would put a scope seam
+        // inside a single sentence.
+        let overall = try #require(
+            insightsEngine(dataset(entries, policies(rateCents: 2_000))).averageDollarsPerHour()
+        )
+        let token = Money.wholeDollarString(fromCents: Int((overall * 100).rounded()))
+        #expect(move.body.contains("\(token)/hr across all your history."))
+    }
+
+    /// **Why the disclosure is needed:** the two rates really are different
+    /// numbers, so an unqualified "overall" on one of them was a second
+    /// answer to the tile's question.
+    ///
+    /// MEASURED on a history split across the 180-day boundary, at
+    /// $20.00/hr: the recent half runs $70.00/hr and the older half
+    /// $39.00/hr, so the tile's 180-day rate and the Move's all-history rate
+    /// cannot coincide.
+    @Test("the Move's all-history rate and the HOURLY tile's window rate differ")
+    func theTwoScopesDiffer() throws {
+        let now = at(2026, 9, 25, hour: 9)
+        var entries = rateLeaderFixture()
+        // Older than `recentRange`, which starts 2026-03-29 for this `now`.
+        for week in 0..<3 {
+            entries.append(
+                TipEntry(date: at(2025, 11, 4 + week * 7), amountCents: 9_500, kind: .credit,
+                         hoursWorked: 5, shiftPeriod: .dinner, shiftID: shiftID(20 + week))
+            )
+        }
+        let set = dataset(entries, policies(rateCents: 2_000))
+        let snapshot = try #require(set.snapshot)
+        let facts = pageFacts(entries, policies(rateCents: 2_000), now: now)
+
+        let range = InsightsEarnings.recentRange(referenceDate: now, in: PaydayTestZone.payroll)
+        #expect(!range.contains(CivilDay(at(2025, 11, 4), in: PaydayTestZone.payroll)))
+
+        let tileRateCents = try #require(facts.hourly).rateCents
+        #expect(tileRateCents == snapshot.range(range, asOf: CivilDay.distantFuture).hourlyRateCents)
+
+        let allHistory = try #require(insightsEngine(set).averageDollarsPerHour())
+        let allHistoryCents = Int((allHistory * 100).rounded())
+        #expect(tileRateCents != allHistoryCents,
+                "if the two scopes ever coincide this fixture stopped testing anything")
     }
 }

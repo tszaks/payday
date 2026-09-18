@@ -81,6 +81,49 @@ enum EarningsChartAxisGranularity: Equatable {
     }
 }
 
+/// Which metric a bar is worth — the basis the CALLER declared.
+///
+/// Two cases and no third, because a chart's bar may only be one of the two
+/// metrics a range query answers in whole cents. It exists so the choice is
+/// an ARGUMENT rather than a constant baked into `EarningsChartPoint`: wave 2
+/// measured Insights printing `EarningsFigure.earnedIncome` bars under its
+/// own note reading "Every figure below is tips only", so one day was
+/// $265.00 on the chart and $105.00 in the tiles, the typical range, the plan
+/// and the day totals beside it — and the bar's own label said "Total", which
+/// by Tyler's rule means wage-inclusive.
+///
+/// A caller that has no basis decision to make (a pay period hero and its
+/// chart, which are both `earnedIncome` by construction) passes nothing and
+/// gets `.earnedIncome`, which is what every wave-0 and wave-1 consumer did
+/// before this parameter existed.
+enum EarningsChartMetric: Equatable {
+    case earnedIncome
+    case nonWageEarnings
+
+    /// The registry identity, for a test that wants to name it.
+    var metricID: MetricID {
+        switch self {
+        case .earnedIncome: return MetricID.earnedIncome
+        case .nonWageEarnings: return MetricID.nonWageEarnings
+        }
+    }
+
+    /// The one place a bar's figure is built, so the metric the caller
+    /// declared is the metric the bar's cents, label, peak callout and scrub
+    /// readout all come from.
+    ///
+    /// `.earnedIncome` still collapses to `nonWageEarnings` on a `.off`
+    /// result, which is `EarningsFigure.earnedIncome`'s own rule: with wages
+    /// off the two are the same cents and only the second is an honest name
+    /// for them.
+    func figure(_ result: EarningsResult) -> EarningsFigure {
+        switch self {
+        case .earnedIncome: return EarningsFigure.earnedIncome(result)
+        case .nonWageEarnings: return EarningsFigure.nonWageEarnings(result)
+        }
+    }
+}
+
 /// One bar.
 ///
 /// The bar's figure is not a number that happens to agree with the engine:
@@ -109,11 +152,16 @@ struct EarningsChartPoint: Equatable, Identifiable {
     /// yields no points at all when there is no snapshot.
     let cents: Int
 
-    init(date: Date, range: DayRange, result: EarningsResult) {
+    init(
+        date: Date,
+        range: DayRange,
+        result: EarningsResult,
+        metric: EarningsChartMetric = .earnedIncome
+    ) {
         self.date = date
         self.range = range
         self.result = result
-        let figure = EarningsFigure.earnedIncome(result)
+        let figure = metric.figure(result)
         self.figure = figure
         self.cents = figure.cents ?? 0
     }
@@ -121,7 +169,14 @@ struct EarningsChartPoint: Equatable, Identifiable {
     /// True when some shift in this bucket has no wage, so the bar is drawn
     /// hollow: "this is what is known so far" rather than "this is the
     /// night" (Design 2, presentation rules for `.partial`).
+    ///
+    /// Read off the FIGURE's metric and not the result's completeness alone.
+    /// A `nonWageEarnings` bar has nothing missing from it — every shift has
+    /// tips, which is that metric's stated missing-data rule — so a tips bar
+    /// on a page that fell back BECAUSE some shift has no hours is complete
+    /// as the number it actually is. Its page said why, once, above it.
     var isPartial: Bool {
+        guard figure.metric == MetricID.earnedIncome else { return false }
         if case .partial = result.completeness.state { return true }
         return false
     }
@@ -149,6 +204,10 @@ struct EarningsChartFacts: SnapshotFacts {
     /// Carries the chart's completeness for the header and the axis.
     let whole: EarningsResult?
     let stamp: SnapshotStamp?
+    /// What every bar on this chart is worth, as the caller declared it.
+    /// Exposed so a screen's parity test can assert the chart is on the same
+    /// metric as the sentence printed above it.
+    let metric: EarningsChartMetric
 
     /// - Parameters:
     ///   - snapshot: nil while `EarningsStore` is loading or unavailable.
@@ -163,16 +222,24 @@ struct EarningsChartFacts: SnapshotFacts {
     ///   - asOf: the cutoff. Defaults to the snapshot's own
     ///     (`stamp.asOf`), which is what makes the last bar of the current
     ///     period stop at today instead of drawing an empty future.
+    ///   - metric: the basis the CALLER declared. Defaults to
+    ///     `.earnedIncome`, which is every wave-0 and wave-1 consumer's
+    ///     answer (a pay period's chart sits under that period's
+    ///     wage-inclusive hero). Insights passes its page basis, because a
+    ///     page that has fallen back to tips must not draw wage-inclusive
+    ///     bars under the sentence saying so — see `EarningsChartMetric`.
     init(
         snapshot: EarningsSnapshot?,
         range: DayRange,
         timeZone: TimeZone,
-        asOf: CivilDay? = nil
+        asOf: CivilDay? = nil,
+        metric: EarningsChartMetric = .earnedIncome
     ) {
         let cutoff = asOf ?? snapshot?.stamp.asOf
         let charted = cutoff.map { range.clamped(to: $0) } ?? range
         granularity = .forRange(charted)
         stamp = snapshot?.stamp
+        self.metric = metric
 
         guard let snapshot, !charted.isEmpty else {
             points = []
@@ -204,7 +271,8 @@ struct EarningsChartFacts: SnapshotFacts {
                 // already clamped above, so nothing slips past the cutoff.
                 result: bucket.count == 1
                     ? snapshot.day(bucket.start)
-                    : snapshot.range(bucket, asOf: CivilDay.distantFuture)
+                    : snapshot.range(bucket, asOf: CivilDay.distantFuture),
+                metric: metric
             )
         }
         maxCents = points.map(\.cents).max() ?? 0
@@ -232,7 +300,8 @@ struct EarningsChartFacts: SnapshotFacts {
     init(
         wholeOf snapshot: EarningsSnapshot?,
         timeZone: TimeZone,
-        asOf: CivilDay = .distantFuture
+        asOf: CivilDay = .distantFuture,
+        metric: EarningsChartMetric = .earnedIncome
     ) {
         guard
             let snapshot,
@@ -243,7 +312,8 @@ struct EarningsChartFacts: SnapshotFacts {
                 snapshot: nil,
                 range: DayRange(day: CivilDay(Date(), in: timeZone)),
                 timeZone: timeZone,
-                asOf: asOf
+                asOf: asOf,
+                metric: metric
             )
             return
         }
@@ -251,7 +321,8 @@ struct EarningsChartFacts: SnapshotFacts {
             snapshot: snapshot,
             range: DayRange(start: first, end: last),
             timeZone: timeZone,
-            asOf: asOf
+            asOf: asOf,
+            metric: metric
         )
     }
 }
