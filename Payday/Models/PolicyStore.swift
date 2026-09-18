@@ -26,6 +26,18 @@ import Foundation
 ///   PaydaySettingsSyncClock."
 @Observable
 final class PolicyStore {
+    /// Posted whenever the stored policies actually change, by any of the
+    /// three write kinds. `EarningsStore` rebuilds on it.
+    ///
+    /// `@Observable` is not enough on its own: it tells a SwiftUI view that
+    /// read `policies` to re-render, but the earnings snapshot has to be
+    /// recomputed by a store that is not reading this object's properties,
+    /// and a download or a migration must move it too. `apply` also touches
+    /// `PaydaySettingsSyncClock`, which posts its own notification; the
+    /// 50 ms debounce in `EarningsStore` coalesces the pair into one
+    /// rebuild.
+    static let didChange = Notification.Name("com.szakacsmedia.payday.policiesDidChange")
+
     private static let key = "com.szakacsmedia.payday.compensationPolicies"
     /// Set once the frozen calendar policy has been created, for reporting.
     /// The migration itself is gated on there being no calendar policy at
@@ -87,6 +99,7 @@ final class PolicyStore {
         guard updated != policies else { return }
         policies = updated
         persist()
+        Self.postDidChange()
         // Touched in THIS store's suite, not implicitly in the App Group.
         // In the app they are the same suite, but a store pointed at another
         // one would otherwise keep its policies in one place and its
@@ -250,6 +263,7 @@ final class PolicyStore {
         guard updated != policies else { return }
         policies = updated
         persist()
+        Self.postDidChange()
         #if !WIDGET_EXTENSION
         PaydayWidgetRefresh.request()
         #endif
@@ -261,6 +275,7 @@ final class PolicyStore {
     /// starting with no rate at all.
     func reset() {
         policies = .empty
+        defer { Self.postDidChange() }
         defaults.removeObject(forKey: Self.key)
         defaults.removeObject(forKey: Self.calendarMigrationKey)
         defaults.removeObject(forKey: Self.rateMigrationKey)
@@ -349,6 +364,7 @@ final class PolicyStore {
         guard outcome.changedAnything else { return outcome }
         policies = updated
         persist()
+        Self.postDidChange()
         // An adoption is not a user edit, so it must not advance the settings
         // clock — but it still has to REACH the server once, or the column
         // the migration exists for stays NULL forever on exactly the
@@ -396,6 +412,19 @@ final class PolicyStore {
     }
 
     // MARK: Persistence
+
+    /// Posts `didChange` on the main thread. Mirrors
+    /// `PaydaySettingsSyncClock.touch`: a policy write can arrive from a
+    /// background sync leg, and the observers are main-actor stores.
+    private static func postDidChange() {
+        if Thread.isMainThread {
+            NotificationCenter.default.post(name: didChange, object: nil)
+        } else {
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: didChange, object: nil)
+            }
+        }
+    }
 
     private static func load(from defaults: UserDefaults) -> CompensationPolicies {
         guard let data = defaults.data(forKey: key) else { return .empty }
