@@ -38,6 +38,17 @@ struct SyncPassOrderTests {
             PaydaySyncState.pendingLegacyEntryDeletions(for: Self.user).keys, for: Self.user)
         PaydaySyncState.clearShiftRestores(
             PaydaySyncState.pendingShiftRestores(for: Self.user).keys, for: Self.user)
+        // The FLIP is persistent too, and keyed by user id like the queues.
+        // `aConvergedAccountSkipsTheOneShot` sets it deliberately, and
+        // without this reset every test that runs after it sees a flipped
+        // account and a pass that skips the one-shot. Third persistent
+        // App Group value in this file to need clearing; they all outlive
+        // the test AND the run.
+        _ = PaydaySyncState.applyShiftAuthority(
+            ShiftReadAuthority.State(
+                migratedAt: nil, rollbackAt: nil,
+                conservationFailedAt: nil, remainingGroupCount: nil
+            ), for: Self.user)
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [RoutingStub.self]
         return SupabaseClient(
@@ -83,6 +94,10 @@ struct SyncPassOrderTests {
         #expect(calls == [
             "POST /rest/v1/rpc/upsert_user_settings",
             "POST /rest/v1/rpc/payday_unmigrated_tip_row_count",
+            // Reached even with a count of 0, because an account with
+            // nothing to convert still needs the one-shot to COMPLETE
+            // before it can be authoritative.
+            "POST /rest/v1/rpc/migrate_tip_entries_to_shifts",
             "POST /rest/v1/rpc/fetch_shift_changes",
             "GET /rest/v1/tip_entries",
             "GET /rest/v1/paycheck_records",
@@ -300,11 +315,27 @@ struct SyncPassOrderTests {
         if let iConvert, let iSettings { #expect(iSettings < iConvert, "6a must follow the orchestration; got \(calls)") }
     }
 
-    /// The other half, and the one that keeps a converged account from
-    /// paying for the conversion on every pass forever.
-    @Test("a converged account never calls the one-shot")
+    /// The self-limit, and it is the whole reason 6a is not simply
+    /// unconditional.
+    ///
+    /// REWRITTEN: this used to assert that a zero COUNT skips the one-shot.
+    /// That assumption is exactly the defect -- a new account has a zero
+    /// count forever, so it never ran the one-shot, never got
+    /// `migrated_at`, and never left the legacy arm. The skip is now keyed
+    /// on being AUTHORITATIVE, so a settled account pays nothing while an
+    /// unflipped one keeps trying.
+    @Test("an authoritative account never calls the one-shot again")
     func aConvergedAccountSkipsTheOneShot() async throws {
         let service = PaydaySyncService(client: client())   // count route defaults to 0
+        // Flip it first, through the real predicate's writer rather than by
+        // poking the checkpoint, so this tests the shipped path.
+        _ = PaydaySyncState.applyShiftAuthority(
+            ShiftReadAuthority.State(
+                migratedAt: Date(timeIntervalSince1970: 1_758_000_000),
+                rollbackAt: nil, conservationFailedAt: nil, remainingGroupCount: 0
+            ), for: Self.user)
+        #expect(PaydaySyncState.shiftsAreAuthoritative(for: Self.user),
+                "precondition: the account must be flipped for this test to mean anything")
         let ctx = try context()
         _ = try? await service.synchronize(
             context: ctx,
@@ -391,6 +422,18 @@ final class RoutingStub: URLProtocol, @unchecked Sendable {
             // are about ordering; `theOneShotFiresOnlyWhenThereIsWorkToDo`
             // overrides it.
             ("/rpc/payday_unmigrated_tip_row_count", "0"),
+            // The one-shot returns a `shift_migration_state` ROW, not a
+            // list. With the generic "[]" the pass throws here and every
+            // later assertion in this file silently stops being exercised
+            // -- the same shape as `fetch_shift_changes` above.
+            //
+            // Stamped and finished, which is what an empty account now gets:
+            // the function ran, converted nothing, and completed.
+            ("/rpc/migrate_tip_entries_to_shifts", """
+                {"user_id":"90000000-0000-4000-8000-000000000001",
+                 "migrated_at":"2026-09-19T00:00:00.000Z","rollback_at":null,
+                 "conservation_failed_at":null,"remaining_group_count":0}
+                """),
             ("/rpc/fetch_shift_changes", "{\"server_now\":\"2026-09-19T00:00:00.000Z\",\"rows\":[]}"),
             ("/rest/v1/rpc/", "[]"),
         ]

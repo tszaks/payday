@@ -745,14 +745,35 @@ select pg_temp.expect('last_run_at_moves_on_a_no_op_even_though_migrated_at_does
   'last_run_at=' || (pg_temp.state('56000000-0000-4000-8000-000000000011') ->> 'last_run_at')
     || ' migrated_at=' || (pg_temp.state('56000000-0000-4000-8000-000000000011') ->> 'migrated_at'));
 
--- An account the on-arrival trigger converted end to end has NO migrated_at,
--- because the one-shot never had anything to write. That is correct and it is
--- written down here so nobody reads a null migrated_at as "un-converted": the
--- client's readiness fact is remaining_group_count reaching zero, and the
--- "is any old build still writing" fact is last_legacy_write_at, which the
--- fold stamps.
-select pg_temp.expect('anAccountTheTriggerConvertedEndToEndHasNoMigratedAtAndThatIsCorrect',
-  (pg_temp.state('56000000-0000-4000-8000-000000000016') ->> 'migrated_at') is null
+-- REVERSED 2026-09-19. The original comment is kept verbatim below because it
+-- recorded a real intent that turned out to CONTRADICT THE CLIENT:
+--
+--   "An account the on-arrival trigger converted end to end has NO
+--    migrated_at, because the one-shot never had anything to write. That is
+--    correct ... the client's readiness fact is remaining_group_count
+--    reaching zero, and the 'is any old build still writing' fact is
+--    last_legacy_write_at, which the fold stamps."
+--
+-- The client does not do that. `ShiftReadAuthority.isAuthoritative` opens with
+-- `guard state.migratedAt != nil` and only then checks the remainder. So the
+-- server treated such an account as ready and the client treated it as
+-- un-converted, permanently. TWO DEFINITIONS OF ONE FACT, which is the thing
+-- this project exists to end. Measured consequence: an account with no legacy
+-- rows, or one the trigger converted end to end, never flipped, and all
+-- eleven flip-gated call sites took the legacy branch -- writers included, so
+-- it logged tip_entries forever and the records engine never activated.
+--
+-- The client's guard is the correct half and stays. With no state row at all
+-- `remaining_group_count` is null and `(nil ?? 0) == 0` is TRUE, so without a
+-- stamp "never checked" and "finished" are the same value -- the
+-- empty-versus-refused confusion in a different column.
+--
+-- The stamp now records COMPLETION rather than work done, so this assertion
+-- inverts: the trigger-converted account HAS a migrated_at once the one-shot
+-- has run for it. remaining_group_count and last_legacy_write_at are
+-- unchanged and still asserted.
+select pg_temp.expect('anAccountTheTriggerConvertedEndToEndIsStampedOnceTheOneShotRuns',
+  (pg_temp.state('56000000-0000-4000-8000-000000000016') ->> 'migrated_at') is not null
   and (pg_temp.state('56000000-0000-4000-8000-000000000016') ->> 'remaining_group_count') = '0'
   and (pg_temp.state('56000000-0000-4000-8000-000000000016') ->> 'last_legacy_write_at') is not null,
   'migrated_at=' || coalesce(pg_temp.state('56000000-0000-4000-8000-000000000016') ->> 'migrated_at','null')
