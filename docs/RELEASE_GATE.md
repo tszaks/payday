@@ -392,11 +392,24 @@ A parity test written before its fix is the honest way to hold the line: it name
 
 | Test | Why it fails today | Closes in |
 |---|---|---|
-| `EarningsParityTests` (the calendar-day parity assertion, `PaydayTests/EarningsParityTests.swift:235`) | `CalendarView` slices the ledger per day (`CalendarView.swift:49`), so a week's overtime never reaches a tile. This is the audit's original bug, now pinned by a test instead of a document. | PR 5, when every consumer reads `EarningsSnapshot` over the whole dataset |
 
-- [ ] Zero entries remain in this table, and no fixture is suppressed. Measure it with the JSON and the gate, NOT with a bare grep:
-      `cat Packages/PaydayCore/Tests/PaydayCoreTests/Fixtures/KnownIssues.json` must print `[]`, and
-      `PAYDAYCORE_RELEASE_GATE=1 swift test --package-path Packages/PaydayCore --filter KnownIssuesGate` must pass.
+- [x] **DONE 2026-09-19.** Zero entries remain in this table, and no fixture
+      is suppressed. The last row, `EarningsParityTests`' calendar-day parity
+      assertion, was STALE: it closes in PR 5, PR 5 is merged, and the suite
+      it names now passes for real -- `MonthEqualsSumOfItsDaysTests`, 4 tests
+      in 1 suite, including the case named "the month header and its five
+      tiles are now one answer, 19716, and the 1131c gap is gone", which is
+      the very gap the row described. Removed.
+
+      The file's own trap caught me on the way: the one `withKnownIssue`
+      left in `EarningsParityTests.swift` is a COMMENT recording the
+      wrapper's deletion, not a live suppression -- the same false positive
+      this line already warns about. Read the match before counting it.
+
+      Measured with the JSON and the gate, NOT with a bare grep:
+      `cat Packages/PaydayCore/Tests/PaydayCoreTests/Fixtures/KnownIssues.json` must print `[]` -- it does, and
+      `PAYDAYCORE_RELEASE_GATE=1 swift test --package-path Packages/PaydayCore --filter KnownIssuesGate` must pass
+      -- it does, 3 tests in 1 suite.
       The grep this line used to name was wrong twice over: it searched `PaydayTests/` while the mechanism lives in
       `Packages/PaydayCore/Tests/PaydayCoreTests/Support/KnownIssues.swift`, and it counted a COMMENT recording the
       wrapper's own removal as a live suppression. A gate command that manufactures a positive is the same defect as
@@ -512,7 +525,12 @@ That is weaker than a per-commit historical verdict and stronger than nothing, a
 
 **A green re-run is not evidence about the current workflow, even when it passes.** The `852f36a` re-run (run `35333038807`, `run_attempt=2`) came back `completed/success`, its migrations job included — on the **old** workflow, still carrying `version: latest`. The unpinned CLI simply did not hit the rate limit that time. So the flake is intermittent rather than absent there, which is precisely why the pin matters and precisely why that green tick says nothing about the workflow in the tree today.
 
-- [ ] The current release-candidate commit's full CI is green. Record the run id and every job's conclusion.
+- [x] The current release-candidate commit's full CI is green. Record the run
+      id and every job's conclusion. **MEASURED 2026-09-19 at `05bfb4a`,
+      run_id `35443664784`, conclusion `success`:** Payday app + widget
+      (xcodebuild test) success; payday-api (deno test) success; Supabase
+      migrations (db reset) success; Design lint success; PaydayCore (swift
+      test) success. Five of five, none skipped, none cancelled.
 - [x] Every merge commit after the concurrency fix has a completed, successful run — no `cancelled`, no `failure`, and none missing. Audit **per SHA**, not per branch: **MEASURED 2026-09-19 across all 19 production merge commits since 2026-09-18T20:00Z: zero cancelled, zero missing, zero failed.** One exception, recorded rather than swept: `0f4f1bc` (#72, the watermark migration) has a `Supabase migrations (db reset)` job that never completed -- it WEDGED, which is the defect that forced the revert. It can never be green, because its content is the bug. Its verdict is superseded by `c93489d`, the revert, which is green on all five. A reverted commit's red is not an outstanding failure; it is the record of why the revert exists.
 
       ```
@@ -529,8 +547,35 @@ That is weaker than a per-commit historical verdict and stronger than nothing, a
       — `NO RUN`, `in_progress/pending`, `completed/success`,
       `completed/cancelled` — and was run against this history before being
       written down here.
-- [ ] The four commits without their own green verdict (`8260f7d`, `852f36a`, `c800493`, `013de83`) are recorded here as transitively covered, with the later green merge commit that covers each one named — `013de83` is covered by `4d631c9`. They are **not** to be ticked as individually verified, because they cannot be.
-- [ ] No merge commit's run is `cancelled`, and none is missing entirely. A cancelled run is not a pass and not a failure; it is an absence, and in a listing an absence reads like neither. That is exactly how these went unnoticed.
+- [x] The four commits without their own green verdict (`8260f7d`,
+      `852f36a`, `c800493`, `013de83`) are recorded here as transitively
+      covered. **MEASURED 2026-09-19, and their states are NOT the same:**
+
+      | commit | its own run |
+      |---|---|
+      | `8260f7d` | `completed/cancelled` -- an absence, not a pass |
+      | `852f36a` | `completed/success` |
+      | `c800493` | `completed/failure` |
+      | `013de83` | NO RUN AT ALL |
+
+      All four are ancestors of `05bfb4a`, whose run `35443664784` is green
+      on all five jobs. **State the limit of that argument rather than
+      leaning on it:** ancestry proves the CURRENT tree is green and
+      contains their contributions. It does not prove each intermediate
+      state was ever exercised, and for `c800493` -- which failed -- it
+      proves only that whatever failed is not failing now. Transitive
+      coverage of the result, not of each step.
+
+- [ ] No merge commit's run is `cancelled`, and none is missing entirely.
+      A cancelled run is not a pass and not a failure; it is an absence.
+      **NOT GREEN, and it cannot be made green by working harder: the
+      history already contains both.** `8260f7d` is `cancelled` and
+      `013de83` has no run. Those facts are fixed. What IS measured clean is
+      everything since: the 20 most recent first-parent commits on
+      `production` each have exactly ONE run, all `completed/success`, zero
+      cancelled, zero missing (2026-09-19). The honest resolution is the
+      bullet above -- record the four, state what ancestry does and does not
+      prove -- not a checkbox.
 
 ## PR 7 status, measured 2026-09-19 at `c752597`
 
