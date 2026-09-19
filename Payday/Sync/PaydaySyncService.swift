@@ -186,6 +186,39 @@ struct PaydayRemoteRepository {
         return rows.first
     }
 
+    /// Store the engine's answer, and return the server's verdict verbatim.
+    ///
+    /// Returns the RPC's `text` rather than throwing on `stale_input`,
+    /// because losing a race is an ORDINARY outcome and an exception would
+    /// make it indistinguishable from a network failure at the call site.
+    func upsertEarningsSnapshot(
+        revision: Int64,
+        engineVersion: Int,
+        asOf: String?,
+        manifestDigest: String,
+        payload: Data
+    ) async throws -> String {
+        struct Params: Encodable {
+            let p_dataset_revision: Int64
+            let p_engine_version: Int
+            let p_as_of: String?
+            let p_manifest_digest: String
+            let p_payload: AnyJSON
+        }
+        let json = try JSONDecoder().decode(AnyJSON.self, from: payload)
+        let verdict: String = try await client
+            .rpc("upsert_earnings_snapshot", params: Params(
+                p_dataset_revision: revision,
+                p_engine_version: engineVersion,
+                p_as_of: asOf,
+                p_manifest_digest: manifestDigest,
+                p_payload: json
+            ))
+            .execute()
+            .value
+        return verdict
+    }
+
     /// The server's current watermark for the caller.
     ///
     /// A table read rather than the `payday_dataset_revision()` RPC, because
