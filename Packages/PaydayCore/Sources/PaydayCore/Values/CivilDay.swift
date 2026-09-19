@@ -97,6 +97,19 @@ public struct CivilDay: Hashable, Comparable, Codable, Sendable {
     // MARK: Arithmetic
 
     /// Days since 1970-01-01 (negative before it). Proleptic Gregorian.
+    /// "Aug 31". For copy that has to NAME a day rather than count one.
+    ///
+    /// Built from a table rather than a `DateFormatter` because this type is
+    /// a civil day, not an instant: handing it to a formatter means choosing
+    /// a time zone, and the whole point of `CivilDay` is that there is not
+    /// one to choose. English-only, matching the rest of the copy layer.
+    public var shortLabel: String {
+        let months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+        guard month >= 1, month <= 12 else { return iso }
+        return "\(months[month - 1]) \(day)"
+    }
+
     public var dayNumber: Int {
         CivilDay.dayNumber(year: year, month: month, day: day)
     }
