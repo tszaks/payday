@@ -561,9 +561,16 @@ struct PaydayCloudGate<Content: View>: View {
             Task { await syncIfReady() }
         }
         .onReceive(NotificationCenter.default.publisher(for: ModelContext.didSave)) { _ in
+            // BEFORE the queue call, not inside it: `queueSyncAfterLocalChange`
+            // returns early when the scene is inactive or a sync is already
+            // running, and then debounces two seconds. The watermark's claim
+            // is false the moment the write lands, so it is withdrawn here
+            // rather than by whatever sync eventually notices.
+            PaydaySyncState.invalidateSyncedDatasetRevision()
             queueSyncAfterLocalChange()
         }
         .onReceive(NotificationCenter.default.publisher(for: PaydaySettingsSyncClock.didChange)) { _ in
+            PaydaySyncState.invalidateSyncedDatasetRevision()
             queueSyncAfterLocalChange()
         }
         .onDisappear {
