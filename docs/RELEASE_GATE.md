@@ -704,6 +704,32 @@ its limit rather than as a clearance: one mutation is not a proof of
 general parity. It is the mutation this condition named, and the asymmetry
 it was created to detect is gone.
 
+### MET IS NOT CLEARED: PR 8 has TWO blocking conditions, not one
+
+This one is satisfied. **The other is not, and it is the dangerous one to
+overlook**, because "entry condition MET" reads like a green light.
+
+PR 8 deletes `TipBreakdown`, `ShiftDetails`, `ShiftDays.groupedByShift` and
+`TipEntry.netCents` -- the legacy CALCULATION paths. Once they are gone the
+app can only read from records, so **shipping PR 8 IS the flip**, whatever
+the flag says.
+
+And `FLIP-BLOCKER-DELETION-FLUSH` fires exactly there. Shape 3 keeps
+`tip_entries` as the write surface indefinitely, so deleting a shift still
+has to tombstone its legacy source rows -- and that flush has no production
+consumer. Delete the calculation paths without fixing it and the first
+thing the new representation does is resurrect a shift the user deleted.
+
+The two conditions are independent and both must hold:
+
+| condition | state |
+|---|---|
+| records arm out-gates legacy for the canonical mutation | **MET** (above) |
+| shift deletions reach the server | **NOT MET** -- `FLIP-BLOCKER-DELETION-FLUSH` |
+
+Worth stating because the failure mode here is a reader who checks the
+condition they remember, finds it green, and proceeds.
+
 Reproduce with: clamp `asOf` to `.now` in each `DashboardEarnings.build`
 overload in turn, run the app suite, and diff the sorted sets of failing
 test names. Set equality is the gate; the counts are incidental.
