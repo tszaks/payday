@@ -565,7 +565,60 @@ level is affordable here -- `ShiftWriteWireTests` already stubs
 `URLProtocol` -- and has not been swept systematically. That is real
 remaining work; it is just not the work the plan's list describes.
 
-## BLOCKING CONDITION FOR THE FLIP: shift deletions have no flush
+## CORRECTED 2026-09-19: the flip blocker is narrower than I wrote
+
+**Retraction of the mechanism, not of the finding.** I recorded this as a
+P0 whose failure mode was "the fold re-derives the shift and the next pull
+brings it back". **The fold cannot do that, and I should have checked
+before writing it.**
+
+Measured in `20260917200000_add_shift_deriver.sql`:
+
+- `private.shift_is_open_to_fold` is
+  `native_modified_at is null and deleted_at is null` -- a deleted shift is
+  closed to the fold entirely.
+- ARM 1's `on conflict ... do update` sets fourteen columns and
+  **`deleted_at` is not among them**. The upsert cannot clear a tombstone.
+- ARM 3, the un-delete arm, reopens only `deleted_reason = 'converted'` on
+  a shift with `native_modified_at is null`, and says so: *"Only a tombstone
+  the fold itself set on a shift no human has touched is reopened. A user
+  deletion is never cleared."*
+
+So the server-side invariant that review ruled for -- *a tombstoned shift id
+is never re-derived, whatever legacy rows survive* -- **already exists and is
+complete.** We both designed a fix for an implemented guarantee.
+
+**And the scope was wrong too.** It is not that deletions specifically lack
+a flush. The ENTIRE shift sync leg has zero production callers:
+
+| symbol | production callers |
+|---|---|
+| `upsertShifts` | 0 (its one "reference" is a doc comment) |
+| `reconcileShifts` | 0 |
+| `softDeleteShifts` | 0 |
+| `restoreShifts` | 0 |
+| `fetchShifts` | 0 |
+
+That is coherent pre-flip state, not a hole in a built system. `shifts` is
+not synced by the device at all yet.
+
+### What survives, and it is worth keeping
+
+**Whoever wires the shift sync leg must wire ALL of it.** The deletion flush
+is the piece most likely to be forgotten, because push and pull are the
+obvious two and a queue with no reader fails silently. `ShiftCommands`
+already queues into `pendingShiftDeletions` and `pendingLegacyEntryDeletions`
+today, so the producers are live and waiting.
+
+That is a completeness requirement on unbuilt work, not a defect in built
+work -- a real difference, and the reason this section is no longer titled
+as a P0.
+
+`FLIP-BLOCKER-DELETION-FLUSH` remains the marker, because the allowlist
+entries naming it are still correct: those accessors genuinely have no
+consumer yet.
+
+## ORIGINAL ENTRY, kept for the record: shift deletions have no flush
 
 **Marker: `FLIP-BLOCKER-DELETION-FLUSH`** -- named by every entry in
 `scripts/syncstate-unwired-allowlist.txt` that this condition excuses.
