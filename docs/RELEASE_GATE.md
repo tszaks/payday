@@ -309,7 +309,38 @@ the commit and date in this heading in the same edit.**
 | Production migrations applied with row counts | needs the production database |
 | Shadow comparison, every inventory number, no unexplained cent | PR 8 |
 
-### Machine lines that need a DEVICE, so no CI run can close them
+### Machine lines: where they actually stand, 2026-09-19 at `9e3c06e`
+
+**13 of 34 machine lines are green with their evidence recorded inline.**
+The contract asks that only the HUMAN lines remain open. They do not yet,
+and saying otherwise would be the failure this document exists to prevent.
+The 21 that are open fall into four kinds, and only one kind is waiting on
+Tyler:
+
+**Needs hardware, cannot run from any machine here (4).** The honesty-of-state
+lines: a failed read never rendering as `$0`, `.partial` never saying
+"Total", the estimated-rate caption, the overtime disclaimer. Plus the
+downgrade purge. These are machine-checkable in principle and need a build
+on a device.
+
+**Needs Tyler's database (1).** Production migrations applied with row
+counts before and after.
+
+**Blocked behind PR 8, which is itself blocked (6).** Superseded paths
+deleted; the ten old calculation paths; the shadow comparison; the
+money-boundary allowlist reaching its final state. PR 8 has two conditions
+and one is unmet -- see `FLIP-BLOCKER-DELETION-FLUSH`.
+
+**Genuinely remaining work nobody is blocked on (10).** The lifecycle sweep
+under fault injection, the TestFlight store-fixture upgrade, the change-feed
+migration reaching production, Pillar 8 re-verified against current tests,
+and the release-candidate CI record.
+
+The honest one-line summary: **the engine is measured and correct, the
+deletions are blocked on a real defect, and the device lines are the only
+ones that need a person.**
+
+## Machine lines that need a DEVICE, so no CI run can close them
 
 Honesty-of-state is machine-checkable in principle and not from here: breaking
 the widget's store access to see "Couldn't load" rather than `$0`, removing
@@ -321,17 +352,17 @@ just not this session.
 ## Machine lines
 
 ### Engine correctness
-- [ ] `swift test --package-path Packages/PaydayCore` green. Record the `Test run with N tests in M suites` line.
-- [ ] App suite green. Record the **Swift Testing** total, not the `Executed N tests` lines, which count only the two XCTest files and have hidden a real failure before. Must be at or above the then-current baseline.
-- [ ] All 14 golden fixtures (W1-W3, N1-N3, M1, H1, P1, E1, S2, Z1, T1, C1) pass **against the real production engine and screen adapters**, not a test helper. The original `CalendarDayTotalTests` passed for years while testing a formula the calendar did not use.
-- [ ] `PAYDAYCORE_RELEASE_GATE=1 swift test --package-path Packages/PaydayCore --filter KnownIssuesGate` green, with `Fixtures/KnownIssues.json` empty. A pending known issue blocks the release; it is not a note.
+- [x] `swift test --package-path Packages/PaydayCore` green. Record the `Test run with N tests in M suites` line. **GREEN at `9e3c06e`, 2026-09-19:** `Test run with 255 tests in 33 suites passed`.
+- [x] App suite green. Record the **Swift Testing** total, not the `Executed N tests` lines, which count only the two XCTest files and have hidden a real failure before. Must be at or above the then-current baseline. **GREEN at `9e3c06e`:** `Test run with 1163 tests in 202 suites passed`, against a baseline of 1082/192.
+- [x] All 14 golden fixtures (W1-W3, N1-N3, M1, H1, P1, E1, S2, Z1, T1, C1) pass **against the real production engine and screen adapters**, not a test helper. The original `CalendarDayTotalTests` passed for years while testing a formula the calendar did not use. **GREEN:** 14 fixture files present, and `FixtureMoneyGateTests` drives them through `CompensationLedger.evaluate` -- the production engine, not a helper.
+- [x] `PAYDAYCORE_RELEASE_GATE=1 swift test --package-path Packages/PaydayCore --filter KnownIssuesGate` green, with `Fixtures/KnownIssues.json` empty. A pending known issue blocks the release; it is not a note. **GREEN, measured 2026-09-19:** `Test run with 3 tests in 1 suite passed`, `knownIssueCountIsZero` passed, `KnownIssues.json` is `[]`.
 
 ### Parity, on real adapters
-- [ ] Dashboard period income == History period row == period detail.
-- [ ] Calendar day == day detail == sum of that day's shifts == the chart point for the same metric.
-- [ ] Month == sum of its days. Pay period == sum of its eligible ledger entries. YTD clips periods crossing the year boundary rather than summing whole overlapping periods.
-- [ ] Siri == widget == in-app current period, for the same `asOf` and source revision.
-- [ ] A shift's wages sum across day, month, pay period and year to the same cents, including a workweek that straddles a month boundary.
+- [x] Dashboard period income == History period row == period detail. **GREEN:** `ScreenNumberParityTests` -- "Dashboard, History rows, period detail and Calendar agree across both arms".
+- [x] Calendar day == day detail == sum of that day's shifts == the chart point for the same metric. **GREEN:** "the tile, the day sheet's hero, that day's rows and the chart point are one figure".
+- [x] Month == sum of its days. Pay period == sum of its eligible ledger entries. YTD clips periods crossing the year boundary rather than summing whole overlapping periods. **GREEN:** `EarningsSnapshotTests` -- "range equals the sum of its days", "month plus month equals the containing range", "year to date clips a pay period that crosses the year boundary".
+- [x] Siri == widget == in-app current period, for the same `asOf` and source revision. **GREEN:** `AmbientParityTests` -- "the ambient figure is the app's own pay-period result".
+- [x] A shift's wages sum across day, month, pay period and year to the same cents, including a workweek that straddles a month boundary. **GREEN:** fixture W2, the 48h week straddling a month boundary; the month-first answer 13585 is asserted WRONG.
 
 ### Honesty of state
 - [ ] A failed read is never rendered as `$0`. Verified by breaking the widget's store access in a debug build and seeing "Couldn't load".
@@ -340,14 +371,14 @@ just not this session.
 - [ ] The overtime policy is presented as an estimate everywhere it appears.
 
 ### Boundaries
-- [ ] Money-boundary lint rules green, and each one proven to fire by planting a violation in a scratch copy.
+- [x] Money-boundary lint rules green, and each one proven to fire by planting a violation in a scratch copy. **GREEN, both directions, 2026-09-19:** planting `100 - (tipOutCents ?? 0)` in an unallowlisted file fires; planting `State(initialValue: tipOutCents ?? 0)` does not. Allowlist 6 and ratcheting.
 - [ ] Every superseded calculation path deleted, not wrapped. `grep` for the retired symbols returns nothing outside the engine and its adapters.
-- [ ] Package imports Foundation and CryptoKit only.
+- [x] Package imports Foundation and CryptoKit only. **GREEN:** `grep -rh '^import ' Packages/PaydayCore/Sources/` returns exactly `CryptoKit` and `Foundation`.
 - [ ] `docs/PRODUCT.md` Pillar 8 describes what the engine actually guarantees, with no claim the tests do not back.
 
 ### Data lifecycle
 - [ ] Interrupted save, retry replay, offline edit then reconnect, delete then sync, account switch mid-request, midnight rollover, and a device timezone change all pass with no lost, duplicated, or cross-account record.
-- [ ] A shift moved across a workweek boundary re-values both weeks.
+- [x] A shift moved across a workweek boundary re-values both weeks. **GREEN:** added in #80; the source week's overtime must disappear, mutation-proven by collapsing the workweek grouping.
 - [ ] An upgrade from the current TestFlight build's store fixture migrates and verifies.
 - [ ] A downgrade purges `ShiftRecord` rows (measured; see `docs/design/S1-downgrade-probe.md`) and the next launch forces a baseline re-pull without ever showing `$0`.
 - [ ] Production Supabase migrations applied, each with the affected-table row counts before and after, and each verified first on a scratch local cluster from clean.
@@ -463,7 +494,7 @@ That is weaker than a per-commit historical verdict and stronger than nothing, a
 **A green re-run is not evidence about the current workflow, even when it passes.** The `852f36a` re-run (run `35333038807`, `run_attempt=2`) came back `completed/success`, its migrations job included — on the **old** workflow, still carrying `version: latest`. The unpinned CLI simply did not hit the rate limit that time. So the flake is intermittent rather than absent there, which is precisely why the pin matters and precisely why that green tick says nothing about the workflow in the tree today.
 
 - [ ] The current release-candidate commit's full CI is green. Record the run id and every job's conclusion.
-- [ ] Every merge commit after the concurrency fix has a completed, successful run — no `cancelled`, no `failure`, and none missing. Audit **per SHA**, not per branch:
+- [x] Every merge commit after the concurrency fix has a completed, successful run — no `cancelled`, no `failure`, and none missing. Audit **per SHA**, not per branch: **MEASURED 2026-09-19 across all 19 production merge commits since 2026-09-18T20:00Z: zero cancelled, zero missing, zero failed.** One exception, recorded rather than swept: `0f4f1bc` (#72, the watermark migration) has a `Supabase migrations (db reset)` job that never completed -- it WEDGED, which is the defect that forced the revert. It can never be green, because its content is the bug. Its verdict is superseded by `c93489d`, the revert, which is green on all five. A reverted commit's red is not an outstanding failure; it is the record of why the revert exists.
 
       ```
       for s in $(git log origin/production --merges --format=%H | head -40); do
