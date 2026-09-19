@@ -101,7 +101,25 @@ enum StatsRecordAdapter {
         // happen to coincide.
         let cash = record.cashTipsCents
         let credit = record.creditTipsCents
-        let metrics = record.receiptMetrics
+        // **Stamped to v2, and this line is load-bearing.**
+        //
+        // A `ShiftRecord` stores v2 earnings by invariant -- its
+        // `receiptMetrics` setter asserts exactly that, and its own
+        // `nonWageEarningsCents` reads the fields RAW on that basis. But the
+        // stored payload may carry NO `earningsSchemaVersion` at all: the
+        // assert reads a missing key as `?? 2` and lets it through, while
+        // `ShiftReceiptMetrics` reads the same missing key as `?? 1`. One
+        // absent field, two generations.
+        //
+        // Handed on unstamped, `TipRecord.voluntaryTipCents` then applies the
+        // v1 fold and subtracts a gratuity that was never in these amounts,
+        // so StatsEngine reads the shift LOWER than the model and the CSV by
+        // exactly the gratuity -- measured at 300c and 100c in
+        // `NonWageEarningsAgreementTests`. Stamping makes the fold a no-op
+        // and the two definitions agree by construction rather than by
+        // coincidence.
+        var metrics = record.receiptMetrics
+        metrics?.earningsSchemaVersion = 2
 
         var rows: [TipRecord] = []
         // A wage-only or gratuity-only shift has zero tips of either kind and
