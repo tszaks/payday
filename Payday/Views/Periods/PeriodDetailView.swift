@@ -72,6 +72,29 @@ struct PeriodDetailFacts: SnapshotFacts {
     /// `chartFacts.whole`, which is the same range query the hero is.
     let chartFacts: EarningsChartFacts
 
+    /// Whether this period has any shift, in EITHER representation.
+    ///
+    /// The same one-arm gate that hid the Dashboard's Shifts section from the
+    /// first flipped account. `shiftDays` is legacy-only and
+    /// `HistoryEarnings.build`'s record arm returns it empty by construction,
+    /// so a flipped account's chart was gated on a list that is always empty
+    /// for it. The empty-state sentence below already asked BOTH arms, which
+    /// is why only the chart silently vanished.
+    var hasShifts: Bool {
+        Self.hasShifts(shiftDays: shiftDays, shiftRecordDays: shiftRecordDays)
+    }
+
+    /// The rule itself, reachable without building a whole facts struct, so a
+    /// test can state it over BOTH arms directly. A screen-level gate that
+    /// can only be exercised by constructing an entire render is a gate that
+    /// gets one arm tested and the other one shipped.
+    static func hasShifts(
+        shiftDays: [(day: Date, shiftID: UUID, items: [TipEntry])],
+        shiftRecordDays: [ShiftRecord]
+    ) -> Bool {
+        !shiftDays.isEmpty || !shiftRecordDays.isEmpty
+    }
+
     /// `MetricID.expectedPaycheckGross` for the period, read off
     /// `expectation` — the value handed to `PaycheckEntrySheet` — so the
     /// figure this screen renders and the figure the sheet renders and audits
@@ -256,7 +279,7 @@ struct PeriodDetailView: View {
                 // the scrub readout), so no separate flat header goes above
                 // it — this is this screen's only other flat section without
                 // a kicker.
-                if !facts.shiftDays.isEmpty {
+                if facts.hasShifts {
                     NightlyEarningsChart(facts: facts.chartFacts)
                 }
 
@@ -367,7 +390,7 @@ struct PeriodDetailView: View {
 
     @ViewBuilder
     private func shiftsSection(_ facts: PeriodDetailFacts) -> some View {
-        if facts.shiftDays.isEmpty, facts.shiftRecordDays.isEmpty {
+        if !facts.hasShifts {
             Text("No shifts in this period.")
                 .font(PaydayFont.bodyRegular)
                 .foregroundStyle(PaydayColor.textSecondary)
