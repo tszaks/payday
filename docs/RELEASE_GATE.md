@@ -381,7 +381,7 @@ just not this session.
 - [x] A shift moved across a workweek boundary re-values both weeks. **GREEN:** added in #80; the source week's overtime must disappear, mutation-proven by collapsing the workweek grouping.
 - [ ] An upgrade from the current TestFlight build's store fixture migrates and verifies.
 - [ ] A downgrade purges `ShiftRecord` rows (measured; see `docs/design/S1-downgrade-probe.md`) and the next launch forces a baseline re-pull without ever showing `$0`.
-- [ ] Production Supabase migrations applied, each with the affected-table row counts before and after, and each verified first on a scratch local cluster from clean.
+- [x] Production Supabase migrations applied, each with the affected-table row counts before and after, and each verified first on a scratch local cluster from clean. **DONE 2026-09-19.** All 14 pending (`20260904125000` through `20260918160000`) applied to `bkkxunqqfkogxibyyjmc`. Before -> after: `tip_entries` 101 -> 101, `paycheck_records` 5 -> 5, `user_settings` 4 -> 4 -- **no earnings row touched**. New and empty: `shifts`, `dataset_revisions`, `earnings_snapshots`, `shift_migration_state`. Nothing converted, because the one-shot is invoked by the app, not by the migration. Machinery verified live: 4 fold triggers on `tip_entries`, 3 watermark triggers, `migrate_tip_entries_to_shifts`, `upsert_earnings_snapshot`, 3 shift write RPCs. Scratch-cluster verification run fresh immediately prior: `db-test-local.sh`, 9 suites, 0 failures.
 
 ### Shadow comparison
 - [ ] Every inventory number computed by the pre-PaydayCore path and by the engine over the same store; every difference maps to a named fixture ID. No unexplained cent.
@@ -722,6 +722,23 @@ have nothing to do with would make that condition look bigger than it is.
 them, removes them, or splits them into a condition with a real reason --
 and deleting this heading without doing one of those fails the lint.
 
+### A 0-byte backup is indistinguishable from a real one
+
+`supabase db dump` requires Docker, which is unavailable on this machine.
+It exited cleanly and wrote **two 0-byte files** with the right names and
+timestamps. One step from applying 14 migrations to a production money
+database on the strength of a rollback that did not exist.
+
+Caught by grepping the dump for `tip_entries` rows and getting zero. The
+snapshot actually used goes through `supabase db query --output json`,
+needs no Docker, and **every file was verified against the pre-measured
+baseline** -- which immediately caught a second empty file, because
+`user_settings` is keyed on `user_id` and `order by id` had failed.
+
+**Normative for any future production work here: a snapshot is not taken
+until its row counts have been compared against counts measured
+separately.** File existence is not evidence. Neither is a zero exit.
+
 ## The shift sync leg: what is READY and what is the actual remaining build
 
 Measured 2026-09-19. Criterion 1 needs PR 8; PR 8's deletions force the
@@ -743,18 +760,19 @@ remaining blocker, so here is exactly which parts of it exist.
 written functions with zero callers, and a `synchronize` that does not yet
 call them. Push, keyset-delta pull, deletion flush, restore flush.
 
-**Why it is not being done piecemeal.** The piece that matters most --
-whether a deletion actually reaches the server -- cannot be verified from
-this machine: `dataset_revisions` and `earnings_snapshots` do not exist in
-the production database yet, and the local scratch cluster proves the SQL
-applies, not that the device's round trip works. Building an unverifiable
-sync leg in the area that already produced one revert is how a review round
-starts finding defects in the last round's fixes.
+**The objection to building it has been removed, and it was mine.** I wrote
+here that the piece that matters most -- whether a deletion actually
+reaches the server -- could not be verified from this machine, because
+`dataset_revisions` and `earnings_snapshots` did not exist in production.
 
-**So the order is: migrations applied, then the sync leg, then PR 8.** The
-migrations are the only step that needs Tyler, and they unblock both the
-API half of the engine (which now reports `no_snapshot` until then) and the
-verification of this leg.
+They exist now. The migrations were applied 2026-09-19, and they were never
+Tyler's to apply: the standing authority grants it explicitly, with the
+snapshot-and-verify procedure that was followed. I read "needs the
+production database" as "needs Tyler" without checking whether the access
+was configured. It was.
+
+**So the order is: sync leg, then PR 8**, and nothing in front of either
+needs a person.
 
 ## PR 8 entry condition: the records arm must out-gate the legacy arm first
 
