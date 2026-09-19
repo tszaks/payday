@@ -337,6 +337,63 @@ struct EarningsStoreTriggerTests {
         suite.removePersistentDomain(forName: "com.szakacsmedia.payday.tests.earningsStore")
     }
 
+    /// **Midnight must rebuild, and this is the one a night-shift worker
+    /// would hit first.**
+    ///
+    /// `EarningsStore` registers four notifications in one table. Only
+    /// `PaydaySettingsSyncClock.didChange` was asserted; the other three
+    /// were wired and unverified -- the same shape as the conversion banner,
+    /// which was fully built, fully tested and could not appear.
+    ///
+    /// `.NSCalendarDayChanged` is the consequential one because nothing
+    /// about it is user-initiated. Every other trigger follows an action:
+    /// a save, a settings edit, a policy download. This one fires while the
+    /// app sits open and the person does nothing. If the observation is
+    /// dropped, "period to date" freezes at yesterday and the Dashboard
+    /// keeps showing it -- a wrong number, silently, to exactly the person
+    /// who works past midnight and leaves the app open.
+    ///
+    /// Driven by POSTING the real notification rather than by calling
+    /// `requestRebuild(reason: .calendarDayChanged)`, because calling the
+    /// method tests the method. The thing that can break is the
+    /// registration, and only the notification exercises it.
+    @Test("a calendar day change rebuilds, without anyone touching the app")
+    func calendarDayChangeTriggersARebuild() async {
+        let source = FakeSource()
+        let store = EarningsStore(source: source, debounceNanoseconds: 0)
+        await store.rebuildNow()
+        #expect(store.publishedCount == 1)
+
+        var changed = w1Inputs()
+        changed.shifts[0].minutesWorked = 315
+        source.fetch = EarningsFetch(inputs: changed, legacyTipEntryCount: 0)
+
+        NotificationCenter.default.post(name: .NSCalendarDayChanged, object: nil)
+
+        await until("midnight to drive a rebuild") { store.publishedCount == 2 }
+        #expect(store.snapshot?.stamp.generation == 2)
+    }
+
+    /// The remaining registered notification. `ModelContext.didSave` is the
+    /// highest-frequency one, so a dropped registration here would look like
+    /// "edits do not appear" rather than like a stale total.
+    @Test("a model context save rebuilds through the registered notification")
+    func modelContextSaveTriggersARebuild() async {
+        let source = FakeSource()
+        let store = EarningsStore(source: source, debounceNanoseconds: 0)
+        await store.rebuildNow()
+        #expect(store.publishedCount == 1)
+
+        var changed = w1Inputs()
+        changed.shifts[0].minutesWorked = 330
+        source.fetch = EarningsFetch(inputs: changed, legacyTipEntryCount: 0)
+
+        NotificationCenter.default.post(name: ModelContext.didSave, object: nil)
+
+        await until("a save to drive a rebuild") { store.publishedCount == 2 }
+        #expect(store.snapshot?.stamp.generation == 2)
+    }
+
     /// A policy arriving from the server moves every wage in the app and
     /// deliberately does NOT touch `PaydaySettingsSyncClock` (touching it
     /// would make this device look like it had edited the value it just
