@@ -396,6 +396,7 @@ struct CalendarView: View {
         // history inside the interactive budget.
         let resolvedCalendar = calendar
         let facts = makeFacts(calendar: resolvedCalendar)
+        ScrollViewReader { proxy in
         ScrollView {
             VStack(spacing: PaydaySpacing.p16) {
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 7), spacing: 6) {
@@ -419,6 +420,7 @@ struct CalendarView: View {
                 .gesture(monthSwipeGesture)
 
                 monthSummarySection(facts)
+                    .id("calendar-summary")
             }
             .padding(.horizontal, PaydaySpacing.p16)
             .padding(.top, PaydaySpacing.p8)
@@ -433,6 +435,16 @@ struct CalendarView: View {
                 gridIsUnderHeader = isUnder
             }
         }
+        // QA-only, same launch-arg pattern as -ScrollInsightsBottom: simctl
+        // can screenshot but not scroll, and the pinned header's whole point
+        // is what it does once the grid is behind it -- a top-of-scroll
+        // capture is exactly the one that cannot show it.
+        .onAppear {
+            guard ProcessInfo.processInfo.arguments.contains("-ScrollCalendarBottom") else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                withAnimation(nil) { proxy.scrollTo("calendar-summary", anchor: .bottom) }
+            }
+        }
         .background(PaydayColor.background)
         .sheet(item: $daySelection) { selection in
             DayDetailSheet(date: selection.date).paydayAppearance()
@@ -442,8 +454,15 @@ struct CalendarView: View {
             if ProcessInfo.processInfo.arguments.contains("-OpenDaySheet") {
                 daySelection = DaySelection(date: .now)
             }
+            // The same hook Dashboard and PeriodDetail carry. Calendar was
+            // the one drawer of the three that could not be captured open,
+            // which is the state where its rows actually are.
+            if ProcessInfo.processInfo.arguments.contains("-DebugExpandBreakdown") {
+                monthBreakdownExpanded = true
+            }
         }
         #endif
+        }
     }
 
     private func makeFacts(calendar: Calendar) -> CalendarMonthFacts {
@@ -584,57 +603,65 @@ struct CalendarView: View {
                 .frame(maxWidth: .infinity, alignment: .center)
                 .padding(.top, PaydaySpacing.p4)
         } else {
-            VStack(spacing: PaydaySpacing.p12) {
-                Divider()
-
-                // The same drawer Dashboard and PeriodDetail use, over the
-                // month's own `EarningsResult`. A person can now see that
-                // this figure is cash + credit + gratuity + wages MINUS
-                // tip-out rather than having to be told.
-                HeroBreakdownDrawer(
-                    rows: facts.monthBreakdownRows,
-                    total: facts.monthBreakdownTotal,
-                    hasBreakdown: facts.monthHasBreakdown,
-                    isExpanded: $monthBreakdownExpanded
-                ) {
-                    VStack(spacing: 2) {
-                        Text(facts.monthFigure.text ?? ShiftDayRow.unavailablePlaceholder)
-                            .font(PaydayFont.displayMedium)
-                            .monospacedDigit()
-                            .foregroundStyle(PaydayColor.textPrimary)
-                            .contentTransition(.numericText())
-                            .animation(
-                                reduceMotion ? nil : PaydayAnimation.premiumSpring,
-                                value: facts.monthFigure.cents
-                            )
-                        Text(facts.monthCaption)
-                            .font(PaydayFont.caption)
-                            .foregroundStyle(PaydayColor.textSecondary)
-                        // `.estimated` carries its caption, per the completeness
-                        // presentation rules: a wage priced off an assumed rate
-                        // says so on the surface that shows it.
-                        if let caption = facts.monthWagesCaption ?? facts.monthFigure.caption {
-                            Text(caption)
-                                .font(PaydayFont.caption2)
-                                .foregroundStyle(PaydayColor.textTertiary)
-                                .multilineTextAlignment(.center)
-                        }
-                    }
-                    .frame(maxWidth: .infinity)
-                }
-
-                VStack(spacing: 4) {
-                    Text("\(facts.daysWorkedCount) day\(facts.daysWorkedCount == 1 ? "" : "s") worked · \(facts.monthHoursLabel)")
-                        .font(PaydayFont.subheadline)
-                        .foregroundStyle(PaydayColor.textPrimary)
+            // The same drawer Dashboard and PeriodDetail use, over the
+            // month's own `EarningsResult`. A person can now see that this
+            // figure is cash + credit + gratuity + wages MINUS tip-out
+            // rather than having to be told.
+            HeroBreakdownDrawer(
+                rows: facts.monthBreakdownRows,
+                total: facts.monthBreakdownTotal,
+                hasBreakdown: facts.monthHasBreakdown,
+                isExpanded: $monthBreakdownExpanded
+            ) {
+                VStack(spacing: 2) {
+                    Text(facts.monthFigure.text ?? ShiftDayRow.unavailablePlaceholder)
+                        .font(PaydayFont.displayMedium)
                         .monospacedDigit()
+                        .foregroundStyle(PaydayColor.textPrimary)
+                        .contentTransition(.numericText())
+                        .animation(
+                            reduceMotion ? nil : PaydayAnimation.premiumSpring,
+                            value: facts.monthFigure.cents
+                        )
+                    // The days and hours ride the completeness caption
+                    // instead of standing alone under the drawer, where they
+                    // were a .subheadline in primary ink -- the weight of a
+                    // headline, orphaned below a grey slab, describing the
+                    // number two elements above it. They describe the same
+                    // selection the caption does, so they belong on its line.
+                    Text("\(facts.monthCaption) · \(facts.daysWorkedCount) day\(facts.daysWorkedCount == 1 ? "" : "s") · \(facts.monthHoursLabel)")
+                        .font(PaydayFont.caption)
+                        .foregroundStyle(PaydayColor.textSecondary)
+                        .monospacedDigit()
+                        .multilineTextAlignment(.center)
+                    // `.estimated` carries its caption, per the completeness
+                    // presentation rules: a wage priced off an assumed rate
+                    // says so on the surface that shows it. It stays on the
+                    // hero rather than moving onto the drawer's Wages row --
+                    // Dashboard and PeriodDetail both print it under their
+                    // heroes too, so putting it on the shared row as well
+                    // would state it twice on three screens.
+                    if let caption = facts.monthWagesCaption ?? facts.monthFigure.caption {
+                        Text(caption)
+                            .font(PaydayFont.caption2)
+                            .foregroundStyle(PaydayColor.textTertiary)
+                            .multilineTextAlignment(.center)
+                    }
                 }
-
-                // Weekday mini-bars deleted (Tyler, 2026-07-20): the heatmap
-                // grid directly above already tells the which-days story —
-                // re-encoding it smaller looked goofy at any styling. The two
-                // text lines are the summary.
+                .frame(maxWidth: .infinity)
+                // The drawer tucks itself -PaydayRadius.xl + 2 UNDER its
+                // card, so the card has to actually be one. Without this the
+                // grey recess slid up over the hero's own caption lines and
+                // printed "you kept this month" on a grey slab that started
+                // mid-sentence. Dashboard and PeriodDetail both end their
+                // card closure with exactly this, which is why neither of
+                // them showed it.
+                .paydayCard(padding: PaydaySpacing.p24)
             }
+
+            // Weekday mini-bars deleted (Tyler, 2026-07-20): the heatmap
+            // grid directly above already tells the which-days story —
+            // re-encoding it smaller looked goofy at any styling.
         }
     }
 
