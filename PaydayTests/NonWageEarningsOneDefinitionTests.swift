@@ -115,4 +115,50 @@ struct NonWageEarningsOneDefinitionTests {
         #expect(b.netTotalCents == canonical)
     }
 
+    /// The last of the five. `StatsEngine` held TWO spellings -- one on
+    /// `TipRecord`, one on `ShiftFacts` -- and both are now the canonical
+    /// definition applied to already-normalized inputs.
+    ///
+    /// What did NOT move is the v1 receipt fold in `voluntaryTipCents`.
+    /// That is not a duplicate of this formula, it is what makes a legacy
+    /// row comparable at all, and folding it away was exactly the mistake
+    /// in the closed #106.
+    @Test("StatsEngine's two net spellings both equal the canonical one", arguments: [
+        (1_000, 300, 150),
+        (0, 0, 0),
+        (100, 900, 0),
+        (7_500, 0, 1_200),
+    ])
+    func statsEngineMatchesCanonical(voluntary: Int, gratuity: Int, tipOut: Int) {
+        var metrics = ShiftReceiptMetrics()
+        metrics.earningsSchemaVersion = 2      // no fold; isolate the recombination
+        metrics.gratuityFeesCents = gratuity
+        let row = TipRecord(
+            date: Date(timeIntervalSince1970: 1_758_000_000),
+            amountCents: voluntary,
+            kind: .cash,
+            isDouble: false,
+            recordedAt: nil,
+            hoursWorked: 5,
+            tipOutCents: tipOut,
+            salesCents: nil,
+            shiftPeriod: nil,
+            shiftID: UUID(),
+            clockIn: nil,
+            clockOut: nil,
+            serverCount: nil,
+            receiptMetrics: metrics,
+            note: nil
+        )
+        // The formula as it stood before the delegation, verbatim.
+        let shipped = voluntary + gratuity - tipOut
+        let canonical = EarningsComponents(
+            voluntaryCashCents: voluntary,
+            gratuityFeesCents: gratuity,
+            tipOutCents: tipOut
+        ).nonWageEarningsCents
+        #expect(row.netCents == shipped)
+        #expect(row.netCents == canonical)
+    }
+
 }
