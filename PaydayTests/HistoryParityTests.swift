@@ -508,6 +508,30 @@ struct PeriodDrawerReadsTheLedgerTests {
         #expect(wageRow.caption?.isEmpty == false)
     }
 
+    /// The chart's gate, which was the second instance of the Dashboard
+    /// defect: `shiftDays` is legacy-only and the record arm returns it empty
+    /// by construction, so a flipped account's chart was gated on a list that
+    /// is always empty for it. The empty-state sentence underneath already
+    /// asked both arms, which is why only the chart disappeared and nothing
+    /// said so.
+    @Test("a flipped period still has shifts, so the chart draws and the empty state does not")
+    func recordArmPeriodHasShifts() {
+        let render = HistoryRender(entries: c1Entries())
+        #expect(render.detail.hasShifts, "legacy arm, unchanged")
+
+        let record = ShiftRecord(
+            workDate: at(2026, 10, 5, hour: 12),
+            shiftPeriod: .dinner,
+            creditTipsCents: 12_000,
+            hoursWorked: 5
+        )
+        #expect(!record.id.uuidString.isEmpty)
+        // A period holding ONLY records: legacy empty, records populated.
+        // That is every flipped account.
+        #expect(PeriodDetailFacts.hasShifts(shiftDays: [], shiftRecordDays: [record]))
+        #expect(!PeriodDetailFacts.hasShifts(shiftDays: [], shiftRecordDays: []))
+    }
+
     @Test("a wage-only period has no decomposition, so the drawer does not open")
     func wageOnlyPeriodHasNoBreakdown() throws {
         let entries = [

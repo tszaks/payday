@@ -105,6 +105,26 @@ struct DashboardFacts: SnapshotFacts {
     /// showing at all.
     let paydayPhase: PaydayMoment.Phase?
     let shiftCount: Int
+
+    /// Whether this period has any shift to draw, in EITHER representation.
+    ///
+    /// The screen used to branch on `periodEntries.isEmpty`, and
+    /// `periodEntries` is legacy-only -- it is `periodShifts.flatMap(\.items)`
+    /// over `allShifts`, and `DashboardEarnings.build`'s record arm returns
+    /// `shiftDays: []` by construction, because the Dataset holds exactly one
+    /// representation and never merges them.
+    ///
+    /// So the first account to flip saw "No shifts this period." under a
+    /// correct, non-zero hero. Every other consumer on this screen was
+    /// already right: `shiftsSection` renders BOTH arms and says "Exactly one
+    /// of these is populated, by construction", and `shiftCount` sums both.
+    /// Only the gate deciding whether to draw any of it asked one arm.
+    ///
+    /// It lives here rather than in the view so it can be tested. The legacy
+    /// coupling had a test (`noShiftsKeepsItsZero` asserts
+    /// `periodEntries.isEmpty` IS what draws the sentence) and the record arm
+    /// had none, which is exactly why a green suite shipped this.
+    var hasShiftsThisPeriod: Bool { shiftCount > 0 }
     let shiftDays: [(day: Date, shiftID: UUID, items: [TipEntry])]
     /// The same rows in the shift representation, filtered by the same civil
     /// work-day rule. Empty unless the caller passed records, so the two are
@@ -727,7 +747,7 @@ struct DashboardView: View {
 
                     tonightLineRow(facts)
 
-                    if facts.periodEntries.isEmpty {
+                    if !facts.hasShiftsThisPeriod {
                         emptyState(facts)
                     } else {
                         shiftsSection(facts)
