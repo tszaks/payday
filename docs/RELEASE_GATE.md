@@ -729,8 +729,8 @@ kind of claim that gets planned around.
 | Idempotent retries on `id` | **DONE, pre-existing** | `on conflict (user_id, id) do update` in `add_shift_write_rpcs.sql` |
 | Last-client-write-wins by `client_updated_at` | **DONE, pre-existing** | `excluded.client_updated_at >= existing.client_updated_at`, documented at the RPC |
 | Deletions preserved across reconnect | **DONE, pre-existing** | four tests in `ShiftCheckpointTests`, incl. "a full sync pass preserves pending shift restores" and "a legacy deletion queue entry survives a restore-cancel pass" |
-| Late responses for a previous account rejected | **UNREACHABLE BY DESIGN** | `registerCurrentUser` refuses a second account outright; asserted at `PaydaySyncStateTests:27`. There is no switch to reject a late response from |
-| Account switch clears the store and checkpoint | **UNREACHABLE BY DESIGN** | same refusal. The plan item describes a path this codebase forbids |
+| Late responses for a previous account rejected | **OPEN, and previously mis-scored** | see the correction below |
+| Account switch clears the store and checkpoint | **OPEN, and previously mis-scored** | see the correction below |
 | Shift moved across workweeks re-values both | **ADDED** (#80) | source week's overtime must disappear, not merely stop growing |
 | Upgrade conserves rows and money | **ADDED** (#82) | conservation, not expected values; two identical rows must not be deduplicated |
 | Midnight rollover rebuilds | **ADDED** (#83) | posts the real `.NSCalendarDayChanged`, so the REGISTRATION is what is tested |
@@ -753,6 +753,51 @@ That is worse than a typo, because a gate document citing test names that
 resolve to nothing is a rubber stamp shaped like evidence. A sweep of every
 backticked identifier in this file found exactly one such citation: the one
 I had just added. `scripts/design-lint.sh` now fails on any other.
+
+### CORRECTED 2026-09-19: "unreachable by design" was the wrong score
+
+Both account-switch rows above were marked UNREACHABLE BY DESIGN on the
+justification that "`registerCurrentUser` refuses a second account
+outright". Measured today, that justification is false in one specific way,
+and the two rows are reopened.
+
+What is true: `canRegister` admits a user only when none is registered or it
+is the same one, and `signOut` deliberately does NOT clear the registration
+(it is documented as non-destructive -- the shifts stay for the next
+sign-in). So the ordinary path, sign out and sign in as somebody else, IS
+refused, and that half of the original claim holds.
+
+What is false: `deleteAccount` calls `forget(userID:)`, which removes the
+registration key. That is correct and necessary -- without it a deleted
+account would lock the device out of every future Apple ID, which is the
+lockout that call was added to fix -- but it means the refusal is
+CONDITIONAL, not absolute. There is a supported path to a second account on
+one device, so "there is no switch to reject a late response from" does not
+hold.
+
+And `synchronize` resolves its `userID` once, at the top, from
+`client.auth.session`, and never re-checks it. A grep for a user guard in
+the apply path returns nothing. So the window between a request leaving and
+its response landing is not defended by anything.
+
+**What is NOT established, and must not be read into this.** That a response
+can actually land after the forget-and-re-register in practice is UNPROVEN.
+It requires account deletion (not sign-out), a sync in flight across that
+deletion, and a task interleaving nobody has demonstrated. `pendingLocalSync`
+is only the two-second debounce, not the network request, so its cancellation
+does not settle the question either way. The defect recorded here is that the
+gate row's STATED JUSTIFICATION is wrong and the apply path has no re-check.
+The race itself is unmeasured.
+
+**Deliberately not fixed before the flip build.** The fix is a re-check of
+the registered user immediately before the pass applies pulled rows. It is a
+new abort path in `synchronize`, which is the single most delicate function
+in this repo and is exactly the code the next build exists to exercise: that
+build's entire purpose is to run step 6a and flip the engine on a real
+device. Adding an abort path to the sync pass days before that, to close a
+row reachable only via account DELETION followed by re-registration, trades a
+large risk against a small one. It is queued for after the flip lands, with
+the measurement above as its starting point.
 
 **PR 7's plan list is now CLOSED.** The last item, the parser rule, is
 design-lint rule 32. What remains is not on the list: see the paragraph
