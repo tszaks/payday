@@ -879,10 +879,12 @@ else
 fi
 
 echo ""
-if [ "$FAIL" -eq 1 ]; then
-  echo "=== Design lint FAILED — see docs/DESIGN.md ==="
-  exit 1
-fi
+# NO exit here. This used to be the script's only exit point, and it sat
+# ABOVE rules 32, 33 and 31 -- so those three set FAIL=1 after the only test
+# of it had already run, and the script fell through to "Design lint passed"
+# and exited 0. All three were advisory for their whole existence, and CI's
+# Design lint job was green on a FAILING sub-lint. The single exit is now at
+# the bottom, after every rule has had its say.
 # 32. Parsers produce candidates, never rows.
 #     A parser's output is a GUESS -- from OCR or a model -- and the design
 #     is that a person confirms it before it becomes money. A parser that
@@ -908,4 +910,19 @@ if bash scripts/lint-syncstate-wired.sh; then :; else FAIL=1; fi
 #     it searches the whole tree rather than the comment-blanked stream.
 if bash scripts/lint-doc-citations.sh; then :; else FAIL=1; fi
 
+# 34. A durable queue that synchronize() flushes must be drained there too.
+#     Three instances of this exact shape shipped in one day -- the legacy
+#     deletion queue with no reader, then the shift deletion queue and the
+#     shift restore queue both flushed and never cleared. Each was found only
+#     by the next round of review, which is the signature the plan names:
+#     the approach is wrong, not under-polished. The generating decision is
+#     that a flush and its clear are hand-written at two distant sites with
+#     no structural link, so a half-written pair is silent. This makes the
+#     class mechanically visible.
+if bash scripts/lint-queue-drains.sh; then :; else FAIL=1; fi
+
+if [ "$FAIL" -eq 1 ]; then
+  echo "=== Design lint FAILED — see docs/DESIGN.md ==="
+  exit 1
+fi
 echo "=== Design lint passed ==="
