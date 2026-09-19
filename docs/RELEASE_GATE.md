@@ -534,6 +534,110 @@ level is affordable here -- `ShiftWriteWireTests` already stubs
 `URLProtocol` -- and has not been swept systematically. That is real
 remaining work; it is just not the work the plan's list describes.
 
+## BLOCKING CONDITION FOR THE FLIP: shift deletions have no flush
+
+**Marker: `FLIP-BLOCKER-DELETION-FLUSH`** -- named by every entry in
+`scripts/syncstate-unwired-allowlist.txt` that this condition excuses.
+Deleting this section fails `lint-syncstate-wired.sh` until those symbols
+are wired, which is deliberate: the excuse cannot outlive the reason.
+
+**Found 2026-09-19 while sweeping PR 7. The shift deletion path has
+producers and no consumers. At the moment `shiftsAreAuthoritative` becomes
+true for an account, deleting a shift will stop reaching the server.**
+
+Measured, three independent ways, all pointing the same direction:
+
+| symbol | app references outside `PaydaySyncState` |
+|---|---|
+| `recordShiftDeletion` | 2 (producers, in `ShiftCommands`) |
+| `recordLegacyEntryDeletions` | 1 (producer) |
+| `pendingShiftDeletions` | **0** |
+| `pendingLegacyEntryDeletions` | **0** |
+| `softDeleteShifts` | **0** (defined on the repository, called only by a wire test) |
+| `restoreShifts` | **0** |
+
+`ShiftCommands.delete` queues both a shift tombstone and the deleted shift's
+legacy source rows. Nothing in production reads either queue.
+`PaydaySyncService` flushes `pendingTipDeletions` only, which is the
+`tipEntries` key -- and `legacyEntries` exists as a SEPARATE key precisely
+because `tipEntries` is emptied by the restore-cancel arm before the flush
+runs. That reasoning is documented at `PaydaySyncState.swift:256`; the queue
+it created is the one with no reader.
+
+**Why it is latent rather than live.** `shiftsAreAuthoritativeForCurrentAccount`
+is false for every account, so screens render from the legacy
+representation and hand `[TipEntry]` to the delete path, taking the arm
+that works. The `ShiftRecord` overload at `ShiftContextMenu.swift:68` is
+built ahead of the flip.
+
+**Why it is a P0 at the flip rather than a tidy-up.** The user deletes a
+shift. It disappears locally. The server never hears, so the legacy rows
+stay live, the fold re-derives the shift, and the next pull brings it back.
+A deleted shift RETURNING is indistinguishable from the app inventing money,
+and it is the failure that the whole conversion design was shaped to avoid
+-- the `legacyEntries` key exists because someone already reasoned their way
+to this exact outcome and split the queue to prevent it.
+
+**This is the same shape as slice S13** -- machinery built, tested at the
+wrong layer, with no producer or no consumer in production -- occurring for
+the fourth time in this project and in the most damaging place available.
+
+### The fix is a server-side invariant, NOT flush ordering
+
+Ruled after review, and the rejected option is the instructive one.
+
+The tempting fix is "flush the legacy row deletions before the tombstone".
+**It is wrong.** It makes correctness depend on two network operations
+landing in a particular order, which fails under partition, partial
+success, retry, and app termination between the two. This project has paid
+for that class twice in one night -- the wedged migration and the
+intermittent CI verification -- and both were expensive *because* they were
+intermittent. A resurrection bug that only appears when the second call
+fails is the worst version available: rare, unreproducible, and presenting
+to the user as invented money.
+
+**Instead: a tombstoned shift id is never re-derived by the fold, whatever
+legacy rows survive.** Then client flush order is irrelevant, a lost legacy
+deletion is a storage leak rather than a correctness failure, and a
+tombstone means what its name says -- the shift is dead as a fact, not as a
+race outcome.
+
+Three consequences to design in deliberately:
+
+- **Only an explicit restore clears a tombstone.** Absence of a delete must
+  never clear it, or the same race is rebuilt from the other side.
+  `restoreShifts` becomes the sole revocation path, which is what it is
+  already shaped for.
+- **A re-created shift mints a NEW id**, never reusing a tombstoned one, or
+  resurrection returns through the front door.
+- **The legacy-row flush stays**, demoted from correctness to hygiene, and
+  must remain outside the `tipEntries` restore-cancel arm -- which is the
+  entire reason the separate key exists.
+
+That is a migration plus a consumer rather than just a consumer. It is more
+work, and it is the right more-work.
+
+**Not fixed here, deliberately.** Where the flush belongs is a design
+decision: which pass, in what order relative to the server-side fold, and
+what happens when a tombstone lands before its legacy rows do. PR 2's shape
+died twice from answering questions like that quickly. This is recorded as a
+blocking condition on the flip, not patched at the end of a long session.
+
+## UNTRIAGED-LEGACY-ACCESSORS
+
+`lint-syncstate-wired.sh` found two `PaydaySyncState` accessors with no
+production reader that are NOT part of the deletion-flush gap:
+`knownTipEntryIDs` and `knownPaycheckIDs`.
+
+They are allowlisted under this marker rather than under the flip blocker,
+because I have not established whether they are dead code from the 1.0 sync
+or are wanted by something unbuilt, and filing them under a condition they
+have nothing to do with would make that condition look bigger than it is.
+
+**This section exists to be deleted.** Whoever triages them either wires
+them, removes them, or splits them into a condition with a real reason --
+and deleting this heading without doing one of those fails the lint.
+
 ## PR 8 entry condition: the records arm must out-gate the legacy arm first
 
 **PR 8 may not delete the legacy calculation paths until the records arm's
