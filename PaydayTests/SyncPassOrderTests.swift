@@ -136,6 +136,39 @@ struct SyncPassOrderTests {
             #expect(settings < pull, "settings push must stay ahead of the pull; got \(calls)")
         }
     }
+    /// The deletion flush the gate doc predicted would be forgotten -- and
+    /// that the first draft of this leg did forget.
+    ///
+    /// `shifts` is DERIVED from `tip_entries`. Delete a migrated shift,
+    /// leave its source rows alive, and the server's fold re-derives it: the
+    /// deleted shift comes back. The producer has been queueing these since
+    /// PR 2 with no reader, which is why the queue fails silently rather
+    /// than loudly.
+    @Test("a queued legacy-entry deletion is actually flushed to the server")
+    func aQueuedLegacyEntryDeletionReachesTheServer() async throws {
+        let legacy = UUID(uuidString: "90000000-0000-4000-8000-0000000000b1")!
+        PaydaySyncState.recordLegacyEntryDeletions([legacy], for: Self.user)
+
+        let service = PaydaySyncService(client: client())
+        let ctx = try context()
+        _ = try? await service.synchronize(
+            context: ctx,
+            scheduleStore: PayScheduleStore(),
+            preferencesStore: UserPreferencesStore(),
+            moveLedgerStore: MoveLedgerStore(),
+            policyStore: PolicyStore(),
+            userID: Self.user
+        )
+
+        let calls = RoutingStub.recordedPaths()
+        #expect(
+            calls.contains("POST /rest/v1/rpc/soft_delete_tip_entries"),
+            "the legacy deletion queue was never flushed; got \(calls)"
+        )
+        // Cleared only on success, so a flushed queue must be empty after.
+        #expect(PaydaySyncState.pendingLegacyEntryDeletions(for: Self.user).isEmpty)
+    }
+
 }
 
 /// Routes by URL path and records the order, because one canned body for
