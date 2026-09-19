@@ -653,6 +653,11 @@ final class PaydaySyncService {
         // later step can observe it as deleted and act on that.
         if !checkpoint.pendingShiftRestores.isEmpty {
             _ = try await repository.restoreShifts(Array(checkpoint.pendingShiftRestores.keys))
+            // Drain it. Cleared only after the call returned, so a throw
+            // retries next pass. `checkpoint` is a local value, so the ids
+            // stay available to `restoringIDs` in the reconcile below.
+            PaydaySyncState.clearShiftRestores(
+                checkpoint.pendingShiftRestores.keys, for: userID)
         }
         try await repository.upsertTips(changedTips)
         try await repository.upsertPaychecks(changedPaychecks)
@@ -880,6 +885,11 @@ final class PaydaySyncService {
         // because it is keyed on this queue. Reached only if the flush above
         // did not throw, so a failed delete still retries next pass.
         PaydaySyncState.clearShiftDeletions(pendingShiftDeletions.keys, for: userID)
+        // MARKED, not cleared. Clearing would bound the map but would erase
+        // the one fact that distinguishes "deleted, never sent" from
+        // "deleted and already tombstoned on the server" -- and the undo
+        // path needs exactly that. See UNDO-AFTER-FLUSH-LOSES-LEGACY-ROWS.
+        PaydaySyncState.markShiftTombstonesFlushed(pendingShiftDeletions.keys, for: userID)
 
         let reconciledTipEntries = try context.fetch(FetchDescriptor<TipEntry>())
         let reconciledPaycheckRecords = try context.fetch(FetchDescriptor<PaycheckRecord>())

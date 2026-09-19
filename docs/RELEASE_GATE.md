@@ -811,6 +811,36 @@ was configured. It was.
 **So the order is: sync leg, then PR 8**, and nothing in front of either
 needs a person.
 
+## UNDO-AFTER-FLUSH-LOSES-LEGACY-ROWS
+
+**Found 2026-09-19 while draining the rule-33 allowlist, and it is a real
+data-loss path for 1.0 builds.**
+
+`ShiftCommands` undo calls `cancelLegacyEntryDeletions`, which only
+UN-QUEUES. Once a sync pass has flushed the deletion, that queue is already
+empty, so the call is a no-op -- the shift itself is restored via
+`restore_shifts`, but its legacy `tip_entries` rows stay soft-deleted. The
+code comment at the call site names the harm exactly: *"or a 1.0 build has
+permanently lost a night the user un-deleted."*
+
+Under Shape 3, `tip_entries` remains the write and read surface for every
+shipped 1.0 build indefinitely, so those rows are not redundant copies.
+
+`ShiftTombstone.flushedToServer` is the flag that distinguishes the two
+cases, which is why `markShiftTombstonesFlushed` is now WIRED (the flush
+marks, it does not clear) rather than deleted. I nearly deleted it as dead
+code; deleting it would have removed the detector for this bug while
+leaving the bug.
+
+**The fix needs a server-side restore for legacy rows** (the shift side has
+`restore_shifts`; there is no `restore_tip_entries`), so it is a slice of
+its own rather than something to bolt on here.
+
+Not a PR 8 blocker by itself, but it MUST be closed before the tombstone
+map can be bounded: clearing tombstones after a flush is the obvious way to
+stop unbounded growth in App Group UserDefaults, and it is only safe once
+the undo path no longer needs to know a deletion was flushed.
+
 ## PR 8 entry condition: the records arm must out-gate the legacy arm first
 
 **PR 8 may not delete the legacy calculation paths until the records arm's
