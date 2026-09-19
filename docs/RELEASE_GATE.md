@@ -418,15 +418,29 @@ because `shifts` is the only read surface there, the writer is a third party
 so the post-push readback cannot cover it, and the cache check compares ID
 sets so a present-but-stale shift never forces a re-baseline.
 
-- [ ] The client clamps the shift cursor to
+- [x] The client clamps the shift cursor to
       `min(max(updated_at) among pulled rows, server_now - shiftCursorSafetyWindow)`,
       where `server_now` comes from `public.fetch_shift_changes` **in the same
-      statement as the page**, never a separate read.
-- [ ] `scripts/db-test-race.sh` case 10 passes **both** arms: the folded shift
+      statement as the page**, never a separate read. **DONE 2026-09-19, and
+      it was NOT done when the leg shipped.** Wiring the shift leg in #101 I
+      used the plain `ServerCursor.advanced` and left `clampedShiftCursor`
+      unwired -- a helper that already existed, with its 300s window.
+      `theShiftCursorIsClampedToTheFence` fails without it, reading
+      `1970-01-01T00:00:00.000Z` against the expected
+      `2026-09-18T23:55:00.000Z`, and no other test in the suite could tell:
+      the pass succeeds either way.
+- [x] `scripts/db-test-race.sh` case 10 passes **both** arms: the folded shift
       is MISSING with the unclamped cursor and ARRIVES, with its money, with
-      the clamped one. One arm alone proves nothing.
-- [ ] `20260918120000_add_shift_change_feed.sql` is applied to production
+      the clamped one. One arm alone proves nothing. **MEASURED 2026-09-19:**
+      `anUnclampedCursorPermanentlyMissesTheFoldedShift` = 0,
+      `theClampedCursorStillDeliversTheFoldedShift` = 1,
+      `theDeliveredFoldedShiftCarriesItsMoney` cash=4200 source=migration.
+      Whole suite passed.
+- [x] `20260918120000_add_shift_change_feed.sql` is applied to production
       before, or in the same batch as, the first build that reads shifts.
+      **MEASURED 2026-09-19** against `bkkxunqqfkogxibyyjmc`: applied, and
+      there is zero drift overall -- 24 migrations in the repository, 24
+      applied, none pending.
 
 **No build that reads `public.shifts` ships until all three are green.** This
 is the guard; migration ordering is not, because the clamp is client code and
@@ -447,9 +461,14 @@ violates anything is itself a failure, so it cannot quietly stop shrinking
 into permanent permission.
 
 - [ ] `bash scripts/design-lint.sh` passes with the money-boundary allowlist
-      **empty**. Seven files remain as of 2026-09-18: `TipEntry`,
-      `LegacyShiftRow`, `ShiftRecord`, `PaycheckAudit`, `TipBreakdown`,
-      `StatsEngine`, `LogTipSheet`.
+      **empty**. Seven files as of 2026-09-18; **FIVE as of 2026-09-19**:
+      `TipEntry`, `LegacyShiftRow`, `PaycheckAudit`, `TipBreakdown`,
+      `StatsEngine`. `ShiftRecord` and `LogTipSheet` drained. Still NOT
+      green, and the remaining five are not all the same kind of debt: what
+      is left in `TipBreakdown` is `result.tipOutCents += ...`, aggregating
+      an input field rather than computing money, and `StatsEngine`'s 18 are
+      `.netCents` USES whose definition now delegates to the engine.
+      Loosening the pattern would drain lines without draining debt.
 - [ ] The ten old calculation paths are deleted, not merely wrapped:
       `TipEntry`, `TipBreakdown`, `ShiftDetails`, `ShiftDays.groupedByShift`,
       `WageEstimate`, `PeriodIncome`, `PredictedPaycheck`, `PaycheckAudit`,
