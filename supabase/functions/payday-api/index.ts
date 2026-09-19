@@ -1482,7 +1482,10 @@ export function earnedIncomeCents(
   return t.cash + t.credit + t.gratuity - t.tipOut + t.regular + t.overtime;
 }
 
-async function engineEarnings(
+// Exported ONLY so a test can reach it. It had none: the Swift half of this
+// path has nine cases in `SnapshotUploaderTests`, the serving half had zero,
+// so nothing proved the API hands back what the device published.
+export async function engineEarnings(
   ctx: RequestContext,
   start: string | null,
   end: string | null,
