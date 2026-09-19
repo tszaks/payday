@@ -299,6 +299,36 @@ reading the legacy rows with no switch at all, and every parity gate in the
 suite stayed green through all nine, because each surface was internally
 consistent with whatever it happened to read.
 
+**Updated 2026-09-19, and the update is mostly about what is still FALSE.**
+The paragraph above is written functionally precisely so it can go stale in
+only one direction, and it went stale in the understating direction again:
+PR 6's group 2.14 landed overnight -- a server-issued `dataset_revision`
+watermark, an `earnings_snapshots` table, an `upsert_earnings_snapshot`
+acceptance rule, the upload document, and `SnapshotUploader` itself.
+
+**But none of that is connected, and the honest consequence is that ONE
+SURFACE STILL DISAGREES BY CONSTRUCTION: the API.** Measured today:
+
+- `/v1/summary` still calls `payday_agent_summary`, which does its own
+  arithmetic and has no wage concept at all. It answers "how much this
+  period" with tips only.
+- Nothing in `supabase/functions/` reads `earnings_snapshots`.
+- `SnapshotUploader` has no production caller; its only mention outside its
+  own file is a doc comment.
+
+So of the four things the goal names -- what Payday **shows**, **speaks**,
+**exports** and **serves** -- the first three come from the one engine and
+the fourth does not. An agent asking the API for a period total gets a
+different number from the one on the Dashboard, and the difference is
+wages, not rounding. That is the largest remaining gap in this pillar and
+it is a build, not a bug: the mechanism exists and is untested end to end
+because it is unwired.
+
+Stated here rather than only in `RELEASE_GATE.md` because this pillar is
+where someone looks to find out whether the engine is done, and "the
+screens agree" is a true sentence that would leave them with the wrong
+impression.
+
 The choice is no longer the screen's to make. A builder takes both stored
 shapes and resolves which to read itself, so a half-switched screen is not
 expressible, and `design-lint.sh` rule 23 fails the build on any app-code
