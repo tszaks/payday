@@ -501,7 +501,7 @@ kind of claim that gets planned around.
 | Upgrade conserves rows and money | **ADDED** (#82) | conservation, not expected values; two identical rows must not be deduplicated |
 | Midnight rollover rebuilds | **ADDED** (#83) | posts the real `.NSCalendarDayChanged`, so the REGISTRATION is what is tested |
 | Device timezone change leaves money untouched | **DONE, pre-existing** | fixture T1 |
-| Parsers produce candidates only | **TRUE, UNENFORCED** | no `.insert(`/`.save()`/`ModelContext` in any of the five parser files. Currently true with nothing holding it there; a lint rule is the obvious follow-up |
+| Parsers produce candidates only | **DONE** | `scripts/lint-parsers-pure.sh`, design-lint rule 32. Proven to fire: adding a `try? c.save()` to `ReceiptAIParser` fails it by name |
 
 **A citation in this table must name a symbol that EXISTS.** The row above
 originally cited "anEditThatThrowsLeavesTheRecordExactlyAsItWas" (quoted, not
@@ -520,7 +520,9 @@ resolve to nothing is a rubber stamp shaped like evidence. A sweep of every
 backticked identifier in this file found exactly one such citation: the one
 I had just added. `scripts/design-lint.sh` now fails on any other.
 
-**So PR 7's remaining work is one lint rule, not a slice.** Two of its
+**PR 7's plan list is now CLOSED.** The last item, the parser rule, is
+design-lint rule 32. What remains is not on the list: see the paragraph
+below. Two of its
 eleven items describe paths the code makes unreachable and should be struck
 from the plan rather than implemented; the plan predates the decision that
 made them impossible.
