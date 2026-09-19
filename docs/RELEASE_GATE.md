@@ -754,6 +754,68 @@ resolve to nothing is a rubber stamp shaped like evidence. A sweep of every
 backticked identifier in this file found exactly one such citation: the one
 I had just added. `scripts/design-lint.sh` now fails on any other.
 
+### MEASURED 2026-09-19: the server-side conversion is COMPLETE
+
+Recorded because the plan said the conversion would run on the first sync
+of the next build, and it had already run before that build was cut.
+`shift_migration_state`, read from production:
+
+| field | value |
+|---|---|
+| `migrated_at` | 2026-09-19 17:19:51Z |
+| `rollback_at` | null |
+| `conservation_failed_at` | null |
+| `remaining_group_count` | 0 |
+| `shift_count` | 60 |
+| `shift_non_wage_cents` | 1186131 |
+| `source_non_wage_cents` | 1186131 |
+| `unconverted_legacy_cents` | 0 |
+
+All four conditions `ShiftReadAuthority.isAuthoritative` requires are
+satisfied ON THE SERVER, and conservation is exact.
+
+**This is not the flip.** The flip is device-local: `isAuthoritative`
+reads `migratedAt` out of `AppGroup.defaults`, and no server action
+writes that. What the next build has to do is narrower than the plan
+assumed -- pull a finished state and stamp the local flag -- but it
+still cannot happen until somebody opens the app.
+
+### APPLIED 2026-09-19: the Aug 31 duplicate, in BOTH representations
+
+Two rows for 2026-08-31, both credit $134.96, sixteen minutes apart. The
+02:04 row carried no shift period, no hours and no tip-out; the 02:20
+row carried dinner, 4.65h and a 1940c tip-out with full receipt metrics.
+The incomplete one was both the double count and, because its hours were
+null, the shift behind "wages missing for 1 shift".
+
+It existed TWICE. The conversion above had already copied it into
+`shifts`, so soft-deleting only the `tip_entries` row would have left the
+engine still counting it. Both were soft-deleted in ONE transaction: a
+half-applied delete makes `shift_non_wage_cents` disagree with
+`source_non_wage_cents`, and `conservation_failed_at` is one of the four
+conditions gating the flip -- the repair would have blocked the thing it
+was clearing the way for.
+
+Measured against the proven pre-delete snapshot, not against a stored
+field (the stored `shift_non_wage_cents` is a different noun from a live
+`sum`, and comparing to it made the delta look like zero at first):
+
+| | before | after |
+|---|---|---|
+| August non-wage | 613710 | 600214 |
+| all-time live non-wage | 1199627 | 1186131 |
+| live `shifts` | 60 | 59 |
+| live `tip_entries` | 100 | 99 |
+
+Both deltas are exactly 13496c. All four flip conditions still hold
+afterwards. Reversible: `deleted_at` can be nulled, and the pre-delete
+snapshot was verified row-for-row against separately measured counts.
+
+One thing the check caught: setting `deleted_at` fires the shift deriver,
+which re-derived the deleted row's `non_wage_earnings_cents` to 0. So a
+live sum taken after the fact cannot show the drop, and only the snapshot
+can.
+
 ### CORRECTED 2026-09-19: "unreachable by design" was the wrong score
 
 Both account-switch rows above were marked UNREACHABLE BY DESIGN on the
