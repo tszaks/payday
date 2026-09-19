@@ -413,6 +413,19 @@ genuinely needs the hardware.** Measured 2026-09-19.
 - [x] A shift moved across a workweek boundary re-values both weeks. **GREEN:** added in #80; the source week's overtime must disappear, mutation-proven by collapsing the workweek grouping.
 - [ ] An upgrade from the current TestFlight build's store fixture migrates and verifies.
 - [ ] A downgrade purges `ShiftRecord` rows (measured; see `docs/design/S1-downgrade-probe.md`) and the next launch forces a baseline re-pull without ever showing `$0`.
+- [x] **Migration 15 applied 2026-09-19: `20260919150000_stamp_migrated_at_on_completion.sql`.**
+      Before -> after, all five tables: `tip_entries` 101 -> 101, `shifts`
+      0 -> 0, `shift_migration_state` 0 -> 0, `paycheck_records` 5 -> 5,
+      `user_settings` 4 -> 4. **No earnings row touched** -- it replaces a
+      function and writes no data. Verified on the live database rather
+      than inferred from a clean exit: `pg_get_functiondef` now contains
+      the completion rule and no longer contains `case when v_wrote > 0
+      then statement_timestamp()`. Scratch cluster from clean first: 9
+      suites, 379 assertions, 0 failures. Snapshot proven beforehand at
+      `~/payday-snapshots/prestamp-20260919T154334Z` -- a DURABLE path, not
+      `/tmp`, after the earlier pre-conversion snapshot was left somewhere
+      a reboot would clear.
+
 - [x] Production Supabase migrations applied, each with the affected-table row counts before and after, and each verified first on a scratch local cluster from clean. **DONE 2026-09-19.** All 14 pending (`20260904125000` through `20260918160000`) applied to `bkkxunqqfkogxibyyjmc`. Before -> after: `tip_entries` 101 -> 101, `paycheck_records` 5 -> 5, `user_settings` 4 -> 4 -- **no earnings row touched**. New and empty: `shifts`, `dataset_revisions`, `earnings_snapshots`, `shift_migration_state`. Nothing converted, because the one-shot is invoked by the app, not by the migration. Machinery verified live: 4 fold triggers on `tip_entries`, 3 watermark triggers, `migrate_tip_entries_to_shifts`, `upsert_earnings_snapshot`, 3 shift write RPCs. Scratch-cluster verification run fresh immediately prior: `db-test-local.sh`, 9 suites, 0 failures.
 
 ### Shadow comparison
