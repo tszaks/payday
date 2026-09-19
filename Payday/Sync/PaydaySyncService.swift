@@ -961,9 +961,26 @@ final class PaydaySyncService {
             captured: localShiftVersionsAtStart,
             current: shiftVersionsBeforeReconcile
         )
-        let shiftCursor = PaydaySyncState.ServerCursor.advanced(
-            from: shiftNeedsBaseline ? .beginning : (checkpoint.shiftServerCursor ?? .beginning),
-            candidates: pulledShifts.rows.map { ($0.serverUpdatedAt, $0.id) }
+        // CLAMPED, not `ServerCursor.advanced`. The shift leg is the one
+        // feed with a writer the device cannot see coming: the server fold
+        // stamps a converted shift with a timestamp EARLIER than the
+        // visible maximum, so a cursor parked on "newest row I pulled"
+        // steps straight over it and never returns.
+        //
+        // `db-test-race.sh` case 10 measures exactly that, both arms:
+        // `anUnclampedCursorPermanentlyMissesTheFoldedShift` delivers 0 rows,
+        // `theClampedCursorStillDeliversTheFoldedShift` delivers 1 with its
+        // money. Wiring the shift leg in #101 I used the plain advance and
+        // left `clampedShiftCursor` -- which already existed, with its
+        // 300-second window -- unwired. Step 6a is what makes folded shifts
+        // exist, so this had to land with it rather than after.
+        //
+        // `serverNow` comes from the same statement as the page, never a
+        // separate read, which is the half the gate is most specific about.
+        let shiftCursor = PaydaySyncState.clampedShiftCursor(
+            from: shiftNeedsBaseline ? nil : checkpoint.shiftServerCursor,
+            pulledUpdatedAt: pulledShifts.rows.map { ($0.serverUpdatedAt, $0.id) },
+            serverNow: pulledShifts.serverNow
         )
         guard let shiftCursor else { throw PaydayMigrationError.invalidRemoteData }
         let tipCursor = PaydaySyncState.ServerCursor.advanced(

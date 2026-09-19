@@ -317,6 +317,45 @@ struct SyncPassOrderTests {
         #expect(!RoutingStub.recordedPaths().contains { $0.contains("migrate_tip_entries_to_shifts") })
     }
 
+    /// The shift cursor must be CLAMPED, and this is the only test that can
+    /// tell: the pass succeeds either way, so a plain `ServerCursor.advanced`
+    /// is invisible to every other assertion here.
+    ///
+    /// Why it matters is measured in `db-test-race.sh` case 10. The server
+    /// fold stamps a converted shift EARLIER than the visible maximum, so a
+    /// cursor parked on the newest pulled row steps over it and never
+    /// returns it -- `anUnclampedCursorPermanentlyMissesTheFoldedShift`
+    /// delivers 0 rows. Step 6a is what makes folded shifts exist.
+    ///
+    /// The stub reports `server_now = 2026-09-19T00:00:00Z` and no rows, so
+    /// the fence is 300s earlier and the id half becomes the all-zero UUID
+    /// -- carrying a real id beside a clamped-down timestamp would skip any
+    /// row sitting exactly at the fence with a lower id.
+    @Test("the shift cursor is clamped to the safety window, not the newest row")
+    func theShiftCursorIsClampedToTheFence() async throws {
+        let service = PaydaySyncService(client: client())
+        let ctx = try context()
+        _ = try? await service.synchronize(
+            context: ctx,
+            scheduleStore: PayScheduleStore(),
+            preferencesStore: UserPreferencesStore(),
+            moveLedgerStore: MoveLedgerStore(),
+            policyStore: PolicyStore(),
+            userID: Self.user
+        )
+
+        let cursor = PaydaySyncState.snapshot(for: Self.user).shiftServerCursor
+        #expect(cursor != nil, "the pass wrote no shift cursor at all")
+        #expect(
+            cursor?.updatedAt == "2026-09-18T23:55:00.000Z",
+            "expected the fence (server_now - 300s); got \(cursor?.updatedAt ?? "nil")"
+        )
+        #expect(
+            cursor?.id == UUID(uuidString: "00000000-0000-0000-0000-000000000000"),
+            "a clamped cursor must carry the all-zero id; got \(cursor?.id.uuidString ?? "nil")"
+        )
+    }
+
 }
 
 /// Routes by URL path and records the order, because one canned body for
