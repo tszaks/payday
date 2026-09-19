@@ -756,9 +756,38 @@ remaining blocker, so here is exactly which parts of it exist.
 | the 1.0 blob | `pendingDeletionsDecodeA10ShapedBlob` asserts a queue written by the shipped build still decodes |
 | server invariants | a tombstoned shift is never re-derived: `shift_is_open_to_fold` excludes deleted rows, ARM 1 never touches `deleted_at`, ARM 3 reopens only fold-set tombstones |
 
-**THE REMAINING BUILD is design section 7.1 only: the orchestration.** Five
-written functions with zero callers, and a `synchronize` that does not yet
-call them. Push, keyset-delta pull, deletion flush, restore flush.
+**THE REMAINING BUILD is design section 7.1's orchestration, and it has a
+prerequisite nobody had costed.** Measured 2026-09-19:
+
+- `synchronize` has **no end-to-end test at all**. `grep -rln "\.synchronize("
+  PaydayTests/` returns nothing.
+- A single pass makes **9 distinct repository calls**.
+- Section 7.5 requires inserting five steps into that function and
+  INVERTING the order for the shift leg only (pull before push, while tips
+  stay push-then-pull), and warns that getting the exclusion set wrong
+  leaves a divergence "permanent and unpushable".
+
+So the design names a test -- `firstShiftsSyncPullsBeforePushingAndReadsBackAfter`
+-- that would be the FIRST end-to-end test of the most dangerous function
+in the app, and writing it means stubbing nine RPC response shapes.
+
+**The seam exists and no refactor is needed:** `PaydaySyncService.init(client:)`
+is injectable, and `StubbingURLProtocol` in `ShiftWriteWireTests` already
+records requests in order. The cost is the nine response bodies, not
+plumbing.
+
+**So the next slice is the harness, not the reorder.** Reordering a
+function with no end-to-end coverage, where the design itself warns the
+failure is permanent and unpushable, is the shape that killed PR 2's first
+two designs.
+
+### And 6a is deliberately NOT first
+
+Step 6a calls `migrate_tip_entries_to_shifts`. That converts real accounts,
+and conversion is what makes `shiftsAreAuthoritative` flip. **Wiring 6a
+before the leg would flip reads to a representation the device cannot
+sync** -- deletions would not propagate, edits would not push. The one-shot
+must land AFTER the orchestration, never with it and never before it.
 
 **The objection to building it has been removed, and it was mine.** I wrote
 here that the piece that matters most -- whether a deletion actually
