@@ -641,7 +641,7 @@ private struct DayCell: View {
                     .font(PaydayFont.caption2)
                     .fontWeight(.medium)
                     .monospacedDigit()
-                    .foregroundStyle(Self.heatTextColor(fraction: heatFraction, colorScheme: colorScheme))
+                    .foregroundStyle(CalendarHeat.textColor(fraction: heatFraction, colorScheme: colorScheme))
                     .lineLimit(1)
                     .minimumScaleFactor(0.6)
             }
@@ -650,7 +650,7 @@ private struct DayCell: View {
         // footprint so the grid reads as one surface with heat in it, never
         // a field of raised chips (Tyler, 2026-07-28).
         .frame(maxWidth: .infinity, minHeight: 46, maxHeight: 46)
-        .background(hasTips ? PaydayColor.primary.opacity(Self.fillOpacity(fraction: heatFraction)) : Color.clear, in: RoundedRectangle(cornerRadius: PaydayRadius.sm))
+        .background(hasTips ? PaydayColor.primary.opacity(CalendarHeat.fillOpacity(fraction: heatFraction)) : Color.clear, in: RoundedRectangle(cornerRadius: PaydayRadius.sm))
         // Today always rings the full cell in the same rounded-square
         // geometry as the tiles — a tight circle around the numeral read as
         // a stray dot, not a state (Tyler, 2026-07-20).
@@ -671,7 +671,7 @@ private struct DayCell: View {
             .fontWeight(hasTips || isToday ? .bold : .regular)
             .foregroundStyle(
                 hasTips
-                    ? Self.heatTextColor(fraction: heatFraction, colorScheme: colorScheme)
+                    ? CalendarHeat.textColor(fraction: heatFraction, colorScheme: colorScheme)
                     : (isCurrentMonth ? PaydayColor.textSecondary : PaydayColor.textTertiary)
             )
     }
@@ -690,60 +690,4 @@ private struct DayCell: View {
         return "\(dateText), \(amount) logged"
     }
 
-    /// One-hue green ramp (Tyler, 2026-07-28), reversing the temperature-walk
-    /// exception picked on 2026-07-19: a hue walk from red through yellow to
-    /// green was meant to separate a tightly clustered month at a glance, but
-    /// on real renders it came out as muddy browns and olives on black — not
-    /// one cell actually read as the app's green — so the "deliberate,
-    /// contained exception to the one-green law" it was sold as never earned
-    /// its keep. The calendar rejoins that law: every worked day is
-    /// PaydayColor.primary, full stop, and heat is carried by opacity alone,
-    /// floored so the faintest worked day still reads as green rather than
-    /// fading toward grey — the mistake made in the prior opacity attempt
-    /// (2026-07-20) that led to the (now also reversed) fully-opaque commit.
-    /// That prior miss came from tuning against dark-mode renders only; the
-    /// floor here is picked by looking at both modes.
-    private static let fillOpacityFloor = 0.22
-
-    /// A linear ramp off a high floor made every worked day look alike on a
-    /// tightly clustered month. Squaring the fraction spends more of the
-    /// range on the differences that actually exist between ordinary days,
-    /// while the floor keeps the quietest one unmistakably green.
-    private static func fillOpacity(fraction: Double) -> Double {
-        let curved = fraction * fraction
-        return fillOpacityFloor + (1 - fillOpacityFloor) * curved
-    }
-
-    private static func backgroundComponents(for colorScheme: ColorScheme) -> (r: Double, g: Double, b: Double) {
-        if colorScheme == .dark {
-            return (0.0196, 0.0196, 0.0196) // #050505
-        }
-        return (0.9804, 0.9804, 0.9804) // #FAFAFA
-    }
-
-    /// Contrast is computed against the fill as it actually composites —
-    /// PaydayColor.primary at `fillOpacity`, blended over this mode's page
-    /// background (PaydayColor.background) — rather than assumed. Choose the
-    /// higher-contrast black/white foreground using WCAG's gamma-correct
-    /// relative luminance, so every point in the heat ramp stays legible.
-    private static func heatTextColor(fraction: Double, colorScheme: ColorScheme) -> Color {
-        let alpha = fillOpacity(fraction: fraction)
-        let bg = backgroundComponents(for: colorScheme)
-        let fgR = 0.0
-        let fgG = colorScheme == .dark ? 0.7216 : 0.5216 // #00B83F / #00852F
-        let fgB = colorScheme == .dark ? 0.2471 : 0.1843
-        let r = fgR * alpha + bg.r * (1 - alpha)
-        let g = fgG * alpha + bg.g * (1 - alpha)
-        let b = fgB * alpha + bg.b * (1 - alpha)
-        let luminance = 0.2126 * linearized(r) + 0.7152 * linearized(g) + 0.0722 * linearized(b)
-        let blackContrast = (luminance + 0.05) / 0.05
-        let whiteContrast = 1.05 / (luminance + 0.05)
-        return blackContrast >= whiteContrast ? .black : .white
-    }
-
-    private static func linearized(_ component: Double) -> Double {
-        component <= 0.04045
-            ? component / 12.92
-            : pow((component + 0.055) / 1.055, 2.4)
-    }
 }
