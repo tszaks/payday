@@ -201,6 +201,36 @@ struct CalendarMonthFacts: SnapshotFacts {
     /// partition exactly what `range(_:)` selects.
     let monthFigure: EarningsFigure
 
+    /// The month hero's drawer, from the SAME `EarningsResult` the face
+    /// figure came from.
+    ///
+    /// The Calendar was the one hero without one. Dashboard and
+    /// PeriodDetail have had `HeroBreakdownDrawer` since wave 0, so a
+    /// person could see what a period was made of everywhere except the
+    /// month they were looking at -- and this screen is where the
+    /// "wages missing for 1 shift" caption appears, which is exactly the
+    /// figure most worth opening up.
+    ///
+    /// Rows come from `BreakdownRow.ledgerRows`, which reads
+    /// `knownComponents`, so a partial month shows the tips it has and the
+    /// wages it has and does not silently imply the missing one.
+    let monthBreakdownRows: [BreakdownRow]
+    /// The emphasized bottom line. Its LABEL is the face figure's, so the
+    /// card and the drawer cannot say two different things about one number.
+    let monthBreakdownTotal: BreakdownRow
+    let monthLipText: String?
+    let monthHasBreakdown: Bool
+
+    /// The wages caption, NAMING the day when it can.
+    ///
+    /// "wages missing for 1 shift" made Tyler scan a whole month by hand to
+    /// find which one. The engine already knew: every `ShiftValuation`
+    /// carries its `workDay` and a `wage` that is `.unavailable` when it
+    /// could not be priced, so this is a filter over
+    /// `EarningsSnapshot.valuations(in:)` rather than new engine API or a
+    /// second derivation of the same fact.
+    let monthWagesCaption: String?
+
     let stamp: SnapshotStamp?
 
     /// The payroll zone the snapshot was built in, for the grid's day lookup.
@@ -217,6 +247,18 @@ struct CalendarMonthFacts: SnapshotFacts {
             let monthResult = snapshot.range(month.range)
             monthFigure = .earnedIncome(monthResult)
             monthHoursLabel = WorkedMinutes.hoursLabel(minutes: monthResult.minutes)
+            monthBreakdownRows = BreakdownRow.ledgerRows(monthResult)
+            monthBreakdownTotal = BreakdownRow.total(monthResult)
+            monthLipText = BreakdownRow.lipText(monthResult)
+            monthHasBreakdown = BreakdownRow.hasBreakdown(monthResult)
+            // Sorted so the named day is stable run to run; a caption that
+            // reorders itself reads like the data changed.
+            let unpriced = snapshot.valuations(in: month.range)
+                .filter { !$0.wage.isValued }
+                .map(\.workDay)
+                .sorted { $0.iso < $1.iso }
+            monthWagesCaption = CompletenessCopy.caption(
+                monthResult.completeness.state, unpricedDays: unpriced)
             // One result per civil day of the month, from the query whose
             // contract is that it partitions the range above. Paired by each
             // result's OWN range rather than by index, so a cutoff that
@@ -237,6 +279,15 @@ struct CalendarMonthFacts: SnapshotFacts {
             // amounts at all.
             monthFigure = .unavailable()
             monthHoursLabel = WorkedMinutes.hoursLabel(minutes: 0)
+            // A failed read has no breakdown to show. The label still comes
+            // from the figure so VoiceOver reads something next to the
+            // placeholder, matching Dashboard's unavailable branch.
+            let unavailable = EarningsFigure.unavailable()
+            monthBreakdownRows = []
+            monthBreakdownTotal = BreakdownRow(unavailable.label, cents: nil, emphasized: true)
+            monthLipText = nil
+            monthHasBreakdown = false
+            monthWagesCaption = nil
             tiles = []
         }
 
@@ -297,6 +348,9 @@ struct CalendarView: View {
     @Environment(PayScheduleStore.self) private var scheduleStore
     @Environment(PolicyStore.self) private var policyStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// The month hero's drawer. Collapsed by default: the grid is what a
+    /// glance at this screen is for, and the breakdown is the second question.
+    @State private var monthBreakdownExpanded = false
     @Query private var allEntries: [TipEntry]
     /// The other representation. `CalendarEarnings.snapshot` resolves which
     /// one this screen reads; see its header for why the choice is no longer
@@ -491,28 +545,41 @@ struct CalendarView: View {
             VStack(spacing: PaydaySpacing.p12) {
                 Divider()
 
-                VStack(spacing: 2) {
-                    Text(facts.monthFigure.text ?? ShiftDayRow.unavailablePlaceholder)
-                        .font(PaydayFont.displayMedium)
-                        .monospacedDigit()
-                        .foregroundStyle(PaydayColor.textPrimary)
-                        .contentTransition(.numericText())
-                        .animation(
-                            reduceMotion ? nil : PaydayAnimation.premiumSpring,
-                            value: facts.monthFigure.cents
-                        )
-                    Text(facts.monthCaption)
-                        .font(PaydayFont.caption)
-                        .foregroundStyle(PaydayColor.textSecondary)
-                    // `.estimated` carries its caption, per the completeness
-                    // presentation rules: a wage priced off an assumed rate
-                    // says so on the surface that shows it.
-                    if let caption = facts.monthFigure.caption {
-                        Text(caption)
-                            .font(PaydayFont.caption2)
-                            .foregroundStyle(PaydayColor.textTertiary)
-                            .multilineTextAlignment(.center)
+                // The same drawer Dashboard and PeriodDetail use, over the
+                // month's own `EarningsResult`. A person can now see that
+                // this figure is cash + credit + gratuity + wages MINUS
+                // tip-out rather than having to be told.
+                HeroBreakdownDrawer(
+                    lipText: facts.monthLipText ?? "",
+                    rows: facts.monthBreakdownRows,
+                    total: facts.monthBreakdownTotal,
+                    hasBreakdown: facts.monthHasBreakdown,
+                    isExpanded: $monthBreakdownExpanded
+                ) {
+                    VStack(spacing: 2) {
+                        Text(facts.monthFigure.text ?? ShiftDayRow.unavailablePlaceholder)
+                            .font(PaydayFont.displayMedium)
+                            .monospacedDigit()
+                            .foregroundStyle(PaydayColor.textPrimary)
+                            .contentTransition(.numericText())
+                            .animation(
+                                reduceMotion ? nil : PaydayAnimation.premiumSpring,
+                                value: facts.monthFigure.cents
+                            )
+                        Text(facts.monthCaption)
+                            .font(PaydayFont.caption)
+                            .foregroundStyle(PaydayColor.textSecondary)
+                        // `.estimated` carries its caption, per the completeness
+                        // presentation rules: a wage priced off an assumed rate
+                        // says so on the surface that shows it.
+                        if let caption = facts.monthWagesCaption ?? facts.monthFigure.caption {
+                            Text(caption)
+                                .font(PaydayFont.caption2)
+                                .foregroundStyle(PaydayColor.textTertiary)
+                                .multilineTextAlignment(.center)
+                        }
                     }
+                    .frame(maxWidth: .infinity)
                 }
 
                 VStack(spacing: 4) {

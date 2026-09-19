@@ -109,6 +109,29 @@ public enum CompletenessCopy {
         }
     }
 
+    /// The caption, NAMING the days it is about when it can.
+    ///
+    /// "wages missing for 1 shift" sends a person hunting a whole month by
+    /// hand to find which one -- Tyler did exactly that. The engine already
+    /// knows: `EarningsSnapshot.valuations(in:)` returns each
+    /// `ShiftValuation` with its `workDay` and a `wage` that is
+    /// `.unavailable(.hoursMissing)` when it could not be priced. So this
+    /// needs no new engine API, only the days passed in.
+    ///
+    /// Names up to two days. Beyond that a list is noise and the count is
+    /// the more useful fact, so it falls back to `caption(_:)`.
+    public static func caption(_ state: WageState, unpricedDays: [CivilDay]) -> String? {
+        guard case .partial(let missingHours, let missingRate) = state,
+              missingHours > 0, missingRate == 0,
+              !unpricedDays.isEmpty, unpricedDays.count <= 2
+        else { return caption(state) }
+
+        let named = unpricedDays.count == 1
+            ? unpricedDays[0].shortLabel
+            : "\(unpricedDays[0].shortLabel) and \(unpricedDays[1].shortLabel)"
+        return "wages missing for \(named) -- add hours to price it"
+    }
+
     /// "1 shift" / "N shifts". The one place the plural lives.
     public static func shiftCount(_ count: Int) -> String {
         count == 1 ? "1 shift" : "\(count) shifts"

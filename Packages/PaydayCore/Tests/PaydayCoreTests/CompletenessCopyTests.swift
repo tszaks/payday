@@ -295,4 +295,65 @@ struct CompletenessCopyTests {
             #expect(MetricID.nonWageEarnings.allowedLabels.contains(label))
         }
     }
+    /// **The caption has to say WHICH shift.**
+    ///
+    /// "wages missing for 1 shift" is a true sentence that sends a person
+    /// hunting a month by hand -- which is exactly what happened before this
+    /// existed. The day is knowable: every `ShiftValuation` carries its
+    /// `workDay`, so the count was never the only thing available.
+    @Test("one unpriced day is named, not counted")
+    func oneUnpricedDayIsNamed() {
+        let caption = CompletenessCopy.caption(
+            .partial(missingHours: 1, missingRate: 0),
+            unpricedDays: [CivilDay(year: 2026, month: 8, day: 31)]
+        )
+        #expect(caption == "wages missing for Aug 31 -- add hours to price it")
+        #expect(caption?.contains("1 shift") == false, "naming replaces counting")
+    }
+
+    @Test("two unpriced days are both named")
+    func twoUnpricedDaysAreNamed() {
+        let caption = CompletenessCopy.caption(
+            .partial(missingHours: 2, missingRate: 0),
+            unpricedDays: [CivilDay(year: 2026, month: 8, day: 31),
+                           CivilDay(year: 2026, month: 9, day: 2)]
+        )
+        #expect(caption == "wages missing for Aug 31 and Sep 2 -- add hours to price it")
+    }
+
+    /// Past two, a list is noise and the count is the more useful fact.
+    @Test("three or more falls back to the count")
+    func threeOrMoreFallsBackToTheCount() {
+        let days = (1...3).map { CivilDay(year: 2026, month: 8, day: $0) }
+        let caption = CompletenessCopy.caption(
+            .partial(missingHours: 3, missingRate: 0), unpricedDays: days)
+        #expect(caption == "wages missing for 3 shifts")
+    }
+
+    /// A missing RATE is not a missing day -- no hours to add, so naming a
+    /// date would tell someone to do a thing that would not help.
+    @Test("a missing rate keeps the count, even with days to hand")
+    func aMissingRateIsNotNamed() {
+        let caption = CompletenessCopy.caption(
+            .partial(missingHours: 0, missingRate: 1),
+            unpricedDays: [CivilDay(year: 2026, month: 8, day: 31)]
+        )
+        #expect(caption == "no rate set for 1 shift")
+    }
+
+    /// With no days supplied the overload must behave exactly like the
+    /// original, so every existing caller is unaffected.
+    @Test("no days supplied is identical to the original caption")
+    func emptyDaysMatchesTheOriginal() {
+        for state: WageState in [
+            .complete, .off, .noShifts, .estimated,
+            .partial(missingHours: 1, missingRate: 0),
+            .partial(missingHours: 0, missingRate: 2),
+            .partial(missingHours: 1, missingRate: 1),
+        ] {
+            #expect(CompletenessCopy.caption(state, unpricedDays: []) == CompletenessCopy.caption(state),
+                    "diverged for \(state)")
+        }
+    }
+
 }
