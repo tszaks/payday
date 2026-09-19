@@ -45,6 +45,66 @@ struct MigrationRunnerTests {
         #expect(july1.first?.shiftID != july2.first?.shiftID)
     }
 
+    /// **PR 7's gate applied to the upgrade path: no lost, duplicated or
+    /// altered records.**
+    ///
+    /// The tests around this one check the transformation RULES -- one id
+    /// per day, coalescing, hour recomputation. None of them checks the
+    /// property a person would actually notice, which is that the money
+    /// still adds up afterwards. A backfill that dropped a row, or ran a
+    /// day's cash through twice, would satisfy every rule above and still
+    /// be the worst possible bug in a tips app.
+    ///
+    /// Asserted as CONSERVATION rather than as a list of expected values:
+    /// the total before must equal the total after, and the multiset of
+    /// (date, cents, kind) must be untouched. A hand-typed expectation
+    /// would only re-state what the code did.
+    @Test("the upgrade conserves every row and every cent")
+    func upgradeConservesRowsAndMoney() throws {
+        let context = try makeContext()
+        // A realistic legacy store: cash+credit nights, a lone cash night, a
+        // duplicate amount on the same day (which must NOT be deduplicated),
+        // a zero row, and a punch-backed row.
+        let rows = [
+            TipEntry(date: day(2026, 7, 1), amountCents: 5_000, kind: .cash),
+            TipEntry(date: day(2026, 7, 1), amountCents: 3_000, kind: .credit),
+            TipEntry(date: day(2026, 7, 1), amountCents: 3_000, kind: .credit),
+            TipEntry(date: day(2026, 7, 2), amountCents: 4_000, kind: .cash),
+            TipEntry(date: day(2026, 7, 3), amountCents: 0, kind: .cash),
+            TipEntry(date: day(2026, 7, 4), amountCents: 12_345, kind: .credit)
+        ]
+        rows.forEach { context.insert($0) }
+        try context.save()
+
+        func fingerprint() throws -> [String] {
+            try context.fetch(FetchDescriptor<TipEntry>())
+                .map { "\(Int($0.date.timeIntervalSince1970))|\($0.amountCents)|\($0.kind.rawValue)" }
+                .sorted()
+        }
+        let before = try fingerprint()
+        let centsBefore = try context.fetch(FetchDescriptor<TipEntry>())
+            .reduce(0) { $0 + $1.amountCents }
+        #expect(centsBefore == 27_345, "the fixture must be what this test thinks it is")
+
+        MigrationRunner.backfillShiftIDs(in: context)
+        MigrationRunner.recomputeExactHours(in: context)
+
+        let after = try fingerprint()
+        let centsAfter = try context.fetch(FetchDescriptor<TipEntry>())
+            .reduce(0) { $0 + $1.amountCents }
+
+        #expect(after.count == before.count, "no row lost and none duplicated")
+        #expect(after == before, "no row's date, amount or kind altered")
+        #expect(centsAfter == centsBefore, "not one cent moved")
+
+        // The two identical credit rows on July 1 are a real shape -- two
+        // tables closed out at the same amount -- and collapsing them would
+        // silently halve that night.
+        let july1Credits = try context.fetch(FetchDescriptor<TipEntry>())
+            .filter { Calendar.current.isDate($0.date, inSameDayAs: day(2026, 7, 1)) && $0.kind == .credit }
+        #expect(july1Credits.count == 2, "identical rows are distinct shifts' worth of money")
+    }
+
     @Test("backfill is idempotent and deterministic across runs")
     func idempotentAndDeterministic() throws {
         let context = try makeContext()
