@@ -400,7 +400,6 @@ Payday/Models/ShiftRecord.swift
 Payday/Utilities/PaycheckAudit.swift
 Payday/Utilities/TipBreakdown.swift
 Payday/Utilities/StatsEngine.swift
-Payday/Views/Shared/LogTipSheet.swift
 "
 
 money_boundary_hits() { # file
@@ -414,7 +413,23 @@ money_boundary_hits() { # file
     }
     line ~ /\.netCents/ ||
     line ~ /cashTipsCents[[:space:]]*\+/ ||
-    line ~ /tipOutCents[[:space:]]*\?\?/ ||
+    # `tipOutCents ??` counts ONLY when the LINE does arithmetic.
+    #
+    # Unqualified it caught `State(initialValue: record.tipOutCents ?? 0)`
+    # -- unwrapping an optional for a FORM FIELD's default, which computes
+    # no money -- and so kept LogTipSheet.swift, a live view PR 8 does NOT
+    # delete, permanently allowlisted for something that was never a
+    # violation. An over-broad money rule is worse than a narrow one: it
+    # teaches people to allowlist instead of to fix, and it inflates how
+    # much bypass looks left.
+    #
+    # The discriminator is the LINE, not the operand. A first attempt
+    # required an operator ADJACENT to `tipOutCents ??` and silently lost
+    # TipBreakdown.swift:72, `result.tipOutCents += details.tipOutCents ?? 0`
+    # -- real accumulation whose operator sits beside the other operand.
+    # Narrowing a money lint loses a catch more easily than it gains
+    # precision, so both directions are mutation-tested.
+    (line ~ /tipOutCents[[:space:]]*\?\?/ && line ~ /[-+]=?[[:space:]]/) ||
     line ~ /\*[[:space:]]*1\.5/ ||
     line ~ /\/[[:space:]]*100[[:space:]]*\/[[:space:]]*hours/ {
       printf "%s:%d:%s\n", FILENAME, FNR, line
