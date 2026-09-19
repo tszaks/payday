@@ -569,6 +569,8 @@ final class PaydaySyncService {
         // set whether or not the write path remembered to touch() it.
         let localTipVersionsAtStart = try PaydayRowFingerprint.values(localTipEntries)
         let localPaycheckVersionsAtStart = try PaydayRowFingerprint.values(localPaycheckRecords)
+        let localShiftRecords = try context.fetch(FetchDescriptor<ShiftRecord>())
+        let localShiftVersionsAtStart = try PaydayRowFingerprint.values(localShiftRecords)
 
         // One sync per install: a checkpoint written under the shipped
         // timestamp scheme has no fingerprints, so ask the server what it
@@ -625,10 +627,33 @@ final class PaydaySyncService {
         for id in restoredPaycheckIDs { pendingPaycheckDeletions.removeValue(forKey: id) }
         PaydaySyncState.clearTipDeletions(restoredTipIDs, for: userID)
         PaydaySyncState.clearPaycheckDeletions(restoredPaycheckIDs, for: userID)
+
+        // Change detection reads the FINGERPRINT map, never `shiftClientUpdatedAt`.
+        // A timestamp misses corrections outright: `didSet` never fires on a
+        // SwiftData `@Model`, so an edited shift keeps its old stamp and would
+        // never enter the upload set.
+        let changedShiftIDs = PaydaySyncState.changedIDs(
+            current: localShiftVersionsAtStart,
+            acknowledged: checkpoint.shiftContentFingerprint
+        )
+        let changedShifts = localShiftRecords
+            .filter { changedShiftIDs.contains($0.id) }
+            .map { RemoteShift(record: $0, userID: userID) }
+        let currentShiftIDs = Set(localShiftRecords.map(\.id))
+        var pendingShiftDeletions = PaydaySyncState.pendingShiftDeletions(for: userID)
+        let restoredShiftIDs = currentShiftIDs.intersection(pendingShiftDeletions.keys)
+        for id in restoredShiftIDs { pendingShiftDeletions.removeValue(forKey: id) }
+        PaydaySyncState.clearShiftDeletions(restoredShiftIDs, for: userID)
         Self.logger.notice(
             "Sync plan. localTips=\(localTips.count) localPaychecks=\(localPaychecks.count) uploadTips=\(changedTips.count) uploadPaychecks=\(changedPaychecks.count) deleteTips=\(pendingTipDeletions.count) deletePaychecks=\(pendingPaycheckDeletions.count)"
         )
 
+        // Step 0. The restore queue is durable and flushes before anything
+        // else writes, so an undone shift is un-deleted on the server before a
+        // later step can observe it as deleted and act on that.
+        if !checkpoint.pendingShiftRestores.isEmpty {
+            _ = try await repository.restoreShifts(Array(checkpoint.pendingShiftRestores.keys))
+        }
         try await repository.upsertTips(changedTips)
         try await repository.upsertPaychecks(changedPaychecks)
         try await repository.softDeleteTips(pendingTipDeletions)
@@ -645,6 +670,40 @@ final class PaydaySyncService {
             // adoption on the floor.
             policyStore.acknowledgePolicyUpload()
         }
+
+        // ---- Shift leg, design 7.5 steps 6-9. PULL BEFORE PUSH ----
+        //
+        // The inversion is for THIS LEG ONLY. Inverting globally breaks two
+        // measured things: `verifyServerContainsChangedRows` lives inside the
+        // tip/paycheck pull block, so pulling before the paycheck upsert checks
+        // a subset that does not exist yet and every sync throws
+        // `paycheckMismatch`; and `apply(_:force:)` is called with force==true
+        // whenever the user did not touch settings during the pass, so pulling
+        // before `upsertSettings` reverts a locally changed wage.
+        //
+        // Step 6a (`migrate_tip_entries_to_shifts`) is deliberately NOT here.
+        // It converts real accounts and trips the read flip, so it lands after
+        // this orchestration, never with it.
+        // A cursor alone is not enough: if the checkpoint names shifts the
+        // local store no longer has, the delta feed can never reintroduce
+        // them, so fall back to a baseline read.
+        let shiftNeedsBaseline = PaydaySyncState.shiftCacheRequiresBaseline(
+            localShiftIDs: currentShiftIDs,
+            pendingShiftDeletionIDs: Set(pendingShiftDeletions.keys),
+            checkpoint: checkpoint
+        )
+        let pulledShifts = try await repository.fetchShiftChanges(
+            cursor: shiftNeedsBaseline ? nil : checkpoint.shiftServerCursor
+        )
+        _ = try await repository.upsertShifts(changedShifts)
+        _ = try await repository.softDeleteShifts(pendingShiftDeletions)
+        // Step 9. Read back only what this pass touched, so the device adopts
+        // the server's canonical result -- a `client_updated_at` clamped to
+        // statement_timestamp(), a sanitized receipt payload, a refold.
+        let shiftReadbackIDs = changedShiftIDs.union(pendingShiftDeletions.keys)
+        let readbackShifts = shiftReadbackIDs.isEmpty
+            ? []
+            : try await repository.fetchShifts(userID: userID, ids: shiftReadbackIDs)
 
         let remoteTips: [RemoteTipEntry]
         let remotePaychecks: [RemotePaycheckRecord]
@@ -753,6 +812,36 @@ final class PaydaySyncService {
             locallyDeletedDuringSync: Set(localPaycheckVersionsAtStart.keys)
                 .subtracting(paycheckVersionsBeforeReconcile.keys)
         )
+
+        // TWO calls, not one merged set, and the split is load-bearing.
+        //
+        // Pull-sourced rows must skip ids the user edited before this pass:
+        // the push has not happened for them yet, so adopting the server's
+        // copy would discard an unpushed edit. The step-9 READBACK rows must
+        // NOT skip them -- they are the server's answer to this pass's own
+        // write. Applying the exclusion to both would leave the device holding
+        // a value the server rejected while still acking it as clean, so the
+        // row would read unchanged forever: a permanent, unpushable divergence.
+        let shiftVersionsBeforeReconcile = try PaydayRowFingerprint.values(
+            try context.fetch(FetchDescriptor<ShiftRecord>())
+        )
+        let locallyDeletedShifts = Set(localShiftVersionsAtStart.keys)
+            .subtracting(shiftVersionsBeforeReconcile.keys)
+        _ = try Self.reconcileShifts(
+            pulledShifts.rows,
+            in: context,
+            localVersionsAtStart: localShiftVersionsAtStart,
+            locallyDeletedDuringSync: locallyDeletedShifts,
+            locallyChangedBeforeSync: changedShiftIDs,
+            restoringIDs: Set(checkpoint.pendingShiftRestores.keys)
+        )
+        _ = try Self.reconcileShifts(
+            readbackShifts,
+            in: context,
+            localVersionsAtStart: localShiftVersionsAtStart,
+            locallyDeletedDuringSync: locallyDeletedShifts,
+            restoringIDs: Set(checkpoint.pendingShiftRestores.keys)
+        )
         if let remoteSettings {
             Self.apply(
                 remoteSettings,
@@ -777,6 +866,17 @@ final class PaydaySyncService {
         let acknowledgedPaychecks = reconciledPaycheckRecords.map { RemotePaycheckRecord(record: $0, userID: userID) }
         let acknowledgedTipFingerprints = try PaydayRowFingerprint.values(reconciledTipEntries)
         let acknowledgedPaycheckFingerprints = try PaydayRowFingerprint.values(reconciledPaycheckRecords)
+        let reconciledShiftRecords = try context.fetch(FetchDescriptor<ShiftRecord>())
+        let acknowledgedShiftFingerprints = try PaydayRowFingerprint.values(reconciledShiftRecords)
+        let shiftsChangedDuringSync = PaydaySyncState.IDsChangedDuringSync(
+            captured: localShiftVersionsAtStart,
+            current: shiftVersionsBeforeReconcile
+        )
+        let shiftCursor = PaydaySyncState.ServerCursor.advanced(
+            from: shiftNeedsBaseline ? .beginning : (checkpoint.shiftServerCursor ?? .beginning),
+            candidates: pulledShifts.rows.map { ($0.serverUpdatedAt, $0.id) }
+        )
+        guard let shiftCursor else { throw PaydayMigrationError.invalidRemoteData }
         let tipCursor = PaydaySyncState.ServerCursor.advanced(
             from: checkpoint.tipServerCursor ?? .beginning,
             candidates: tipCursorRows.map { ($0.serverUpdatedAt, $0.id) }
@@ -801,6 +901,13 @@ final class PaydaySyncService {
             checkpointToWrite.tipEntryIDs = Set(acknowledgedTips.map(\.id))
             checkpointToWrite.paycheckIDs = Set(acknowledgedPaychecks.map(\.id))
             checkpointToWrite.migrationVerified = true
+            checkpointToWrite.shiftIDs = Set(reconciledShiftRecords.map(\.id))
+            checkpointToWrite.shiftServerCursor = shiftCursor
+            checkpointToWrite.shiftContentFingerprint = PaydaySyncState.acknowledgedVersions(
+                current: acknowledgedShiftFingerprints,
+                checkpoint: checkpoint.shiftContentFingerprint,
+                changedDuringSync: shiftsChangedDuringSync
+            )
             // Written for a possible rollback to the timestamp scheme only.
             // Change detection compares the fingerprints below.
             checkpointToWrite.tipClientUpdatedAt = PaydaySyncState.acknowledgedVersions(
