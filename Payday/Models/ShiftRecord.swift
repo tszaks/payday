@@ -209,12 +209,42 @@ final class ShiftRecord {
     var receiptMetrics: ShiftReceiptMetrics? {
         get { Self.decode(receiptMetricsJSON) }
         set {
+            // `?? 0`, not `?? 2`. A MISSING key used to satisfy this
+            // assert by defaulting to 2, while `ShiftReceiptMetrics` reads
+            // the same missing key as `?? 1` and folds on it. One absent
+            // field, two generations -- and the two readers then disagree by
+            // exactly the gratuity (measured: 300c and 100c).
+            //
+            // No sanctioned writer produces that state: the SQL deriver
+            // stamps after folding, and `applyEarnings` goes through
+            // `normalizedToV2`, which does both and is idempotent. So this
+            // makes an unreachable state UNREPRESENTABLE rather than fixing
+            // a live bug. Do not "fix" the disagreement by relabelling a
+            // payload downstream: without subtracting the folded gratuity
+            // that double-counts the money permanently, which is the worse
+            // direction and which `design-lint` refuses.
+            // Clearing to nil stays legal -- that is how a payload is
+            // removed. What is rejected is a PRESENT payload with an absent
+            // version, which the old `?? 2` waved through.
             assert(
-                (newValue?.earningsSchemaVersion ?? 2) >= 2,
-                "ShiftRecord stores v2 earnings only. Use applyEarnings."
+                Self.storesV2Earnings(newValue),
+                "ShiftRecord stores v2 earnings only, and an ABSENT version is not v2. Use applyEarnings."
             )
             receiptMetricsJSON = Self.encode(newValue)
         }
+    }
+
+    /// The invariant the setter asserts, as a value rather than a trap.
+    ///
+    /// Extracted because an `assert` cannot be demonstrated without killing
+    /// the test process -- and a guard nobody has watched fail is not a
+    /// guard. `ShiftRecordV2InvariantTests` exercises this directly.
+    ///
+    /// Clearing to nil is legal; that is how a payload is removed. What is
+    /// rejected is a PRESENT payload whose version is absent.
+    static func storesV2Earnings(_ metrics: ShiftReceiptMetrics?) -> Bool {
+        guard let metrics else { return true }
+        return (metrics.earningsSchemaVersion ?? 0) >= 2
     }
 
     /// True when a payload is present but will not decode.
