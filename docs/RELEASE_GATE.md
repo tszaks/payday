@@ -541,8 +541,50 @@ into permanent permission.
       17 test references across `ShiftAuthorityLegTests`,
       `FlipGates3And4Tests` and `FlipStraddleDeferralTests` cover it.
 
-      **What is missing is not code. It is one sync by the one account with
-      data** -- 100 legacy rows, measured directly against production via
+      **CORRECTED 2026-09-19, and it makes the blocker LARGER rather than
+      smaller: one sync is necessary and NOT sufficient.** A brand-new
+      account never flips at all. Measured in
+      `20260917230000_add_shift_one_shot_migration.sql`, both branches of
+      the only writer of `migrated_at`:
+
+      ```sql
+      -- insert branch  (:663)
+      case when v_wrote > 0 then statement_timestamp() else null end
+      -- conflict branch (:671)
+      case when v_wrote > 0 then coalesce(st.migrated_at, statement_timestamp())
+                            else st.migrated_at end
+      ```
+
+      Both require `v_wrote > 0`. `private.note_legacy_write` -- the fold
+      trigger's writer -- sets `last_legacy_write_at`,
+      `bulk_legacy_rewrite_at` and `conservation_failed_at`, and never
+      `migrated_at`. Step 6a only calls the one-shot when
+      `payday_unmigrated_tip_row_count() > 0`.
+
+      So an account with no legacy rows to convert: never calls the
+      one-shot, never gets `migrated_at`, `isAuthoritative` is false
+      forever, and all ELEVEN flip-gated sites take the legacy branch --
+      including the writers, so it logs `TipEntry` rows indefinitely.
+
+      **Not a money bug.** The legacy arm computes correctly and the
+      server's fold still produces `shifts` for the API, so a new user's
+      numbers are right. It is a STRUCTURAL blocker for this line: deleting
+      the legacy arm would strand every new install permanently, not merely
+      until its first sync.
+
+      **So criterion 6 needs a decision, not just a sync**: something has to
+      make "this account has nothing to convert" mean authoritative. The
+      obvious candidates are stamping `migrated_at` when a conversion runs
+      with zero work to do, or teaching `ShiftReadAuthority.isAuthoritative`
+      to treat a verified-empty legacy set as ready. Both are one-line
+      changes with very different failure modes, and picking between them
+      is a design call rather than a cleanup.
+
+      Everything below this paragraph was written before that was measured
+      and describes the sync as the only missing piece.
+
+      **What is missing is not code alone. It is one sync by the one account
+      with data** -- 100 legacy rows, measured directly against production via
       `private.unmigrated_legacy_rows`. Deleting the legacy arm before that
       sync would remove the only path an unconverted account has.
 
