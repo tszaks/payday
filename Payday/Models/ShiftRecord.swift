@@ -1,4 +1,5 @@
 import Foundation
+import PaydayCore
 import SwiftData
 
 /// Where a shift row came from. The fold writes `migration`, the agent API
@@ -322,9 +323,26 @@ final class ShiftRecord {
 
     /// Voluntary tips plus employee gratuity, minus tip-out. The Swift twin of
     /// `shifts.non_wage_earnings_cents`, which is a generated column.
+    /// Delegated to the ONE definition rather than spelling the formula a
+    /// second time.
+    ///
+    /// `nonWageEarnings` was written out independently in five places --
+    /// here, `EarningsComponents`, `TipBreakdown`, `LegacyShiftRow` and
+    /// `StatsEngine`. Identical arithmetic in all five, which is precisely
+    /// the hazard: they agree until one is edited, and then they disagree
+    /// silently about a number the user is looking at.
+    ///
+    /// Reading the fields RAW is correct here and is the record's invariant:
+    /// a `ShiftRecord` holds v2 earnings, so `cashTipsCents` and
+    /// `creditTipsCents` are voluntary-only and the gratuity is a separate
+    /// additive category. See `storesV2Earnings`.
     var nonWageEarningsCents: Int {
-        cashTipsCents + creditTipsCents + (receiptMetrics?.employeeGratuityFeesCents ?? 0)
-            - (tipOutCents ?? 0)
+        EarningsComponents(
+            voluntaryCashCents: cashTipsCents,
+            voluntaryCreditCents: creditTipsCents,
+            gratuityFeesCents: receiptMetrics?.employeeGratuityFeesCents ?? 0,
+            tipOutCents: tipOutCents ?? 0
+        ).nonWageEarningsCents
     }
 
     // MARK: - Payload coding
