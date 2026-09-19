@@ -588,19 +588,27 @@ So the server-side invariant that review ruled for -- *a tombstoned shift id
 is never re-derived, whatever legacy rows survive* -- **already exists and is
 complete.** We both designed a fix for an implemented guarantee.
 
-**And the scope was wrong too.** It is not that deletions specifically lack
-a flush. The ENTIRE shift sync leg has zero production callers:
+**And the scope was wrong too.** It was not that deletions specifically
+lacked a flush. The ENTIRE shift sync leg had zero production callers.
+
+**WIRED 2026-09-19** (PR #101, merged at `72cdec8`; the legacy flush in the
+follow-up). Measured counts, not claimed:
 
 | symbol | production callers |
 |---|---|
-| `upsertShifts` | 0 (its one "reference" is a doc comment) |
-| `reconcileShifts` | 0 |
-| `softDeleteShifts` | 0 |
-| `restoreShifts` | 0 |
-| `fetchShifts` | 0 |
+| `upsertShifts` | 1 |
+| `reconcileShifts` | 2 (pull rows and readback rows, deliberately separate) |
+| `softDeleteShifts` | 1 |
+| `restoreShifts` | 1 |
+| `fetchShifts` | 1 |
+| `pendingLegacyEntryDeletions` | 1 |
 
-That is coherent pre-flip state, not a hole in a built system. `shifts` is
-not synced by the device at all yet.
+The warning below was right and it caught a real omission: the first draft
+of the leg wired `softDeleteShifts` and forgot the legacy queue. Because
+`shifts` is DERIVED from `tip_entries`, that would have let the server fold
+re-derive any deleted migrated shift -- the deleted shift comes back.
+Fixed, and guarded by `aQueuedLegacyEntryDeletionReachesTheServer`, which
+fails with the flush removed.
 
 ### What survives, and it is worth keeping
 
