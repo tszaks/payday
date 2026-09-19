@@ -54,7 +54,12 @@ failing=$(jq -r '[.statusCheckRollup[]?
 
 # The reviewed commit must still be the tip, or the green belongs to
 # something else.
-git fetch -q origin "$branch" 2>"$ERRFILE" || true
+# `timeout` because an unbounded fetch HANGS the caller. A polling loop
+# around this script wrote one line in 38 minutes and then nothing: the
+# loop was alive, stuck inside a fetch that never returned, and from
+# outside it looked exactly like "CI is still running". A monitor that can
+# hang reports a false state, which is the one thing a monitor must not do.
+timeout 60 git fetch -q origin "$branch" 2>"$ERRFILE" || true
 remote=$(git rev-parse "origin/$branch" 2>/dev/null || echo "")
 [[ "$remote" == "$sha" ]] || {
   echo "REFUSE: tip is ${remote:0:7}, PR head is ${sha:0:7}"; exit 1; }
