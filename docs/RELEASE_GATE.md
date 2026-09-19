@@ -365,10 +365,42 @@ just not this session.
 - [x] A shift's wages sum across day, month, pay period and year to the same cents, including a workweek that straddles a month boundary. **GREEN:** fixture W2, the 48h week straddling a month boundary; the month-first answer 13585 is asserted WRONG.
 
 ### Honesty of state
-- [ ] A failed read is never rendered as `$0`. Verified by breaking the widget's store access in a debug build and seeing "Couldn't load".
-- [ ] `.partial` completeness never renders the word "Total". Verified by removing hours from one shift and reading the headline.
-- [ ] Wages estimated from the legacy rate carry their caption until the rate-history prompt is answered.
-- [ ] The overtime policy is presented as an estimate everywhere it appears.
+**How to re-run the evidence below, because the obvious way silently lies.**
+`-only-testing:PaydayTests/SomeSuite/someFunctionName` matches NOTHING for a
+Swift Testing `@Test`, and reports `Test run with 0 tests in 1 suite passed`
+-- a green line produced by running nothing, which is how this evidence was
+nearly cited unverified. Swift Testing prints the `@Test("display name")`,
+so grep the whole run for the display string instead. Same family as the
+`Executed N tests` trap already recorded in the goal contract.
+
+**These four are DEVICE checks and stay unchecked until someone runs them on
+a phone. Their machine half is already covered, and naming it is the point:
+a reader should be able to see what is already proven mechanically and what
+genuinely needs the hardware.** Measured 2026-09-19.
+
+- [ ] A failed read is never rendered as `$0`. Verified by breaking the
+      widget's store access in a debug build and seeing "Couldn't load".
+      *Machine half:* `unavailableRendersNoCurrency`
+      (`DashboardParityTests`) and `unavailableCarriesNoAmount`
+      (`AmbientParityTests`) both assert that an unavailable state emits no
+      currency at all. What they cannot do is prove the widget PROCESS
+      fails the way the debug break makes it fail.
+- [ ] `.partial` completeness never renders the word "Total". Verified by
+      removing hours from one shift and reading the headline.
+      *Machine half:* `partialIsNeverATotal` (`CompletenessCopyTests`) plus
+      20 assertions on the "Known so far" label across the suite. What is
+      left is that a real headline, laid out, says it.
+- [ ] Wages estimated from the legacy rate carry their caption until the
+      rate-history prompt is answered.
+      *Machine half:* `estimated` (`CompletenessTests`), `estimatedState`
+      and `estimatedWithAMixedHistory` (`EarningsSnapshotTests`), and
+      `estimatedMonthCarriesItsCaption` (`CalendarSnapshotParityTests`).
+      The prompt-answering half is a UI flow nobody has driven end to end.
+- [ ] The overtime policy is presented as an estimate everywhere it
+      appears. *Machine half:* the copy lives in
+      `CompletenessCopy.swift`, so it is one definition rather than a
+      phrase repeated per screen. "Everywhere it appears" is still a claim
+      about screens, and screens are what a person checks.
 
 ### Boundaries
 - [x] Money-boundary lint rules green, and each one proven to fire by planting a violation in a scratch copy. **GREEN, both directions, 2026-09-19:** planting `100 - (tipOutCents ?? 0)` in an unallowlisted file fires; planting `State(initialValue: tipOutCents ?? 0)` does not. Allowlist 6 and ratcheting.
