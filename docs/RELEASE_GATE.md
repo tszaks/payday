@@ -491,7 +491,7 @@ kind of claim that gets planned around.
 
 | PR 7 item | State | Evidence |
 |---|---|---|
-| Atomic logical-shift save, rollback on throw | **DONE, pre-existing** | `ShiftCommands` documents "One `save()`, and a `rollback()` on any throw"; `anEditThatThrowsLeavesTheRecordExactlyAsItWas` |
+| Atomic logical-shift save, rollback on throw | **DONE, pre-existing** | `ShiftCommands.swift:105` performs the rollback; `ShiftCommandsTests.swift:92` `editThatThrowsChangesNothing()`, plus `AutosaveOffPersistenceTests.swift:207` (the rollback survives a reopen) and `DeletionQueueAtomicityTests.swift:57` `rollbackDoesNotUndoTheQueueWrite` |
 | Idempotent retries on `id` | **DONE, pre-existing** | `on conflict (user_id, id) do update` in `add_shift_write_rpcs.sql` |
 | Last-client-write-wins by `client_updated_at` | **DONE, pre-existing** | `excluded.client_updated_at >= existing.client_updated_at`, documented at the RPC |
 | Deletions preserved across reconnect | **DONE, pre-existing** | four tests in `ShiftCheckpointTests`, incl. "a full sync pass preserves pending shift restores" and "a legacy deletion queue entry survives a restore-cancel pass" |
@@ -502,6 +502,23 @@ kind of claim that gets planned around.
 | Midnight rollover rebuilds | **ADDED** (#83) | posts the real `.NSCalendarDayChanged`, so the REGISTRATION is what is tested |
 | Device timezone change leaves money untouched | **DONE, pre-existing** | fixture T1 |
 | Parsers produce candidates only | **TRUE, UNENFORCED** | no `.insert(`/`.save()`/`ModelContext` in any of the five parser files. Currently true with nothing holding it there; a lint rule is the obvious follow-up |
+
+**A citation in this table must name a symbol that EXISTS.** The row above
+originally cited "anEditThatThrowsLeavesTheRecordExactlyAsItWas" (quoted, not
+backtick-fenced, precisely so the lint below does not flag this sentence),
+which is
+nowhere in the codebase: I camel-cased the test's DISPLAY string
+(`@Test("an edit that throws leaves the record exactly as it was")`) into
+something shaped like an identifier and wrote it here as if it were one. The
+test is real and the coverage is real -- the function is
+`editThatThrowsChangesNothing()` -- but a reader who greps the name I wrote
+finds nothing and concludes the coverage is phantom. A reviewer did exactly
+that within the hour.
+
+That is worse than a typo, because a gate document citing test names that
+resolve to nothing is a rubber stamp shaped like evidence. A sweep of every
+backticked identifier in this file found exactly one such citation: the one
+I had just added. `scripts/design-lint.sh` now fails on any other.
 
 **So PR 7's remaining work is one lint rule, not a slice.** Two of its
 eleven items describe paths the code makes unreachable and should be struck
