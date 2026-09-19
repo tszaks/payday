@@ -487,6 +487,40 @@ into permanent permission.
       `WageEstimate`, `PeriodIncome`, `PredictedPaycheck`, `PaycheckAudit`,
       `TipRecord`, `ShiftWriter`.
 
+      **BLOCKED, and on a specific measurable event rather than on effort.**
+      Measured 2026-09-19 at `3e2b0cb`: all ten are still live, 453
+      references between them (`TipEntry` alone 257). None is dead code
+      waiting to be swept.
+
+      They are the LEGACY ARM, which serves an account the server has not
+      converted -- and as of this measurement that is every account. The
+      arm stops being needed when `shiftsAreAuthoritative` turns true, and
+      the chain that turns it true is complete and wired, verified rather
+      than assumed:
+
+      1. step 6a calls `migrate_tip_entries_to_shifts` (shipped, `779b840`)
+      2. the server stamps `shift_migration_state.migrated_at`
+      3. the pass reads it -- `GET /rest/v1/shift_migration_state` is in the
+         recorded call order in `SyncPassOrderTests`
+      4. `applyShiftAuthority` (`PaydaySyncService.swift:1199`) writes
+         `shiftsAreAuthoritativeAt`
+      5. `shiftsAreAuthoritative` returns true and the readers switch
+
+      17 test references across `ShiftAuthorityLegTests`,
+      `FlipGates3And4Tests` and `FlipStraddleDeferralTests` cover it.
+
+      **What is missing is not code. It is one sync by the one account with
+      data** -- 100 legacy rows, measured directly against production via
+      `private.unmigrated_legacy_rows`. Deleting the legacy arm before that
+      sync would remove the only path an unconverted account has.
+
+      Deliberately NOT done: invoking `migrate_tip_entries_to_shifts`
+      directly over SQL to unblock this. It would reach the same end state
+      and would skip the orchestration ordering that step 6a exists to
+      guarantee -- after the leg, before the shift pull -- which is the
+      ordering a whole PR was spent getting right. A shortcut that bypasses
+      the thing being tested is not a shortcut.
+
 Both were verified to FAIL when they should, not merely to pass: a synthetic
 violation in a non-allowlisted file was caught on all three of its patterns,
 and an allowlisted file made artificially clean tripped the ratchet. A lint
