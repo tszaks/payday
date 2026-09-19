@@ -90,6 +90,16 @@ enum PaydaySyncState {
         var shiftIDs: Set<UUID>
         var shiftServerCursor: ServerCursor?
         var shiftClientUpdatedAt: [UUID: String]
+        /// Content hashes of the shifts the server has acknowledged.
+        ///
+        /// The sibling of `tipContentFingerprint`, and required for the same
+        /// measured reason: `didSet` never fires on a SwiftData `@Model`, so
+        /// a timestamp-based change signal misses CORRECTIONS entirely --
+        /// inserts and deletes survive, edits are silently lost. The shift
+        /// checkpoint shipped with only `shiftClientUpdatedAt`, a timestamp,
+        /// so detecting changed shifts from it would reintroduce that P0 in
+        /// the leg that becomes authoritative for reads.
+        var shiftContentFingerprint: [UUID: String]
         /// Durability, from SERVER RESPONSES ONLY -- never from a local fetch,
         /// which would assert local presence as server durability.
         var shiftServerAckedIDs: Set<UUID>
@@ -139,6 +149,7 @@ enum PaydaySyncState {
             shiftIDs: Set<UUID> = [],
             shiftServerCursor: ServerCursor? = nil,
             shiftClientUpdatedAt: [UUID: String] = [:],
+            shiftContentFingerprint: [UUID: String] = [:],
             shiftServerAckedIDs: Set<UUID> = [],
             shiftWriteAttempts: [UUID: Int] = [:],
             pendingShiftRestores: [UUID: Date] = [:],
@@ -160,6 +171,7 @@ enum PaydaySyncState {
             self.shiftIDs = shiftIDs
             self.shiftServerCursor = shiftServerCursor
             self.shiftClientUpdatedAt = shiftClientUpdatedAt
+            self.shiftContentFingerprint = shiftContentFingerprint
             self.shiftServerAckedIDs = shiftServerAckedIDs
             self.shiftWriteAttempts = shiftWriteAttempts
             self.pendingShiftRestores = pendingShiftRestores
@@ -183,6 +195,7 @@ enum PaydaySyncState {
             case shiftIDs
             case shiftServerCursor
             case shiftClientUpdatedAt
+            case shiftContentFingerprint
             case shiftServerAckedIDs
             case shiftWriteAttempts
             case pendingShiftRestores
@@ -213,6 +226,7 @@ enum PaydaySyncState {
             shiftIDs = try values.decodeIfPresent(Set<UUID>.self, forKey: .shiftIDs) ?? []
             shiftServerCursor = try values.decodeIfPresent(ServerCursor.self, forKey: .shiftServerCursor)
             shiftClientUpdatedAt = try values.decodeIfPresent([UUID: String].self, forKey: .shiftClientUpdatedAt) ?? [:]
+            shiftContentFingerprint = try values.decodeIfPresent([UUID: String].self, forKey: .shiftContentFingerprint) ?? [:]
             shiftServerAckedIDs = try values.decodeIfPresent(Set<UUID>.self, forKey: .shiftServerAckedIDs) ?? []
             shiftWriteAttempts = try values.decodeIfPresent([UUID: Int].self, forKey: .shiftWriteAttempts) ?? [:]
             pendingShiftRestores = try values.decodeIfPresent([UUID: Date].self, forKey: .pendingShiftRestores) ?? [:]

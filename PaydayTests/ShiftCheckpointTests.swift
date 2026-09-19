@@ -59,6 +59,7 @@ struct ShiftCheckpointTests {
             shiftIDs: [c],
             shiftServerCursor: .init(updatedAt: "2026-09-07T00:00:00.000Z", id: c),
             shiftClientUpdatedAt: [c: "2026-09-08T00:00:00.000Z"],
+            shiftContentFingerprint: [c: "abcdef0123456789"],
             shiftServerAckedIDs: [c],
             shiftWriteAttempts: [c: 3],
             pendingShiftRestores: [c: Date(timeIntervalSince1970: 1_700_000_000)],
