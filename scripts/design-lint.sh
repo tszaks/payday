@@ -416,7 +416,7 @@ money_boundary_hits() { # file
     # `tipOutCents ??` counts ONLY when the LINE does arithmetic.
     #
     # Unqualified it caught `State(initialValue: record.tipOutCents ?? 0)`
-    # -- unwrapping an optional for a FORM FIELD's default, which computes
+    # -- unwrapping an optional for a the default of a FORM FIELD, which computes
     # no money -- and so kept LogTipSheet.swift, a live view PR 8 does NOT
     # delete, permanently allowlisted for something that was never a
     # violation. An over-broad money rule is worse than a narrow one: it
