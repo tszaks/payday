@@ -433,4 +433,54 @@ struct ShiftAuthorityLegTests {
         #expect(!deferred)
         #expect(!PaydaySyncState.shiftsAreAuthoritative(for: id))
     }
+    /// **A guarantee that dropped from two to one, so it gets a name.**
+    ///
+    /// A partially converted account used to be held back from the records
+    /// engine TWICE: `migrated_at` was null (the one-shot only stamped when
+    /// it wrote rows) AND `remaining_group_count` was positive. Stamping on
+    /// COMPLETION removes the first, so the whole guarantee now rests on the
+    /// remainder alone.
+    ///
+    /// If this ever passes with `remaining > 0`, an account mid-conversion
+    /// reads from `shifts` that do not all exist yet and its owner sees part
+    /// of their own money.
+    @Test("a partially converted account is not authoritative, on the remainder alone")
+    func aPartiallyConvertedAccountIsNotAuthoritative() {
+        let midConversion = ShiftReadAuthority.State(
+            migratedAt: Date(timeIntervalSince1970: 1_758_000_000),  // stamped: it RAN
+            rollbackAt: nil,
+            conservationFailedAt: nil,
+            remainingGroupCount: 3                                    // but did not finish
+        )
+        #expect(ShiftReadAuthority.isAuthoritative(midConversion) == false)
+
+        // The same state with the work finished IS authoritative, so the
+        // test above is failing on the remainder and not on something else.
+        let finished = ShiftReadAuthority.State(
+            migratedAt: Date(timeIntervalSince1970: 1_758_000_000),
+            rollbackAt: nil,
+            conservationFailedAt: nil,
+            remainingGroupCount: 0
+        )
+        #expect(ShiftReadAuthority.isAuthoritative(finished))
+    }
+
+    /// The new-account case, which is the whole reason the stamp moved.
+    /// Nothing to convert, the one-shot ran anyway, so it completed.
+    @Test("an account with nothing to convert is authoritative once the one-shot has run")
+    func anEmptyAccountIsAuthoritativeAfterTheOneShotRuns() {
+        let neverRan = ShiftReadAuthority.State(
+            migratedAt: nil, rollbackAt: nil,
+            conservationFailedAt: nil, remainingGroupCount: 0
+        )
+        #expect(ShiftReadAuthority.isAuthoritative(neverRan) == false,
+                "no stamp means the one-shot has not completed here")
+
+        let ranWithNoWork = ShiftReadAuthority.State(
+            migratedAt: Date(timeIntervalSince1970: 1_758_000_000),
+            rollbackAt: nil, conservationFailedAt: nil, remainingGroupCount: 0
+        )
+        #expect(ShiftReadAuthority.isAuthoritative(ranWithNoWork))
+    }
+
 }

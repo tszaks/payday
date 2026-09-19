@@ -725,7 +725,24 @@ final class PaydaySyncService {
         // out and rolling back forever; `remainingGroupCount` is how that
         // progress is observed.
         let unmigratedCount = try await repository.unmigratedTipRowCount()
-        if unmigratedCount > 0 {
+        // NOT `unmigratedCount > 0` alone. A brand-new account has nothing to
+        // convert, so that test never fired, `migrated_at` was never stamped,
+        // and the account stayed on the legacy arm FOREVER -- writers
+        // included. The one-shot has to be reached at least once so it can
+        // complete, which is what the stamp now records.
+        //
+        // Self-limiting rather than unconditional: once the account is
+        // authoritative it is never called again, so a settled account pays
+        // nothing. An account that cannot flip (conservation failed) retries
+        // each pass, which is correct -- it is a broken account and the work
+        // is bounded by the group budget.
+        //
+        // And it does NOT branch on the count being zero to decide
+        // emptiness. `payday_unmigrated_tip_row_count()` returns 0 to an
+        // unauthenticated caller, so a refused read and an empty account are
+        // the same value here; the one-shot itself runs under real auth and
+        // converts whatever it actually finds.
+        if unmigratedCount > 0 || !PaydaySyncState.shiftsAreAuthoritative(for: userID) {
             let state = try await repository.migrateTipEntriesToShifts(
                 userID: userID,
                 maxGroups: PaydayRemoteRepository.legacyConversionGroupBudget)
