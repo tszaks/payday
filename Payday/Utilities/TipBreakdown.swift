@@ -1,4 +1,5 @@
 import Foundation
+import PaydayCore
 
 /// Single source of truth for splitting a set of shift entries into voluntary
 /// cash/credit tips, employee gratuity/fees, tip-out, and net earnings. Pure
@@ -32,7 +33,24 @@ struct TipBreakdown: Equatable {
     var earnedBeforeTipOutCents: Int { grossTotalCents + gratuityFeesCents }
 
     /// Net shift earnings: voluntary tips + employee gratuity/fees - tip-out.
-    var netTotalCents: Int { earnedBeforeTipOutCents - tipOutCents }
+    ///
+    /// Delegated rather than respelled. This was the third of five
+    /// independent copies of `nonWageEarnings`; identical arithmetic in each,
+    /// which is the hazard, because they agree until one is edited and then
+    /// disagree silently about a number on screen.
+    ///
+    /// The values reaching this type are already voluntary-only -- `total(of:)`
+    /// folds legacy receipts on the way in -- so the canonical definition
+    /// applies unchanged. The fold itself stays in `LegacyShiftRow`, which is
+    /// a sanctioned legacy read leg and NOT a duplicate of this formula.
+    var netTotalCents: Int {
+        EarningsComponents(
+            voluntaryCashCents: cashCents,
+            voluntaryCreditCents: creditCents,
+            gratuityFeesCents: gratuityFeesCents,
+            tipOutCents: tipOutCents
+        ).nonWageEarningsCents
+    }
 
     static let zero = TipBreakdown(cashCents: 0, creditCents: 0, tipOutCents: 0)
 

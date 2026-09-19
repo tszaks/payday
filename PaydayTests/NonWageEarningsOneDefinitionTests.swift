@@ -84,4 +84,35 @@ struct NonWageEarningsOneDefinitionTests {
         #expect(r.nonWageEarningsCents == canonical)
         #expect(r.nonWageEarningsCents == shippedFormula(r))
     }
+    /// The third copy, collapsed. `TipBreakdown` reaches this type with
+    /// values already folded to voluntary-only by `total(of:)`, so the
+    /// canonical definition applies unchanged.
+    ///
+    /// The v1 fold itself stays in `LegacyShiftRow` and is deliberately NOT
+    /// delegated: it is a sanctioned legacy read leg, not a duplicate of
+    /// this formula, and collapsing it would destroy the normalization that
+    /// makes a legacy row comparable at all.
+    @Test("TipBreakdown's net equals the canonical definition", arguments: [
+        (1_000, 2_000, 300, 150),
+        (0, 0, 0, 0),
+        (100, 0, 900, 0),
+        (5_000, 1_234, 0, 777),
+    ])
+    func tipBreakdownMatchesCanonical(cash: Int, credit: Int, gratuity: Int, tipOut: Int) {
+        let b = TipBreakdown(
+            cashCents: cash, creditCents: credit,
+            tipOutCents: tipOut, gratuityFeesCents: gratuity
+        )
+        // The formula as it stood before the delegation, verbatim.
+        let shipped = (cash + credit) + gratuity - tipOut
+        let canonical = EarningsComponents(
+            voluntaryCashCents: cash,
+            voluntaryCreditCents: credit,
+            gratuityFeesCents: gratuity,
+            tipOutCents: tipOut
+        ).nonWageEarningsCents
+        #expect(b.netTotalCents == shipped)
+        #expect(b.netTotalCents == canonical)
+    }
+
 }
