@@ -898,7 +898,35 @@ The two conditions are independent and both must hold:
 | condition | state |
 |---|---|
 | records arm out-gates legacy for the canonical mutation | **MET** (above) |
-| shift deletions reach the server | **NOT MET** -- `FLIP-BLOCKER-DELETION-FLUSH` |
+| shift deletions reach the server | **MET 2026-09-19** -- both halves wired and mutation-checked; see below |
+
+**Second condition, now MET.** It has two halves and both are required,
+because `shifts` is derived from `tip_entries`: the shift row must be
+tombstoned AND its legacy source rows must be, or the server fold
+re-derives the shift the user deleted.
+
+| half | call sites | guarded by |
+|---|---|---|
+| `softDeleteShifts` | 1 | `aQueuedShiftDeletionReachesTheServer` |
+| legacy source rows | 1 | `aQueuedLegacyEntryDeletionReachesTheServer` |
+
+Each fails with its flush removed. `scripts/syncstate-unwired-allowlist.txt`
+no longer lists either symbol.
+
+**A third defect was found while proving this, and it was mine.** The shift
+queue was cleared only on the UNDO path, never after a successful flush --
+so every later pass re-sent every deletion the account had ever made, and
+the step-9 readback id set grew without bound because it is keyed on that
+queue. Fixed by mirroring the two tip lines, and asserted directly: the
+queue must DRAIN, not merely be sent.
+
+**And the harness that proved it was itself shallower than it looked.**
+With `{}` as the stubbed settings row the pass threw `keyNotFound: user_id`
+at the settings decode, so every test in `SyncPassOrderTests` silently
+stopped two thirds of the way through -- before the deletion clears, the
+reconcile and the checkpoint write. A valid row, plus discriminating the
+single-object read from the array read by the `Accept` header PostgREST
+uses for `.single()`, is what let the pass complete end to end.
 
 Worth stating because the failure mode here is a reader who checks the
 condition they remember, finds it green, and proceeds.
