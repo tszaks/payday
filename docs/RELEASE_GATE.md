@@ -220,11 +220,11 @@ Measured against `production` at `c77bb57`:
 | PR | State | Evidence |
 |---|---|---|
 | 0, 1 | merged | package, CI, metric registry |
-| 2 | S1-S9 landed; S10 reclassified to PR 8; S11, S12 done; **S13's VIEW remains** | `ShiftRecord`, the flip, the sync leg, `agent_api_shifts_test.sql`, `ScreenNumberParityTests` |
+| 2 | S1-S9 landed; S10 reclassified to PR 8; S11, S12 done; **S13's VIEW remains**. **Sync leg WIRED 2026-09-19** (#101-#104, `f4a8215`): 4 call sites in `synchronize`, pull before push, step-9 readback, all three deletion queues flushed AND drained | `ShiftRecord`, the flip, the sync leg, `agent_api_shifts_test.sql`, `ScreenNumberParityTests` |
 | 3 | merged | `CompensationLedger`, `PolicyStore` |
 | 4 | merged | `EarningsSnapshot`, `EarningsStore` |
 | 5 | merged | 14 views read the engine |
-| 6 | mostly merged; **group 2.14 unbuilt** | widget and Siri reach `buildOnce`; CSV uses `HoursFormatting`; but `earnings_snapshots`, `upsert_earnings_snapshot` and `SnapshotUploader` do not exist |
+| 6 | merged | widget and Siri reach `buildOnce`; CSV uses `HoursFormatting`. **Group 2.14 row CORRECTED 2026-09-19**: it claimed `earnings_snapshots`, `upsert_earnings_snapshot` and `SnapshotUploader` "do not exist". All three do -- `SnapshotUploader.swift` (109 lines), `SnapshotPublisher.swift` (45 lines), and `20260918160000_add_dataset_revision_and_snapshots.sql`, applied to production on 2026-09-19. The row was true when written and was not updated when the work landed |
 | 7 | not started | atomic save landed with S9; the rest is open |
 | 8 | gated | behind the catch-count entry condition above |
 
@@ -810,6 +810,33 @@ was configured. It was.
 
 **So the order is: sync leg, then PR 8**, and nothing in front of either
 needs a person.
+
+## Criteria measured 2026-09-19 at `f4a8215`
+
+Commands and numbers, not claims. Re-run any line to check it.
+
+| criterion | command | result |
+|---|---|---|
+| 2a | `swift test --package-path Packages/PaydayCore` | **255 tests in 33 suites passed** |
+| 2b | `xcodebuild test -scheme Payday` | **1171 tests in 203 suites passed** |
+| 3 | 14 fixtures (`C1 E1 H1 M1 N1 N2 N3 P1 S2 T1 W1 W2 W3 Z1`; the 15th JSON is `KnownIssues.json`) | present, and each is asserted through the real engine -- `FixtureGateTests` and `FixtureMoneyGateTests` call `CompensationLedger.evaluate` directly, never a recomputing helper |
+| 4 | `PAYDAYCORE_RELEASE_GATE=1 swift test --package-path Packages/PaydayCore` | **255/33 passed, `knownIssueCountIsZero` passed** |
+| 6 (lint half) | `bash scripts/design-lint.sh` | **exit 0, 34 PASS lines** -- and exit 0 now MEANS it; see below |
+
+**Criterion 6's lint half carries a caveat that has to be stated.** Until
+`f4a8215`, `design-lint.sh`'s only exit point sat ABOVE rules 31-34, so
+those four could print `[FAIL]` and the script still exited 0. Every
+"design-lint exit 0" recorded in this document before that commit is
+evidence only for rules 1-30.
+
+**Criterion 6's deletion half is NOT met.** 34 money-boundary violations
+remain across 6 allowlisted files: `StatsEngine.swift` 22 (3120 lines),
+`LegacyShiftRow.swift` 4, `TipEntry.swift` 3, `ShiftRecord.swift` 2,
+`PaycheckAudit.swift` 2, `TipBreakdown.swift` 1. `Analytics/StatsEngine.swift`
+and `Export/CSVRows.swift` are the two planned PaydayCore modules still
+absent. `CSVExporter.swift` is NOT among the violators: its only money line
+formats (`String(format: "%.2f", Double(cents) / 100)`) rather than
+computes, so the goal's "exports" verb is already engine-sourced.
 
 ## UNDO-AFTER-FLUSH-LOSES-LEGACY-ROWS
 
