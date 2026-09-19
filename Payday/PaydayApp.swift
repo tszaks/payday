@@ -54,7 +54,23 @@ struct PaydayApp: App {
             // production. Post-conversion with a purged shift cache the
             // engine then computed from ZERO shifts while `legacyTipEntryCount`
             // knew the account still had data, and every surface rendered $0.
-            shiftsAreAuthoritative: { PaydaySyncState.shiftsAreAuthoritativeForCurrentAccount }
+            shiftsAreAuthoritative: { PaydaySyncState.shiftsAreAuthoritativeForCurrentAccount },
+            // WIRED HERE, not left on its default, because the comment above
+            // is a record of what a defaulted parameter costs: S7's fact
+            // shipped unwired and `.shiftCacheWiped` was unreachable in
+            // production for three slices. `onPublish` is the same shape --
+            // a hook whose default is "do nothing" -- so it gets connected
+            // in the same commit that introduces it.
+            //
+            // Self-gating before the migration lands: `syncedDatasetRevision`
+            // is only set when `dataset_revisions` can be read, and that
+            // table does not exist in production yet, so the uploader
+            // returns `.skippedNoCleanSync` and spends no round trip. It
+            // starts working when the migration is applied, with no second
+            // change here.
+            onPublish: { snapshot in
+                SnapshotPublisher.shared.publish(snapshot)
+            }
         ))
         try? Tips.configure([.displayFrequency(.immediate), .datastoreLocation(.applicationDefault)])
         UNUserNotificationCenter.current().delegate = NotificationDelegate.shared

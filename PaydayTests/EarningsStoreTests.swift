@@ -394,6 +394,64 @@ struct EarningsStoreTriggerTests {
         #expect(store.snapshot?.stamp.generation == 2)
     }
 
+    // MARK: - The publish sink
+
+    /// The sink exists so a published snapshot reaches the server. A hook
+    /// whose default is "do nothing" is the shape that shipped
+    /// `.shiftCacheWiped` unreachable for three slices, so it is asserted
+    /// rather than assumed.
+    @Test("a published snapshot reaches the sink")
+    func publishReachesTheSink() async {
+        var seen: [UInt64] = []
+        let source = FakeSource()
+        let store = EarningsStore(
+            source: source,
+            debounceNanoseconds: 0,
+            onPublish: { seen.append($0.stamp.generation) }
+        )
+        await store.rebuildNow()
+        #expect(seen.count == 1, "one publish, one call")
+        #expect(seen.first == store.snapshot?.stamp.generation,
+                "the sink sees exactly what a reader sees")
+    }
+
+    /// **The generation guard must apply to the sink too.** An older
+    /// computation returning late is dropped for `state`; if it still
+    /// reached the sink, the device would upload a snapshot no screen is
+    /// showing -- the server and the app disagreeing, caused by the
+    /// mechanism built to make them agree.
+    @Test("a stale computation never reaches the sink")
+    func staleComputationDoesNotReachTheSink() async {
+        var calls = 0
+        let source = FakeSource()
+        let store = EarningsStore(
+            source: source,
+            debounceNanoseconds: 0,
+            onPublish: { _ in calls += 1 }
+        )
+        await store.rebuildNow()
+        #expect(calls == 1)
+
+        // A failed fetch publishes `.unavailable`, which is not `.ready`.
+        source.nextFetchThrows = true
+        await store.rebuildNow()
+        #expect(calls == 1, "only a .ready state is an answer worth uploading")
+    }
+
+    /// Nothing is published before the first successful build, so the sink
+    /// cannot be handed a snapshot that does not exist.
+    @Test("no publish means no sink call")
+    func noPublishNoCall() {
+        var calls = 0
+        _ = EarningsStore(
+            source: FakeSource(),
+            debounceNanoseconds: 0,
+            observesTriggers: false,
+            onPublish: { _ in calls += 1 }
+        )
+        #expect(calls == 0)
+    }
+
     /// A policy arriving from the server moves every wage in the app and
     /// deliberately does NOT touch `PaydaySettingsSyncClock` (touching it
     /// would make this device look like it had edited the value it just
