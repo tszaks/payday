@@ -87,6 +87,47 @@ struct DatasetRevisionLegTests {
         #expect(stored(id) != nil, "0 and nil are different answers")
     }
 
+    /// **The window an uploader would otherwise fall into.**
+    ///
+    /// A local write breaks the "we agree" claim immediately, but the sync
+    /// that notices is debounced two seconds and skipped entirely when the
+    /// scene is inactive. In that gap the server's revision has not moved
+    /// either -- the write has not reached it -- so
+    /// `upsert_earnings_snapshot` would ACCEPT a snapshot computed from
+    /// unsynced rows. The acceptance rule cannot catch this one; only the
+    /// device knows it has unsent work.
+    @Test("a local write withdraws the watermark immediately")
+    func localWriteWithdrawsImmediately() async {
+        let id = freshUser()
+        await PaydaySyncService.applyDatasetRevisionLeg(userID: id, clean: true) { 77 }
+        #expect(stored(id) == 77)
+
+        PaydaySyncState.invalidateSyncedDatasetRevision(for: id)
+        #expect(stored(id) == nil, "the claim is false the moment the write lands")
+    }
+
+    /// The production call site passes no account and relies on the
+    /// registered one, so that path is exercised rather than assumed --
+    /// a defaulted argument nobody tests is how a producer goes missing.
+    @Test("the no-argument form uses the registered account")
+    func noArgumentFormUsesRegisteredAccount() async {
+        guard let registered = PaydaySyncState.registeredUserID else {
+            // Nothing registered in this run; register one so the real path
+            // is still covered rather than silently skipped.
+            let fresh = UUID()
+            guard PaydaySyncState.registerCurrentUser(fresh) else { return }
+            await PaydaySyncService.applyDatasetRevisionLeg(userID: fresh, clean: true) { 3 }
+            #expect(stored(fresh) == 3)
+            PaydaySyncState.invalidateSyncedDatasetRevision()
+            #expect(stored(fresh) == nil)
+            return
+        }
+        await PaydaySyncService.applyDatasetRevisionLeg(userID: registered, clean: true) { 4 }
+        #expect(stored(registered) == 4)
+        PaydaySyncState.invalidateSyncedDatasetRevision()
+        #expect(stored(registered) == nil)
+    }
+
     /// Two accounts on one device must not share a watermark.
     @Test("the watermark is per account")
     func perAccount() async {
