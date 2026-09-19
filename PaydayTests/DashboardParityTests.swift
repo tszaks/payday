@@ -593,8 +593,53 @@ struct DashboardCompletenessTests {
         #expect(facts.hero.text == "$0.00")
         #expect(facts.hero.label == "Total")
         #expect(facts.hero.caption == nil)
-        #expect(facts.periodEntries.isEmpty, "which is what draws 'No shifts this period.'")
+        #expect(facts.periodEntries.isEmpty)
+        #expect(!facts.hasShiftsThisPeriod, "which is what draws 'No shifts this period.'")
         #expect(facts.heroDeferredShiftCount == 0, "nothing is being left out; the period is empty")
+    }
+
+    /// Tyler's phone, the first time an account flipped: a correct, non-zero
+    /// hero with "No shifts this period." underneath it.
+    ///
+    /// `DashboardEarnings.build`'s record arm returns `shiftDays: []` by
+    /// construction -- the Dataset carries exactly one representation and
+    /// never merges them -- so `periodEntries`, which is
+    /// `periodShifts.flatMap(\.items)` over the LEGACY arm, is empty for
+    /// every flipped account no matter how many shifts it has. The screen
+    /// branched on exactly that.
+    ///
+    /// Everything else here was already right, which is what made it
+    /// invisible: `shiftsSection` renders both arms and `shiftCount` sums
+    /// both. Only the gate asked one.
+    ///
+    /// The legacy half of this coupling was asserted above and the record
+    /// half was not, so the suite stayed green through it. This is that half.
+    @Test("a flipped account with shifts does not draw the empty state")
+    func recordArmPeriodIsNotEmpty() {
+        let now = at(2026, 10, 7, hour: 12)
+        let record = ShiftRecord(
+            workDate: at(2026, 10, 5, hour: 12),
+            shiftPeriod: .dinner,
+            creditTipsCents: 12_000,
+            hoursWorked: 5
+        )
+        let facts = DashboardFacts(
+            snapshot: nil,
+            allShifts: [],
+            allShiftRecords: [record],
+            schedule: schedule,
+            now: now,
+            forcedPaydayPhase: nil,
+            dismissedClosedEnd: nil,
+            dismissedCheckEnd: nil,
+            payrollTimeZone: PaydayTestZone.payroll
+        )
+        // The legacy arm IS empty on a flipped account. That is correct and
+        // is precisely why it must not be the thing the screen branches on.
+        #expect(facts.periodEntries.isEmpty)
+        #expect(facts.shiftRecordDays.count == 1)
+        #expect(facts.shiftCount == 1)
+        #expect(facts.hasShiftsThisPeriod, "the Shifts section must draw, not the empty state")
     }
 
     /// The defect the deferral above did not cover, and the reason
