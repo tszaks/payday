@@ -495,6 +495,65 @@ struct CompensationLedgerTests {
         #expect(output.totalComponents.regularWagesCents == 283 * 60)
     }
 
+    /// **Moving a shift between workweeks must re-value BOTH weeks**, and
+    /// PR 7 names this as a lifecycle case because it is the edit a person
+    /// makes when they logged a night on the wrong date.
+    ///
+    /// The source week loses hours and may drop below the threshold, so
+    /// overtime it had must DISAPPEAR -- not merely stop growing. The
+    /// destination week gains them and may cross. An implementation that
+    /// valued only the week the shift landed in would leave the source
+    /// week's overtime standing, and the person would be paid, on paper, for
+    /// overtime in a week they no longer worked 40 hours in.
+    ///
+    /// Stated as the property that makes it checkable: valuation depends
+    /// ONLY on the current inputs, never on what they used to be. So moving
+    /// a shift must produce exactly what authoring it in the destination
+    /// from the start produces -- asserted against a freshly built input set
+    /// rather than against numbers typed here, because a hand-typed
+    /// expectation would just be this code run twice.
+    @Test("Moving a shift to another workweek re-values both: the source loses its overtime")
+    func movingAShiftRevaluesBothWeeks() {
+        // Week 1 is 45h over five 9h days -> 5h of overtime.
+        let beforeWeekOne = (1...5).map { Self.shift($0, Self.monday.adding(days: $0 - 1), minutes: 540) }
+        // Week 2 starts at 18h, comfortably under the threshold.
+        let beforeWeekTwo = (6...7).map { Self.shift($0, Self.monday.adding(days: 7 + $0 - 6), minutes: 540) }
+
+        let before = CompensationLedger.evaluate(
+            beforeWeekOne + beforeWeekTwo,
+            rates: [Self.rate(283)],
+            calendars: [Self.calendarPolicy()]
+        )
+        #expect(before.totalComponents.overtimeWagesCents > 0,
+                "the fixture must actually have overtime to lose")
+
+        // Move shift 5 out of week 1 and into week 2.
+        let movedShift = Self.shift(5, Self.monday.adding(days: 7 + 2), minutes: 540)
+        let afterMove = CompensationLedger.evaluate(
+            beforeWeekOne.filter { $0.id != movedShift.id } + beforeWeekTwo + [movedShift],
+            rates: [Self.rate(283)],
+            calendars: [Self.calendarPolicy()]
+        )
+
+        // Week 1 is now 36h and week 2 is 27h: NEITHER crosses 40.
+        #expect(afterMove.totalComponents.overtimeWagesCents == 0,
+                "the source week's overtime must disappear, not persist")
+        #expect(afterMove.totalComponents.regularWagesCents == 283 * 63,
+                "63 hours, all regular")
+
+        // The property: a move is indistinguishable from having authored it
+        // that way. If these differ, valuation depends on history.
+        let authoredThatWay = CompensationLedger.evaluate(
+            beforeWeekTwo + [movedShift] + beforeWeekOne.filter { $0.id != movedShift.id },
+            rates: [Self.rate(283)],
+            calendars: [Self.calendarPolicy()]
+        )
+        #expect(afterMove.totalComponents == authoredThatWay.totalComponents)
+        #expect(Dictionary(uniqueKeysWithValues: afterMove.valuations.map { ($0.id, $0.components) })
+                == Dictionary(uniqueKeysWithValues: authoredThatWay.valuations.map { ($0.id, $0.components) }),
+                "per shift too, not just in total")
+    }
+
     @Test("The workweek start decides the bucketing: Sat+Sun 25h each is 10h overtime Monday-start and none Sunday-start")
     func workweekStartDrivesBucketing() {
         // Sat 2026-10-03 and Sun 2026-10-04: one Monday-start week, two
