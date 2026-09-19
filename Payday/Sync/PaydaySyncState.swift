@@ -716,6 +716,35 @@ enum PaydaySyncState {
         }
     }
 
+    /// Withdraw the watermark because LOCAL data just changed.
+    ///
+    /// ## The window this closes, which I opened
+    ///
+    /// `syncedDatasetRevision` means "at the instant I read this, the
+    /// server's dataset and mine agreed". A local write breaks that
+    /// immediately, but the next sync is what NOTICES -- and
+    /// `queueSyncAfterLocalChange` debounces two seconds and returns early
+    /// when the scene is not active or a sync is already running.
+    ///
+    /// In that window the watermark still claims agreement while local data
+    /// has moved. An uploader trusting it would stamp a snapshot computed
+    /// from UNSYNCED local rows with a revision the server still considers
+    /// current, and `upsert_earnings_snapshot` would ACCEPT it -- because
+    /// the server's revision has not moved either: the write has not reached
+    /// it yet. The acceptance rule cannot catch this one; only the device
+    /// knows it has unsent work.
+    ///
+    /// So the withdrawal happens at the WRITE, not at the sync that follows
+    /// it. Non-nil then means "no local change since the last clean pass",
+    /// which is the property the uploader actually needs.
+    ///
+    /// Takes the account explicitly for tests and defaults to the registered
+    /// one, because the notification that triggers this carries no user.
+    static func invalidateSyncedDatasetRevision(for userID: UUID? = nil) {
+        guard let id = userID ?? registeredUserID else { return }
+        applySyncedDatasetRevision(nil, clean: false, for: id)
+    }
+
     /// **The one writer of `shiftsAreAuthoritativeAt`**, and therefore the one
     /// place the flip can happen for an account.
     ///
