@@ -106,6 +106,23 @@ enum PaydaySyncState {
         /// switch both work.
         var shiftsAreAuthoritativeAt: String?
 
+        /// The server watermark this device last observed at a moment when it
+        /// had NOTHING left to push or pull.
+        ///
+        /// Non-nil is a claim about a coincidence: "at the instant I read
+        /// this, the server's dataset and mine agreed". `SnapshotUploader`
+        /// stamps an upload with it, and `upsert_earnings_snapshot` accepts
+        /// only while it is still current -- so a stale value costs nothing
+        /// but a rejected upload and a retry after the next sync.
+        ///
+        /// nil means "no such moment is known", which is the honest state
+        /// after a failed sync, after an account switch, and on a pass that
+        /// still needs a follow-up. It is CLEARED rather than left stale for
+        /// the same reason `shiftsAreAuthoritativeAt` is: a value that
+        /// silently stops being true is worse than no value, because the
+        /// reader cannot tell.
+        var syncedDatasetRevision: Int64?
+
         init(
             tipEntryIDs: Set<UUID> = [],
             paycheckIDs: Set<UUID> = [],
@@ -125,7 +142,8 @@ enum PaydaySyncState {
             shiftServerAckedIDs: Set<UUID> = [],
             shiftWriteAttempts: [UUID: Int] = [:],
             pendingShiftRestores: [UUID: Date] = [:],
-            shiftsAreAuthoritativeAt: String? = nil
+            shiftsAreAuthoritativeAt: String? = nil,
+            syncedDatasetRevision: Int64? = nil
         ) {
             self.tipEntryIDs = tipEntryIDs
             self.paycheckIDs = paycheckIDs
@@ -146,6 +164,7 @@ enum PaydaySyncState {
             self.shiftWriteAttempts = shiftWriteAttempts
             self.pendingShiftRestores = pendingShiftRestores
             self.shiftsAreAuthoritativeAt = shiftsAreAuthoritativeAt
+            self.syncedDatasetRevision = syncedDatasetRevision
         }
 
         private enum CodingKeys: String, CodingKey {
@@ -168,6 +187,7 @@ enum PaydaySyncState {
             case shiftWriteAttempts
             case pendingShiftRestores
             case shiftsAreAuthoritativeAt
+            case syncedDatasetRevision
         }
 
         /// Hand-written so a checkpoint persisted by any earlier build still
@@ -197,6 +217,7 @@ enum PaydaySyncState {
             shiftWriteAttempts = try values.decodeIfPresent([UUID: Int].self, forKey: .shiftWriteAttempts) ?? [:]
             pendingShiftRestores = try values.decodeIfPresent([UUID: Date].self, forKey: .pendingShiftRestores) ?? [:]
             shiftsAreAuthoritativeAt = try values.decodeIfPresent(String.self, forKey: .shiftsAreAuthoritativeAt)
+            syncedDatasetRevision = try values.decodeIfPresent(Int64.self, forKey: .syncedDatasetRevision)
         }
     }
 
@@ -670,6 +691,29 @@ enum PaydaySyncState {
     /// migration version, which is what both earlier designs did.
     static func shiftsAreAuthoritative(for userID: UUID) -> Bool {
         load(for: userID).shiftsAreAuthoritativeAt != nil
+    }
+
+    /// **The ONE writer of `syncedDatasetRevision`.**
+    ///
+    /// Deliberately not `@discardableResult` and deliberately not a plain
+    /// `mutate` at the call site, for the same reason `applyShiftAuthority`
+    /// is not: a field whose meaning is "these two things agreed at an
+    /// instant" is only correct if exactly one place decides when that
+    /// instant happened.
+    ///
+    /// `clean` is the caller's verdict on whether the pass finished with
+    /// nothing outstanding. A pass that still needs a follow-up CLEARS the
+    /// value rather than leaving the previous one: the previous one was true
+    /// about a dataset that has since moved, and a stale watermark is exactly
+    /// what would make an upload look current when it is not.
+    static func applySyncedDatasetRevision(
+        _ revision: Int64?,
+        clean: Bool,
+        for userID: UUID
+    ) {
+        mutate(userID: userID) {
+            $0.syncedDatasetRevision = clean ? revision : nil
+        }
     }
 
     /// **The one writer of `shiftsAreAuthoritativeAt`**, and therefore the one

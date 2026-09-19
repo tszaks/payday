@@ -186,6 +186,25 @@ struct PaydayRemoteRepository {
         return rows.first
     }
 
+    /// The server's current watermark for the caller.
+    ///
+    /// A table read rather than the `payday_dataset_revision()` RPC, because
+    /// `dataset_revisions` already carries `for select using (auth.uid() =
+    /// user_id)` RLS and a `select` grant, so this needs no new privilege.
+    /// An ABSENT row is revision 0 and not an error: it is the state of an
+    /// account nothing has written for yet.
+    func fetchDatasetRevision(userID: UUID) async throws -> Int64 {
+        struct Row: Decodable { let revision: Int64 }
+        let rows: [Row] = try await client
+            .from("dataset_revisions")
+            .select("revision")
+            .eq("user_id", value: userID)
+            .limit(1)
+            .execute()
+            .value
+        return rows.first?.revision ?? 0
+    }
+
     /// Tombstones shifts. The server stores the EARLIEST of the requested and
     /// the already-stored tombstone, so a replayed delete is a true no-op and
     /// a clock-skewed device cannot park a tombstone in the future.
@@ -780,19 +799,31 @@ final class PaydaySyncService {
         var report = try Self.cachedReport(context: context, userID: userID)
         report.conversionPending = authority.remainingGroupCount
 
+        // Computed once and used twice -- as `requiresFollowUpSync` and as the
+        // `clean` verdict the watermark leg needs -- because two expressions
+        // for "did this pass finish everything" would eventually disagree,
+        // and the disagreement would be a watermark recorded on a dirty pass.
+        let followUp = !tipsChangedDuringSync.isEmpty
+            || !paychecksChangedDuringSync.isEmpty
+            || settingsChangedDuringSync
+            // THE LIVENESS REQUIREMENT. Nothing inside the deferral re-arms
+            // it, so a caller treating `.deferPromotion` as a no-op would
+            // strand the account on the legacy representation for the rest of
+            // the session -- a guard against a few-seconds straddle turned
+            // into an indefinite one. Asking for a follow-up pass is what
+            // makes the deferral a DELAY rather than a cancellation.
+            || authority.deferred
+
+        // Read the watermark LAST, after every push and pull this pass will
+        // do. Reading it earlier would record a number that this pass's own
+        // writes then invalidated.
+        await Self.applyDatasetRevisionLeg(userID: userID, clean: !followUp) {
+            try await repository.fetchDatasetRevision(userID: userID)
+        }
+
         return PaydaySyncOutcome(
             report: report,
-            requiresFollowUpSync: !tipsChangedDuringSync.isEmpty
-                || !paychecksChangedDuringSync.isEmpty
-                || settingsChangedDuringSync
-                // THE LIVENESS REQUIREMENT. Nothing inside the deferral
-                // re-arms it, so a caller treating `.deferPromotion` as a
-                // no-op would strand the account on the legacy representation
-                // for the rest of the session -- a guard against a
-                // few-seconds straddle turned into an indefinite one. Asking
-                // for a follow-up pass is what makes the deferral a DELAY
-                // rather than a cancellation.
-                || authority.deferred
+            requiresFollowUpSync: followUp
         )
     }
 
@@ -910,6 +941,47 @@ final class PaydaySyncService {
             // announce "conversion finished" to the banner, for the same
             // reason it must not demote the representation.
             return .unknown
+        }
+    }
+
+    /// Record the watermark this pass observed, but ONLY if the pass ended
+    /// with nothing outstanding.
+    ///
+    /// `fetch` is injected with the real repository call at the one
+    /// production call site, the same seam as `applyShiftAuthorityLeg` --
+    /// so the "dirty pass clears it" rule can be tested rather than grepped
+    /// for.
+    ///
+    /// ## Why a failed read CLEARS rather than keeps
+    ///
+    /// The opposite is tempting: a read failure is transient, and the old
+    /// value was true a moment ago. But the value's whole meaning is "at the
+    /// instant I read this, the server's dataset and mine agreed", and a
+    /// failed read is not an instant at which anything was observed. Keeping
+    /// it would let a device stamp an upload with a watermark it never saw.
+    ///
+    /// The cost of clearing is one rejected upload and a retry after the next
+    /// sync, because `upsert_earnings_snapshot` rejects a stale revision
+    /// anyway. The cost of keeping is a snapshot the server accepts while the
+    /// device computed it from data the server no longer holds -- which is
+    /// the exact disagreement this whole mechanism exists to prevent.
+    static func applyDatasetRevisionLeg(
+        userID: UUID,
+        clean: Bool,
+        fetch: () async throws -> Int64
+    ) async {
+        guard clean else {
+            PaydaySyncState.applySyncedDatasetRevision(nil, clean: false, for: userID)
+            return
+        }
+        do {
+            let revision = try await fetch()
+            PaydaySyncState.applySyncedDatasetRevision(revision, clean: true, for: userID)
+        } catch {
+            // Deliberately spelled out rather than `try?`: design-lint rule 19
+            // bans `try?` on write paths, and the catch is what lets the
+            // header above exist.
+            PaydaySyncState.applySyncedDatasetRevision(nil, clean: false, for: userID)
         }
     }
 
