@@ -82,6 +82,7 @@ struct SyncPassOrderTests {
         // the source: settings push, then the baseline pull.
         #expect(calls == [
             "POST /rest/v1/rpc/upsert_user_settings",
+            "POST /rest/v1/rpc/payday_unmigrated_tip_row_count",
             "POST /rest/v1/rpc/fetch_shift_changes",
             "GET /rest/v1/tip_entries",
             "GET /rest/v1/paycheck_records",
@@ -265,6 +266,57 @@ struct SyncPassOrderTests {
         )
     }
 
+    /// Step 6a converts REAL accounts, so when it runs is not a detail.
+    ///
+    /// Design 7.5 puts it after the orchestration and before the shift
+    /// pull: ahead of the leg it would flip reads to a representation the
+    /// device cannot sync, and after the pull it would convert rows this
+    /// pass then fails to see. And it is ONE call, never a loop, because a
+    /// loop inside a pass is how an account that cannot converge hangs a
+    /// sync instead of making partial progress.
+    @Test("the one-shot fires only when there is work, and exactly once")
+    func theOneShotFiresOnlyWhenThereIsWorkToDo() async throws {
+        let service = PaydaySyncService(client: client())
+        RoutingStub.route("/rpc/payday_unmigrated_tip_row_count", to: "7")
+        let ctx = try context()
+
+        _ = try? await service.synchronize(
+            context: ctx,
+            scheduleStore: PayScheduleStore(),
+            preferencesStore: UserPreferencesStore(),
+            moveLedgerStore: MoveLedgerStore(),
+            policyStore: PolicyStore(),
+            userID: Self.user
+        )
+
+        let calls = RoutingStub.recordedPaths()
+        let convert = calls.filter { $0.contains("migrate_tip_entries_to_shifts") }
+        #expect(convert.count == 1, "expected exactly one conversion call; got \(calls)")
+
+        let iConvert = calls.firstIndex { $0.contains("migrate_tip_entries_to_shifts") }
+        let iPull = calls.firstIndex { $0.contains("fetch_shift_changes") }
+        let iSettings = calls.firstIndex { $0.contains("upsert_user_settings") }
+        if let iConvert, let iPull { #expect(iConvert < iPull, "6a must precede the shift pull; got \(calls)") }
+        if let iConvert, let iSettings { #expect(iSettings < iConvert, "6a must follow the orchestration; got \(calls)") }
+    }
+
+    /// The other half, and the one that keeps a converged account from
+    /// paying for the conversion on every pass forever.
+    @Test("a converged account never calls the one-shot")
+    func aConvergedAccountSkipsTheOneShot() async throws {
+        let service = PaydaySyncService(client: client())   // count route defaults to 0
+        let ctx = try context()
+        _ = try? await service.synchronize(
+            context: ctx,
+            scheduleStore: PayScheduleStore(),
+            preferencesStore: UserPreferencesStore(),
+            moveLedgerStore: MoveLedgerStore(),
+            policyStore: PolicyStore(),
+            userID: Self.user
+        )
+        #expect(!RoutingStub.recordedPaths().contains { $0.contains("migrate_tip_entries_to_shifts") })
+    }
+
 }
 
 /// Routes by URL path and records the order, because one canned body for
@@ -294,10 +346,23 @@ final class RoutingStub: URLProtocol, @unchecked Sendable {
             // Must precede the generic /rpc/ entry: routes match in order,
             // and `fetch_shift_changes` decodes a RemoteShiftPage OBJECT, so
             // the generic "[]" makes the pass throw mid-leg.
+            // Returns a NUMBER, not "[]" -- the generic /rpc/ body does not
+            // decode as Int and the pass throws before the shift leg.
+            // Default 0, so the one-shot does not fire in the passes that
+            // are about ordering; `theOneShotFiresOnlyWhenThereIsWorkToDo`
+            // overrides it.
+            ("/rpc/payday_unmigrated_tip_row_count", "0"),
             ("/rpc/fetch_shift_changes", "{\"server_now\":\"2026-09-19T00:00:00.000Z\",\"rows\":[]}"),
             ("/rest/v1/rpc/", "[]"),
         ]
         lock.unlock()
+    }
+
+    /// Override one route for a single test. The map is rebuilt by
+    /// `reset()`, so this cannot leak into the next test.
+    static func route(_ fragment: String, to body: String) {
+        lock.lock(); defer { lock.unlock() }
+        routes.insert((fragment, body), at: 0)
     }
 
     static func recordedPaths() -> [String] {
