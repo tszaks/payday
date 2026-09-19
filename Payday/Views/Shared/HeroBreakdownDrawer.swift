@@ -11,16 +11,29 @@ import SwiftUI
 ///
 /// `cents` is optional because a figure the engine could not produce renders
 /// as a placeholder and never as `$0.00` (PR 5 adapter contract, rule 4).
+///
+/// `caption` is a second line under the label, for a qualifier that belongs to
+/// ONE row rather than to the whole drawer. The wage rows use it for their
+/// hours: "Wages · 64h 50m" put a duration and a dollar amount on one line in
+/// the same weight, so the eye had to parse which half was the money.
 struct BreakdownRow: Identifiable {
     var id: String { label }
     let label: String
     let cents: Int?
+    let caption: String?
     let emphasized: Bool
     let dividerAbove: Bool
 
-    init(_ label: String, cents: Int?, emphasized: Bool = false, dividerAbove: Bool = false) {
+    init(
+        _ label: String,
+        cents: Int?,
+        caption: String? = nil,
+        emphasized: Bool = false,
+        dividerAbove: Bool = false
+    ) {
         self.label = label
         self.cents = cents
+        self.caption = caption
         self.emphasized = emphasized
         self.dividerAbove = dividerAbove
     }
@@ -78,17 +91,27 @@ extension BreakdownRow {
             rows.append(BreakdownRow("Gratuity & fees", cents: components.gratuityFeesCents))
         }
         if result.completeness.shiftsWageValued > 0 {
-            // Regular hours only. `result.minutes` is the TOTAL, so labeling
+            // Regular hours only. `result.minutes` is the TOTAL, so captioning
             // this row with it would claim the base-rate line covers hours
             // that are actually priced at 1.5x on the Overtime row below it.
+            //
+            // The hours are a CAPTION, not part of the label. On one line
+            // ("Wages · 64h 50m    $597.00") a row states a duration and a
+            // dollar amount in the same size and weight, and the interesting
+            // half is whichever one you were not looking at. Underneath, the
+            // label and the money sit on one baseline and the hours qualify
+            // them from below, which is how every other qualifier on this
+            // screen already behaves.
             rows.append(BreakdownRow(
-                "Wages · \(WorkedMinutes.hoursLabel(minutes: result.regularMinutes))",
-                cents: components.regularWagesCents
+                "Wages",
+                cents: components.regularWagesCents,
+                caption: WorkedMinutes.hoursLabel(minutes: result.regularMinutes)
             ))
             if components.overtimeWagesCents > 0 {
                 rows.append(BreakdownRow(
-                    "Overtime · \(WorkedMinutes.hoursLabel(minutes: result.overtimeMinutes))",
-                    cents: components.overtimeWagesCents
+                    "Overtime",
+                    cents: components.overtimeWagesCents,
+                    caption: WorkedMinutes.hoursLabel(minutes: result.overtimeMinutes)
                 ))
             }
         }
@@ -266,11 +289,23 @@ struct HeroBreakdownDrawer<Card: View>: View {
         .clipShape(drawerShape)
     }
 
+    /// `.firstTextBaseline` so the amount sits on the LABEL's baseline. With
+    /// the default alignment a captioned row centres the amount against the
+    /// two-line block, and the money column stops being a column the moment
+    /// one row grows a caption.
     private func breakdownRow(_ row: BreakdownRow) -> some View {
-        HStack {
-            Text(row.label)
-                .font(row.emphasized ? PaydayFont.subheadline : PaydayFont.footnote)
-                .foregroundStyle(row.emphasized ? PaydayColor.textPrimary : PaydayColor.textSecondary)
+        HStack(alignment: .firstTextBaseline) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(row.label)
+                    .font(row.emphasized ? PaydayFont.subheadline : PaydayFont.footnote)
+                    .foregroundStyle(row.emphasized ? PaydayColor.textPrimary : PaydayColor.textSecondary)
+                if let caption = row.caption {
+                    Text(caption)
+                        .font(PaydayFont.caption2)
+                        .foregroundStyle(PaydayColor.textTertiary)
+                        .monospacedDigit()
+                }
+            }
             Spacer(minLength: 0)
             Text(BreakdownRow.amountText(row.cents))
                 .font(row.emphasized ? PaydayFont.subheadline : PaydayFont.footnote)

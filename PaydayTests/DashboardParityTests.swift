@@ -237,14 +237,15 @@ struct DashboardPeriodParityTests {
         )
 
         let labels = facts.heroBreakdownRows.map(\.label)
-        #expect(labels == ["Cash tips", "Credit tips", "Wages · 38h", "Earned", "Tipped out"])
+        #expect(labels == ["Cash tips", "Credit tips", "Wages", "Earned", "Tipped out"])
+        #expect(facts.heroBreakdownRows.first { $0.label == "Wages" }?.caption == "38h")
 
         func cents(_ label: String) throws -> Int {
             try #require(facts.heroBreakdownRows.first { $0.label == label }?.cents)
         }
         #expect(try cents("Cash tips") == 7_500)
         #expect(try cents("Credit tips") == 42_500)
-        #expect(try cents("Wages · 38h") == 68_400)
+        #expect(try cents("Wages") == 68_400)
         // The subtotal is `EarningsComponents.grossBeforeTipOutCents`, not
         // four terms this screen adds up.
         #expect(try cents("Earned") == 118_400)
