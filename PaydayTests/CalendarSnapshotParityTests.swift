@@ -342,4 +342,115 @@ struct CalendarSnapshotParityTests {
         // A neighbouring day genuinely has nothing.
         #expect(facts.tile(on: day(2026, 10, 8))?.hasShifts == false)
     }
+    /// **The month drawer cannot disagree with the month face.**
+    ///
+    /// The Calendar hero was the only one without a breakdown drawer, so a
+    /// person could see WHAT their month came to and never what it was made
+    /// of. A drawer is a SECOND surface showing the same fact, and this
+    /// project's claim is that two surfaces do not disagree -- so it gets
+    /// the same treatment as every other pair rather than being trusted
+    /// because it happens to read the same variable today.
+    ///
+    /// The reconciliation asserted is the one a person would do by hand:
+    /// cash + credit + gratuity + wages - tipped out == the headline.
+    @Test("the month drawer's rows reconcile to the month headline")
+    func monthDrawerReconcilesToTheHeadline() throws {
+        // A fixture WITH a tip-out, deliberately. `straddlingWeek()` has
+        // none, and the first version of this test used it -- so dropping
+        // the "Tipped out" row from the drawer changed nothing and the
+        // mutation passed. A reconciliation over a figure with nothing to
+        // subtract cannot detect a missing subtraction.
+        let entries = straddlingWeek().enumerated().map { index, entry -> TipEntry in
+            entry.tipOutCents = 1_500          // $15 off every shift
+            if index == 0 { entry.amountCents += 2_000 }   // and one uneven day
+            return entry
+        }
+        let engine = try #require(snapshot(
+            entries: entries, policies: policies(rateCents: 1_000)))
+        let month = CalendarMonthFacts(
+            snapshot: engine,
+            displayedMonth: day(2026, 10, 1),
+            calendar: calendarInPayrollZone()
+        )
+
+        // The row list carries a SUBTOTAL ("Earned", gross before tip-out),
+        // so summing every row double-counts it. The first version of this
+        // test summed them all and reported 51000 against a correct 24000 --
+        // the test was wrong about the shape, not the drawer about the money.
+        //
+        // The real reconciliation, and the one a person reads down the
+        // drawer: the addends make the subtotal, and the subtotal minus the
+        // tip-out is the headline.
+        let byLabel = Dictionary(
+            month.monthBreakdownRows.map { ($0.label, $0.cents ?? 0) },
+            uniquingKeysWith: { a, _ in a })
+        let subtotal = try #require(byLabel["Earned"], "no subtotal row")
+        let tipOut = try #require(byLabel["Tipped out"], "no tip-out row -- the fixture must have one or this proves nothing")
+
+        let addends = month.monthBreakdownRows
+            .filter { $0.label != "Earned" && $0.label != "Tipped out" }
+            .compactMap { $0.cents }
+            .reduce(0, +)
+        #expect(addends == subtotal,
+                "cash + credit + gratuity + wages = \(addends), subtotal says \(subtotal)")
+        #expect(tipOut < 0, "Tipped out must SUBTRACT, or the headline is gross")
+        #expect(subtotal + tipOut == month.monthFigure.cents,
+                "subtotal \(subtotal) + tipout \(tipOut) != headline \(month.monthFigure.cents ?? -1)")
+        #expect(month.monthBreakdownTotal.cents == month.monthFigure.cents,
+                "the drawer's bottom line and the face are one number or neither is trustworthy")
+    }
+
+    /// A failed read has nothing to explain, and must not offer to.
+    @Test("an unavailable month offers no drawer")
+    func anUnavailableMonthHasNoDrawer() {
+        let month = CalendarMonthFacts(
+            snapshot: nil,
+            displayedMonth: day(2026, 10, 1),
+            calendar: calendarInPayrollZone()
+        )
+        #expect(month.monthHasBreakdown == false)
+        #expect(month.monthBreakdownRows.isEmpty)
+        #expect(month.monthLipText == nil)
+    }
+
+    /// **The month caption names the unpriced day, and names the RIGHT one.**
+    ///
+    /// `CompletenessCopyTests` covers the sentence. This covers the wiring:
+    /// that `CalendarMonthFacts` finds the unpriced shift from the engine's
+    /// own valuations over the month's range. A wrong range or an inverted
+    /// filter would produce a confident, well-formed, wrong date.
+    @Test("the month caption names the shift that is missing hours")
+    func theMonthCaptionNamesTheUnpricedShift() throws {
+        // Four priced days and one with NO hours, so the month is `.partial`
+        // for exactly one reason and exactly one day.
+        var entries = straddlingWeek()
+        entries[3].hoursWorked = nil          // Thu 2026-10-01
+        let engine = try #require(snapshot(
+            entries: entries, policies: policies(rateCents: 1_000)))
+        let month = CalendarMonthFacts(
+            snapshot: engine,
+            displayedMonth: day(2026, 10, 1),
+            calendar: calendarInPayrollZone()
+        )
+
+        let caption = try #require(month.monthWagesCaption)
+        #expect(caption.contains("Oct 1"), "expected the unpriced day named; got \(caption)")
+        #expect(!caption.contains("1 shift"), "naming replaces counting; got \(caption)")
+        // And it must not name a day that IS priced.
+        #expect(!caption.contains("Oct 2"), "named a priced day; got \(caption)")
+    }
+
+    /// A fully priced month says nothing, rather than saying nothing is wrong.
+    @Test("a complete month has no wages caption")
+    func aCompleteMonthHasNoWagesCaption() throws {
+        let engine = try #require(snapshot(
+            entries: straddlingWeek(), policies: policies(rateCents: 1_000)))
+        let month = CalendarMonthFacts(
+            snapshot: engine,
+            displayedMonth: day(2026, 10, 1),
+            calendar: calendarInPayrollZone()
+        )
+        #expect(month.monthWagesCaption == nil)
+    }
+
 }
