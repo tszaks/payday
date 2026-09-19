@@ -482,6 +482,56 @@ That is weaker than a per-commit historical verdict and stronger than nothing, a
 - [ ] The four commits without their own green verdict (`8260f7d`, `852f36a`, `c800493`, `013de83`) are recorded here as transitively covered, with the later green merge commit that covers each one named — `013de83` is covered by `4d631c9`. They are **not** to be ticked as individually verified, because they cannot be.
 - [ ] No merge commit's run is `cancelled`, and none is missing entirely. A cancelled run is not a pass and not a failure; it is an absence, and in a listing an absence reads like neither. That is exactly how these went unnoticed.
 
+## PR 7 status, measured 2026-09-19 at `c752597`
+
+**PR 7 was recorded as "not started". That is wrong, and most of it was
+already done before tonight.** Measured item by item against the plan's own
+list rather than summarised, because "not started" on a release card is the
+kind of claim that gets planned around.
+
+| PR 7 item | State | Evidence |
+|---|---|---|
+| Atomic logical-shift save, rollback on throw | **DONE, pre-existing** | `ShiftCommands.swift:105` performs the rollback; `ShiftCommandsTests.swift:92` `editThatThrowsChangesNothing()`, plus `AutosaveOffPersistenceTests.swift:207` (the rollback survives a reopen) and `DeletionQueueAtomicityTests.swift:57` `rollbackDoesNotUndoTheQueueWrite` |
+| Idempotent retries on `id` | **DONE, pre-existing** | `on conflict (user_id, id) do update` in `add_shift_write_rpcs.sql` |
+| Last-client-write-wins by `client_updated_at` | **DONE, pre-existing** | `excluded.client_updated_at >= existing.client_updated_at`, documented at the RPC |
+| Deletions preserved across reconnect | **DONE, pre-existing** | four tests in `ShiftCheckpointTests`, incl. "a full sync pass preserves pending shift restores" and "a legacy deletion queue entry survives a restore-cancel pass" |
+| Late responses for a previous account rejected | **UNREACHABLE BY DESIGN** | `registerCurrentUser` refuses a second account outright; asserted at `PaydaySyncStateTests:27`. There is no switch to reject a late response from |
+| Account switch clears the store and checkpoint | **UNREACHABLE BY DESIGN** | same refusal. The plan item describes a path this codebase forbids |
+| Shift moved across workweeks re-values both | **ADDED** (#80) | source week's overtime must disappear, not merely stop growing |
+| Upgrade conserves rows and money | **ADDED** (#82) | conservation, not expected values; two identical rows must not be deduplicated |
+| Midnight rollover rebuilds | **ADDED** (#83) | posts the real `.NSCalendarDayChanged`, so the REGISTRATION is what is tested |
+| Device timezone change leaves money untouched | **DONE, pre-existing** | fixture T1 |
+| Parsers produce candidates only | **TRUE, UNENFORCED** | no `.insert(`/`.save()`/`ModelContext` in any of the five parser files. Currently true with nothing holding it there; a lint rule is the obvious follow-up |
+
+**A citation in this table must name a symbol that EXISTS.** The row above
+originally cited "anEditThatThrowsLeavesTheRecordExactlyAsItWas" (quoted, not
+backtick-fenced, precisely so the lint below does not flag this sentence),
+which is
+nowhere in the codebase: I camel-cased the test's DISPLAY string
+(`@Test("an edit that throws leaves the record exactly as it was")`) into
+something shaped like an identifier and wrote it here as if it were one. The
+test is real and the coverage is real -- the function is
+`editThatThrowsChangesNothing()` -- but a reader who greps the name I wrote
+finds nothing and concludes the coverage is phantom. A reviewer did exactly
+that within the hour.
+
+That is worse than a typo, because a gate document citing test names that
+resolve to nothing is a rubber stamp shaped like evidence. A sweep of every
+backticked identifier in this file found exactly one such citation: the one
+I had just added. `scripts/design-lint.sh` now fails on any other.
+
+**So PR 7's remaining work is one lint rule, not a slice.** Two of its
+eleven items describe paths the code makes unreachable and should be struck
+from the plan rather than implemented; the plan predates the decision that
+made them impossible.
+
+**What this does NOT mean.** The gate line "no lost, duplicated, or
+cross-account records under fault injection" is satisfied for the faults
+named above and is not a general proof. Sync fault injection at the wire
+level is affordable here -- `ShiftWriteWireTests` already stubs
+`URLProtocol` -- and has not been swept systematically. That is real
+remaining work; it is just not the work the plan's list describes.
+
 ## PR 8 entry condition: the records arm must out-gate the legacy arm first
 
 **PR 8 may not delete the legacy calculation paths until the records arm's

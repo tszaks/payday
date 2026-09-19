@@ -868,4 +868,11 @@ if [ "$FAIL" -eq 1 ]; then
   echo "=== Design lint FAILED — see docs/DESIGN.md ==="
   exit 1
 fi
+# 31. A gate document may not cite a symbol that does not exist.
+#     RELEASE_GATE.md cited a test name that was a hand-camel-cased display
+#     string. The coverage was real; the identifier was not, and a reviewer
+#     grepping it concluded the opposite. Delegated to its own script because
+#     it searches the whole tree rather than the comment-blanked stream.
+if bash scripts/lint-doc-citations.sh; then :; else FAIL=1; fi
+
 echo "=== Design lint passed ==="
