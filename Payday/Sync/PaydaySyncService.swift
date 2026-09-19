@@ -175,6 +175,37 @@ struct PaydayRemoteRepository {
     /// NOT `.single()`. That throws when no row exists, which would turn the
     /// ordinary case into a sync failure -- the same trap
     /// `fetchAllRows`' header records for the `user_settings` read.
+    /// How many legacy rows this account still has to convert.
+    ///
+    /// Zero for an unauthenticated caller BY DESIGN -- the function reads
+    /// `auth.uid()` and returns 0 when it is null. Measured directly against
+    /// production, where that made it report 0 while one account held 100
+    /// unconverted rows; the per-user predicate underneath reported all 100.
+    /// So a 0 from here means "nothing to do FOR ME", never "nothing to do".
+    func unmigratedTipRowCount() async throws -> Int {
+        try await client.rpc("payday_unmigrated_tip_row_count").execute().value
+    }
+
+    /// ONE bounded pass of the legacy conversion.
+    ///
+    /// `p_max_groups` is not tuning. Without a budget a multi-year account
+    /// gets one all-or-nothing attempt under a 60s timeout, and on exceeding
+    /// it the whole RPC rolls back, the count is unchanged, and the client
+    /// repeats it identically forever with no state in which the account
+    /// advanced. `remainingGroupCount` comes back every run so progress is a
+    /// number rather than a retry.
+    func migrateTipEntriesToShifts(
+        userID: UUID, maxGroups: Int
+    ) async throws -> RemoteShiftMigrationState {
+        try await client
+            .rpc("migrate_tip_entries_to_shifts", params: [
+                "p_user_id": AnyJSON.string(userID.uuidString),
+                "p_max_groups": AnyJSON.integer(maxGroups),
+            ])
+            .execute()
+            .value
+    }
+
     func fetchShiftMigrationState(userID: UUID) async throws -> RemoteShiftMigrationState? {
         let rows: [RemoteShiftMigrationState] = try await client
             .from("shift_migration_state")
@@ -355,6 +386,11 @@ struct PaydayRemoteRepository {
     }
 
     static let shiftFeedPageSize = 1_000
+
+    /// Groups converted per sync pass. Bounded so a multi-year account makes
+    /// partial forward progress instead of exceeding the 60s statement
+    /// timeout and rolling the whole conversion back.
+    static let legacyConversionGroupBudget = 200
 
     func fetchShifts(userID: UUID, ids: Set<UUID>) async throws -> [RemoteShift] {
         try await fetchByIDs(table: "shifts", columns: shiftColumns, userID: userID, ids: ids)
@@ -674,6 +710,28 @@ final class PaydaySyncService {
             // set, so the next sync tries again rather than dropping the
             // adoption on the floor.
             policyStore.acknowledgePolicyUpload()
+        }
+
+        // ---- Step 6a. The one-shot legacy conversion. ----
+        //
+        // AFTER the orchestration and BEFORE the shift pull, which is the
+        // only correct position. Ahead of the leg it would flip reads to a
+        // representation the device cannot sync -- deletions would not
+        // propagate and edits would not push. After the pull it would
+        // convert rows this pass then fails to see.
+        //
+        // ONE call, never a loop inside the pass. The budget caps the work
+        // so a long account converges over several syncs instead of timing
+        // out and rolling back forever; `remainingGroupCount` is how that
+        // progress is observed.
+        let unmigratedCount = try await repository.unmigratedTipRowCount()
+        if unmigratedCount > 0 {
+            let state = try await repository.migrateTipEntriesToShifts(
+                userID: userID,
+                maxGroups: PaydayRemoteRepository.legacyConversionGroupBudget)
+            Self.logger.notice(
+                "Legacy conversion pass. unmigratedBefore=\(unmigratedCount) remainingGroups=\(state.remainingGroupCount ?? -1) migratedAt=\(state.migratedAt ?? "nil")"
+            )
         }
 
         // ---- Shift leg, design 7.5 steps 6-9. PULL BEFORE PUSH ----
