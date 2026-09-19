@@ -953,6 +953,37 @@ Commands and numbers, not claims. Re-run any line to check it.
 | 4 | `PAYDAYCORE_RELEASE_GATE=1 swift test --package-path Packages/PaydayCore` | **255/33 passed, `knownIssueCountIsZero` passed** |
 | 6 (lint half) | `bash scripts/design-lint.sh` | **exit 0, 34 PASS lines** -- and exit 0 now MEANS it; see below |
 
+**Criteria 3 and 5 RE-MEASURED 2026-09-19 at `9a3f3a0`, by suite, because
+they had been CITED rather than run.** Two of this session's four
+corrections came from trusting a measurement taken somewhere else, so a
+recorded green from a previous sitting is not evidence for this one.
+
+Criterion 5, clause by clause against its own wording:
+
+| clause | suite that passed |
+|---|---|
+| Dashboard = History row = period detail | `Dashboard period income equals the History row and period detail` |
+| calendar day = day detail = Σ shifts = chart point | `Calendar parity: tile == sheet == Σ shifts == chart point` |
+| month = sum of its days | `A month equals the sum of its days` |
+| Siri = widget = app | `Ambient parity: Siri == widget == app` |
+
+Plus `Screen number parity across representations`, `Dashboard parity on the
+records arm`, `Insights snapshot parity`, `CSV export representation
+parity`, `Payday notification equals the Dashboard payday card` and
+`Reveal comparison parity` -- 18 parity suites green in the same run.
+
+Criterion 3, and the qualifier "never a test helper" is the part that
+matters: `Fixture gates` and `Fixture money gates` pass under
+`PAYDAYCORE_RELEASE_GATE=1`, and they reach the engine through
+`CompensationLedger.evaluate` and `PaycheckReconciler.proposal` -- the
+production entry points. `Fixture consistency` asserts separately that
+exactly the 14 plan fixtures are present and every id matches its filename.
+
+**Criterion 6 is the one that is not met, and it is not met for a reason
+that no amount of work in this repository changes today.** See the blocked
+note on the ten calculation paths: 453 live references, retired only when
+the legacy arm stops serving unconverted accounts, which needs one sync.
+
 **Criterion 6's lint half carries a caveat that has to be stated.** Until
 `f4a8215`, `design-lint.sh`'s only exit point sat ABOVE rules 31-34, so
 those four could print `[FAIL]` and the script still exited 0. Every
