@@ -329,6 +329,38 @@ where someone looks to find out whether the engine is done, and "the
 screens agree" is a true sentence that would leave them with the wrong
 impression.
 
+**Later the same day, and it changes one of the sentences above.** The
+device now SYNCS shifts. The entire shift leg -- push, pull, soft-delete,
+restore, and the post-write readback -- existed as code with **zero
+callers**: six functions, seventeen passing unit tests, nothing in the app
+reaching any of them. That is the second component found in this state in
+one day, alongside `SnapshotUploader`, so "the mechanism exists" should be
+read here as a statement about files and not about behaviour.
+
+It is wired now (`#101`-`#104`). It pulls before it pushes, for the shift
+leg ALONE -- inverting globally makes every sync throw `paycheckMismatch`
+and reverts a locally changed wage -- and all three of its durable queues
+now flush AND drain. Three defects of one shape were found getting there,
+each by the round after the one that introduced it. `design-lint` rule 34
+now fails the build on a queue flushed without being drained, so that shape
+cannot recur silently.
+
+**Two of the five spellings of `nonWageEarnings` are gone** (`#108`,
+`#109`). One fact was written out independently in `EarningsComponents`,
+`ShiftRecord`, `TipBreakdown`, `LegacyShiftRow` and `StatsEngine` -- the
+same arithmetic five times, agreeing until one was edited. The first two now
+delegate to the engine. `LegacyShiftRow` deliberately does not: it applies
+the v1 receipt fold and is a sanctioned legacy read leg, not a duplicate.
+`StatsEngine` remains, and it is the copy that actually diverged, by exactly
+the gratuity, on a payload carrying no `earningsSchemaVersion`.
+
+**A caveat about the lint this pillar leans on.** The money-boundary rule
+does ratchet and does block, as claimed above. But until `f4a8215` on
+2026-09-19, `design-lint.sh` had its only exit check positioned ABOVE rules
+31 through 34, so those four printed `[FAIL]` and the script still exited 0.
+Any conclusion resting on rules 31-34 before that commit should be
+re-derived rather than trusted.
+
 The choice is no longer the screen's to make. A builder takes both stored
 shapes and resolves which to read itself, so a half-switched screen is not
 expressible, and `design-lint.sh` rule 23 fails the build on any app-code
@@ -345,9 +377,13 @@ Not true yet, and a reader should not assume otherwise:
   duplicate money math, so the API no longer computes a *second* answer --
   but it has no wage concept either, because a wage is a property of a
   workweek under a rate history the server does not hold. Wage-inclusive
-  totals reach it only through a device-published snapshot, which is PR 6's
-  group 2.14 and is not built. `docs/PAYDAY_API.md` states this at the top of
-  its contract. An API total and an app total are the same *non-wage* number
+  totals reach it only through a device-published snapshot. **This bullet
+  said group 2.14 "is not built" and that now contradicts the dated update
+  above, which records that it landed.** Both readings mislead on their own:
+  the code exists, and none of it is connected, so the practical state is
+  the same as not built. The update above is authoritative; this bullet is
+  kept because a reader greps for the claim, not for the date.
+  `docs/PAYDAY_API.md` states this at the top of its contract. An API total and an app total are the same *non-wage* number
   and are not comparable as totals.
 - **That deletion is in the repository, not necessarily in production.** The
   deployed edge function changes only when someone runs
