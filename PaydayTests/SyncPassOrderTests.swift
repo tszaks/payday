@@ -36,6 +36,8 @@ struct SyncPassOrderTests {
             PaydaySyncState.pendingShiftDeletions(for: Self.user).keys, for: Self.user)
         PaydaySyncState.clearLegacyEntryDeletions(
             PaydaySyncState.pendingLegacyEntryDeletions(for: Self.user).keys, for: Self.user)
+        PaydaySyncState.clearShiftRestores(
+            PaydaySyncState.pendingShiftRestores(for: Self.user).keys, for: Self.user)
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [RoutingStub.self]
         return SupabaseClient(
@@ -224,6 +226,42 @@ struct SyncPassOrderTests {
         #expect(
             PaydaySyncState.pendingShiftDeletions(for: Self.user).isEmpty,
             "the shift deletion queue never drained"
+        )
+    }
+
+    /// Step 0's queue must DRAIN, and this is the third queue in this file
+    /// with the same defect: written on the user action, flushed by the
+    /// sync, cleared only on the UNDO path. `pendingShiftDeletions` and the
+    /// tombstone map had it too. A queue that never drains re-sends its
+    /// whole history every pass, forever.
+    @Test("a queued shift restore is flushed and then drained")
+    func aQueuedShiftRestoreIsFlushedAndDrained() async throws {
+        let service = PaydaySyncService(client: client())
+        let restored = UUID(uuidString: "90000000-0000-4000-8000-0000000000d1")!
+        PaydaySyncState.recordShiftRestore(restored, for: Self.user)
+
+        let ctx = try context()
+        _ = try? await service.synchronize(
+            context: ctx,
+            scheduleStore: PayScheduleStore(),
+            preferencesStore: UserPreferencesStore(),
+            moveLedgerStore: MoveLedgerStore(),
+            policyStore: PolicyStore(),
+            userID: Self.user
+        )
+
+        let calls = RoutingStub.recordedPaths()
+        #expect(
+            calls.contains("POST /rest/v1/rpc/restore_shifts"),
+            "the restore queue was never flushed; got \(calls)"
+        )
+        #expect(
+            calls.first == "POST /rest/v1/rpc/restore_shifts",
+            "step 0 must run before every other write; got \(calls)"
+        )
+        #expect(
+            PaydaySyncState.pendingShiftRestores(for: Self.user).isEmpty,
+            "the restore queue never drained"
         )
     }
 
