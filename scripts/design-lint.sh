@@ -876,6 +876,16 @@ fi
 #     attributed to the user. PR 7's last unenforced item.
 if bash scripts/lint-parsers-pure.sh; then :; else FAIL=1; fi
 
+# 33. A PaydaySyncState accessor with no production reader is a defect.
+#     Four instances of this shape have been found by hand here -- the
+#     conversion banner with no producer, `conversionPending` never
+#     assigned, EarningsStore registrations never asserted, and the shift
+#     deletion queues with no consumer. The last is a latent P0 and was
+#     found by accident. The allowlist must DRAIN: each entry names a marker
+#     that has to exist in RELEASE_GATE.md, and an entry that gains a reader
+#     fails too.
+if bash scripts/lint-syncstate-wired.sh; then :; else FAIL=1; fi
+
 # 31. A gate document may not cite a symbol that does not exist.
 #     RELEASE_GATE.md cited a test name that was a hand-camel-cased display
 #     string. The coverage was real; the identifier was not, and a reviewer
