@@ -722,6 +722,40 @@ have nothing to do with would make that condition look bigger than it is.
 them, removes them, or splits them into a condition with a real reason --
 and deleting this heading without doing one of those fails the lint.
 
+## The shift sync leg: what is READY and what is the actual remaining build
+
+Measured 2026-09-19. Criterion 1 needs PR 8; PR 8's deletions force the
+flip; the flip needs the device to sync `shifts`. That leg is the real
+remaining blocker, so here is exactly which parts of it exist.
+
+**READY, and verified rather than assumed:**
+
+| piece | state |
+|---|---|
+| repository calls | `upsertShifts`, `reconcileShifts`, `softDeleteShifts`, `restoreShifts`, `fetchShifts` all written and unit-tested at the wire (`ShiftWriteWireTests`) |
+| checkpoint fields | all seven from design 7.2 present on `Snapshot` |
+| `PendingDeletions` decoder | hand-written, every key optional, including `legacyEntries` which postdates the design |
+| the silent-default guard | design-lint catches a missing key in BOTH structs. Mutation-proven today on `PendingDeletions.legacyEntries`: removing the `decodeIfPresent` line fails with "is never assigned in init(from:)", removing the `CodingKeys` case fails with "is a stored property with no CodingKeys case" |
+| the 1.0 blob | `pendingDeletionsDecodeA10ShapedBlob` asserts a queue written by the shipped build still decodes |
+| server invariants | a tombstoned shift is never re-derived: `shift_is_open_to_fold` excludes deleted rows, ARM 1 never touches `deleted_at`, ARM 3 reopens only fold-set tombstones |
+
+**THE REMAINING BUILD is design section 7.1 only: the orchestration.** Five
+written functions with zero callers, and a `synchronize` that does not yet
+call them. Push, keyset-delta pull, deletion flush, restore flush.
+
+**Why it is not being done piecemeal.** The piece that matters most --
+whether a deletion actually reaches the server -- cannot be verified from
+this machine: `dataset_revisions` and `earnings_snapshots` do not exist in
+the production database yet, and the local scratch cluster proves the SQL
+applies, not that the device's round trip works. Building an unverifiable
+sync leg in the area that already produced one revert is how a review round
+starts finding defects in the last round's fixes.
+
+**So the order is: migrations applied, then the sync leg, then PR 8.** The
+migrations are the only step that needs Tyler, and they unblock both the
+API half of the engine (which now reports `no_snapshot` until then) and the
+verification of this leg.
+
 ## PR 8 entry condition: the records arm must out-gate the legacy arm first
 
 **PR 8 may not delete the legacy calculation paths until the records arm's
