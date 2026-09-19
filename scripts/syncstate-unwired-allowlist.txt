@@ -1,0 +1,19 @@
+# A PaydaySyncState accessor with no production reader is a defect until
+# proven otherwise. Each line: <symbol>  <MARKER>
+#
+# MARKER must appear in docs/RELEASE_GATE.md. That is what makes this list
+# DRAIN rather than grow: when the blocking condition is resolved and its
+# section leaves the doc, every entry naming it fails the lint and has to be
+# removed or re-justified. An allowlist whose entries cannot expire becomes
+# a permanent excuse, which is how every suppression file ends up.
+#
+# An entry whose symbol has GAINED a reader also fails. The list cannot
+# outlive its reason in either direction.
+
+pendingShiftDeletions          FLIP-BLOCKER-DELETION-FLUSH
+pendingLegacyEntryDeletions    FLIP-BLOCKER-DELETION-FLUSH
+clearLegacyEntryDeletions      FLIP-BLOCKER-DELETION-FLUSH
+clearShiftRestores             FLIP-BLOCKER-DELETION-FLUSH
+markShiftTombstonesFlushed     FLIP-BLOCKER-DELETION-FLUSH
+knownTipEntryIDs               UNTRIAGED-LEGACY-ACCESSORS
+knownPaycheckIDs               UNTRIAGED-LEGACY-ACCESSORS
