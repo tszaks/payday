@@ -522,9 +522,35 @@ final class PaydaySyncService {
         scheduleStore: PayScheduleStore,
         preferencesStore: UserPreferencesStore,
         moveLedgerStore: MoveLedgerStore,
-        policyStore: PolicyStore
+        policyStore: PolicyStore,
+        /// The account to sync. Defaults to the signed-in session, which is
+        /// the production path and is unchanged.
+        ///
+        /// It exists because `synchronize` HAS NO END-TO-END TEST -- `grep
+        /// -rln "\.synchronize(" PaydayTests/` returned nothing -- and it
+        /// could not get one: the first line was `client.auth.session`, and
+        /// a `SupabaseClient` built with a static `accessToken` provider
+        /// throws `sessionMissing` rather than yielding a session. Measured
+        /// with a throwaway probe rather than assumed.
+        ///
+        /// So the nine RPC fixtures the design's call-order test needs were
+        /// never the blocker; the first line was. This is the same
+        /// injectable seam the file already uses for
+        /// `applyShiftAuthorityLeg(userID:fetch:)` and
+        /// `applyDatasetRevisionLeg(userID:clean:fetch:)`.
+        ///
+        /// NOT the S7 shape. A defaulted hook whose default does nothing is
+        /// how `.shiftCacheWiped` stayed unreachable; here the default IS
+        /// the production behaviour, so nothing is silently skipped by
+        /// leaving it alone.
+        userID injectedUserID: UUID? = nil
     ) async throws -> PaydaySyncOutcome {
-        let userID = try await client.auth.session.user.id
+        let userID: UUID
+        if let injectedUserID {
+            userID = injectedUserID
+        } else {
+            userID = try await client.auth.session.user.id
+        }
         let repository = PaydayRemoteRepository(client: client)
         let localTipEntries = try context.fetch(FetchDescriptor<TipEntry>())
         let localPaycheckRecords = try context.fetch(FetchDescriptor<PaycheckRecord>())
