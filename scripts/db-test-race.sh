@@ -1164,6 +1164,86 @@ q "delete from auth.users where id = '$U7'" >/dev/null
 
 q "delete from auth.users where id in ('$U','$U2')" >/dev/null
 
+# ===========================================================================
+# 9. THE WATERMARK'S RESIDUAL INVARIANT: A TWO-USER TRANSACTION MUST NOT HANG.
+#
+# `dataset_revisions` is bumped by a DEFERRABLE INITIALLY DEFERRED constraint
+# trigger, so the watermark is acquired at COMMIT, last, and can never be the
+# held edge of a lock cycle. That argument covers ONE watermark row.
+#
+# It does not cover two. Deferred triggers are FOR EACH ROW and fire at commit
+# once per touched row IN TOUCH ORDER, so a transaction writing for users
+# (A, B) and a concurrent one writing for (B, A) acquire two watermark rows in
+# opposite orders and a cycle is constructible again.
+#
+# NO SUCH WRITE PATH EXISTS TODAY -- every write into `shifts`,
+# `paycheck_records` and `user_settings` is scoped to `auth.uid()`, and
+# nothing takes a user_id array or loops over users. So this is an
+# UNDOCUMENTED ASSUMPTION the design rests on rather than a defect, and the
+# first multi-user backfill someone writes in six months would violate it
+# silently.
+#
+# MEASURED rather than assumed, because "deadlock" and "hang" are different
+# severities and only one of them is what went wrong in 0f4f1bc: two
+# transactions writing (A,B) and (B,A) produce `ERROR: deadlock detected` in
+# about 3 seconds. PostgreSQL detects and breaks it; one side errors with
+# 40P01 and can retry. It does NOT wedge.
+#
+# So the assertion is the property that actually matters -- IT TERMINATES.
+# Asserting "it deadlocks" would enshrine today's behaviour and fail on a
+# future change that made it safe; asserting it finishes catches the only
+# outcome that is fatal.
+# ===========================================================================
+
+UA='81000000-0000-4000-8000-00000000000a'
+UB='81000000-0000-4000-8000-00000000000b'
+q "delete from auth.users where id in ('$UA','$UB')" >/dev/null
+q "insert into auth.users (id,email) values ('$UA','race-2ua@test.invalid'),('$UB','race-2ub@test.invalid')" >/dev/null
+
+two_user_write() { # $1=first uid  $2=second uid  $3=id prefix
+  cat <<EOF
+begin;
+insert into public.shifts (id,user_id,work_date,cash_tips_cents,client_updated_at)
+values ('$3-0000-4000-8000-000000000001','$1',date '2026-09-10',100,timestamptz '2026-09-10T23:00:00Z');
+select pg_sleep(1);
+insert into public.shifts (id,user_id,work_date,cash_tips_cents,client_updated_at)
+values ('$3-0000-4000-8000-000000000002','$2',date '2026-09-10',200,timestamptz '2026-09-10T23:00:00Z');
+commit;
+EOF
+}
+two_user_write "$UA" "$UB" cc000001 > "$WORK/two_user_a.sql"
+two_user_write "$UB" "$UA" cc000002 > "$WORK/two_user_b.sql"
+
+PGAPPNAME=payday_race_2ua "${PSQL[@]}" -q -f "$WORK/two_user_a.sql" >"$WORK/2ua.out" 2>&1 & TUA=$!
+PGAPPNAME=payday_race_2ub "${PSQL[@]}" -q -f "$WORK/two_user_b.sql" >"$WORK/2ub.out" 2>&1 & TUB=$!
+( sleep 45; kill -9 $TUA $TUB 2>/dev/null ) >/dev/null 2>&1 & TUKILL=$!
+# `set +e` around the waits, matching the pattern this suite already uses for
+# `wait "$BPID"`. Without it a killed background job aborts the whole script
+# under `set -e` with exit 137, so a DETECTED HANG would surface as an
+# unexplained abort instead of as `hung=1` -- a failure that does not name
+# itself, which is the shape this suite exists to avoid. Found by mutating
+# the kill delay to zero; the assertion did not fail, the suite vanished.
+TU_HUNG=0
+set +e
+wait $TUA; TU_RA=$?
+wait $TUB; TU_RB=$?
+set -e
+[ "${TU_RA:-0}" -ge 128 ] && TU_HUNG=1
+[ "${TU_RB:-0}" -ge 128 ] && TU_HUNG=1
+kill $TUKILL 2>/dev/null || true
+
+# THE ASSERTION. A hang is the fatal mode and the one 0f4f1bc actually
+# produced; a detected deadlock is an error the caller can retry.
+check "aTwoUserTransactionTerminatesRatherThanWedging" "hung=0" "hung=$TU_HUNG"
+
+# And if it DID conflict, it must be a clean 40P01 rather than something
+# silently wrong. Zero conflicts is also acceptable -- the point is that no
+# other error shape appears.
+TU_ERRS="$(cat "$WORK/2ua.out" "$WORK/2ub.out" 2>/dev/null | grep -c 'ERROR' || true)"
+TU_DEADLOCKS="$(cat "$WORK/2ua.out" "$WORK/2ub.out" 2>/dev/null | grep -ci 'deadlock detected' || true)"
+check "anyTwoUserConflictIsADetectedDeadlockNotSomethingElse" "clean=yes"   "clean=$([ "$TU_ERRS" = "$TU_DEADLOCKS" ] && echo yes || echo no)" 
+q "delete from auth.users where id in ('$UA','$UB')" >/dev/null
+
 echo
 if [ "$FAILED" = "1" ]; then
   echo "== S4/S5/S6/S8 concurrency suite FAILED"
