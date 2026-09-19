@@ -658,11 +658,56 @@ Measured on `DashboardEarnings`:
 | records arm clamps, before | 1 | 3 |
 | records arm clamps, after `DashboardRecordsArmParityTests` | 2 | **14** |
 
-**Gap as measured on 2026-09-18: 5 suites / 32 tests on legacy against
-2 / 14 on records.**
-That is the number PR 8 must close, and it is a measurement rather than an
-estimate — re-run the mutation, do not re-read this table, because the whole
-point of the condition is that counts drift.
+**RE-STATED 2026-09-19, because the count form could not be checked.**
+
+The condition was "the records arm's catch count must reach the legacy
+arm's", recorded as 5 suites / 32 tests against 2 / 14. Re-running the
+canonical mutation today gives **3 / 9 on BOTH arms** -- and legacy
+*dropping* from 5/32 to 3/9 is the tell. Coverage did not fall; the two
+measurements used different counting conventions. Swift Testing prints a
+failing test twice (once per issue, once for "failed after"), and a test
+failing on three issues inflates a naive count threefold.
+
+So the recorded numbers were not wrong so much as **unreproducible**, which
+for a gate is the same thing: a threshold nobody can re-derive cannot be
+met or missed, only asserted.
+
+**The condition is now a SET comparison, which is method-independent and is
+also the actual risk.** Deleting the legacy arm deletes the tests that
+exercise it. What matters is not how many those are, but whether any of
+them catches something the records arm misses -- because those are the ones
+whose deletion loses coverage.
+
+> **PR 8 may not delete the legacy calculation paths while any test catches
+> a cross-surface defect on the legacy arm that no test catches on the
+> records arm.**
+
+Measured at `6862117`, clamping each arm's dataset to today in turn and
+diffing the sets of failing test names:
+
+| | |
+|---|---|
+| caught by BOTH arms | 6 tests |
+| caught by the RECORDS arm only | **0** |
+| caught by the LEGACY arm only | **0** |
+
+The six: "Dashboard, History rows, period detail and Calendar agree across
+both arms", "Dashboard, the History row and period detail agree on one
+records period", "a shift at 5pm on the period's final day is inside the
+records range", "one fixture reads the same on all four HistoryEarnings
+consumers", "one records dataset answers both the to-date and the
+whole-period question", and "the payday card's check differs from the hero
+by exactly the cash, on records".
+
+**So the entry condition is MET for the canonical mutation.** Stated with
+its limit rather than as a clearance: one mutation is not a proof of
+general parity. It is the mutation this condition named, and the asymmetry
+it was created to detect is gone.
+
+Reproduce with: clamp `asOf` to `.now` in each `DashboardEarnings.build`
+overload in turn, run the app suite, and diff the sorted sets of failing
+test names. Set equality is the gate; the counts are incidental.
+
 
 And on `CalendarEarnings`:
 
