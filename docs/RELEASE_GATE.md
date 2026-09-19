@@ -263,7 +263,7 @@ the check has been shown to FAIL on purpose at least once.
 
 ### GREEN, with the command and the number
 
-**MEASURED AT `8b2454a`, 2026-09-18.** Every row below is a reading taken at
+**MEASURED AT `bdb47e9`, 2026-09-19.** Every row below is a reading taken at
 that commit, not a standing property of the repo.
 
 A row here says "this command printed this number once, on this tree". It
@@ -285,10 +285,10 @@ than no watchdog, because it teaches the reader to discount the next alarm.
 **So: re-run the command before citing a row. If you update a number, update
 the commit and date in this heading in the same edit.**
 
-| Line | Evidence (at `8b2454a`) |
+| Line | Evidence (at `bdb47e9`) |
 |---|---|
-| PaydayCore green | `swift test --package-path Packages/PaydayCore` → `250 tests in 32 suites passed` |
-| App suite green, at/above baseline | `1144 tests in 200 suites passed`; baseline 1082/192. Was `1141/200` here until #65 added three tests -- the stale-number case that produced the dating rule above |
+| PaydayCore green | `swift test --package-path Packages/PaydayCore` → `255 tests in 33 suites passed` |
+| App suite green, at/above baseline | `1163 tests in 202 suites passed`; baseline 1082/192. Has read `1141/200` and `1144/200` at earlier commits -- the drift that produced the dating rule above, and the reason this heading names a tree |
 | 14 fixtures vs the real engine | mutation sweep: **14/14 money-gated** (was 8/14). Gates call `CompensationLedger.evaluate`, `PaycheckReconciler.proposal`, `HoursFormatting.*`; grep for test-local cents arithmetic returns nothing |
 | Release gate armed | `PAYDAYCORE_RELEASE_GATE=1` green, `knownIssueCountIsZero` passed, `KnownIssues.json` = `[]`. Proven BOTH ways: planting `["W1"]` fails with `Release blocked` |
 | Dashboard == History == period detail | per-arm mutation; records 2 suites/14 tests, legacy 5/32 |
