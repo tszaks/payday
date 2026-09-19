@@ -120,6 +120,14 @@ enum PaydaySpacing {
 // sizes (like Apple Wallet) so amounts read as premium finance UI. UI text
 // uses semantic Dynamic Type styles with bumped weights.
 
+/// Minimum interactive target.
+///
+/// Apple's HIG floor, named rather than written as `44` at each call site so
+/// a reviewer can see it is the guideline and not a number someone liked.
+enum PaydayHit {
+    static let minimum: CGFloat = 44
+}
+
 enum PaydayFont {
 
     // MARK: - Display Fonts (SF Pro Rounded, for money)

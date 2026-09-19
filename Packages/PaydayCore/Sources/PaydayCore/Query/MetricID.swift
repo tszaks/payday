@@ -49,15 +49,19 @@ public enum MetricID: String, CaseIterable, Codable, Sendable {
     /// **Definition:** hourlyRateCents × regular minutes under the workweek threshold, cumulative half-up rounding per week.
     /// **Basis:** work date.
     /// **Missing data:** `.unavailable` when hours or rate are missing; rolls into `Completeness`.
-    /// **Labels:** today's drawer row "Wages · {hours}" (e.g. "Wages · 6h 23m"); `{hours}`
-    /// is the placeholder for the formatted regular hours, like `$X`/`N`/`M` in `hourlyRate`.
+    /// **Labels:** the drawer row "Wages". The regular hours are no longer part
+    /// of the label -- they ride on the row's CAPTION ("9h 45m"), because a
+    /// label carrying a duration and a cell carrying a dollar amount, in one
+    /// weight on one line, made the reader work out which half was the money.
+    /// A caption is not a label, so it is not registered here; the row's
+    /// figure is still the only thing this metric may be titled with.
     case regularWages
 
     /// **Definition:** hourlyRateCents × multiplier × minutes past the workweek threshold, cumulative half-up rounding per week.
     /// **Basis:** work date.
     /// **Missing data:** `.unavailable` when hours or rate are missing; rolls into `Completeness`.
-    /// **Labels:** today's drawer row "Overtime · {hours}" (e.g. "Overtime · 2h"); `{hours}`
-    /// is the placeholder for the formatted overtime hours.
+    /// **Labels:** the drawer row "Overtime". As with `regularWages`, the hours
+    /// moved to the row's caption and out of the label.
     case overtimeWages
 
     /// **Definition:** max(0, (credit > 0 ? credit : cash + credit) - tipOut); the stub never
@@ -184,9 +188,9 @@ public enum MetricID: String, CaseIterable, Codable, Sendable {
         case .tipOut:
             return ["Tipped out"]
         case .regularWages:
-            return ["Wages · {hours}"]
+            return ["Wages"]
         case .overtimeWages:
-            return ["Overtime · {hours}"]
+            return ["Overtime"]
         case .expectedPaycheckTipsLine:
             return ["Your check's tips line"]
         case .expectedPaycheckGross:

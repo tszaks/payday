@@ -218,7 +218,6 @@ struct CalendarMonthFacts: SnapshotFacts {
     /// The emphasized bottom line. Its LABEL is the face figure's, so the
     /// card and the drawer cannot say two different things about one number.
     let monthBreakdownTotal: BreakdownRow
-    let monthLipText: String?
     let monthHasBreakdown: Bool
 
     /// The wages caption, NAMING the day when it can.
@@ -249,7 +248,6 @@ struct CalendarMonthFacts: SnapshotFacts {
             monthHoursLabel = WorkedMinutes.hoursLabel(minutes: monthResult.minutes)
             monthBreakdownRows = BreakdownRow.ledgerRows(monthResult)
             monthBreakdownTotal = BreakdownRow.total(monthResult)
-            monthLipText = BreakdownRow.lipText(monthResult)
             monthHasBreakdown = BreakdownRow.hasBreakdown(monthResult)
             // Sorted so the named day is stable run to run; a caption that
             // reorders itself reads like the data changed.
@@ -285,7 +283,6 @@ struct CalendarMonthFacts: SnapshotFacts {
             let unavailable = EarningsFigure.unavailable()
             monthBreakdownRows = []
             monthBreakdownTotal = BreakdownRow(unavailable.label, cents: nil, emphasized: true)
-            monthLipText = nil
             monthHasBreakdown = false
             monthWagesCaption = nil
             tiles = []
@@ -351,6 +348,10 @@ struct CalendarView: View {
     /// The month hero's drawer. Collapsed by default: the grid is what a
     /// glance at this screen is for, and the breakdown is the second question.
     @State private var monthBreakdownExpanded = false
+    /// Whether the grid has scrolled under the pinned header. Drives only the
+    /// header's hairline, which should not be drawn while the header is
+    /// simply sitting on the page with nothing behind it.
+    @State private var gridIsUnderHeader = false
     @Query private var allEntries: [TipEntry]
     /// The other representation. `CalendarEarnings.snapshot` resolves which
     /// one this screen reads; see its header for why the choice is no longer
@@ -395,16 +396,9 @@ struct CalendarView: View {
         // history inside the interactive budget.
         let resolvedCalendar = calendar
         let facts = makeFacts(calendar: resolvedCalendar)
+        ScrollViewReader { proxy in
         ScrollView {
             VStack(spacing: PaydaySpacing.p16) {
-                monthNavRow
-                    // The lens selector sits directly above this screen;
-                    // the month needs air to read as its own thing rather
-                    // than a second row of that control (Tyler, 2026-07-28).
-                    .padding(.top, PaydaySpacing.p20)
-
-                weekdayHeader
-
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 7), spacing: 6) {
                     ForEach(facts.gridDays, id: \.self) { day in
                         Button {
@@ -426,11 +420,31 @@ struct CalendarView: View {
                 .gesture(monthSwipeGesture)
 
                 monthSummarySection(facts)
+                    .id("calendar-summary")
             }
             .padding(.horizontal, PaydaySpacing.p16)
             .padding(.top, PaydaySpacing.p8)
         }
         .contentMargins(.bottom, 88, for: .scrollContent)
+        .safeAreaInset(edge: .top, spacing: 0) { pinnedHeader }
+        .onScrollGeometryChange(for: Bool.self) { geometry in
+            geometry.contentOffset.y + geometry.contentInsets.top > 8
+        } action: { _, isUnder in
+            guard gridIsUnderHeader != isUnder else { return }
+            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) {
+                gridIsUnderHeader = isUnder
+            }
+        }
+        // QA-only, same launch-arg pattern as -ScrollInsightsBottom: simctl
+        // can screenshot but not scroll, and the pinned header's whole point
+        // is what it does once the grid is behind it -- a top-of-scroll
+        // capture is exactly the one that cannot show it.
+        .onAppear {
+            guard ProcessInfo.processInfo.arguments.contains("-ScrollCalendarBottom") else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                withAnimation(nil) { proxy.scrollTo("calendar-summary", anchor: .bottom) }
+            }
+        }
         .background(PaydayColor.background)
         .sheet(item: $daySelection) { selection in
             DayDetailSheet(date: selection.date).paydayAppearance()
@@ -440,8 +454,15 @@ struct CalendarView: View {
             if ProcessInfo.processInfo.arguments.contains("-OpenDaySheet") {
                 daySelection = DaySelection(date: .now)
             }
+            // The same hook Dashboard and PeriodDetail carry. Calendar was
+            // the one drawer of the three that could not be captured open,
+            // which is the state where its rows actually are.
+            if ProcessInfo.processInfo.arguments.contains("-DebugExpandBreakdown") {
+                monthBreakdownExpanded = true
+            }
         }
         #endif
+        }
     }
 
     private func makeFacts(calendar: Calendar) -> CalendarMonthFacts {
@@ -482,6 +503,46 @@ struct CalendarView: View {
     /// horizontal swipe over the grid moving months — the gesture every
     /// calendar already teaches. The buttons were a second navigation bar
     /// stacked under the real one.
+    /// Month and weekday letters, pinned.
+    ///
+    /// Both used to scroll away with the grid, so a month scrolled halfway
+    /// down presented a block of numbers starting at "14" with nothing saying
+    /// which month it was or which column was Monday -- the grid lost the two
+    /// labels that make it a calendar rather than a table of numbers. They are
+    /// the cheapest thing on the screen to keep and the most expensive to
+    /// lose.
+    ///
+    /// The hero and its drawer deliberately stay BELOW the grid and scroll
+    /// normally. Lifting the month's figure up here as well would make a
+    /// ~150pt permanent header out of a screen whose subject is the grid, and
+    /// would strand the breakdown drawer, whose whole geometry is a recess
+    /// tucked under the card directly above it.
+    ///
+    /// A hairline, and only once something is actually behind it. No shadow:
+    /// rule 2 gives dark mode none, and a hairline plus a shadow is two
+    /// treatments of one edge.
+    private var pinnedHeader: some View {
+        VStack(spacing: PaydaySpacing.p12) {
+            monthNavRow
+            weekdayHeader
+        }
+        // The lens selector sits directly above this screen; the month needs
+        // air to read as its own thing rather than a second row of that
+        // control (Tyler, 2026-07-28).
+        .padding(.top, PaydaySpacing.p20)
+        .padding(.bottom, PaydaySpacing.p12)
+        .background(PaydayColor.background)
+        .overlay(alignment: .bottom) {
+            // `Divider()` rather than a hand-rolled Rectangle: it is what
+            // every other hairline in the app uses, and it already resolves
+            // its own hairline width and per-mode colour. A `1 /
+            // UIScreen.main.scale` here would have been this repo's only use
+            // of a screen-scale lookup that no longer has one right answer.
+            Divider()
+                .opacity(gridIsUnderHeader ? 1 : 0)
+        }
+    }
+
     private var monthNavRow: some View {
         Text(monthTitle)
             .font(PaydayFont.headline)
@@ -542,58 +603,65 @@ struct CalendarView: View {
                 .frame(maxWidth: .infinity, alignment: .center)
                 .padding(.top, PaydaySpacing.p4)
         } else {
-            VStack(spacing: PaydaySpacing.p12) {
-                Divider()
-
-                // The same drawer Dashboard and PeriodDetail use, over the
-                // month's own `EarningsResult`. A person can now see that
-                // this figure is cash + credit + gratuity + wages MINUS
-                // tip-out rather than having to be told.
-                HeroBreakdownDrawer(
-                    lipText: facts.monthLipText ?? "",
-                    rows: facts.monthBreakdownRows,
-                    total: facts.monthBreakdownTotal,
-                    hasBreakdown: facts.monthHasBreakdown,
-                    isExpanded: $monthBreakdownExpanded
-                ) {
-                    VStack(spacing: 2) {
-                        Text(facts.monthFigure.text ?? ShiftDayRow.unavailablePlaceholder)
-                            .font(PaydayFont.displayMedium)
-                            .monospacedDigit()
-                            .foregroundStyle(PaydayColor.textPrimary)
-                            .contentTransition(.numericText())
-                            .animation(
-                                reduceMotion ? nil : PaydayAnimation.premiumSpring,
-                                value: facts.monthFigure.cents
-                            )
-                        Text(facts.monthCaption)
-                            .font(PaydayFont.caption)
-                            .foregroundStyle(PaydayColor.textSecondary)
-                        // `.estimated` carries its caption, per the completeness
-                        // presentation rules: a wage priced off an assumed rate
-                        // says so on the surface that shows it.
-                        if let caption = facts.monthWagesCaption ?? facts.monthFigure.caption {
-                            Text(caption)
-                                .font(PaydayFont.caption2)
-                                .foregroundStyle(PaydayColor.textTertiary)
-                                .multilineTextAlignment(.center)
-                        }
-                    }
-                    .frame(maxWidth: .infinity)
-                }
-
-                VStack(spacing: 4) {
-                    Text("\(facts.daysWorkedCount) day\(facts.daysWorkedCount == 1 ? "" : "s") worked · \(facts.monthHoursLabel)")
-                        .font(PaydayFont.subheadline)
-                        .foregroundStyle(PaydayColor.textPrimary)
+            // The same drawer Dashboard and PeriodDetail use, over the
+            // month's own `EarningsResult`. A person can now see that this
+            // figure is cash + credit + gratuity + wages MINUS tip-out
+            // rather than having to be told.
+            HeroBreakdownDrawer(
+                rows: facts.monthBreakdownRows,
+                total: facts.monthBreakdownTotal,
+                hasBreakdown: facts.monthHasBreakdown,
+                isExpanded: $monthBreakdownExpanded
+            ) {
+                VStack(spacing: 2) {
+                    Text(facts.monthFigure.text ?? ShiftDayRow.unavailablePlaceholder)
+                        .font(PaydayFont.displayMedium)
                         .monospacedDigit()
+                        .foregroundStyle(PaydayColor.textPrimary)
+                        .contentTransition(.numericText())
+                        .animation(
+                            reduceMotion ? nil : PaydayAnimation.premiumSpring,
+                            value: facts.monthFigure.cents
+                        )
+                    // The days and hours ride the completeness caption
+                    // instead of standing alone under the drawer, where they
+                    // were a .subheadline in primary ink -- the weight of a
+                    // headline, orphaned below a grey slab, describing the
+                    // number two elements above it. They describe the same
+                    // selection the caption does, so they belong on its line.
+                    Text("\(facts.monthCaption) · \(facts.daysWorkedCount) day\(facts.daysWorkedCount == 1 ? "" : "s") · \(facts.monthHoursLabel)")
+                        .font(PaydayFont.caption)
+                        .foregroundStyle(PaydayColor.textSecondary)
+                        .monospacedDigit()
+                        .multilineTextAlignment(.center)
+                    // `.estimated` carries its caption, per the completeness
+                    // presentation rules: a wage priced off an assumed rate
+                    // says so on the surface that shows it. It stays on the
+                    // hero rather than moving onto the drawer's Wages row --
+                    // Dashboard and PeriodDetail both print it under their
+                    // heroes too, so putting it on the shared row as well
+                    // would state it twice on three screens.
+                    if let caption = facts.monthWagesCaption ?? facts.monthFigure.caption {
+                        Text(caption)
+                            .font(PaydayFont.caption2)
+                            .foregroundStyle(PaydayColor.textTertiary)
+                            .multilineTextAlignment(.center)
+                    }
                 }
-
-                // Weekday mini-bars deleted (Tyler, 2026-07-20): the heatmap
-                // grid directly above already tells the which-days story —
-                // re-encoding it smaller looked goofy at any styling. The two
-                // text lines are the summary.
+                .frame(maxWidth: .infinity)
+                // The drawer tucks itself -PaydayRadius.xl + 2 UNDER its
+                // card, so the card has to actually be one. Without this the
+                // grey recess slid up over the hero's own caption lines and
+                // printed "you kept this month" on a grey slab that started
+                // mid-sentence. Dashboard and PeriodDetail both end their
+                // card closure with exactly this, which is why neither of
+                // them showed it.
+                .paydayCard(padding: PaydaySpacing.p24)
             }
+
+            // Weekday mini-bars deleted (Tyler, 2026-07-20): the heatmap
+            // grid directly above already tells the which-days story —
+            // re-encoding it smaller looked goofy at any styling.
         }
     }
 
@@ -645,7 +713,7 @@ private struct DayCell: View {
                     .font(PaydayFont.caption2)
                     .fontWeight(.medium)
                     .monospacedDigit()
-                    .foregroundStyle(Self.heatTextColor(fraction: heatFraction, colorScheme: colorScheme))
+                    .foregroundStyle(CalendarHeat.textColor(fraction: heatFraction, colorScheme: colorScheme))
                     .lineLimit(1)
                     .minimumScaleFactor(0.6)
             }
@@ -654,7 +722,7 @@ private struct DayCell: View {
         // footprint so the grid reads as one surface with heat in it, never
         // a field of raised chips (Tyler, 2026-07-28).
         .frame(maxWidth: .infinity, minHeight: 46, maxHeight: 46)
-        .background(hasTips ? PaydayColor.primary.opacity(Self.fillOpacity(fraction: heatFraction)) : Color.clear, in: RoundedRectangle(cornerRadius: PaydayRadius.sm))
+        .background(hasTips ? PaydayColor.primary.opacity(CalendarHeat.fillOpacity(fraction: heatFraction)) : Color.clear, in: RoundedRectangle(cornerRadius: PaydayRadius.sm))
         // Today always rings the full cell in the same rounded-square
         // geometry as the tiles — a tight circle around the numeral read as
         // a stray dot, not a state (Tyler, 2026-07-20).
@@ -675,7 +743,7 @@ private struct DayCell: View {
             .fontWeight(hasTips || isToday ? .bold : .regular)
             .foregroundStyle(
                 hasTips
-                    ? Self.heatTextColor(fraction: heatFraction, colorScheme: colorScheme)
+                    ? CalendarHeat.textColor(fraction: heatFraction, colorScheme: colorScheme)
                     : (isCurrentMonth ? PaydayColor.textSecondary : PaydayColor.textTertiary)
             )
     }
@@ -694,60 +762,4 @@ private struct DayCell: View {
         return "\(dateText), \(amount) logged"
     }
 
-    /// One-hue green ramp (Tyler, 2026-07-28), reversing the temperature-walk
-    /// exception picked on 2026-07-19: a hue walk from red through yellow to
-    /// green was meant to separate a tightly clustered month at a glance, but
-    /// on real renders it came out as muddy browns and olives on black — not
-    /// one cell actually read as the app's green — so the "deliberate,
-    /// contained exception to the one-green law" it was sold as never earned
-    /// its keep. The calendar rejoins that law: every worked day is
-    /// PaydayColor.primary, full stop, and heat is carried by opacity alone,
-    /// floored so the faintest worked day still reads as green rather than
-    /// fading toward grey — the mistake made in the prior opacity attempt
-    /// (2026-07-20) that led to the (now also reversed) fully-opaque commit.
-    /// That prior miss came from tuning against dark-mode renders only; the
-    /// floor here is picked by looking at both modes.
-    private static let fillOpacityFloor = 0.22
-
-    /// A linear ramp off a high floor made every worked day look alike on a
-    /// tightly clustered month. Squaring the fraction spends more of the
-    /// range on the differences that actually exist between ordinary days,
-    /// while the floor keeps the quietest one unmistakably green.
-    private static func fillOpacity(fraction: Double) -> Double {
-        let curved = fraction * fraction
-        return fillOpacityFloor + (1 - fillOpacityFloor) * curved
-    }
-
-    private static func backgroundComponents(for colorScheme: ColorScheme) -> (r: Double, g: Double, b: Double) {
-        if colorScheme == .dark {
-            return (0.0196, 0.0196, 0.0196) // #050505
-        }
-        return (0.9804, 0.9804, 0.9804) // #FAFAFA
-    }
-
-    /// Contrast is computed against the fill as it actually composites —
-    /// PaydayColor.primary at `fillOpacity`, blended over this mode's page
-    /// background (PaydayColor.background) — rather than assumed. Choose the
-    /// higher-contrast black/white foreground using WCAG's gamma-correct
-    /// relative luminance, so every point in the heat ramp stays legible.
-    private static func heatTextColor(fraction: Double, colorScheme: ColorScheme) -> Color {
-        let alpha = fillOpacity(fraction: fraction)
-        let bg = backgroundComponents(for: colorScheme)
-        let fgR = 0.0
-        let fgG = colorScheme == .dark ? 0.7216 : 0.5216 // #00B83F / #00852F
-        let fgB = colorScheme == .dark ? 0.2471 : 0.1843
-        let r = fgR * alpha + bg.r * (1 - alpha)
-        let g = fgG * alpha + bg.g * (1 - alpha)
-        let b = fgB * alpha + bg.b * (1 - alpha)
-        let luminance = 0.2126 * linearized(r) + 0.7152 * linearized(g) + 0.0722 * linearized(b)
-        let blackContrast = (luminance + 0.05) / 0.05
-        let whiteContrast = 1.05 / (luminance + 0.05)
-        return blackContrast >= whiteContrast ? .black : .white
-    }
-
-    private static func linearized(_ component: Double) -> Double {
-        component <= 0.04045
-            ? component / 12.92
-            : pow((component + 0.055) / 1.055, 2.4)
-    }
 }

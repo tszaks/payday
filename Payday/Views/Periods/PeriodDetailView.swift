@@ -66,7 +66,6 @@ struct PeriodDetailFacts: SnapshotFacts {
     /// (`docs/METRICS.md` [SC-02] and [SC-03]).
     let breakdownRows: [BreakdownRow]
     let breakdownTotal: BreakdownRow
-    let lipText: String
     let hasBreakdown: Bool
 
     /// One engine query per bar, over this period's days. `Σ bars` is
@@ -145,7 +144,6 @@ struct PeriodDetailFacts: SnapshotFacts {
             hero = EarningsFigure.earnedIncome(periodResult)
             breakdownRows = BreakdownRow.ledgerRows(periodResult)
             breakdownTotal = BreakdownRow.total(periodResult)
-            lipText = BreakdownRow.lipText(periodResult)
             hasBreakdown = BreakdownRow.hasBreakdown(periodResult)
         } else {
             // No dataset stands behind these facts, so nothing may render a
@@ -154,7 +152,6 @@ struct PeriodDetailFacts: SnapshotFacts {
             hero = .unavailable()
             breakdownRows = []
             breakdownTotal = BreakdownRow("Known so far", cents: nil, emphasized: true)
-            lipText = ""
             hasBreakdown = false
         }
         hourlyRateCaption = HistoryEarnings.hourlyRateCaption(periodResult)
@@ -247,7 +244,6 @@ struct PeriodDetailView: View {
         ScrollView {
             VStack(spacing: PaydaySpacing.p16) {
                 HeroBreakdownDrawer(
-                    lipText: facts.lipText,
                     rows: facts.breakdownRows,
                     total: facts.breakdownTotal,
                     hasBreakdown: facts.hasBreakdown,

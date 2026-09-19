@@ -410,7 +410,6 @@ struct CalendarSnapshotParityTests {
         )
         #expect(month.monthHasBreakdown == false)
         #expect(month.monthBreakdownRows.isEmpty)
-        #expect(month.monthLipText == nil)
     }
 
     /// **The month caption names the unpriced day, and names the RIGHT one.**
