@@ -547,11 +547,29 @@ into permanent permission.
       sync would remove the only path an unconverted account has.
 
       Deliberately NOT done: invoking `migrate_tip_entries_to_shifts`
-      directly over SQL to unblock this. It would reach the same end state
-      and would skip the orchestration ordering that step 6a exists to
-      guarantee -- after the leg, before the shift pull -- which is the
-      ordering a whole PR was spent getting right. A shortcut that bypasses
-      the thing being tested is not a shortcut.
+      directly over SQL to unblock this.
+
+      **The first reason given for that was the weaker one, and correcting
+      it matters more than the decision it defended.** I wrote that a manual
+      conversion would skip the orchestration ordering step 6a exists to
+      guarantee. That ordering is in fact already tested --
+      `theOneShotFiresOnlyWhenThereIsWorkToDo` asserts 6a fires between the
+      settings push and the shift pull, and it is mutation-proven. So the
+      argument was true but small.
+
+      **The decisive reason is that a manual conversion would not unblock
+      anything.** `shiftsAreAuthoritative` reads
+      `load(for: userID).shiftsAreAuthoritativeAt`, and `load` reads
+      `AppGroup.defaults` -- a DEVICE-LOCAL checkpoint. Converting on the
+      server sets `shift_migration_state.migrated_at`; it does not write
+      that key. The device flips only after a pass reads the state and
+      `applyShiftAuthority` writes it locally. Until the device has
+      flipped, the legacy arm is still the path its readers take, so
+      deleting the arm would break the app between conversion and first
+      sync.
+
+      One sync is required either way. The shortcut buys nothing, which is
+      a better reason to decline it than the one I first wrote down.
 
 Both were verified to FAIL when they should, not merely to pass: a synthetic
 violation in a non-allowlisted file was caught on all three of its patterns,
