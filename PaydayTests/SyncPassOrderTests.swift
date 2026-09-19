@@ -24,6 +24,7 @@ import Testing
 struct SyncPassOrderTests {
 
     private static let user = UUID(uuidString: "90000000-0000-4000-8000-000000000001")!
+    private static let shift = UUID(uuidString: "90000000-0000-4000-8000-0000000000a1")!
 
     private func client() -> SupabaseClient {
         RoutingStub.reset()
@@ -71,25 +72,37 @@ struct SyncPassOrderTests {
         // the source: settings push, then the baseline pull.
         #expect(calls == [
             "POST /rest/v1/rpc/upsert_user_settings",
+            "POST /rest/v1/rpc/fetch_shift_changes",
             "GET /rest/v1/tip_entries",
             "GET /rest/v1/paycheck_records",
             "GET /rest/v1/user_settings",
         ], "got \(calls)")
+
+        // No shift PUSH on an empty account, which is correct and is also why
+        // this test cannot prove the 7.5 inversion on its own -- there is no
+        // push to order the pull against. That is the next test's job.
+        #expect(!calls.contains("POST /rest/v1/rpc/upsert_shifts"))
     }
 
-    /// **The shift leg is absent, measured end to end rather than grepped.**
+    /// The test design 7.5 names: `firstShiftsSyncPullsBeforePushingAndReadsBackAfter`.
     ///
-    /// This assertion is written to FAIL when design 7.5 lands, and that is
-    /// its job. Whoever wires the leg has to come here and state the new
-    /// order deliberately -- which is the only moment anyone will check that
-    /// the shift PULL precedes the shift PUSH, the inversion 7.5 requires
-    /// and that applies to the shift leg alone.
+    /// Supersedes the placeholder that asserted NO shift call happened. That
+    /// one was written before the leg existed, to fail the day it was wired.
+    /// It did exactly that, and this replaces it rather than relaxing it.
     ///
-    /// A reorder with no test to break is a reorder nobody reviews.
-    @Test("no shift call happens yet, and this fails the day the leg is wired")
-    func theShiftLegIsNotWiredYet() async throws {
+    /// The inversion only means something when there is a shift to push, so
+    /// this pass starts with one unacknowledged local shift.
+    @Test("the shift leg pulls before it pushes, then reads back what it wrote")
+    func firstShiftsSyncPullsBeforePushingAndReadsBackAfter() async throws {
         let service = PaydaySyncService(client: client())
         let ctx = try context()
+        ctx.insert(ShiftRecord(
+            id: Self.shift,
+            workDate: Date(timeIntervalSince1970: 1_758_000_000),
+            cashTipsCents: 1_000,
+            hoursWorked: 5
+        ))
+        try ctx.save()
 
         _ = try? await service.synchronize(
             context: ctx,
@@ -100,14 +113,28 @@ struct SyncPassOrderTests {
             userID: Self.user
         )
 
-        let shiftCalls = RoutingStub.recordedPaths().filter {
-            $0.contains("/shifts") || $0.contains("_shifts") || $0.contains("shift_")
+        let calls = RoutingStub.recordedPaths()
+        let pull = calls.firstIndex(of: "POST /rest/v1/rpc/fetch_shift_changes")
+        let push = calls.firstIndex(of: "POST /rest/v1/rpc/upsert_shifts")
+        let readback = calls.lastIndex(of: "GET /rest/v1/shifts")
+
+        #expect(pull != nil, "no shift pull in \(calls)")
+        #expect(push != nil, "no shift push in \(calls)")
+        #expect(readback != nil, "no step-9 readback in \(calls)")
+        if let pull, let push, let readback {
+            // The whole point of 7.5, asserted as an ordering rather than a
+            // literal array so an unrelated call cannot silently invalidate it.
+            #expect(pull < push, "shift pull must precede the push; got \(calls)")
+            #expect(push < readback, "readback must follow the push; got \(calls)")
         }
-        #expect(shiftCalls.isEmpty, """
-            The shift leg is now reaching the network: \(shiftCalls).
-            Update the expected order in this suite, and while you are here
-            confirm the shift PULL precedes the shift PUSH per design 7.5.
-            """)
+
+        // The inversion is for the SHIFT leg only. Settings must still be
+        // pushed before anything is pulled, or `apply(_:force:)` reverts a
+        // locally changed wage.
+        if let settings = calls.firstIndex(of: "POST /rest/v1/rpc/upsert_user_settings"),
+           let pull {
+            #expect(settings < pull, "settings push must stay ahead of the pull; got \(calls)")
+        }
     }
 }
 
@@ -125,6 +152,10 @@ final class RoutingStub: URLProtocol, @unchecked Sendable {
             ("/rest/v1/tip_entries", "[]"),
             ("/rest/v1/paycheck_records", "[]"),
             ("/rest/v1/shifts", "[]"),
+            // Must precede the generic /rpc/ entry: routes match in order,
+            // and `fetch_shift_changes` decodes a RemoteShiftPage OBJECT, so
+            // the generic "[]" makes the pass throw mid-leg.
+            ("/rpc/fetch_shift_changes", "{\"server_now\":\"2026-09-19T00:00:00.000Z\",\"rows\":[]}"),
             ("/rest/v1/rpc/", "[]"),
         ]
         lock.unlock()
