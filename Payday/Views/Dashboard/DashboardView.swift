@@ -157,8 +157,6 @@ struct DashboardFacts: SnapshotFacts {
     /// `CompletenessCopy.earnedIncomeLabel` — so a partial period reads
     /// "Known so far" and can no longer print "Total".
     let heroBreakdownTotal: BreakdownRow
-    /// The collapsed lip. Nil when there is no dataset behind it.
-    let heroLipText: String?
     let heroHasBreakdown: Bool
 
     /// `MetricID.expectedPaycheckGross` for the period the payday card is
@@ -367,7 +365,6 @@ struct DashboardFacts: SnapshotFacts {
             heroBreakdownTotal = deferredShiftCount > 0
                 ? BreakdownRow(figure.label, cents: total.cents, emphasized: true)
                 : total
-            heroLipText = BreakdownRow.lipText(heroResult)
             heroHasBreakdown = BreakdownRow.hasBreakdown(heroResult)
         } else {
             // A label is still owed even with no figure: VoiceOver reads it
@@ -377,7 +374,6 @@ struct DashboardFacts: SnapshotFacts {
             hero = unavailable
             heroBreakdownRows = []
             heroBreakdownTotal = BreakdownRow(unavailable.label, cents: nil, emphasized: true)
-            heroLipText = nil
             heroHasBreakdown = false
         }
 
@@ -842,7 +838,6 @@ struct DashboardView: View {
     /// `tipOutCents`, READ rather than reconstructed.
     private func heroWithDrawer(_ facts: DashboardFacts) -> some View {
         HeroBreakdownDrawer(
-            lipText: facts.heroLipText ?? "",
             rows: facts.heroBreakdownRows,
             total: facts.heroBreakdownTotal,
             hasBreakdown: facts.heroHasBreakdown,

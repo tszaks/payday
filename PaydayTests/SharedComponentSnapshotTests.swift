@@ -277,7 +277,6 @@ struct HeroBreakdownDrawerSnapshotTests {
     func lipReconciles() throws {
         let snapshot = try dayWithTipOut()
         let result = snapshot.day(CivilDay(at(2026, 9, 28), in: PaydayTestZone.payroll))
-        #expect(BreakdownRow.lipText(result) == "Earned $137.59 · Tipped out $10.00")
         #expect(BreakdownRow.hasBreakdown(result))
     }
 

@@ -255,7 +255,6 @@ struct DashboardPeriodParityTests {
         // A tip-out was logged, so the bottom line is "You kept" and never
         // "Total" — and the words come from `CompletenessCopy`.
         #expect(facts.heroBreakdownTotal.label == "You kept")
-        #expect(facts.heroLipText == "Earned $1,184.00 · Tipped out $27.00")
     }
 
     /// The pay-period grid's weekday and the payroll workweek's are two

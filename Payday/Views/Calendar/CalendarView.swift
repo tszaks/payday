@@ -218,7 +218,6 @@ struct CalendarMonthFacts: SnapshotFacts {
     /// The emphasized bottom line. Its LABEL is the face figure's, so the
     /// card and the drawer cannot say two different things about one number.
     let monthBreakdownTotal: BreakdownRow
-    let monthLipText: String?
     let monthHasBreakdown: Bool
 
     /// The wages caption, NAMING the day when it can.
@@ -249,7 +248,6 @@ struct CalendarMonthFacts: SnapshotFacts {
             monthHoursLabel = WorkedMinutes.hoursLabel(minutes: monthResult.minutes)
             monthBreakdownRows = BreakdownRow.ledgerRows(monthResult)
             monthBreakdownTotal = BreakdownRow.total(monthResult)
-            monthLipText = BreakdownRow.lipText(monthResult)
             monthHasBreakdown = BreakdownRow.hasBreakdown(monthResult)
             // Sorted so the named day is stable run to run; a caption that
             // reorders itself reads like the data changed.
@@ -285,7 +283,6 @@ struct CalendarMonthFacts: SnapshotFacts {
             let unavailable = EarningsFigure.unavailable()
             monthBreakdownRows = []
             monthBreakdownTotal = BreakdownRow(unavailable.label, cents: nil, emphasized: true)
-            monthLipText = nil
             monthHasBreakdown = false
             monthWagesCaption = nil
             tiles = []
@@ -550,7 +547,6 @@ struct CalendarView: View {
                 // this figure is cash + credit + gratuity + wages MINUS
                 // tip-out rather than having to be told.
                 HeroBreakdownDrawer(
-                    lipText: facts.monthLipText ?? "",
                     rows: facts.monthBreakdownRows,
                     total: facts.monthBreakdownTotal,
                     hasBreakdown: facts.monthHasBreakdown,

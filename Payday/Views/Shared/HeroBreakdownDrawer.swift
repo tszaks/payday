@@ -123,20 +123,8 @@ extension BreakdownRow {
     /// It used to show gross cash + credit, which sum to MORE than the hero
     /// (tip-out is already out of the hero, wages are already in), so the
     /// closed card presented two figures that could not be squared.
-    static func lipText(_ result: EarningsResult) -> String {
-        let components = result.knownComponents
-        if components.tipOutCents > 0 {
-            return "Earned \(Money.string(fromCents: components.grossBeforeTipOutCents))"
-                + " · Tipped out \(Money.string(fromCents: components.tipOutCents))"
-        }
-        if components.gratuityFeesCents > 0 {
-            return "Tips \(Money.string(fromCents: components.voluntaryTipsCents))"
-                + " · Gratuity \(Money.string(fromCents: components.gratuityFeesCents))"
-        }
-        return "Cash \(Money.string(fromCents: components.voluntaryCashCents))"
-            + " · Credit \(Money.string(fromCents: components.voluntaryCreditCents))"
-    }
-
+    /// Whether there is anything worth opening the drawer for. A selection
+    /// with no tips at all (a wage-only shift) has no decomposition to show.
     /// A row's amount as it renders: negatives take a real U+2212 minus, and
     /// a figure the engine could not produce takes the placeholder rather
     /// than `$0.00` (PR 5 adapter contract, rule 4).
@@ -145,8 +133,6 @@ extension BreakdownRow {
         return cents < 0 ? "−\(Money.string(fromCents: -cents))" : Money.string(fromCents: cents)
     }
 
-    /// Whether there is anything worth opening the drawer for. A selection
-    /// with no tips at all (a wage-only shift) has no decomposition to show.
     static func hasBreakdown(_ result: EarningsResult) -> Bool {
         let components = result.knownComponents
         return components.voluntaryCashCents > 0
@@ -194,7 +180,6 @@ enum HeroBreakdownToggle {
 /// so each hero keeps its own face content and its own VoiceOver grouping —
 /// this component only owns the drawer and the shared tap-to-toggle physics.
 struct HeroBreakdownDrawer<Card: View>: View {
-    let lipText: String
     let rows: [BreakdownRow]
     let total: BreakdownRow
     let hasBreakdown: Bool
@@ -233,10 +218,20 @@ struct HeroBreakdownDrawer<Card: View>: View {
             // Collapsed lip: extra top padding clears the slice tucked
             // behind the card.
             HStack(spacing: PaydaySpacing.p8) {
-                Text(lipText)
-                    .font(PaydayFont.caption)
-                    .foregroundStyle(PaydayColor.textSecondary)
-                    .monospacedDigit()
+                // A WORD, not a figure. This used to read
+                // "Earned $2,435.21 · Tipped out $337.98", which states two
+                // numbers the expanded totals block states again -- rule 11,
+                // "no screen states the same fact twice", which is Tyler's
+                // own and which he wrote after the Dashboard payday card
+                // billed one answer as seven numbers.
+                //
+                // A summary that previews the thing directly beneath it is
+                // not a derived fact earning its place; it is the same fact
+                // twice, once quietly.
+                Text("Breakdown")
+                    .font(PaydayFont.subheadline)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(PaydayColor.textPrimary)
                 Spacer(minLength: 0)
                 Image(systemName: "chevron.down")
                     .font(PaydayFont.caption2)
@@ -248,6 +243,9 @@ struct HeroBreakdownDrawer<Card: View>: View {
             // Constant in both states — a padding that changes with the
             // toggle is one more thing shifting mid-animation.
             .padding(.bottom, PaydaySpacing.p12)
+            // The row is the hit target, not the chevron.
+            .frame(minHeight: PaydayHit.minimum)
+            .contentShape(Rectangle())
 
             if isExpanded {
                 VStack(spacing: PaydaySpacing.p8) {
