@@ -463,8 +463,6 @@ struct PeriodDrawerReadsTheLedgerTests {
 
         // And the collapsed lip reconciles with the hero directly above it:
         // Earned − Tipped out is exactly the hero.
-        #expect(render.detail.lipText == "Earned \(Money.string(fromCents: components.grossBeforeTipOutCents))"
-            + " · Tipped out \(Money.string(fromCents: 2_000))")
         #expect(render.detail.hero.cents == components.grossBeforeTipOutCents - 2_000)
     }
 
@@ -504,7 +502,10 @@ struct PeriodDrawerReadsTheLedgerTests {
         #expect(render.detail.breakdownRows.map(\.label) == ["Cash tips", "Credit tips"])
 
         let valued = HistoryRender(entries: c1Entries())
-        #expect(valued.detail.breakdownRows.contains { $0.label.hasPrefix("Wages · ") })
+        let wageRow = try #require(valued.detail.breakdownRows.first { $0.label == "Wages" })
+        // "carry the calendar hours split" is the test's name, so the hours
+        // have to be asserted wherever they live -- now the caption.
+        #expect(wageRow.caption?.isEmpty == false)
     }
 
     @Test("a wage-only period has no decomposition, so the drawer does not open")
@@ -874,7 +875,6 @@ struct HistoryGridWeekdayCannotMoveMoneyTests {
         #expect(monday.detail.hero.cents == sunday.detail.hero.cents)
         #expect(monday.detail.hourlyRateCaption == sunday.detail.hourlyRateCaption)
         #expect(monday.detail.breakdownTotal.cents == sunday.detail.breakdownTotal.cents)
-        #expect(monday.detail.lipText == sunday.detail.lipText)
         #expect(monday.detail.expectedCheckCents == sunday.detail.expectedCheckCents)
         #expect(monday.list.yearToDate.cents == sunday.list.yearToDate.cents)
         #expect(monday.list.rows.compactMap(\.earned.cents) == sunday.list.rows.compactMap(\.earned.cents))

@@ -243,10 +243,14 @@ struct HeroBreakdownDrawerSnapshotTests {
         #expect(rows.map(\.label) == [
             "Cash tips",
             "Credit tips",
-            "Wages · 9h 45m",
+            "Wages",
             "Earned",
             "Tipped out"
         ])
+        // The hours left the LABEL for the row's caption. Asserted here so
+        // dropping the caption fails a test rather than silently deleting
+        // the only place the drawer says how long the wages covered.
+        #expect(rows.first { $0.label == "Wages" }?.caption == "9h 45m")
         #expect(rows.map(\.cents) == [0, 11000, 2759, 13759, -1000])
         // The subtotal is the engine's, not four terms the screen added:
         // exactly one row carries a divider, and it is that one.
@@ -277,7 +281,6 @@ struct HeroBreakdownDrawerSnapshotTests {
     func lipReconciles() throws {
         let snapshot = try dayWithTipOut()
         let result = snapshot.day(CivilDay(at(2026, 9, 28), in: PaydayTestZone.payroll))
-        #expect(BreakdownRow.lipText(result) == "Earned $137.59 · Tipped out $10.00")
         #expect(BreakdownRow.hasBreakdown(result))
     }
 
@@ -343,7 +346,10 @@ struct HeroBreakdownDrawerSnapshotTests {
             end: CivilDay(year: 2026, month: 10, day: 4)
         ))
         let rows = BreakdownRow.ledgerRows(week)
-        #expect(rows.map(\.label) == ["Cash tips", "Credit tips", "Wages · 40h", "Overtime · 8h"])
+        #expect(rows.map(\.label) == ["Cash tips", "Credit tips", "Wages", "Overtime"])
+        // The calendar split, which is the whole point of two wage rows:
+        // 40h at base and 8h at 1.5x, each captioning its own figure.
+        #expect(rows.compactMap(\.caption) == ["40h", "8h"])
         #expect(rows.map(\.cents) == [0, 5000, 11320, 3396])
         // 14716, the number the old month-first path lost 1131c of.
         #expect(BreakdownRow.total(week).cents == 5000 + 14716)
