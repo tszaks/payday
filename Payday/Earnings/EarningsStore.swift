@@ -151,6 +151,7 @@ final class EarningsStore {
 
     /// Rebuilds completed since launch, for the debug sheet and the tests.
     private(set) var publishedCount = 0
+    private let onPublish: @MainActor (EarningsSnapshot) -> Void
     /// Rebuilds that found an unchanged digest and published nothing.
     private(set) var skippedCount = 0
 
@@ -195,8 +196,20 @@ final class EarningsStore {
         requestShiftBaseline: @MainActor @escaping () -> Void = {
             NotificationCenter.default.post(name: EarningsStore.shiftCacheWipeDetected, object: nil)
         },
-        observesTriggers: Bool = true
+        observesTriggers: Bool = true,
+        /// Called after a snapshot is published, on the main actor.
+        ///
+        /// Injected rather than reached for, so the store keeps knowing
+        /// nothing about sync. It exists because a snapshot that agrees
+        /// with the server is only useful if the server is TOLD -- and the
+        /// publish point is the one moment the device knows the engine's
+        /// answer is current.
+        ///
+        /// Defaults to doing nothing, so every existing test and the widget
+        /// build unchanged.
+        onPublish: @MainActor @escaping (EarningsSnapshot) -> Void = { _ in }
     ) {
+        self.onPublish = onPublish
         self.source = source
         self.builder = builder
         self.debounceNanoseconds = debounceNanoseconds
@@ -341,7 +354,13 @@ final class EarningsStore {
     private func publish(_ next: State, generation g: UInt64) {
         guard g == generation else { return }
         state = next
-        if case .ready = next { publishedCount += 1 }
+        if case .ready(let snapshot, _) = next {
+            publishedCount += 1
+            // AFTER the generation guard and AFTER `state` is set, so a
+            // stale computation can never trigger an upload and the sink
+            // always sees what a reader would see.
+            onPublish(snapshot)
+        }
     }
 
     // MARK: - Preview
