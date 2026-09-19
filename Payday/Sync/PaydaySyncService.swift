@@ -697,6 +697,20 @@ final class PaydaySyncService {
         )
         _ = try await repository.upsertShifts(changedShifts)
         _ = try await repository.softDeleteShifts(pendingShiftDeletions)
+        // The SECOND deletion queue, and the one the gate doc predicted would
+        // be forgotten -- correctly, because the first draft of this leg
+        // forgot it. `shifts` is DERIVED from `tip_entries`, so soft-deleting
+        // a migrated shift while its source rows stay alive lets the server's
+        // fold re-derive it and the deleted shift comes back. The producer
+        // (`ShiftCommands.deleteShift`) has been queueing these since PR 2.
+        let pendingLegacyDeletions = PaydaySyncState.pendingLegacyEntryDeletions(for: userID)
+        if !pendingLegacyDeletions.isEmpty {
+            try await repository.softDeleteTips(pendingLegacyDeletions)
+            // Cleared only after the write returned. A throw leaves the queue
+            // intact so the next pass retries, rather than dropping the
+            // deletion on the floor.
+            PaydaySyncState.clearLegacyEntryDeletions(pendingLegacyDeletions.keys, for: userID)
+        }
         // Step 9. Read back only what this pass touched, so the device adopts
         // the server's canonical result -- a `client_updated_at` clamped to
         // statement_timestamp(), a sanitized receipt payload, a refold.
