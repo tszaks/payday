@@ -168,6 +168,34 @@ end $$;
 -- PUBLIC that `anon` merely inherits.
 revoke all on function private.bump_revision_row() from public, anon, authenticated;
 
+-- ---------------------------------------------------------------------------
+-- LOAD-BEARING ASSUMPTION: ONE USER PER WRITE TRANSACTION.
+--
+-- The deferral argument above covers ONE watermark row. It does not cover
+-- two. Deferred triggers are FOR EACH ROW and fire at commit once per touched
+-- row IN TOUCH ORDER, so a transaction writing for users (A, B) racing one
+-- writing for (B, A) acquires two watermark rows in opposite orders and a
+-- cycle is constructible again.
+--
+-- No such write path exists today. Every write into `shifts`,
+-- `paycheck_records` and `user_settings` is scoped to `auth.uid()`; nothing
+-- takes a user_id array or loops users. So this is an ASSUMPTION the design
+-- rests on, not a defect -- and the first multi-user backfill someone writes
+-- later would violate it silently, which is why it is written here and
+-- asserted in `scripts/db-test-race.sh` rather than left to be rediscovered.
+--
+-- MEASURED, because "deadlock" and "hang" are different severities and only
+-- one of them is what 0f4f1bc actually did: two transactions writing (A,B)
+-- and (B,A) produce `ERROR: deadlock detected` in about 3 seconds.
+-- PostgreSQL detects and breaks it, one side gets 40P01 and can retry. It
+-- does NOT wedge. So violating this assumption degrades to a retryable error
+-- rather than to the indefinite block that caused the revert.
+--
+-- `aTwoUserTransactionTerminatesRatherThanWedging` asserts the property that
+-- matters -- that it finishes -- rather than that it deadlocks, so a future
+-- change making it genuinely safe does not fail the test.
+-- ---------------------------------------------------------------------------
+
 -- Every table whose contents can change a number the engine computes. If a
 -- future table joins that set it needs its trigger here, and
 -- `theWatermarkCoversEveryMoneyBearingTable` is what will notice it does not.
