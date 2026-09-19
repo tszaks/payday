@@ -348,6 +348,10 @@ struct CalendarView: View {
     /// The month hero's drawer. Collapsed by default: the grid is what a
     /// glance at this screen is for, and the breakdown is the second question.
     @State private var monthBreakdownExpanded = false
+    /// Whether the grid has scrolled under the pinned header. Drives only the
+    /// header's hairline, which should not be drawn while the header is
+    /// simply sitting on the page with nothing behind it.
+    @State private var gridIsUnderHeader = false
     @Query private var allEntries: [TipEntry]
     /// The other representation. `CalendarEarnings.snapshot` resolves which
     /// one this screen reads; see its header for why the choice is no longer
@@ -394,14 +398,6 @@ struct CalendarView: View {
         let facts = makeFacts(calendar: resolvedCalendar)
         ScrollView {
             VStack(spacing: PaydaySpacing.p16) {
-                monthNavRow
-                    // The lens selector sits directly above this screen;
-                    // the month needs air to read as its own thing rather
-                    // than a second row of that control (Tyler, 2026-07-28).
-                    .padding(.top, PaydaySpacing.p20)
-
-                weekdayHeader
-
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 7), spacing: 6) {
                     ForEach(facts.gridDays, id: \.self) { day in
                         Button {
@@ -428,6 +424,15 @@ struct CalendarView: View {
             .padding(.top, PaydaySpacing.p8)
         }
         .contentMargins(.bottom, 88, for: .scrollContent)
+        .safeAreaInset(edge: .top, spacing: 0) { pinnedHeader }
+        .onScrollGeometryChange(for: Bool.self) { geometry in
+            geometry.contentOffset.y + geometry.contentInsets.top > 8
+        } action: { _, isUnder in
+            guard gridIsUnderHeader != isUnder else { return }
+            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) {
+                gridIsUnderHeader = isUnder
+            }
+        }
         .background(PaydayColor.background)
         .sheet(item: $daySelection) { selection in
             DayDetailSheet(date: selection.date).paydayAppearance()
@@ -479,6 +484,46 @@ struct CalendarView: View {
     /// horizontal swipe over the grid moving months — the gesture every
     /// calendar already teaches. The buttons were a second navigation bar
     /// stacked under the real one.
+    /// Month and weekday letters, pinned.
+    ///
+    /// Both used to scroll away with the grid, so a month scrolled halfway
+    /// down presented a block of numbers starting at "14" with nothing saying
+    /// which month it was or which column was Monday -- the grid lost the two
+    /// labels that make it a calendar rather than a table of numbers. They are
+    /// the cheapest thing on the screen to keep and the most expensive to
+    /// lose.
+    ///
+    /// The hero and its drawer deliberately stay BELOW the grid and scroll
+    /// normally. Lifting the month's figure up here as well would make a
+    /// ~150pt permanent header out of a screen whose subject is the grid, and
+    /// would strand the breakdown drawer, whose whole geometry is a recess
+    /// tucked under the card directly above it.
+    ///
+    /// A hairline, and only once something is actually behind it. No shadow:
+    /// rule 2 gives dark mode none, and a hairline plus a shadow is two
+    /// treatments of one edge.
+    private var pinnedHeader: some View {
+        VStack(spacing: PaydaySpacing.p12) {
+            monthNavRow
+            weekdayHeader
+        }
+        // The lens selector sits directly above this screen; the month needs
+        // air to read as its own thing rather than a second row of that
+        // control (Tyler, 2026-07-28).
+        .padding(.top, PaydaySpacing.p20)
+        .padding(.bottom, PaydaySpacing.p12)
+        .background(PaydayColor.background)
+        .overlay(alignment: .bottom) {
+            // `Divider()` rather than a hand-rolled Rectangle: it is what
+            // every other hairline in the app uses, and it already resolves
+            // its own hairline width and per-mode colour. A `1 /
+            // UIScreen.main.scale` here would have been this repo's only use
+            // of a screen-scale lookup that no longer has one right answer.
+            Divider()
+                .opacity(gridIsUnderHeader ? 1 : 0)
+        }
+    }
+
     private var monthNavRow: some View {
         Text(monthTitle)
             .font(PaydayFont.headline)
