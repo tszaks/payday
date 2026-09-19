@@ -310,11 +310,45 @@ acceptance rule, the upload document, and `SnapshotUploader` itself.
 SURFACE STILL DISAGREES BY CONSTRUCTION: the API.** Measured today:
 
 - `/v1/summary` still calls `payday_agent_summary`, which does its own
-  arithmetic and has no wage concept at all. It answers "how much this
-  period" with tips only.
-- Nothing in `supabase/functions/` reads `earnings_snapshots`.
-- `SnapshotUploader` has no production caller; its only mention outside its
-  own file is a doc comment.
+  arithmetic and has no wage concept at all. Its `shifts` and `paychecks`
+  fields answer "how much this period" with tips only. **Still true.**
+- ~~Nothing in `supabase/functions/` reads `earnings_snapshots`.~~
+  **FALSE, corrected 2026-09-19.** `engineEarnings` reads that table
+  (`payday-api/index.ts:1491`) and is called from the summary route
+  (`:1407`), adding an `earnings` field beside the legacy two. Its own
+  comment says why: "ADDITIVE ON PURPOSE ... so no existing consumer
+  breaks."
+- ~~`SnapshotUploader` has no production caller; its only mention outside
+  its own file is a doc comment.~~ **MISLEADING, corrected 2026-09-19.**
+  True of the SYMBOL and false of the behaviour: `SnapshotPublisher` owns
+  the uploader and `PaydayApp.swift:72` calls
+  `SnapshotPublisher.shared.publish(snapshot)` from `EarningsStore`'s
+  `onPublish` sink. `SnapshotUploaderTests.swift` covers it with nine cases.
+
+**So the "serves" verb is further along than the three bullets above said,
+and the honest summary is narrower than either "not built" or "done".** In
+the REPOSITORY the path is connected end to end: the store publishes, the
+uploader uploads against the server-issued `dataset_revision`, and the
+summary route reads the stored snapshot back. What is genuinely open:
+
+- **No deno test exercises `engineEarnings`.** The Swift half has nine
+  tests; the serving half has none, so nothing proves the API returns what
+  the device published.
+- **The legacy tips-only answer is still served alongside it**, in `shifts`
+  and `paychecks`. An agent reading those fields still gets a number that
+  differs from the Dashboard by wages. Additive was the right call for
+  compatibility, and it means two answers coexist in one response until a
+  consumer is moved.
+- **The deployed edge function is whatever was last deployed**, which the
+  bullet below already warns about and which no one has checked today.
+
+**How this file came to say the opposite, recorded because the mechanism
+matters more than the mistake.** Those three bullets were measured on a
+working tree 48 commits behind `production`, where every one of them was
+TRUE. Measuring the right thing on the wrong tree produces confident,
+checkable, wrong statements -- and the same stale branch nearly deleted
+thirty lines of this pillar in the same sitting. Check `git rev-list --count
+HEAD..origin/production` before believing a "nothing reads this" result.
 
 So of the four things the goal names -- what Payday **shows**, **speaks**,
 **exports** and **serves** -- the first three come from the one engine and
