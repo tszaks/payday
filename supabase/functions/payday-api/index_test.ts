@@ -1,5 +1,6 @@
 import { assertEquals, assertThrows } from "@std/assert";
 import {
+  engineEarnings,
   earnedIncomeCents,
   handleRequest,
   sumSnapshotDays,
@@ -334,4 +335,96 @@ Deno.test("earned income includes wages, asserted against a literal", () => {
     }),
     1200,
   );
+});
+
+/// The serving half of the snapshot path, which had no test at all.
+///
+/// `SnapshotUploaderTests` covers the device publishing with nine cases.
+/// Nothing covered the API reading it back, so "the engine's answer is
+/// served" rested on the code looking right.
+///
+/// Expected totals are LITERALS on purpose. The mirror-test trap in this
+/// very file already cost a real defect once: a test that recomputed the
+/// sum passed all 19 cases while `+ regular + overtime` was missing from
+/// the implementation. A test that redoes the arithmetic cannot detect the
+/// arithmetic being wrong.
+function stubCtx(snapshot: unknown, revision: unknown) {
+  const table = (name: string) => ({
+    select: () => ({
+      eq: () => ({
+        maybeSingle: () =>
+          Promise.resolve({
+            data: name === "earnings_snapshots" ? snapshot : revision,
+          }),
+      }),
+    }),
+  });
+  return {
+    key: { user_id: "u1" },
+    admin: { from: (name: string) => table(name) },
+    // deno-lint-ignore no-explicit-any
+  } as any;
+}
+
+const DAY = {
+  day: "2026-09-10",
+  minutes: 300,
+  totalShifts: 1,
+  knownComponents: {
+    voluntaryCashCents: 1000,
+    voluntaryCreditCents: 2000,
+    gratuityFeesCents: 300,
+    tipOutCents: 150,
+    regularWagesCents: 1415,
+    overtimeWagesCents: 0,
+  },
+};
+
+Deno.test("engine earnings are absent until a device publishes", async () => {
+  const out = await engineEarnings(stubCtx(null, null), null, null);
+  assertEquals(out.available, false);
+  assertEquals(out.reason, "no_snapshot");
+});
+
+Deno.test("the API serves the device's WAGE-INCLUSIVE figure", async () => {
+  const snap = {
+    dataset_revision: 7,
+    engine_version: 1,
+    as_of: "2026-09-19",
+    payload: { days: [DAY] },
+  };
+  const out = await engineEarnings(stubCtx(snap, { revision: 7 }), null, null);
+  assertEquals(out.available, true);
+  assertEquals(out.stale, false);
+  // 1000 + 2000 + 300 - 150 + 1415 + 0. Written out, not computed: dropping
+  // the wage terms is exactly the defect this file shipped once before, and
+  // 3150 (the non-wage answer) must not pass.
+  assertEquals(out.earned_income_cents, 4565);
+  assertEquals(out.regular_wages_cents, 1415);
+  assertEquals(out.minutes_worked, 300);
+});
+
+Deno.test("stale flips when the dataset moved under the snapshot", async () => {
+  const snap = {
+    dataset_revision: 7,
+    engine_version: 1,
+    as_of: "2026-09-19",
+    payload: { days: [DAY] },
+  };
+  const out = await engineEarnings(stubCtx(snap, { revision: 8 }), null, null);
+  assertEquals(out.available, true);
+  assertEquals(out.stale, true);
+});
+
+Deno.test("a day outside the range contributes nothing", async () => {
+  const snap = {
+    dataset_revision: 1,
+    engine_version: 1,
+    as_of: "2026-09-19",
+    payload: { days: [DAY] },
+  };
+  const out = await engineEarnings(
+    stubCtx(snap, { revision: 1 }), "2026-09-11", "2026-09-12");
+  assertEquals(out.days_in_range, 0);
+  assertEquals(out.earned_income_cents, 0);
 });
