@@ -868,6 +868,14 @@ if [ "$FAIL" -eq 1 ]; then
   echo "=== Design lint FAILED — see docs/DESIGN.md ==="
   exit 1
 fi
+# 32. Parsers produce candidates, never rows.
+#     A parser's output is a GUESS -- from OCR or a model -- and the design
+#     is that a person confirms it before it becomes money. A parser that
+#     writes has removed the confirmation step without anyone deciding to,
+#     and the failure is silent: the shift appears, already wrong,
+#     attributed to the user. PR 7's last unenforced item.
+if bash scripts/lint-parsers-pure.sh; then :; else FAIL=1; fi
+
 # 31. A gate document may not cite a symbol that does not exist.
 #     RELEASE_GATE.md cited a test name that was a hand-camel-cased display
 #     string. The coverage was real; the identifier was not, and a reviewer
