@@ -28,6 +28,14 @@ struct SyncPassOrderTests {
 
     private func client() -> SupabaseClient {
         RoutingStub.reset()
+        // The deletion queues live in App Group UserDefaults keyed by user id,
+        // so they survive BOTH the test and the whole test run. Without this
+        // a queued deletion from one test changes another test's call order,
+        // and a leftover from a previous run changes it before any test runs.
+        PaydaySyncState.clearShiftDeletions(
+            PaydaySyncState.pendingShiftDeletions(for: Self.user).keys, for: Self.user)
+        PaydaySyncState.clearLegacyEntryDeletions(
+            PaydaySyncState.pendingLegacyEntryDeletions(for: Self.user).keys, for: Self.user)
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [RoutingStub.self]
         return SupabaseClient(
@@ -76,6 +84,11 @@ struct SyncPassOrderTests {
             "GET /rest/v1/tip_entries",
             "GET /rest/v1/paycheck_records",
             "GET /rest/v1/user_settings",
+            // Reachable only since the stub started returning a VALID
+            // settings row. With "{}" the pass threw `keyNotFound: user_id`
+            // here and these two legs were never exercised by any test.
+            "GET /rest/v1/shift_migration_state",
+            "GET /rest/v1/dataset_revisions",
         ], "got \(calls)")
 
         // No shift PUSH on an empty account, which is correct and is also why
@@ -147,9 +160,8 @@ struct SyncPassOrderTests {
     @Test("a queued legacy-entry deletion is actually flushed to the server")
     func aQueuedLegacyEntryDeletionReachesTheServer() async throws {
         let legacy = UUID(uuidString: "90000000-0000-4000-8000-0000000000b1")!
-        PaydaySyncState.recordLegacyEntryDeletions([legacy], for: Self.user)
-
         let service = PaydaySyncService(client: client())
+        PaydaySyncState.recordLegacyEntryDeletions([legacy], for: Self.user)
         let ctx = try context()
         _ = try? await service.synchronize(
             context: ctx,
@@ -169,6 +181,52 @@ struct SyncPassOrderTests {
         #expect(PaydaySyncState.pendingLegacyEntryDeletions(for: Self.user).isEmpty)
     }
 
+    /// The OTHER half of `FLIP-BLOCKER-DELETION-FLUSH`, and the half that
+    /// names the condition.
+    ///
+    /// `aQueuedLegacyEntryDeletionReachesTheServer` proves the legacy source
+    /// rows get tombstoned. This proves the shift row itself does. Both are
+    /// required before PR 8 may delete the legacy calculation paths, because
+    /// deleting them IS the flip whatever the flag says, and a deletion that
+    /// never reaches the server means the first thing the new representation
+    /// does is resurrect a shift the user deleted.
+    @Test("a queued shift deletion is actually flushed to the server")
+    func aQueuedShiftDeletionReachesTheServer() async throws {
+        let doomed = UUID(uuidString: "90000000-0000-4000-8000-0000000000c1")!
+        let service = PaydaySyncService(client: client())
+        PaydaySyncState.recordShiftDeletion(doomed, for: Self.user)
+        let ctx = try context()
+        _ = try? await service.synchronize(
+            context: ctx,
+            scheduleStore: PayScheduleStore(),
+            preferencesStore: UserPreferencesStore(),
+            moveLedgerStore: MoveLedgerStore(),
+            policyStore: PolicyStore(),
+            userID: Self.user
+        )
+
+        let calls = RoutingStub.recordedPaths()
+        #expect(
+            calls.contains("POST /rest/v1/rpc/soft_delete_shifts"),
+            "the shift deletion queue was never flushed; got \(calls)"
+        )
+        // Step 9 must read the deleted id back, because that tombstoned row
+        // is what removes it locally on the second reconcileShifts call.
+        #expect(
+            calls.contains("GET /rest/v1/shifts"),
+            "no step-9 readback covering the deleted id; got \(calls)"
+        )
+
+        // The queue must DRAIN, not merely be sent. It was cleared only on
+        // the undo path, so every later pass re-sent every deletion the
+        // account had ever made and the step-9 readback id set grew without
+        // bound, because it is keyed on this queue.
+        #expect(
+            PaydaySyncState.pendingShiftDeletions(for: Self.user).isEmpty,
+            "the shift deletion queue never drained"
+        )
+    }
+
 }
 
 /// Routes by URL path and records the order, because one canned body for
@@ -181,7 +239,17 @@ final class RoutingStub: URLProtocol, @unchecked Sendable {
     static func reset() {
         lock.lock(); paths = []
         routes = [
-            ("/rest/v1/user_settings", "{}"),
+            // A VALID settings row, not "{}". With "{}" the pass threw
+            // `keyNotFound: user_id` at the settings decode -- so every test
+            // here silently stopped before the deletion clears, the
+            // reconcile and the checkpoint write. The harness looked like it
+            // covered a whole pass and covered two thirds of one.
+            ("/rest/v1/user_settings", """
+                {"user_id":"90000000-0000-4000-8000-000000000001",
+                 "smart_nudge_enabled":true,"payday_reminder_enabled":true,
+                 "move_ledger":{},"client_updated_at":"2026-09-19T00:00:00.000Z",
+                 "updated_at":"2026-09-19T00:00:00.000Z"}
+                """),
             ("/rest/v1/tip_entries", "[]"),
             ("/rest/v1/paycheck_records", "[]"),
             ("/rest/v1/shifts", "[]"),
@@ -207,8 +275,18 @@ final class RoutingStub: URLProtocol, @unchecked Sendable {
         let method = request.httpMethod ?? "?"
         Self.lock.lock()
         Self.paths.append("\(method) \(path)")
-        let body = Self.routes.first { path.contains($0.0) }?.1 ?? "[]"
+        var body = Self.routes.first { path.contains($0.0) }?.1 ?? "[]"
         Self.lock.unlock()
+
+        // `/user_settings` is read TWO ways in one codebase: the baseline
+        // path decodes a single object, the delta path decodes an array of
+        // one. Same URL, so the only honest discriminator is the header
+        // PostgREST itself uses for `.single()`. Getting this wrong threw
+        // `typeMismatch` mid-pass and silently truncated every test here.
+        if path.contains("user_settings"), !path.contains("/rpc/"),
+           request.value(forHTTPHeaderField: "Accept")?.contains("pgrst.object") != true {
+            body = "[\(body)]"
+        }
 
         let response = HTTPURLResponse(
             url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1",

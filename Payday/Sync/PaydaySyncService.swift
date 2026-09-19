@@ -873,6 +873,13 @@ final class PaydaySyncService {
         }
         PaydaySyncState.clearTipDeletions(pendingTipDeletions.keys, for: userID)
         PaydaySyncState.clearPaycheckDeletions(pendingPaycheckDeletions.keys, for: userID)
+        // Mirrors the two lines above, and its absence was a real leak: the
+        // shift queue was cleared only on the UNDO path (:646), never after a
+        // successful flush. Every later pass then re-sent every deletion the
+        // account had ever made, and `shiftReadbackIDs` grew without bound
+        // because it is keyed on this queue. Reached only if the flush above
+        // did not throw, so a failed delete still retries next pass.
+        PaydaySyncState.clearShiftDeletions(pendingShiftDeletions.keys, for: userID)
 
         let reconciledTipEntries = try context.fetch(FetchDescriptor<TipEntry>())
         let reconciledPaycheckRecords = try context.fetch(FetchDescriptor<PaycheckRecord>())
