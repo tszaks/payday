@@ -1,5 +1,10 @@
 import { assertEquals, assertThrows } from "@std/assert";
-import { handleRequest, testing } from "./index.ts";
+import {
+  earnedIncomeCents,
+  handleRequest,
+  sumSnapshotDays,
+  testing,
+} from "./index.ts";
 
 Deno.test("health is public and versioned", async () => {
   const response = await handleRequest(
@@ -233,4 +238,100 @@ Deno.test("absent optional fields report null rather than being omitted", () => 
                        "server_count", "receipt_metrics", "note"]) {
     assertEquals(shift[field], null, `${field} must be null, not omitted`);
   }
+});
+
+// --- the engine's figure, read from the uploaded snapshot -------------------
+//
+// The server sums precomputed per-day integers. It applies NO POLICY: no
+// overtime allocation, no rounding, no deciding which day a shift belongs
+// to. Every one of those happened once, on device. Summing integers cannot
+// make two surfaces disagree; allocating overtime can, and has.
+
+const day = (
+  d: string,
+  o: Partial<{
+    cash: number; credit: number; gratuity: number; tipOut: number;
+    regular: number; overtime: number; minutes: number; shifts: number;
+  }> = {},
+) => ({
+  day: d,
+  minutes: o.minutes ?? 0,
+  totalShifts: o.shifts ?? 1,
+  knownComponents: {
+    voluntaryCashCents: o.cash ?? 0,
+    voluntaryCreditCents: o.credit ?? 0,
+    gratuityFeesCents: o.gratuity ?? 0,
+    tipOutCents: o.tipOut ?? 0,
+    regularWagesCents: o.regular ?? 0,
+    overtimeWagesCents: o.overtime ?? 0,
+  },
+});
+
+Deno.test("a range sums only the days inside it, inclusive of both ends", () => {
+  const days = [
+    day("2026-09-01", { cash: 1000 }),
+    day("2026-09-02", { cash: 2000 }),
+    day("2026-09-03", { cash: 4000 }),
+  ];
+  // Both endpoints included: the boundary day is the one people check.
+  assertEquals(sumSnapshotDays(days, "2026-09-01", "2026-09-02").cash, 3000);
+  assertEquals(sumSnapshotDays(days, "2026-09-02", "2026-09-03").cash, 6000);
+  assertEquals(sumSnapshotDays(days, "2026-09-02", "2026-09-02").cash, 2000);
+  // A null bound means unbounded on that side, not "today".
+  assertEquals(sumSnapshotDays(days, null, null).cash, 7000);
+  assertEquals(sumSnapshotDays(days, null, "2026-09-01").cash, 1000);
+});
+
+Deno.test("wages are included, which is the whole difference from the legacy figure", () => {
+  const t = sumSnapshotDays(
+    [day("2026-09-01", { cash: 500, credit: 800, gratuity: 100, tipOut: 200, regular: 1320, overtime: 396 })],
+    null,
+    null,
+  );
+  // payday_agent_summary would report 1200 here: tips minus tip-out, no
+  // wages at all. The engine reports the wage-inclusive figure.
+  assertEquals(t.cash + t.credit + t.gratuity - t.tipOut, 1200);
+  assertEquals(
+    t.cash + t.credit + t.gratuity - t.tipOut + t.regular + t.overtime,
+    2916,
+  );
+});
+
+Deno.test("a malformed day is skipped rather than counted as zero", () => {
+  // Counting it as zero would quietly lower a total; skipping it leaves
+  // days_in_range as the tell that something was dropped.
+  const t = sumSnapshotDays(
+    [day("2026-09-01", { cash: 1000 }), { day: 5 }, "nonsense", null],
+    null,
+    null,
+  );
+  assertEquals(t.cash, 1000);
+  assertEquals(t.inRange, 1);
+});
+
+Deno.test("a non-array payload sums to nothing rather than throwing", () => {
+  assertEquals(sumSnapshotDays(undefined, null, null).inRange, 0);
+  assertEquals(sumSnapshotDays({ days: [] }, null, null).cash, 0);
+});
+
+Deno.test("earned income includes wages, asserted against a literal", () => {
+  // A LITERAL, not a re-derivation. The previous version of this check
+  // recomputed the sum in the test, so dropping `+ regular + overtime`
+  // from the response passed all nineteen tests.
+  assertEquals(
+    earnedIncomeCents({
+      cash: 500, credit: 800, gratuity: 100, tipOut: 200,
+      regular: 1320, overtime: 396,
+    }),
+    2916,
+  );
+  // And tips-only is 1200, which is what the legacy figure reports. The
+  // gap between them is the bug this whole engine exists to close.
+  assertEquals(
+    earnedIncomeCents({
+      cash: 500, credit: 800, gratuity: 100, tipOut: 200,
+      regular: 0, overtime: 0,
+    }),
+    1200,
+  );
 });

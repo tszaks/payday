@@ -1404,8 +1404,137 @@ async function summary(
       range: { start_date: start ?? null, end_date: end ?? null },
       shifts: data.shifts,
       paychecks: data.paychecks,
+      earnings: await engineEarnings(ctx, start ?? null, end ?? null),
     },
   };
+}
+
+/**
+ * The engine's own answer for the range, read from the uploaded snapshot.
+ *
+ * ADDITIVE ON PURPOSE. `shifts` and `paychecks` above are unchanged, so no
+ * existing consumer breaks. They are also still computed by
+ * `payday_agent_summary`, which has NO WAGE CONCEPT -- it answers "how much
+ * this period" with tips only, which is why the app and the API disagree
+ * today by construction. This field is how a caller gets the figure the
+ * Dashboard shows. PR 8 deletes the other one.
+ *
+ * NO MONEY MATH HERE, and the distinction is exact: the server sums
+ * precomputed per-day integers over the requested range. It applies no
+ * POLICY -- no overtime allocation, no rounding, no deciding which day a
+ * shift belongs to. Every one of those happened once, on device, under one
+ * engine version. Summing integers cannot make two surfaces disagree;
+ * allocating overtime can, and has.
+ *
+ * `available: false` rather than zeros when no snapshot exists. A zero here
+ * would be indistinguishable from a person who earned nothing, which is the
+ * same lie as a widget rendering $0 for a failed read.
+ */
+/**
+ * Sum the snapshot's per-day components over an inclusive date range.
+ *
+ * Pure, and separated from the fetch so the ARITHMETIC is testable without
+ * a database. Dates are ISO `YYYY-MM-DD`, so lexical comparison IS date
+ * comparison -- no parsing, and therefore no timezone to get wrong.
+ */
+export function sumSnapshotDays(
+  days: unknown,
+  start: string | null,
+  end: string | null,
+) {
+  const t = {
+    cash: 0, credit: 0, gratuity: 0, tipOut: 0, regular: 0, overtime: 0,
+    minutes: 0, shiftCount: 0, inRange: 0,
+  };
+  if (!Array.isArray(days)) return t;
+  for (const d of days) {
+    if (!isRecord(d) || typeof d.day !== "string") continue;
+    if (start !== null && d.day < start) continue;
+    if (end !== null && d.day > end) continue;
+    const k = isRecord(d.knownComponents) ? d.knownComponents : {};
+    t.cash += num(k.voluntaryCashCents);
+    t.credit += num(k.voluntaryCreditCents);
+    t.gratuity += num(k.gratuityFeesCents);
+    t.tipOut += num(k.tipOutCents);
+    t.regular += num(k.regularWagesCents);
+    t.overtime += num(k.overtimeWagesCents);
+    t.minutes += num(d.minutes);
+    t.shiftCount += num(d.totalShifts);
+    t.inRange += 1;
+  }
+  return t;
+}
+
+/**
+ * The wage-INCLUSIVE figure, which is the whole difference from
+ * `shifts.net_tip_earnings_cents`.
+ *
+ * Its own function so it can be tested. Written inline first, and a
+ * mutation that dropped `+ regular + overtime` passed all nineteen tests:
+ * they asserted the sum the TEST computed, not the expression the response
+ * used. A test that derives its expectation the same way the code does
+ * cannot catch a defect in that derivation.
+ */
+export function earnedIncomeCents(
+  t: { cash: number; credit: number; gratuity: number; tipOut: number;
+       regular: number; overtime: number },
+): number {
+  return t.cash + t.credit + t.gratuity - t.tipOut + t.regular + t.overtime;
+}
+
+async function engineEarnings(
+  ctx: RequestContext,
+  start: string | null,
+  end: string | null,
+): Promise<JsonObject> {
+  const { data: snap } = await ctx.admin
+    .from("earnings_snapshots")
+    .select("dataset_revision,engine_version,as_of,payload")
+    .eq("user_id", ctx.key.user_id)
+    .maybeSingle();
+
+  if (!isRecord(snap) || !isRecord(snap.payload)) {
+    return { available: false, reason: "no_snapshot" };
+  }
+
+  const { data: rev } = await ctx.admin
+    .from("dataset_revisions")
+    .select("revision")
+    .eq("user_id", ctx.key.user_id)
+    .maybeSingle();
+  const current = isRecord(rev) && typeof rev.revision === "number"
+    ? rev.revision
+    : 0;
+
+  const t = sumSnapshotDays(snap.payload.days, start, end);
+
+  return {
+    available: true,
+    // True the instant anything in the user's dataset changes, and stays
+    // true until a device recomputes and uploads. An API-side write bumps
+    // the watermark too, so `stale` flips immediately rather than after a
+    // delay the caller cannot see.
+    stale: snap.dataset_revision !== current,
+    dataset_revision: snap.dataset_revision,
+    engine_version: snap.engine_version,
+    as_of: snap.as_of,
+    days_in_range: t.inRange,
+    shift_count: t.shiftCount,
+    minutes_worked: t.minutes,
+    voluntary_cash_tips_cents: t.cash,
+    voluntary_credit_tips_cents: t.credit,
+    gratuity_fees_cents: t.gratuity,
+    tip_out_cents: t.tipOut,
+    regular_wages_cents: t.regular,
+    overtime_wages_cents: t.overtime,
+    // The figure the Dashboard shows. Wage-INCLUSIVE, which is the whole
+    // difference from `shifts.net_tip_earnings_cents` above.
+    earned_income_cents: earnedIncomeCents(t),
+  };
+}
+
+function num(v: unknown): number {
+  return typeof v === "number" && Number.isFinite(v) ? v : 0;
 }
 
 async function listShifts(
