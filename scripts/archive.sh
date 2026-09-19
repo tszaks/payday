@@ -48,6 +48,18 @@ say "  HEAD            ${HEAD_SHA:0:12}"
 say "  origin/production ${PROD_SHA:0:12}"
 say "  behind=$BEHIND ahead=$AHEAD"
 
+# AHEAD is refused too, and the first version of this script did not.
+# Its docstring promised "HEAD == origin/production" and it only implemented
+# the behind half -- a gap between stated and actual behaviour, which is the
+# shape this whole script exists to catch. A build from an unmerged commit is
+# exactly as untraceable as one from a stale commit: the SHA it stamps points
+# at something no one else can fetch.
+if [ "$AHEAD" -ne 0 ] && [ "$ALLOW_BEHIND" != 1 ]; then
+  bad "HEAD is $AHEAD commit(s) AHEAD of origin/production; that SHA is not on production yet"
+  say "   -> merge it first, or pass --allow-behind to archive an unmerged tree knowingly"
+  git log --oneline origin/production..HEAD | head -10 | sed 's/^/     /'
+fi
+
 if [ "$BEHIND" -ne 0 ]; then
   if [ "$ALLOW_BEHIND" = 1 ]; then
     say "  !! ARCHIVING FROM A TREE $BEHIND COMMITS BEHIND PRODUCTION, because --allow-behind"
@@ -57,8 +69,10 @@ if [ "$BEHIND" -ne 0 ]; then
     bad "HEAD is $BEHIND commits BEHIND origin/production. This is the 9191040 failure."
     say "   -> git merge origin/production   (or pass --allow-behind and read the list)"
   fi
-else
-  ok "source tree is current with origin/production"
+elif [ "$AHEAD" -eq 0 ]; then
+  # Only claim "current" when BOTH are zero. Saying it beside an AHEAD
+  # failure is a guard contradicting itself in its own output.
+  ok "source tree is exactly origin/production"
 fi
 
 # ------------------------------------------------------------- clean tree
