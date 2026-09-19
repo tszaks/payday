@@ -1,4 +1,5 @@
 import Foundation
+import PaydayCore
 
 /// Plain, Sendable per-night fact — decoupled from SwiftData's TipEntry so
 /// this stays a pure, easily-tested module, same pattern as
@@ -67,9 +68,16 @@ struct TipRecord: Sendable, Hashable {
     /// minus canonical tip-out. Legacy receipt amounts are normalized before
     /// the categories are recombined, so their total stays unchanged.
     var netCents: Int {
-        voluntaryTipCents
-            + (receiptMetrics?.employeeGratuityFeesCents ?? 0)
-            - (tipOutCents ?? 0)
+        // The RECOMBINATION delegates; the normalization above does not.
+        // `voluntaryTipCents` still applies the v1 receipt fold, because
+        // that is what makes a legacy row comparable at all. What was
+        // duplicated was only the "+ gratuity - tipOut" recombination, which
+        // is `nonWageEarnings` and now has exactly one definition.
+        EarningsComponents(
+            voluntaryCashCents: voluntaryTipCents,
+            gratuityFeesCents: receiptMetrics?.employeeGratuityFeesCents ?? 0,
+            tipOutCents: tipOutCents ?? 0
+        ).nonWageEarningsCents
     }
 
     init(date: Date, amountCents: Int, kind: TipKind, isDouble: Bool, recordedAt: Date? = nil, hoursWorked: Double? = nil, tipOutCents: Int? = nil, salesCents: Int? = nil, shiftPeriod: ShiftPeriod? = nil, shiftID: UUID? = nil, clockIn: Date? = nil, clockOut: Date? = nil, serverCount: Int? = nil, receiptMetrics: ShiftReceiptMetrics? = nil, note: String? = nil) {
@@ -173,7 +181,15 @@ private struct ShiftFacts {
 
     /// Total non-wage shift earnings: voluntary tips + mandatory gratuity and
     /// employee fees - tip-out. Pace, totals, and recommendations use this.
-    var netCents: Int { netVoluntaryTipCents + gratuityFeesCents }
+    /// `grossCents` is already a sum of NORMALIZED `voluntaryTipCents`
+    /// (`:278`), so the canonical definition applies to it unchanged.
+    var netCents: Int {
+        EarningsComponents(
+            voluntaryCashCents: grossCents,
+            gratuityFeesCents: gratuityFeesCents,
+            tipOutCents: tipOutCents ?? 0
+        ).nonWageEarningsCents
+    }
 }
 
 /// A small pure module computing pace, records, baselines, and the post-log
