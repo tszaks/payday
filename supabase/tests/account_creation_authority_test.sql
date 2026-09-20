@@ -9,7 +9,7 @@
 -- Locally with no Docker: `bash scripts/db-test-local.sh`.
 --
 -- WHAT THIS SUITE IS FOR. The trigger exists to close a first-run window: a
--- new account had no `shift_migration_state` row until its first sync ran the
+-- new account had no `shift_migration_ledger` row until its first sync ran the
 -- one-shot, so read authority arrived a round-trip late and the account spent
 -- that gap on the legacy arm. The two properties that make the fix safe are
 -- both easy to assert and were both nearly reasoned about instead:
@@ -34,7 +34,7 @@ values ('aaaaaaaa-1111-1111-1111-111111111111', 'creation@test.invalid');
 insert into results
 select 'creation stamps exactly one row',
        count(*) = 1
-from public.shift_migration_state
+from public.shift_migration_ledger
 where user_id = 'aaaaaaaa-1111-1111-1111-111111111111';
 
 insert into results
@@ -45,7 +45,7 @@ select 'the stamped row satisfies all four authority conditions',
          and conservation_failed_at is null
          and remaining_group_count = 0
        ), false)
-from public.shift_migration_state
+from public.shift_migration_ledger
 where user_id = 'aaaaaaaa-1111-1111-1111-111111111111';
 
 -- NULL, never 0. A zero here asserts a conservation measurement that never
@@ -62,7 +62,7 @@ select 'the conservation counters say NOT MEASURED, not zero',
          and source_row_count is null
          and last_run_at is null
        ), false)
-from public.shift_migration_state
+from public.shift_migration_ledger
 where user_id = 'aaaaaaaa-1111-1111-1111-111111111111';
 
 -- ------------------------------------------------- the fold still converts
@@ -101,21 +101,21 @@ select 'the account is still authoritative after the fold',
          and conservation_failed_at is null
          and remaining_group_count = 0
        ), false)
-from public.shift_migration_state
+from public.shift_migration_ledger
 where user_id = 'aaaaaaaa-2222-2222-2222-222222222222';
 
 -- ------------------------------------------------------------- idempotence
 -- The one-shot may have raced the trigger. Its row is the better one: it
 -- carries real figures. `on conflict do nothing` means a second creation
 -- cannot clobber it.
-update public.shift_migration_state
+update public.shift_migration_ledger
    set source_non_wage_cents = 4242
  where user_id = 'aaaaaaaa-2222-2222-2222-222222222222';
 
 insert into results
 select 'a real measurement is never clobbered by the creation stamp',
        coalesce(bool_and(source_non_wage_cents = 4242), false)
-from public.shift_migration_state
+from public.shift_migration_ledger
 where user_id = 'aaaaaaaa-2222-2222-2222-222222222222';
 
 -- ------------------------------------------------------------- the cascade
@@ -124,7 +124,7 @@ delete from auth.users where id = 'aaaaaaaa-1111-1111-1111-111111111111';
 insert into results
 select 'deleting the account removes its state row',
        count(*) = 0
-from public.shift_migration_state
+from public.shift_migration_ledger
 where user_id = 'aaaaaaaa-1111-1111-1111-111111111111';
 
 -- ------------------------------------------------- signup survives a raise
@@ -155,7 +155,7 @@ where id = 'aaaaaaaa-3333-3333-3333-333333333333';
 insert into results
 select 'and it degrades to exactly today''s behaviour: no row, flip on first sync',
        count(*) = 0
-from public.shift_migration_state
+from public.shift_migration_ledger
 where user_id = 'aaaaaaaa-3333-3333-3333-333333333333';
 
 -- THE CONTROL. Without this, the assertion above passes just as happily when
