@@ -1441,6 +1441,20 @@ insert into public.tip_entries (id, user_id, work_date, amount_cents, kind, clie
  ('56000000-0000-0000-0000-000000000751','56000000-0000-4000-8000-000000000073','2026-07-26',5000,'cash','2026-07-26T23:00:00Z'),
  ('56000000-0000-0000-0000-000000000752','56000000-0000-4000-8000-000000000073','2026-07-27',5500,'cash','2026-07-27T23:00:00Z');
 alter table public.tip_entries enable trigger tip_entries_fold_insert;
+-- The population above is a PRE-EXISTING account -- one whose 1.0 device has
+-- not written since S4 deployed. Creating it here goes through
+-- `insert into auth.users`, which since
+-- 20260920030000_stamp_authority_at_account_creation now stamps a state row
+-- on every NEW account. That trigger is correct and this fixture is not a new
+-- account, so the fixture undoes it rather than the trigger being weakened.
+--
+-- Production is not affected the same way: the trigger fires only on new
+-- inserts, and that migration's backfill deliberately excludes any account
+-- holding tip_entries -- which this one does. So the row below is an artifact
+-- of building a pre-trigger fixture with a post-trigger INSERT, and deleting
+-- it restores the state this fixture claims to model.
+delete from public.shift_migration_state
+ where user_id = '56000000-0000-4000-8000-000000000073';
 
 insert into calls (name, n, txt)
 select 'no_state_row_before', 0,
