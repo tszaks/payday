@@ -18,6 +18,17 @@ concurrency:
   # The merge commit is the artifact that actually ships, and it is the only
   # place a semantic conflict between two independently-green PRs can surface.
   # Verifying the PR head and skipping the merge commit checks the wrong object.
+  #
+  # THIS FIX DOES NOT APPLY TO RE-RUNS OF OLD COMMITS, and the next person to
+  # hit that will conclude it never worked. Re-running a run executes the
+  # workflow file FROM THAT RUN'S COMMIT, not this one. A commit from before
+  # this change therefore still re-runs under the ref-keyed group, so any
+  # merge to production -- anyone's, at any time -- cancels it. Measured on
+  # c800493: attempts 1 and 2 were both killed that way, and attempt 3
+  # succeeded only because production was deliberately held quiet while it
+  # ran. If you need a green verdict on a pre-fix commit, take the merge
+  # queue down for the duration or you will keep collecting cancellations and
+  # blaming the wrong thing.
   group: ci-${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.ref }}
   cancel-in-progress: ${{ github.event_name != 'push' }}
 
