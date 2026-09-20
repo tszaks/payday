@@ -447,8 +447,16 @@ values ('00000000-0000-4000-8000-000000000401', '33333333-3333-4333-8333-3333333
         '2026-07-01', 4200, 'migration', now());
 insert into public.shift_legacy_conflicts (user_id, shift_id, shift_cents_before, legacy_cents_after)
 values ('33333333-3333-4333-8333-333333333333', '00000000-0000-4000-8000-000000000401', 5000, 7000);
+-- `on conflict do update` rather than a bare insert: account creation now
+-- stamps a state row (20260920030000), so this user already has one by the
+-- time the cascade fixture runs. The test is about the FOREIGN KEY cascade,
+-- not about who wrote the row, so it sets the values it needs either way.
 insert into public.shift_migration_state (user_id, migrated_at, remaining_group_count, last_run_at)
-values ('33333333-3333-4333-8333-333333333333', now(), 3, now());
+values ('33333333-3333-4333-8333-333333333333', now(), 3, now())
+on conflict (user_id) do update
+  set migrated_at = excluded.migrated_at,
+      remaining_group_count = excluded.remaining_group_count,
+      last_run_at = excluded.last_run_at;
 insert into private.shift_fold_backlog (user_id, group_key)
 values ('33333333-3333-4333-8333-333333333333', public.payday_legacy_shift_id('2026-07-01'));
 insert into private.shift_fold_failures (user_id, group_keys, sqlstate, message)
