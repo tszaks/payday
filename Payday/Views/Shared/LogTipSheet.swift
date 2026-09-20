@@ -2,6 +2,7 @@ import SwiftUI
 import SwiftData
 import PhotosUI
 import OSLog
+import StoreKit
 import UIKit
 
 enum ScanInputSlotState: Equatable {
@@ -140,6 +141,7 @@ struct LogTipSheet: View {
     @Environment(PayScheduleStore.self) private var scheduleStore
     @Environment(PolicyStore.self) private var policyStore
     @Environment(UserPreferencesStore.self) private var preferencesStore
+    @Environment(\.requestReview) private var requestReview
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Query(sort: \TipEntry.date, order: .reverse) private var allEntries: [TipEntry]
     @Query private var paycheckRecords: [PaycheckRecord]
@@ -1852,6 +1854,30 @@ struct LogTipSheet: View {
         }
         PaydayWidgetRefresh.request()
 
+        // Ask for an honest App Store rating only after Payday has delivered
+        // repeated value. This is tied to completed shifts rather than a
+        // positive result, a record night, or any other sentiment gate.
+        // StoreKit still decides whether the system prompt is displayed.
+        let completedShiftCount: Int
+        if PaydaySyncState.shiftsAreAuthoritativeForCurrentAccount {
+            completedShiftCount = shiftRecords.count + newRecords.count
+        } else {
+            completedShiftCount = ShiftDays.groupedByShift(
+                allEntries + newEntries,
+                shiftID: \.shiftID,
+                date: \.date,
+                period: \.shiftPeriod
+            ).count
+        }
+        if ReviewPromptPolicy.shouldRequest(afterCompletedShifts: completedShiftCount) {
+            Task { @MainActor in
+                // Let the two-second post-log reveal finish first. The rating
+                // request then follows the value moment instead of covering it.
+                try? await Task.sleep(for: .seconds(3))
+                requestReview()
+            }
+        }
+
         // This sheet just consumed the live session's exact punches — end it
         // without stashing pendingEnd, or MainTabView's next-foreground pop
         // would present a second, duplicate sheet for the same shift.
@@ -2174,6 +2200,42 @@ struct LogTipSheet: View {
             }
         }
         dismiss()
+    }
+}
+
+/// A deliberately quiet review cadence. Apple may suppress any request, so
+/// these values record attempts rather than assuming a prompt was shown.
+private enum ReviewPromptPolicy {
+    private static let milestoneKey = "appReview.lastRequestedMilestone"
+    private static let dateKey = "appReview.lastRequestedAt"
+    private static let milestones = [5, 25, 100]
+    private static let minimumInterval: TimeInterval = 180 * 24 * 60 * 60
+
+    static func shouldRequest(
+        afterCompletedShifts count: Int,
+        now: Date = .now,
+        defaults: UserDefaults = .standard
+    ) -> Bool {
+        #if DEBUG
+        guard !ProcessInfo.processInfo.arguments.contains("-SeedShowcase") else {
+            return false
+        }
+        #endif
+
+        guard let milestone = milestones.last(where: { count >= $0 }) else {
+            return false
+        }
+        guard milestone > defaults.integer(forKey: milestoneKey) else {
+            return false
+        }
+        if let lastRequestedAt = defaults.object(forKey: dateKey) as? Date,
+           now.timeIntervalSince(lastRequestedAt) < minimumInterval {
+            return false
+        }
+
+        defaults.set(milestone, forKey: milestoneKey)
+        defaults.set(now, forKey: dateKey)
+        return true
     }
 }
 
