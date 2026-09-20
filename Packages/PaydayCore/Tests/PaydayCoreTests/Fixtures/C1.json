@@ -1,0 +1,114 @@
+{
+  "id": "C1",
+  "description": "W2 with Thursday's hours removed (minutesWorked null on Oct 1). One of five shifts cannot be wage-valued, so the week is .partial(missingHours: 1, missingRate: 0): the headline shows knownComponents.earnedIncomeCents, the word Total is replaced by Known so far, the caption names the missing shift, the Thursday chart bar renders hollow, and $/hr reports 4 of 5 shifts. Because Thursday contributes 0 minutes to the running threshold, Friday is valued as regular time, not overtime.",
+  "kind": "presentation",
+  "policies": {
+    "rate": [
+      { "effectiveFrom": "2025-12-29", "hourlyRateCents": 283, "provenance": "confirmed" }
+    ],
+    "calendar": [
+      {
+        "effectiveFrom": "2025-12-29",
+        "workweekStartWeekday": 2,
+        "overtimeThresholdMinutes": 2400,
+        "overtimeMultiplierHundredths": 150,
+        "payrollTimeZone": "America/New_York"
+      }
+    ]
+  },
+  "schedule": { "frequency": "biweekly", "anchorPeriodEnd": "2026-10-04", "firstWeekday": 2 },
+  "shifts": [
+    { "id": "00000000-0000-0000-0000-000000000001", "workDay": "2026-09-28", "period": "dinner", "minutesWorked": 615,  "voluntaryCashCents": 0, "voluntaryCreditCents": 0, "gratuityFeesCents": 0, "tipOutCents": null },
+    { "id": "00000000-0000-0000-0000-000000000002", "workDay": "2026-09-29", "period": "dinner", "minutesWorked": 585,  "voluntaryCashCents": 0, "voluntaryCreditCents": 0, "gratuityFeesCents": 0, "tipOutCents": null },
+    { "id": "00000000-0000-0000-0000-000000000003", "workDay": "2026-09-30", "period": "dinner", "minutesWorked": 630,  "voluntaryCashCents": 0, "voluntaryCreditCents": 0, "gratuityFeesCents": 0, "tipOutCents": null },
+    { "id": "00000000-0000-0000-0000-000000000004", "workDay": "2026-10-01", "period": "dinner", "minutesWorked": null, "voluntaryCashCents": 0, "voluntaryCreditCents": 0, "gratuityFeesCents": 0, "tipOutCents": null },
+    { "id": "00000000-0000-0000-0000-000000000005", "workDay": "2026-10-02", "period": "dinner", "minutesWorked": 360,  "voluntaryCashCents": 0, "voluntaryCreditCents": 0, "gratuityFeesCents": 0, "tipOutCents": null }
+  ],
+  "legacyEntries": [],
+  "paychecks": [],
+  "asOf": "2026-10-02",
+  "expected": {
+    "metric": "earnedIncome",
+    "workweekStart": "2026-09-28",
+    "perShift": [
+      { "id": "00000000-0000-0000-0000-000000000001", "workDay": "2026-09-28", "minutesWorked": 615,  "wage": "valued",                    "regularMinutes": 615, "overtimeMinutes": 0, "regularWagesCents": 2901, "overtimeWagesCents": 0, "wagesCents": 2901, "nonWageEarningsCents": 0, "earnedIncomeCents": 2901 },
+      { "id": "00000000-0000-0000-0000-000000000002", "workDay": "2026-09-29", "minutesWorked": 585,  "wage": "valued",                    "regularMinutes": 585, "overtimeMinutes": 0, "regularWagesCents": 2759, "overtimeWagesCents": 0, "wagesCents": 2759, "nonWageEarningsCents": 0, "earnedIncomeCents": 2759 },
+      { "id": "00000000-0000-0000-0000-000000000003", "workDay": "2026-09-30", "minutesWorked": 630,  "wage": "valued",                    "regularMinutes": 630, "overtimeMinutes": 0, "regularWagesCents": 2972, "overtimeWagesCents": 0, "wagesCents": 2972, "nonWageEarningsCents": 0, "earnedIncomeCents": 2972 },
+      { "id": "00000000-0000-0000-0000-000000000004", "workDay": "2026-10-01", "minutesWorked": null, "wage": "unavailable.hoursMissing",  "regularMinutes": 0,   "overtimeMinutes": 0, "regularWagesCents": 0,    "overtimeWagesCents": 0, "wagesCents": 0,    "nonWageEarningsCents": 0, "earnedIncomeCents": 0 },
+      { "id": "00000000-0000-0000-0000-000000000005", "workDay": "2026-10-02", "minutesWorked": 360,  "wage": "valued",                    "regularMinutes": 360, "overtimeMinutes": 0, "regularWagesCents": 1698, "overtimeWagesCents": 0, "wagesCents": 1698, "nonWageEarningsCents": 0, "earnedIncomeCents": 1698 }
+    ],
+    "week": {
+      "requestedRange": { "start": "2026-09-28", "end": "2026-10-04" },
+      "effectiveRange": { "start": "2026-09-28", "end": "2026-10-02" },
+      "knownComponents":   { "cash": 0, "credit": 0, "gratuityFees": 0, "tipOut": 0, "regularWages": 10330, "overtimeWages": 0 },
+      "knownEarnedIncomeCents": 10330,
+      "coveredComponents": { "cash": 0, "credit": 0, "gratuityFees": 0, "tipOut": 0, "regularWages": 10330, "overtimeWages": 0 },
+      "coveredEarnedIncomeCents": 10330,
+      "minutes": 2190,
+      "regularMinutes": 2190,
+      "overtimeMinutes": 0,
+      "hourlyRateCents": 283,
+      "coveredShifts": 4,
+      "totalShifts": 5,
+      "shiftIDs": [
+        "00000000-0000-0000-0000-000000000001",
+        "00000000-0000-0000-0000-000000000002",
+        "00000000-0000-0000-0000-000000000003",
+        "00000000-0000-0000-0000-000000000004",
+        "00000000-0000-0000-0000-000000000005"
+      ]
+    },
+    "months": {
+      "2026-09": {
+        "effectiveRange": { "start": "2026-09-01", "end": "2026-09-30" },
+        "shiftIDs": ["00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000002", "00000000-0000-0000-0000-000000000003"],
+        "minutes": 1830,
+        "regularMinutes": 1830,
+        "overtimeMinutes": 0,
+        "regularWagesCents": 8632,
+        "overtimeWagesCents": 0,
+        "knownEarnedIncomeCents": 8632,
+        "completeness": { "state": "complete", "totalShifts": 3, "shiftsWithHours": 3, "shiftsWageValued": 3, "shiftsWageAssumed": 0, "wageFeatureEnabled": true }
+      },
+      "2026-10": {
+        "effectiveRange": { "start": "2026-10-01", "end": "2026-10-02" },
+        "shiftIDs": ["00000000-0000-0000-0000-000000000004", "00000000-0000-0000-0000-000000000005"],
+        "minutes": 360,
+        "regularMinutes": 360,
+        "overtimeMinutes": 0,
+        "regularWagesCents": 1698,
+        "overtimeWagesCents": 0,
+        "knownEarnedIncomeCents": 1698,
+        "completeness": { "state": "partial", "missingHours": 1, "missingRate": 0, "totalShifts": 2, "shiftsWithHours": 1, "shiftsWageValued": 1, "shiftsWageAssumed": 0, "wageFeatureEnabled": true }
+      }
+    },
+    "monthsSumKnownEarnedIncomeCents": 10330,
+    "completeness": {
+      "totalShifts": 5,
+      "shiftsWithHours": 4,
+      "shiftsWageValued": 4,
+      "shiftsWageAssumed": 0,
+      "wageFeatureEnabled": true,
+      "state": "partial",
+      "missingHours": 1,
+      "missingRate": 0
+    },
+    "presentation": {
+      "headlineCents": 10330,
+      "headlineSource": "knownComponents.earnedIncomeCents",
+      "label": "Known so far",
+      "captionTemplate": "wages missing for N shifts",
+      "caption": "wages missing for 1 shift",
+      "hollowBarDays": ["2026-10-01"],
+      "hourlyRateLabel": "Averaging $2.83/hr · 4 of 5 shifts",
+      "hourlyRateCoverage": { "covered": 4, "total": 5 }
+    },
+    "wrongAnswers": {
+      "labelWhenPartialIgnored": "Total",
+      "fullWeekEarnedIncomeCentsIfThursdayHadItsW2Hours": 14716,
+      "unknownWagesHiddenByMissingThursdayCents": 4386,
+      "fridayOvertimeWagesCentsIfThursdayCounted": 2547
+    }
+  },
+  "notes": "Spec row C1: W2 with Thu hours removed -> headline uses knownComponents; completeness .partial(missingHours: 1); label 'Known so far'. Inputs are byte-identical to W2.json except shift 4 (Thu 2026-10-01) has minutesWorked null. Rate 283c, threshold 2400 min, multiplier 150 hundredths, Mon-start workweek (weekday 2), policy zone America/New_York, asOf 2026-10-02 includes every shift (inclusive clamp; Design 2 asOf applies to tips AND wages). Design 1 step 1: rate and calendar policies both effective 2025-12-29 (a Monday) cover every work day. Step 2: all five shifts fall in the workweek starting Mon 2026-09-28. Step 4 chronological split with Thu contributing 0 minutes and .hoursMissing: cumulative minutes before each shift 0, 615, 1200, 1830, 1830 (Thu adds nothing). regular = clamp(2400 - cumulative, 0, m): Mon 615, Tue 585, Wed 630, Thu 0, Fri clamp(570, 0, 360) = 360. Overtime 0 everywhere: total counted minutes 2190 < 2400, so no shift crosses the threshold. Exact numerators in 1/6000 cent, regular_i = 283 * regMin * 100, roundCents(x) = (2x + 6000) / 12000 integer division. REGULAR stream cumulative (step 5, telescoping allocation): Mon 17404500 -> (34809000 + 6000) / 12000 = 34815000 / 12000 = 2901 (naive 2900.75, half-up 2901), allocated 2901. Tue cum 33960000 -> 67926000 / 12000 = 5660 (5660.5 rounds DOWN under integer division of the cumulative), allocated 5660 - 2901 = 2759. Wed cum 51789000 -> 103584000 / 12000 = 8632 (8631.5 half-up), allocated 8632 - 5660 = 2972. Thu cum unchanged 51789000 -> 8632, allocated 0; wage = .unavailable(.hoursMissing), components regularWages 0 / overtimeWages 0. Fri cum 61977000 -> 123960000 / 12000 = 10330 exactly (283 * 2190 / 60 = 10329.5, half-up 10330), allocated 10330 - 8632 = 1698, which equals the naive 283 * 6h = 1698. OVERTIME stream cumulative stays 0 -> every overtimeWagesCents 0. Mon/Tue/Wed match W2 to the cent (Design 1 step 5: a later shift never changes an earlier row). Week wages = 2901 + 2759 + 2972 + 0 + 1698 = 10330 = roundCents(sum exact) by telescoping. Tips are all zero so nonWageEarnings = 0 and earnedIncome = wages per shift; earnedIncome registry row: cash + credit + gratuityFees - tipOut + regularWages + overtimeWages with wages absent where .unavailable. Design 2 EarningsResult: knownComponents = sum over ALL shifts (wages only where valued) = 10330; coveredComponents = sum over shifts WITH hours = shifts 1,2,3,5 = 10330. Known equals covered here only because Thu carries no tips; the known-vs-covered split is pinned with tips by H1. minutes 2190, regularMinutes 2190, overtimeMinutes 0. hourlyRateCents = coveredEarnedIncome * 60 / minutes = 10330 * 60 / 2190 = 619800 / 2190 = 283.01 -> 283 (half-up form (2 * 619800 + 2190) / 4380 = 1241790 / 4380 = 283 by integer division); coverage 4 of 5 (registry hourlyRate row: nil without coverage; carries N of M; label 'Averaging $X/hr . N of M shifts'). RANGES (fixed after review 2026-09-17, no number changed): week.requestedRange is the Design 1 step 2 workweek bucket Mon 2026-09-28..Sun 2026-10-04 and is never clamped; week.effectiveRange is what EarningsResult.range reports for range(requestedRange, asOf: 2026-10-02), because Design 2 clamps the range end to asOf exactly as StatsEngine.periodToDateTotal does (Payday/Utilities/StatsEngine.swift, cutoff = min(startOfDay(asOf), period.end), inclusive) and Design 1 defines DayRange as clamped(to: asOf), so end = 2026-10-02. The old single key 'range' = 2026-10-04 was ambiguous: a test asserting result.range after an asOf-clamped query would have failed while a test asserting the bucket span passed. Every shift falls on or before asOf, so the clamp removes nothing and both ranges select the same five shifts; every cent figure is identical under either. Vocabulary matches W2/W3/T1/S2 (requestedRange/effectiveRange); H1's bare 'range' is the effective range. Months (Design 1 step 6, every aggregate is a sum of per-shift components; Design 2 month(_, asOf:) returns an EarningsResult): each month block carries effectiveRange the way S2's month queries do: September = 2026-09-01..2026-09-30 (asOf 10-02 is after the month end, so unclamped) and October = 2026-10-01..2026-10-02 (clamped to asOf). September (Sep 28-30) = 2901 + 2759 + 2972 = 8632 over 1830 minutes, all three shifts valued so the month itself is complete (totalShifts 3, shiftsWithHours 3, shiftsWageValued 3, shiftsWageAssumed 0); October (Oct 1-2) = 0 + 1698 = 1698 over 360 counted minutes with Thu missing, so October is .partial(missingHours: 1, missingRate: 0) (totalShifts 2, shiftsWithHours 1, shiftsWageValued 1, shiftsWageAssumed 0); 8632 + 1698 = 10330 = week. Month completeness uses the same nested object shape as S2's month queries and this fixture's top-level completeness (state plus the Design 2 Completeness counts, wageFeatureEnabled true because a rate policy exists) so one FixtureLoader schema decodes both; the earlier flat completenessState/missingHours keys were the same facts in a second shape and were replaced on review 2026-09-17. Completeness per Design 2 (top level, the week): totalShifts 5, shiftsWithHours 4, shiftsWageValued 4 (the four with minutes; provenance confirmed so shiftsWageAssumed 0), wageFeatureEnabled true (a rate policy exists), state .partial(missingHours: 1, missingRate: 0) because exactly one shift is .hoursMissing and none is .rateNotSet. Presentation rules for .partial (Design 2 'Presentation rules for partial earnings'): headline shows knownComponents.earnedIncomeCents = 10330 with caption 'wages missing for N shifts' (N = 1; the fixture records both the template and the rendered singular so CompletenessCopy can pin its pluralization rule explicitly; the plan's Verification step 5 uses the singular), 'Total' replaced by 'Known so far', chart renders the partial day 2026-10-01 as a hollow bar, $/hr shows '4 of 5 shifts'. Registry earnedIncome allowed labels: 'Total' (complete), 'Known so far' (partial). WRONG ANSWERS: 'Total' is the label a consumer shows if it ignores completeness (the defect C1 exists to catch). 14716 is W2's complete week; with Thu's 690 minutes unknown the engine cannot know 14716 - 10330 = 4386c of it (Thu's 3537 regular+OT plus Fri's lost 849c OT premium: Fri would be 2547 all-overtime under W2 but is 1698 all-regular here because Thu's minutes never reach the running threshold). Presenting 10330 as a finished total, or silently backfilling Thu, are both wrong; the only honest headline is 10330 labelled 'Known so far'. Dates: 2025-12-29 Monday, 2026-09-28 Monday, 2026-10-01 Thursday, 2026-10-02 Friday, 2026-10-04 Sunday."
+}

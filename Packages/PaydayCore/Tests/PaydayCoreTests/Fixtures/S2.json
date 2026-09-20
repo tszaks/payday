@@ -1,0 +1,214 @@
+{
+  "id": "S2",
+  "description": "W2's exact inputs (Mon Sep 28 .. Fri Oct 2 2026, 48h at 283c, Mon-start, 40h/1.5x, biweekly schedule anchored Oct 4) plus a future-dated shift on Fri Oct 9 carrying tips, tip-out and 480 minutes. Evaluated asOf Oct 2: every asOf-taking query (range, month, payPeriod, yearToDate) excludes the Oct 9 shift from tips AND wages, while the ledger still values it and the un-clamped day(_) query still returns it.",
+  "kind": "query",
+  "policies": {
+    "rate": [
+      { "effectiveFrom": "2025-12-29", "hourlyRateCents": 283, "provenance": "confirmed" }
+    ],
+    "calendar": [
+      {
+        "effectiveFrom": "2025-12-29",
+        "workweekStartWeekday": 2,
+        "overtimeThresholdMinutes": 2400,
+        "overtimeMultiplierHundredths": 150,
+        "payrollTimeZone": "America/New_York"
+      }
+    ]
+  },
+  "schedule": { "frequency": "biweekly", "anchorPeriodEnd": "2026-10-04", "firstWeekday": 2 },
+  "shifts": [
+    { "id": "00000000-0000-0000-0000-000000000001", "workDay": "2026-09-28", "period": "dinner", "minutesWorked": 615, "voluntaryCashCents": 0, "voluntaryCreditCents": 0, "gratuityFeesCents": 0, "tipOutCents": null },
+    { "id": "00000000-0000-0000-0000-000000000002", "workDay": "2026-09-29", "period": "dinner", "minutesWorked": 585, "voluntaryCashCents": 0, "voluntaryCreditCents": 0, "gratuityFeesCents": 0, "tipOutCents": null },
+    { "id": "00000000-0000-0000-0000-000000000003", "workDay": "2026-09-30", "period": "dinner", "minutesWorked": 630, "voluntaryCashCents": 0, "voluntaryCreditCents": 0, "gratuityFeesCents": 0, "tipOutCents": null },
+    { "id": "00000000-0000-0000-0000-000000000004", "workDay": "2026-10-01", "period": "dinner", "minutesWorked": 690, "voluntaryCashCents": 0, "voluntaryCreditCents": 0, "gratuityFeesCents": 0, "tipOutCents": null },
+    { "id": "00000000-0000-0000-0000-000000000005", "workDay": "2026-10-02", "period": "dinner", "minutesWorked": 360, "voluntaryCashCents": 0, "voluntaryCreditCents": 0, "gratuityFeesCents": 0, "tipOutCents": null },
+    { "id": "00000000-0000-0000-0000-000000000006", "workDay": "2026-10-09", "period": "dinner", "minutesWorked": 480, "voluntaryCashCents": 5000, "voluntaryCreditCents": 8000, "gratuityFeesCents": 0, "tipOutCents": 1000 }
+  ],
+  "legacyEntries": [],
+  "paychecks": [],
+  "asOf": "2026-10-02",
+  "expected": {
+    "metric": "earnedIncome",
+    "futureShiftID": "00000000-0000-0000-0000-000000000006",
+    "ledgerValuationOfFutureShift": {
+      "id": "00000000-0000-0000-0000-000000000006",
+      "workDay": "2026-10-09",
+      "workweekStart": "2026-10-05",
+      "minutesWorked": 480,
+      "wage": "valued",
+      "regularMinutes": 480,
+      "overtimeMinutes": 0,
+      "components": { "cash": 5000, "credit": 8000, "gratuityFees": 0, "tipOut": 1000, "regularWages": 2264, "overtimeWages": 0 },
+      "regularWagesCents": 2264,
+      "overtimeWagesCents": 0,
+      "wagesCents": 2264,
+      "nonWageEarningsCents": 12000,
+      "earnedIncomeCents": 14264
+    },
+    "clampRule": "For every query that takes asOf: effectiveEnd = min(asOf, requestedRange.end); select shifts with requestedRange.start <= workDay <= effectiveEnd, inclusive on both ends, exactly as StatsEngine.periodToDateTotal filters (Payday/Utilities/StatsEngine.swift:417, cutoff = min(startOfDay(asOf), period.end)). When requestedRange.start > effectiveEnd the selection is EMPTY: effectiveRange is null, emptyAfterClamp is true, every amount is 0, hourlyRateCents is null, completeness.state is noShifts. Building an inverted range must not trap or throw.",
+    "queryShape": "Every entry in queries has the same keys. query names the Design 2 function. asOf is the clamp date or null for functions that take none. effectiveRange is the inclusive clamped range or null when empty. knownComponents sums all selected shifts; coveredComponents sums selected shifts with hours (equal here because every shift has hours). nonWageEarningsCents, wagesCents and earnedIncomeCents are derived from knownComponents. hourlyRateCents = coveredComponents.earnedIncomeCents * 60 / minutes, half-up, null when minutes == 0.",
+    "queries": {
+      "rangeSep28ToOct9": {
+        "query": "range(_, asOf:)",
+        "asOf": "2026-10-02",
+        "requestedRange": { "start": "2026-09-28", "end": "2026-10-09" },
+        "effectiveRange": { "start": "2026-09-28", "end": "2026-10-02" },
+        "emptyAfterClamp": false,
+        "shiftIDs": [
+          "00000000-0000-0000-0000-000000000001",
+          "00000000-0000-0000-0000-000000000002",
+          "00000000-0000-0000-0000-000000000003",
+          "00000000-0000-0000-0000-000000000004",
+          "00000000-0000-0000-0000-000000000005"
+        ],
+        "knownComponents": { "cash": 0, "credit": 0, "gratuityFees": 0, "tipOut": 0, "regularWages": 11320, "overtimeWages": 3396 },
+        "coveredComponents": { "cash": 0, "credit": 0, "gratuityFees": 0, "tipOut": 0, "regularWages": 11320, "overtimeWages": 3396 },
+        "nonWageEarningsCents": 0,
+        "wagesCents": 14716,
+        "earnedIncomeCents": 14716,
+        "minutes": 2880,
+        "regularMinutes": 2400,
+        "overtimeMinutes": 480,
+        "hourlyRateCents": 307,
+        "completeness": { "state": "complete", "totalShifts": 5, "shiftsWithHours": 5, "shiftsWageValued": 5, "shiftsWageAssumed": 0, "wageFeatureEnabled": true }
+      },
+      "monthSeptember2026": {
+        "query": "month(_, asOf:)",
+        "asOf": "2026-10-02",
+        "yearMonth": "2026-09",
+        "requestedRange": { "start": "2026-09-01", "end": "2026-09-30" },
+        "effectiveRange": { "start": "2026-09-01", "end": "2026-09-30" },
+        "emptyAfterClamp": false,
+        "shiftIDs": [
+          "00000000-0000-0000-0000-000000000001",
+          "00000000-0000-0000-0000-000000000002",
+          "00000000-0000-0000-0000-000000000003"
+        ],
+        "knownComponents": { "cash": 0, "credit": 0, "gratuityFees": 0, "tipOut": 0, "regularWages": 8632, "overtimeWages": 0 },
+        "coveredComponents": { "cash": 0, "credit": 0, "gratuityFees": 0, "tipOut": 0, "regularWages": 8632, "overtimeWages": 0 },
+        "nonWageEarningsCents": 0,
+        "wagesCents": 8632,
+        "earnedIncomeCents": 8632,
+        "minutes": 1830,
+        "regularMinutes": 1830,
+        "overtimeMinutes": 0,
+        "hourlyRateCents": 283,
+        "completeness": { "state": "complete", "totalShifts": 3, "shiftsWithHours": 3, "shiftsWageValued": 3, "shiftsWageAssumed": 0, "wageFeatureEnabled": true }
+      },
+      "monthOctober2026": {
+        "query": "month(_, asOf:)",
+        "asOf": "2026-10-02",
+        "yearMonth": "2026-10",
+        "requestedRange": { "start": "2026-10-01", "end": "2026-10-31" },
+        "effectiveRange": { "start": "2026-10-01", "end": "2026-10-02" },
+        "emptyAfterClamp": false,
+        "shiftIDs": [
+          "00000000-0000-0000-0000-000000000004",
+          "00000000-0000-0000-0000-000000000005"
+        ],
+        "knownComponents": { "cash": 0, "credit": 0, "gratuityFees": 0, "tipOut": 0, "regularWages": 2688, "overtimeWages": 3396 },
+        "coveredComponents": { "cash": 0, "credit": 0, "gratuityFees": 0, "tipOut": 0, "regularWages": 2688, "overtimeWages": 3396 },
+        "nonWageEarningsCents": 0,
+        "wagesCents": 6084,
+        "earnedIncomeCents": 6084,
+        "minutes": 1050,
+        "regularMinutes": 570,
+        "overtimeMinutes": 480,
+        "hourlyRateCents": 348,
+        "completeness": { "state": "complete", "totalShifts": 2, "shiftsWithHours": 2, "shiftsWageValued": 2, "shiftsWageAssumed": 0, "wageFeatureEnabled": true }
+      },
+      "payPeriodSep21ToOct4": {
+        "query": "payPeriod(_, asOf:)",
+        "asOf": "2026-10-02",
+        "requestedRange": { "start": "2026-09-21", "end": "2026-10-04" },
+        "effectiveRange": { "start": "2026-09-21", "end": "2026-10-02" },
+        "emptyAfterClamp": false,
+        "shiftIDs": [
+          "00000000-0000-0000-0000-000000000001",
+          "00000000-0000-0000-0000-000000000002",
+          "00000000-0000-0000-0000-000000000003",
+          "00000000-0000-0000-0000-000000000004",
+          "00000000-0000-0000-0000-000000000005"
+        ],
+        "knownComponents": { "cash": 0, "credit": 0, "gratuityFees": 0, "tipOut": 0, "regularWages": 11320, "overtimeWages": 3396 },
+        "coveredComponents": { "cash": 0, "credit": 0, "gratuityFees": 0, "tipOut": 0, "regularWages": 11320, "overtimeWages": 3396 },
+        "nonWageEarningsCents": 0,
+        "wagesCents": 14716,
+        "earnedIncomeCents": 14716,
+        "minutes": 2880,
+        "regularMinutes": 2400,
+        "overtimeMinutes": 480,
+        "hourlyRateCents": 307,
+        "completeness": { "state": "complete", "totalShifts": 5, "shiftsWithHours": 5, "shiftsWageValued": 5, "shiftsWageAssumed": 0, "wageFeatureEnabled": true }
+      },
+      "payPeriodOct5ToOct18": {
+        "query": "payPeriod(_, asOf:)",
+        "asOf": "2026-10-02",
+        "requestedRange": { "start": "2026-10-05", "end": "2026-10-18" },
+        "effectiveRange": null,
+        "emptyAfterClamp": true,
+        "shiftIDs": [],
+        "knownComponents": { "cash": 0, "credit": 0, "gratuityFees": 0, "tipOut": 0, "regularWages": 0, "overtimeWages": 0 },
+        "coveredComponents": { "cash": 0, "credit": 0, "gratuityFees": 0, "tipOut": 0, "regularWages": 0, "overtimeWages": 0 },
+        "nonWageEarningsCents": 0,
+        "wagesCents": 0,
+        "earnedIncomeCents": 0,
+        "minutes": 0,
+        "regularMinutes": 0,
+        "overtimeMinutes": 0,
+        "hourlyRateCents": null,
+        "completeness": { "state": "noShifts", "totalShifts": 0, "shiftsWithHours": 0, "shiftsWageValued": 0, "shiftsWageAssumed": 0, "wageFeatureEnabled": true }
+      },
+      "rangeOct9ToOct9": {
+        "query": "range(_, asOf:)",
+        "asOf": "2026-10-02",
+        "requestedRange": { "start": "2026-10-09", "end": "2026-10-09" },
+        "effectiveRange": null,
+        "emptyAfterClamp": true,
+        "shiftIDs": [],
+        "knownComponents": { "cash": 0, "credit": 0, "gratuityFees": 0, "tipOut": 0, "regularWages": 0, "overtimeWages": 0 },
+        "coveredComponents": { "cash": 0, "credit": 0, "gratuityFees": 0, "tipOut": 0, "regularWages": 0, "overtimeWages": 0 },
+        "nonWageEarningsCents": 0,
+        "wagesCents": 0,
+        "earnedIncomeCents": 0,
+        "minutes": 0,
+        "regularMinutes": 0,
+        "overtimeMinutes": 0,
+        "hourlyRateCents": null,
+        "completeness": { "state": "noShifts", "totalShifts": 0, "shiftsWithHours": 0, "shiftsWageValued": 0, "shiftsWageAssumed": 0, "wageFeatureEnabled": true }
+      },
+      "dayOct9Unclamped": {
+        "query": "day(_)",
+        "asOf": null,
+        "queryNote": "Design 2 defines day(_) WITHOUT an asOf parameter, so day(2026-10-09) returns the ledger valuation of the future shift. This is the plan's behaviour as written and is asserted as such; it is NOT a wrong answer. If the plan is amended to give day(_) an asOf parameter, delete this entry and let rangeOct9ToOct9 carry the assertion.",
+        "requestedRange": { "start": "2026-10-09", "end": "2026-10-09" },
+        "effectiveRange": { "start": "2026-10-09", "end": "2026-10-09" },
+        "emptyAfterClamp": false,
+        "shiftIDs": ["00000000-0000-0000-0000-000000000006"],
+        "knownComponents": { "cash": 5000, "credit": 8000, "gratuityFees": 0, "tipOut": 1000, "regularWages": 2264, "overtimeWages": 0 },
+        "coveredComponents": { "cash": 5000, "credit": 8000, "gratuityFees": 0, "tipOut": 1000, "regularWages": 2264, "overtimeWages": 0 },
+        "nonWageEarningsCents": 12000,
+        "wagesCents": 2264,
+        "earnedIncomeCents": 14264,
+        "minutes": 480,
+        "regularMinutes": 480,
+        "overtimeMinutes": 0,
+        "hourlyRateCents": 1783,
+        "completeness": { "state": "complete", "totalShifts": 1, "shiftsWithHours": 1, "shiftsWageValued": 1, "shiftsWageAssumed": 0, "wageFeatureEnabled": true }
+      }
+    },
+    "wrongAnswers": {
+      "rangeSep28ToOct9EarnedIncomeNoAsOf": 28980,
+      "rangeSep28ToOct9EarnedIncomeAsOfAppliedToWagesOnlyTipsLeak": 26716,
+      "rangeSep28ToOct9EarnedIncomeAsOfAppliedToTipsOnlyWagesLeak": 16980,
+      "rangeSep28ToOct9NonWageIfFutureIncluded": 12000,
+      "rangeSep28ToOct9WagesIfFutureIncluded": 16980,
+      "monthOctober2026EarnedIncomeIfFutureIncluded": 20348,
+      "rangeOct9ToOct9EarnedIncomeIfFutureIncluded": 14264,
+      "payPeriodOct5ToOct18EarnedIncomeNoAsOf": 14264,
+      "payPeriodOct5ToOct18TipsAsOfWagesWholePeriod": 2264
+    }
+  },
+  "notes": "SOURCES. Plan Design 1 (integer arithmetic, chronological threshold split, cumulative rounding, worked example B). Plan Design 2 Queries, verbatim: 'shift(id), day(_), month(_, asOf:), payPeriod(_, asOf:), yearToDate(year:asOf:), range(_, asOf:), days(in:), paycheck(periodEnd:)' and 'asOf clamps the range end exactly as StatsEngine.periodToDateTotal does and applies to tips AND wages'; so day(_) and shift(id) take NO asOf and only month/payPeriod/yearToDate/range clamp. Plan Design 2 Completeness: { totalShifts, shiftsWithHours, shiftsWageValued, shiftsWageAssumed, wageFeatureEnabled, state }. Spec row S2: 'W2 plus a shift dated Oct 9 (future) with asOf Oct 2 -> excluded from tips AND wages'. docs/METRICS.md maps S2 to DB-01, DB-08, DB-16, DB-20 (Dashboard hero and drawer), CA-01 (calendar day cell), SA-01 (Siri PeriodTotalIntent), WG-02 (widget periodTotalCents), BP-01 and BP-38 (API summary); the Dashboard, Siri and widget rows are PAY-PERIOD consumers whose recorded bug is 'tips asOf today, wages whole period', which is why this fixture carries W2's schedule and asserts payPeriod(_, asOf:). INPUTS are W2.json verbatim (tipOutCents null on the five W2 rows, policies effectiveFrom 2025-12-29 which is a Monday, biweekly schedule anchored 2026-10-04 with firstWeekday 2) plus shift 6. CALENDAR: 2026-09-28 Mon, 2026-10-02 Fri, 2026-10-04 Sun, 2026-10-05 Mon, 2026-10-09 Fri (in the NEXT Monday-start workweek Oct 5..11), 2026-10-18 Sun. PAY PERIODS per Payday/Utilities/PayPeriod.swift period(containing:) with periodicBoundary stepDays 14 anchored on 2026-10-04: the period containing Oct 2 ends Oct 4 (boundary on or after Oct 2), the previous boundary is Sep 20, so the period is Sep 21..Oct 4; the period containing Oct 9 ends Oct 18 and starts Oct 5, so Oct 9 sits in the pay period AFTER asOf. UNITS: 1/6000 cent; regular = 283*minutes*100, overtime = 283*minutes*150, roundCents(x) = (2x+6000)/12000 integer division, per-shift cents = roundCents(cum_i) - roundCents(cum_{i-1}) per stream. WEEK Sep 28..Oct 4, cumulative minutes before each shift 0/615/1200/1830/2520, threshold 2400. Mon 615m: regular exact 17,404,500 -> 2901. Tue 585m: cum 33,960,000 -> 5660, delta 2759. Wed 630m: cum 51,789,000 -> 8632, delta 2972. Thu 690m: regularMinutes = clamp(2400-1830, 0, 690) = 570, OT 120; regular cum 67,920,000 -> 11320, delta 2688; OT exact 5,094,000 -> 849. Fri 360m: cum minutes 2520 >= 2400 so regular 0, OT 360; OT cum 20,376,000 -> 3396, delta 2547. Regular 2901+2759+2972+2688+0 = 11320; OT 849+2547 = 3396; week 14716. September (Sep 28..30) = 8632, 1830 min, hourlyRate 8632*60/1830 = 283.02 -> 283. October asOf Oct 2 (Oct 1..2) = 2688+849+2547 = 6084, 1050 min, regular 570, OT 480, hourlyRate 6084*60/1050 = 347.66 -> 348. Range Sep 28..Oct 9 clamped to Sep 28..Oct 2 and pay period Sep 21..Oct 4 clamped to Sep 21..Oct 2 both select shifts 1-5: 2880 min, regular 2400, OT 480, earnedIncome 14716, hourlyRate 14716*60/2880 = 306.58 -> 307 (matches W2), all tip components 0. FUTURE SHIFT Oct 9, 480m, alone in workweek Oct 5..11: regular exact 283*480*100 = 13,584,000; roundCents = 27,174,000/12000 = 2264.5 -> 2264; OT 0. Tips: cash 5000 + credit 8000 - tipOut 1000 = nonWage 12000; earnedIncome 14264; hourlyRate 14264*60/480 = 1783 exactly. The ledger values it (Design 1 step 2 groups over ALL shifts, never the caller's range) and day(2026-10-09) returns it because day(_) takes no asOf; every asOf-taking query evaluated asOf Oct 2 excludes it. EMPTY CLAMPS: range Oct 9..Oct 9 and payPeriod Oct 5..Oct 18 both have start > min(asOf, end) = Oct 2; the periodToDateTotal filter (date >= start && date <= cutoff) selects nothing, so the result is the empty EarningsResult with completeness noShifts and hourlyRateCents null, and building the clamped DayRange must not trap (a Swift ClosedRange with lowerBound > upperBound traps, so the implementation must represent the empty case, e.g. effectiveRange nil). WRONG ANSWERS: no asOf on the range -> 14716+14264 = 28980; asOf applied to wages only (tips leak) -> 14716+12000 = 26716; asOf applied to tips only (wages leak) -> 14716+2264 = 16980; range nonWage if future included -> 12000; range wages if future included -> 14716+2264 = 16980; October including it -> 6084+14264 = 20348; range Oct 9..Oct 9 including it -> 14264; payPeriod Oct 5..18 with no asOf -> 14264; payPeriod Oct 5..18 built today's way (PeriodTotalIntent line 41 and PaydayWidgetProvider.buildEntry: periodToDateTotal clamps tips to Oct 2 -> 0, PeriodIncome.wages sums the whole period Oct 5..18 -> 8h*283c = 2264) -> 2264, which is the DB-01/SA-01/WG-02 bug METRICS.md records. REVIEW ADJUDICATION (2026-09-17): three reviewers confirmed every number and refuted on shape and ambiguity. Accepted: (a) the old dayOct9 entry asserted 0 under a query the plan defines without asOf; it is replaced by rangeOct9ToOct9 (asOf-aware, asserted empty) and dayOct9Unclamped (asserted 14264 per the plan as written); (b) inputs now equal W2.json so the spec's 'W2 plus a shift' is literally true and the schedule enables the pay-period queries the S2 audit rows actually target; (c) one uniform per-query key set with an explicit query discriminator, asOf, requestedRange, effectiveRange (null when empty), emptyAfterClamp, knownComponents + coveredComponents (Design 2 names), hourlyRateCents, and the six Design 2 Completeness fields; (d) description no longer claims exclusion 'in every query'. Rejected: one reviewer proposed that 'the snapshot stamp's asOf must exclude this shift from day(2026-10-09)'; that would amend Design 2 rather than test it, so the fixture follows the plan as written and flags the amendment path in dayOct9Unclamped.queryNote instead."
+}
