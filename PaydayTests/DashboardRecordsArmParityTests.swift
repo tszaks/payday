@@ -273,6 +273,7 @@ struct DashboardRecordsArmParityTests {
             snapshot: dataset.snapshot,
             allShifts: dataset.shiftDays,
             allShiftRecords: dataset.shiftRecordDays,
+            allTipRecords: dataset.tipRecords,
             schedule: schedule,
             now: now,
             forcedPaydayPhase: forcedPaydayPhase,
@@ -362,5 +363,75 @@ struct DashboardRecordsArmParityTests {
                 "the gap between the hero and the check must be exactly the cash")
         #expect(cash > 0, "the fixture must carry cash, or the gap is zero")
         #expect(check > 0)
+    }
+
+    /// **"The hero still says where this period stands against the usual,
+    /// on records."**
+    ///
+    /// The pace line is gated on `paceDeltaCents`, which came from a
+    /// `StatsEngine` fed `allShifts.flatMap(\.items)` — a sentence that is
+    /// only true on the legacy arm. A flipped account showed the hero, the
+    /// rows and the drawer over record data and silently dropped the one
+    /// line that says whether the number is good. The starvation also took
+    /// the tonight reveal, which is why this asserts `paceDeltaCents`
+    /// rather than the copy: the copy was never the bug.
+    @Test("the pace comparison still has a history to compare against, on records")
+    func paceComparisonHasHistoryOnRecords() {
+        // Two completed periods each hold a shift, so the baseline is a real
+        // median and the copy says "your usual pace" rather than "last
+        // period". The current shift is deliberately much larger, so the
+        // sign of the delta is not an artifact of tip-out rounding.
+        let records = [
+            ShiftRecord(workDate: Self.at(2026, 10, 5), shiftPeriod: .dinner,
+                        creditTipsCents: 30_000, hoursWorked: 8,
+                        recordedAt: Self.at(2026, 10, 5)),
+            ShiftRecord(workDate: Self.at(2026, 9, 20), shiftPeriod: .dinner,
+                        creditTipsCents: 10_000, hoursWorked: 8,
+                        recordedAt: Self.at(2026, 9, 20)),
+            ShiftRecord(workDate: Self.at(2026, 9, 6), shiftPeriod: .dinner,
+                        creditTipsCents: 10_000, hoursWorked: 8,
+                        recordedAt: Self.at(2026, 9, 6)),
+        ]
+        let facts = facts(records, now: Self.at(2026, 10, 7, hour: 12),
+                          schedule: Self.schedule())
+
+        #expect(facts.heroIsCurrent, "mid-period: the hero is this period, so the line should draw")
+        let delta = facts.paceDeltaCents
+        #expect(delta != nil,
+                "the records arm fed StatsEngine an empty history, so the pace line vanished")
+        #expect((delta ?? 0) > 0, "30k this period against two 10k baselines must read ahead")
+        #expect(facts.pacePeriodCount == 2)
+    }
+
+    /// **"Newest shift first, on records."**
+    ///
+    /// `@Query` has no sort, so `DashboardFacts` received records in
+    /// insertion order and rendered them verbatim — oldest at the top on a
+    /// flipped account. The legacy arm's order is `ShiftDays
+    /// .groupedByShift`'s: newest day first, lunch before dinner inside a
+    /// day. This feeds the rows in scrambled order and asserts the screen's
+    /// list reads the same way either arm does.
+    @Test("the shift list reads newest-first through either arm, on records")
+    func shiftRowsReadNewestFirstOnRecords() {
+        let oldest = ShiftRecord(workDate: Self.at(2026, 10, 1),
+                                 creditTipsCents: 5_000, hoursWorked: 5,
+                                 recordedAt: Self.at(2026, 10, 1))
+        let sameDayDinner = ShiftRecord(workDate: Self.at(2026, 10, 5), shiftPeriod: .dinner,
+                                        creditTipsCents: 8_000, hoursWorked: 5,
+                                        recordedAt: Self.at(2026, 10, 5, hour: 23))
+        let sameDayLunch = ShiftRecord(workDate: Self.at(2026, 10, 5), shiftPeriod: .lunch,
+                                       creditTipsCents: 6_000, hoursWorked: 4,
+                                       recordedAt: Self.at(2026, 10, 5, hour: 15))
+        let newest = ShiftRecord(workDate: Self.at(2026, 10, 9), shiftPeriod: .dinner,
+                                 creditTipsCents: 9_000, hoursWorked: 6,
+                                 recordedAt: Self.at(2026, 10, 9))
+        // Insertion order is the scramble: oldest first, and the same-day
+        // pair dinner-before-lunch so both halves of the sort are tested.
+        let facts = facts([oldest, sameDayDinner, sameDayLunch, newest],
+                          now: Self.at(2026, 10, 7, hour: 12),
+                          schedule: Self.schedule())
+
+        #expect(facts.shiftRecordDays.map(\.id) ==
+                [newest.id, sameDayLunch.id, sameDayDinner.id, oldest.id])
     }
 }

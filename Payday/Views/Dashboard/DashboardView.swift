@@ -214,6 +214,15 @@ struct DashboardFacts: SnapshotFacts {
         /// Defaulted, so every existing caller is unchanged. The writer flip
         /// passes records here instead of entries above.
         allShiftRecords: [ShiftRecord] = [],
+        /// The `StatsEngine` rows, from `DashboardEarnings.Dataset
+        /// .tipRecords` — already flattened out of whichever arm built the
+        /// dataset. NOT defaulted and never derived from `allShifts` here:
+        /// on the records arm `allShifts` is empty by construction, and the
+        /// old `flatMap(\.items)` read that as a person with no history, so
+        /// the pace line and tonight's reveal silently vanished the moment
+        /// an account flipped. A defaulted parameter is exactly how that
+        /// caller forgets.
+        allTipRecords: [TipRecord],
         schedule: PaySchedule?,
         now: Date,
         forcedPaydayPhase: PaydayMoment.Phase?,
@@ -246,7 +255,21 @@ struct DashboardFacts: SnapshotFacts {
         let periodRecords = allShiftRecords.filter {
             currentRange.contains(CivilDay($0.workDate, in: payrollTimeZone))
         }
-        shiftRecordDays = periodRecords
+        // `@Query` delivers records unordered — insertion order on a flipped
+        // account, which presented oldest-first. The legacy arm's order is
+        // `ShiftDays.groupedByShift`'s: newest day first, lunch before
+        // dinner inside a day, earliest closeout as the tie-break. The list
+        // reads identically whichever arm is underneath.
+        shiftRecordDays = periodRecords.sorted { lhs, rhs in
+            let lhsDay = calendar.startOfDay(for: lhs.workDate)
+            let rhsDay = calendar.startOfDay(for: rhs.workDate)
+            if lhsDay != rhsDay { return lhsDay > rhsDay }
+            let lhsRank = ShiftDays.periodRank(lhs.shiftPeriod)
+            let rhsRank = ShiftDays.periodRank(rhs.shiftPeriod)
+            if lhsRank != rhsRank { return lhsRank < rhsRank }
+            return (lhs.clockIn ?? lhs.recordedAt ?? lhs.workDate)
+                < (rhs.clockIn ?? rhs.recordedAt ?? rhs.workDate)
+        }
         periodEntries = periodShifts.flatMap(\.items)
         // A "shift" counts closeouts, not calendar days. Either
         // representation supplies it; only one is ever populated.
@@ -256,11 +279,12 @@ struct DashboardFacts: SnapshotFacts {
         for shift in periodShifts { dayCounts[shift.day, default: 0] += 1 }
         multiShiftDays = Set(dayCounts.filter { $0.value >= 2 }.keys)
 
-        // Every entry, read back out of the grouping rather than taken as a
-        // second parameter: one input cannot disagree with itself about which
-        // rows the screen holds. `StatsEngine` sorts its own records, so the
-        // grouping's order is not an input to anything.
-        let tipRecords = allShifts.flatMap(\.items).map(TipRecord.init)
+        // The StatsEngine rows arrive flattened by the dataset itself
+        // (`allTipRecords`): on the records arm there is no grouping to read
+        // entries back out of, and flattening here is precisely what starved
+        // the pace comparison on a flipped account. `StatsEngine` sorts its
+        // own records, so row order is not an input to anything.
+        let tipRecords = allTipRecords
         let statsEngine = StatsEngine(payrollTimeZone: payrollTimeZone, records: tipRecords, calendar: calendar)
 
         // Measured against the MEDIAN of the last several periods at this
@@ -433,13 +457,24 @@ struct DashboardFacts: SnapshotFacts {
         // agreeing. `.unavailable` prints no line at all rather than an echo
         // with a placeholder where the money goes.
         let todayShifts = periodShifts.filter { calendar.isDateInToday($0.day) }
+        // The records arm has no grouped shifts to filter, so the lookup is
+        // representation-neutral: ONE latest closeout today, whichever arm is
+        // populated, carrying the two facts the reveal needs.
+        let todayRecords = periodRecords.filter { calendar.isDateInToday($0.workDate) }
+        let latestToday: (shiftID: UUID, shiftPeriod: ShiftPeriod?)?
+        if let latest = todayRecords.max(by: { ($0.recordedAt ?? $0.workDate) < ($1.recordedAt ?? $1.workDate) }) {
+            latestToday = (latest.id, latest.shiftPeriod)
+        } else if let latest = todayShifts.max(by: { shiftRecordedAt($0.items) < shiftRecordedAt($1.items) }) {
+            latestToday = (latest.shiftID, ShiftDetails.resolve(from: latest.items).shiftPeriod)
+        } else {
+            latestToday = nil
+        }
         var tonightRevealText: String?
-        if let latest = todayShifts.max(by: { shiftRecordedAt($0.items) < shiftRecordedAt($1.items) }),
+        if let latest = latestToday,
            let valuation = snapshot?.valuation(latest.shiftID),
            let revealCents = EarningsFigure
                .shiftEarnedIncome(valuation, wageFeatureEnabled: snapshot?.wageFeatureEnabled ?? false)
                .cents {
-            let details = ShiftDetails.resolve(from: latest.items)
             // The engine's per-shift figures on BOTH sides of the
             // comparison. Handing `StatsEngine` a scalar rate instead made
             // it price each prior shift on its own with
@@ -460,7 +495,7 @@ struct DashboardFacts: SnapshotFacts {
                 shiftID: latest.shiftID
             )
             let components = valuation.components
-            tonightRevealText = "\(RevealCopy.headline(cents: revealCents, includesNonTipIncome: components.wagesCents > 0 || components.gratuityFeesCents > 0)) \(RevealCopy.comparison(for: result.comparison, period: details.shiftPeriod))"
+            tonightRevealText = "\(RevealCopy.headline(cents: revealCents, includesNonTipIncome: components.wagesCents > 0 || components.gratuityFeesCents > 0)) \(RevealCopy.comparison(for: result.comparison, period: latest.shiftPeriod))"
         }
         tonightLine = TonightLine.compose(
             tonightRevealText: tonightRevealText,
@@ -714,6 +749,7 @@ struct DashboardView: View {
                 snapshot: snapshot,
                 allShifts: dataset.shiftDays,
                 allShiftRecords: dataset.shiftRecordDays,
+                allTipRecords: dataset.tipRecords,
                 schedule: scheduleStore.schedule,
                 now: now,
                 forcedPaydayPhase: forcedPaydayPhase,
