@@ -453,3 +453,192 @@ struct CalendarSnapshotParityTests {
     }
 
 }
+
+/// The 2026-09-20 honesty pass on the month card: a day you have not lived
+/// is styled and announced as future rather than as "no shifts", and the
+/// card's one secondary money line is a windowed month-over-month
+/// comparison, never a restated amount.
+@Suite("Calendar honesty: full grid, future days, month delta")
+struct CalendarHonestyTests {
+
+    // MARK: grid shape
+
+    @Test("the current month renders its full grid, future days included")
+    func currentMonthKeepsFullGrid() {
+        // September 2026 on a Monday-first grid: Aug 31 leads, Sep 30 ends,
+        // Oct 1–4 trails — 35 cells. Today is Wednesday Sep 16; the days
+        // after it are styled and announced as future by DayCell, but a
+        // trimmed grid would hide that the rest of the month exists.
+        let facts = CalendarMonthFacts(
+            snapshot: nil,
+            displayedMonth: day(2026, 9, 1),
+            calendar: calendarInPayrollZone(),
+            now: day(2026, 9, 16)
+        )
+        #expect(facts.gridDays.count == 35)
+        #expect(
+            facts.gridDays.last.map { CivilDay($0, in: PaydayTestZone.payroll) }
+                == CivilDay(year: 2026, month: 10, day: 4),
+            "the grid still runs through the month's trailing week"
+        )
+    }
+
+    @Test("a past month renders its grid in full")
+    func pastMonthKeepsFullGrid() {
+        // August 2026 Monday-first: 5 leading days + 31 + 6 trailing = 42.
+        let facts = CalendarMonthFacts(
+            snapshot: nil,
+            displayedMonth: day(2026, 8, 1),
+            calendar: calendarInPayrollZone(),
+            now: day(2026, 9, 16)
+        )
+        #expect(facts.gridDays.count == 42)
+    }
+
+    @Test("a future month renders its grid in full")
+    func futureMonthKeepsFullGrid() {
+        // October 2026, viewed from Sep 16. Trimming here would empty the
+        // whole grid — the disagreeing case a naive rule gets wrong.
+        let facts = CalendarMonthFacts(
+            snapshot: nil,
+            displayedMonth: day(2026, 10, 1),
+            calendar: calendarInPayrollZone(),
+            now: day(2026, 9, 16)
+        )
+        #expect(facts.gridDays.count == 35)
+    }
+
+    // MARK: future-day voice
+
+    @Test("a future in-month day is announced as upcoming, never as no shifts")
+    func futureDayIsUpcoming() {
+        let label = DayCell.label(
+            day: day(2026, 9, 25), tile: nil, isCurrentMonth: true, isFuture: true)
+        #expect(label.contains("upcoming"), "got \(label)")
+        #expect(!label.contains("no shifts"))
+    }
+
+    @Test("a future day with a logged shift still reads its amount")
+    func futureWorkedDayReadsAmount() {
+        let tile = CalendarDayTile(
+            civilDay: CivilDay(year: 2026, month: 9, day: 25),
+            day: day(2026, 9, 25),
+            figure: EarningsFigure(
+                metric: .earnedIncome, amount: .cents(4_200),
+                label: "Total", caption: nil, completeness: .empty),
+            hasShifts: true
+        )
+        #expect(
+            DayCell.label(
+                day: day(2026, 9, 25), tile: tile,
+                isCurrentMonth: true, isFuture: true)
+                == "September 25, $42.00 logged"
+        )
+    }
+
+    @Test("a past day with nothing still reads no shifts")
+    func pastDayStillNoShifts() {
+        #expect(
+            DayCell.label(
+                day: day(2026, 9, 8), tile: nil,
+                isCurrentMonth: true, isFuture: false)
+                == "September 8, no shifts"
+        )
+    }
+
+    // MARK: the month-over-month line
+
+    /// Aug 10: $100 tips + 5h wages. Aug 25: $500 + 5h — AFTER the window.
+    /// Sep 5: $312.34 + 5h. Every shift is alone in its workweek, so wages
+    /// are 5h × $10 straight time on each.
+    private func windowedMonthEntries() -> [TipEntry] {
+        [
+            TipEntry(date: day(2026, 8, 10), amountCents: 10_000, kind: .credit,
+                     hoursWorked: 5, shiftPeriod: .dinner, shiftID: id(1)),
+            TipEntry(date: day(2026, 8, 25), amountCents: 50_000, kind: .credit,
+                     hoursWorked: 5, shiftPeriod: .dinner, shiftID: id(2)),
+            TipEntry(date: day(2026, 9, 5), amountCents: 31_234, kind: .credit,
+                     hoursWorked: 5, shiftPeriod: .dinner, shiftID: id(3)),
+        ]
+    }
+
+    @Test("an in-progress month compares against the same window one month back")
+    func inProgressDeltaUsesTheWindow() throws {
+        let engine = try #require(snapshot(
+            entries: windowedMonthEntries(), policies: policies(rateCents: 1_000)))
+        let facts = CalendarMonthFacts(
+            snapshot: engine,
+            displayedMonth: day(2026, 9, 1),
+            calendar: calendarInPayrollZone(),
+            now: day(2026, 9, 20)
+        )
+        let delta = try #require(facts.monthDelta)
+        #expect(delta.windowLabel == "Aug 1–20")
+        // Windowed: 36234 − 15000. Naive whole-August would count the Aug 25
+        // shift too: 36234 − 70000 = −33766 — a decline the data never had.
+        #expect(delta.cents == 21_234)
+        #expect(delta.cents != -33_766, "counted Aug 21–31 against a 20-day month")
+    }
+
+    @Test("a completed month names the bare prior month")
+    func completedDeltaNamesTheMonth() throws {
+        let entries = [
+            TipEntry(date: day(2026, 7, 15), amountCents: 20_000, kind: .credit,
+                     hoursWorked: 5, shiftPeriod: .dinner, shiftID: id(1)),
+            TipEntry(date: day(2026, 8, 10), amountCents: 10_000, kind: .credit,
+                     hoursWorked: 5, shiftPeriod: .dinner, shiftID: id(2)),
+        ]
+        let engine = try #require(snapshot(entries: entries, policies: policies(rateCents: 1_000)))
+        let facts = CalendarMonthFacts(
+            snapshot: engine,
+            displayedMonth: day(2026, 8, 1),
+            calendar: calendarInPayrollZone(),
+            now: day(2026, 9, 20)
+        )
+        let delta = try #require(facts.monthDelta)
+        #expect(delta.windowLabel == "July")
+        #expect(delta.cents == -10_000)
+    }
+
+    @Test("a first month has no comparison to make")
+    func emptyPriorWindowSuppressesTheDelta() throws {
+        let entries = [
+            TipEntry(date: day(2026, 9, 5), amountCents: 10_000, kind: .credit,
+                     hoursWorked: 5, shiftPeriod: .dinner, shiftID: id(1)),
+        ]
+        let engine = try #require(snapshot(entries: entries, policies: policies(rateCents: 1_000)))
+        let facts = CalendarMonthFacts(
+            snapshot: engine,
+            displayedMonth: day(2026, 9, 1),
+            calendar: calendarInPayrollZone(),
+            now: day(2026, 9, 20)
+        )
+        #expect(facts.monthDelta == nil, "Aug 1–20 is empty — '↑ $150 vs nothing' would be a lie")
+    }
+
+    @Test("a partial month never enters a delta against a total")
+    func partialMonthSuppressesTheDelta() throws {
+        var entries = windowedMonthEntries()
+        entries[2].hoursWorked = nil        // Sep 5 is unpriced → the month is partial
+        let engine = try #require(snapshot(entries: entries, policies: policies(rateCents: 1_000)))
+        let facts = CalendarMonthFacts(
+            snapshot: engine,
+            displayedMonth: day(2026, 9, 1),
+            calendar: calendarInPayrollZone(),
+            now: day(2026, 9, 20)
+        )
+        #expect(facts.monthFigure.mayBeCalledATotal == false)
+        #expect(facts.monthDelta == nil)
+    }
+
+    @Test("a failed read has no delta")
+    func unbackedMonthHasNoDelta() {
+        let facts = CalendarMonthFacts(
+            snapshot: nil,
+            displayedMonth: day(2026, 9, 1),
+            calendar: calendarInPayrollZone(),
+            now: day(2026, 9, 20)
+        )
+        #expect(facts.monthDelta == nil)
+    }
+}
