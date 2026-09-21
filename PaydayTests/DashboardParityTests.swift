@@ -92,6 +92,7 @@ private func dashboardFacts(
     return DashboardFacts(
         snapshot: snapshotOverride ?? dataset.snapshot,
         allShifts: dataset.shiftDays,
+        allTipRecords: dataset.tipRecords,
         schedule: schedule,
         now: now,
         forcedPaydayPhase: forcedPaydayPhase,
@@ -627,6 +628,12 @@ struct DashboardCompletenessTests {
             snapshot: nil,
             allShifts: [],
             allShiftRecords: [record],
+            allTipRecords: [TipRecord(
+                date: record.workDate, amountCents: record.creditTipsCents,
+                kind: .credit, isDouble: false,
+                recordedAt: record.recordedAt, hoursWorked: record.hoursWorked,
+                shiftPeriod: record.shiftPeriod, shiftID: record.id
+            )],
             schedule: schedule,
             now: now,
             forcedPaydayPhase: nil,
@@ -1139,6 +1146,7 @@ struct DashboardPayrollZoneTests {
         let facts = DashboardFacts(
             snapshot: snapshot,
             allShifts: dataset.shiftDays,
+            allTipRecords: dataset.tipRecords,
             schedule: schedule,
             now: at0600UTC.addingTimeInterval(2 * 86_400),
             forcedPaydayPhase: nil,
@@ -1296,6 +1304,7 @@ struct DashboardRenderFactsPerformanceTests {
         let facts = DashboardFacts(
             snapshot: snapshot,
             allShifts: dataset.shiftDays,
+            allTipRecords: dataset.tipRecords,
             schedule: schedule,
             now: now,
             forcedPaydayPhase: nil,
