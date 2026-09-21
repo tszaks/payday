@@ -170,10 +170,10 @@ struct PeriodsView: View {
     @Query private var shiftRecords: [ShiftRecord]
     @Query private var paycheckRecords: [PaycheckRecord]
 
-    /// Owned by HistoryView's single NavigationStack — passed down rather
-    /// than @State here so pushes from this lens and the QA/deep-link hooks
-    /// below land on the same stack the Calendar lens shares.
-    @Binding var path: NavigationPath
+    /// Owned here like Dashboard's and Insights': Periods is its own tab
+    /// now, not a lens inside History, so the stack its rows push into
+    /// lives where the pushes happen.
+    @State private var path = NavigationPath()
     @State private var snapshotCache: HistorySnapshotCache?
     /// Local writes, counted. The snapshot's rebuild trigger and nothing
     /// else: no figure, no label and no cache key is derived from it.
@@ -190,24 +190,47 @@ struct PeriodsView: View {
             payrollTimeZone: policyStore.payrollTimeZone,
             now: currentDay
         )
-        ScrollView {
-            LazyVStack(spacing: 0) {
-                if facts.hasYearToDate {
-                    yearToDateCard(facts)
-                    Divider()
-                }
-                ForEach(facts.rows) { row in
-                    NavigationLink(value: row.period) {
-                        PeriodRow(row: row)
-                    }
-                    .buttonStyle(PressableButtonStyle())
-                    if row.period != facts.rows.last?.period {
+        NavigationStack(path: $path) {
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    if facts.hasYearToDate {
+                        yearToDateCard(facts)
                         Divider()
+                    }
+                    ForEach(facts.rows) { row in
+                        NavigationLink(value: row.period) {
+                            PeriodRow(row: row)
+                        }
+                        .buttonStyle(PressableButtonStyle())
+                        if row.period != facts.rows.last?.period {
+                            Divider()
+                        }
+                    }
+                }
+                .padding(.horizontal, PaydaySpacing.p16)
+                .padding(.top, PaydaySpacing.p8)
+            }
+            .navigationTitle("Periods")
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    // The CSV itself is only built and written to disk when
+                    // the share sheet actually asks for the file's data
+                    // (inside CSVExport's FileRepresentation closure) —
+                    // never on a plain render of this toolbar item.
+                    ShareLink(
+                        item: CSVExport {
+                            CSVExporter.export(
+                                records: shiftRecords,
+                                paycheckRecords: paycheckRecords,
+                                calculator: calculator
+                            )
+                        },
+                        preview: SharePreview("Payday-Export.csv")
+                    ) {
+                        Image(systemName: "square.and.arrow.up")
                     }
                 }
             }
-            .padding(.horizontal, PaydaySpacing.p16)
-            .padding(.top, PaydaySpacing.p8)
         }
         .contentMargins(.bottom, 88, for: .scrollContent)
         .background(PaydayColor.background)
@@ -271,6 +294,10 @@ struct PeriodsView: View {
             policies: policies,
             payrollTimeZone: zone
         )
+    }
+
+    private var calculator: PayPeriodCalculator {
+        PayPeriodCalculator(payrollTimeZone: policyStore.payrollTimeZone, schedule: scheduleStore.schedule ?? .fallback)
     }
 
     private func refreshCurrentDay() {

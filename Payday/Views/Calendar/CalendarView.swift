@@ -376,10 +376,6 @@ struct CalendarView: View {
     /// The month hero's drawer. Collapsed by default: the grid is what a
     /// glance at this screen is for, and the breakdown is the second question.
     @State private var monthBreakdownExpanded = false
-    /// Whether the grid has scrolled under the pinned header. Drives only the
-    /// header's hairline, which should not be drawn while the header is
-    /// simply sitting on the page with nothing behind it.
-    @State private var gridIsUnderHeader = false
     /// The grid's only input — `ShiftRecord` is the only stored shape since
     /// the flip.
     @Query private var shiftRecords: [ShiftRecord]
@@ -426,8 +422,17 @@ struct CalendarView: View {
         // grid and the snapshot are built in — a travelling device must not
         // re-bucket a cell.
         let todayCivil = CivilDay(.now, in: resolvedCalendar.timeZone)
+        NavigationStack {
         ScrollViewReader { proxy in
         ScrollView {
+            // The month strip is ordinary scroll content: a pinned top bar
+            // and a large nav title fight over the same region on iOS 26 —
+            // the title loses (safeAreaInset), gets clipped (inset over
+            // title), or leaves a gap tiles bleed through (pinnedViews,
+            // safeAreaBar). The page keeps the title like every other tab,
+            // and the strip scrolls with the card.
+            monthHeader
+
             // ONE object, not a grid with a box underneath it: the month's
             // tiles and the figure they sum to live on the same card, and
             // the breakdown drawer tucks under THAT card — the recess is
@@ -476,19 +481,9 @@ struct CalendarView: View {
             .padding(.top, PaydaySpacing.p8)
         }
         .contentMargins(.bottom, 88, for: .scrollContent)
-        .safeAreaInset(edge: .top, spacing: 0) { pinnedHeader }
-        .onScrollGeometryChange(for: Bool.self) { geometry in
-            geometry.contentOffset.y + geometry.contentInsets.top > 8
-        } action: { _, isUnder in
-            guard gridIsUnderHeader != isUnder else { return }
-            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) {
-                gridIsUnderHeader = isUnder
-            }
-        }
         // QA-only, same launch-arg pattern as -ScrollInsightsBottom: simctl
-        // can screenshot but not scroll, and the pinned header's whole point
-        // is what it does once the grid is behind it -- a top-of-scroll
-        // capture is exactly the one that cannot show it.
+        // can screenshot but not scroll, and the drawer rows below the card
+        // are the state a top-of-scroll capture can never show.
         .onAppear {
             guard ProcessInfo.processInfo.arguments.contains("-ScrollCalendarBottom") else { return }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
@@ -512,6 +507,11 @@ struct CalendarView: View {
             }
         }
         #endif
+        }
+        // On the stack's direct child, not inside the ScrollViewReader
+        // closure: the title set in there never reaches the bar (Insights
+        // keeps its reader one level down for the same reason).
+        .navigationTitle("Calendar")
         }
     }
 
@@ -545,53 +545,35 @@ struct CalendarView: View {
     }
 
     /// Month navigation lives in the content, not the nav bar — the nav
-    /// bar's title is the fixed "History" chrome shared with the Periods
-    /// lens now, so paging the month can't live there. A compact quiet row,
+    /// bar's title is the fixed "Calendar" chrome, so paging the month
+    /// can't live there. A compact quiet row,
     /// not big floating nav buttons: chevrons small enough to read as an
     /// in-page control, not a second navigation bar.
     /// No chevrons (Tyler, 2026-07-28): the month title alone, with a
     /// horizontal swipe over the grid moving months — the gesture every
     /// calendar already teaches. The buttons were a second navigation bar
     /// stacked under the real one.
-    /// Month and weekday letters, pinned.
+    /// Month and weekday letters.
     ///
-    /// Both used to scroll away with the grid, so a month scrolled halfway
-    /// down presented a block of numbers starting at "14" with nothing saying
-    /// which month it was or which column was Monday -- the grid lost the two
-    /// labels that make it a calendar rather than a table of numbers. They are
-    /// the cheapest thing on the screen to keep and the most expensive to
-    /// lose.
-    ///
-    /// The month's figure and its drawer deliberately stay IN the grid's
-    /// card and scroll normally. Lifting the figure up here as well would
-    /// make a
-    /// ~150pt permanent header out of a screen whose subject is the grid, and
-    /// would strand the breakdown drawer, whose whole geometry is a recess
-    /// tucked under the card directly above it.
-    ///
-    /// A hairline, and only once something is actually behind it. No shadow:
-    /// rule 2 gives dark mode none, and a hairline plus a shadow is two
-    /// treatments of one edge.
-    private var pinnedHeader: some View {
+    /// These were pinned until the tab got its own large title: on iOS 26 a
+    /// pinned top bar and a large title occupy the same region, and every
+    /// pinning mechanism loses differently — the title renders under the
+    /// strip (safeAreaInset), or the strip pins where the expanded title
+    /// was and scrolled tiles bleed through the gap (pinnedViews,
+    /// safeAreaBar). The page header won the argument, so the strip scrolls
+    /// again — the trade the old design also made, back when these labels
+    /// "were the cheapest thing on the screen to keep and the most
+    /// expensive to lose". The grid is one card; mid-scroll the collapsed
+    /// bar still names the page.
+    private var monthHeader: some View {
         VStack(spacing: PaydaySpacing.p12) {
             monthNavRow
             weekdayHeader
         }
-        // The lens selector sits directly above this screen; the month needs
-        // air to read as its own thing rather than a second row of that
-        // control (Tyler, 2026-07-28).
+        // The nav title sits directly above; the month needs air to read as
+        // its own thing rather than a second row of that label.
         .padding(.top, PaydaySpacing.p20)
         .padding(.bottom, PaydaySpacing.p12)
-        .background(PaydayColor.background)
-        .overlay(alignment: .bottom) {
-            // `Divider()` rather than a hand-rolled Rectangle: it is what
-            // every other hairline in the app uses, and it already resolves
-            // its own hairline width and per-mode colour. A `1 /
-            // UIScreen.main.scale` here would have been this repo's only use
-            // of a screen-scale lookup that no longer has one right answer.
-            Divider()
-                .opacity(gridIsUnderHeader ? 1 : 0)
-        }
     }
 
     private var monthNavRow: some View {

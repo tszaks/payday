@@ -1203,8 +1203,7 @@ struct DashboardView: View {
                     // were looking at live inside the CURRENT period's
                     // detail, so land there directly.
                     tabRouter.pendingCurrentPeriodDetail = true
-                    HistoryLens.periods.select()
-                    tabRouter.selected = .history
+                    tabRouter.selected = .periods
                 } label: {
                     Text("See all")
                         .font(PaydayFont.subheadline)
