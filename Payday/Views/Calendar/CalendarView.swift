@@ -426,6 +426,7 @@ struct CalendarView: View {
         // grid and the snapshot are built in — a travelling device must not
         // re-bucket a cell.
         let todayCivil = CivilDay(.now, in: resolvedCalendar.timeZone)
+        NavigationStack {
         ScrollViewReader { proxy in
         ScrollView {
             // ONE object, not a grid with a box underneath it: the month's
@@ -496,6 +497,7 @@ struct CalendarView: View {
             }
         }
         .background(PaydayColor.background)
+        .navigationTitle("Calendar")
         .sheet(item: $daySelection) { selection in
             DayDetailSheet(date: selection.date).paydayAppearance()
         }
@@ -512,6 +514,7 @@ struct CalendarView: View {
             }
         }
         #endif
+        }
         }
     }
 
@@ -545,8 +548,8 @@ struct CalendarView: View {
     }
 
     /// Month navigation lives in the content, not the nav bar — the nav
-    /// bar's title is the fixed "History" chrome shared with the Periods
-    /// lens now, so paging the month can't live there. A compact quiet row,
+    /// bar's title is the fixed "Calendar" chrome, so paging the month
+    /// can't live there. A compact quiet row,
     /// not big floating nav buttons: chevrons small enough to read as an
     /// in-page control, not a second navigation bar.
     /// No chevrons (Tyler, 2026-07-28): the month title alone, with a
