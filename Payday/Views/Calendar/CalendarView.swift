@@ -155,6 +155,22 @@ struct CalendarDayTile: Identifiable, Equatable {
     var id: Int { civilDay.dayNumber }
 }
 
+/// A month-over-month comparison on the hero's own basis: the displayed
+/// month's figure minus the same span of days one month back.
+///
+/// The window matters more than the number. An in-progress September
+/// compares against August 1–20, never all of August — differencing a
+/// 20-day month against a 30-day one would report a decline every month
+/// until its last day. `windowLabel` names the window so the line can say
+/// exactly what was compared.
+struct MonthDelta: Hashable {
+    /// Signed cents: the displayed month's window minus the prior month's.
+    let cents: Int
+    /// "Aug 1–20" while September is in progress, "August" once it has
+    /// closed.
+    let windowLabel: String
+}
+
 /// One immutable render pass for Calendar: the grid's geometry, one figure per
 /// day of the displayed month, and the month's own figure.
 ///
@@ -230,18 +246,26 @@ struct CalendarMonthFacts: SnapshotFacts {
     /// second derivation of the same fact.
     let monthWagesCaption: String?
 
+    /// Total-basis, the same query as the hero one month back over the same
+    /// span of days, so an in-progress month is never compared against a
+    /// whole one. Nil unless both figures are complete earnedIncome
+    /// figures — a delta between a total and a partial is arithmetic across
+    /// two bases — and nil when the prior window has nothing in it.
+    let monthDelta: MonthDelta?
+
     let stamp: SnapshotStamp?
 
     /// The payroll zone the snapshot was built in, for the grid's day lookup.
     private let payrollTimeZone: TimeZone
     private let tilesByDay: [Int: CalendarDayTile]
 
-    init(snapshot: EarningsSnapshot?, displayedMonth: Date, calendar: Calendar) {
+    init(snapshot: EarningsSnapshot?, displayedMonth: Date, calendar: Calendar, now: Date = .now) {
         let zone = calendar.timeZone
         payrollTimeZone = zone
         stamp = snapshot?.stamp
 
         let month = YearMonth(CivilDay(displayedMonth, in: zone))
+        let todayCivil = CivilDay(now, in: zone)
         if let snapshot {
             let monthResult = snapshot.range(month.range)
             monthFigure = .earnedIncome(monthResult)
@@ -257,6 +281,9 @@ struct CalendarMonthFacts: SnapshotFacts {
                 .sorted { $0.iso < $1.iso }
             monthWagesCaption = CompletenessCopy.caption(
                 monthResult.completeness.state, unpricedDays: unpriced)
+            monthDelta = Self.monthDelta(
+                snapshot: snapshot, month: month, current: monthFigure,
+                today: todayCivil, zone: zone)
             // One result per civil day of the month, from the query whose
             // contract is that it partitions the range above. Paired by each
             // result's OWN range rather than by index, so a cutoff that
@@ -285,6 +312,7 @@ struct CalendarMonthFacts: SnapshotFacts {
             monthBreakdownTotal = BreakdownRow(unavailable.label, cents: nil, emphasized: true)
             monthHasBreakdown = false
             monthWagesCaption = nil
+            monthDelta = nil
             tiles = []
         }
 
@@ -306,8 +334,58 @@ struct CalendarMonthFacts: SnapshotFacts {
         }
         let totalCells = leading + daysInMonth
         let totalDays = totalCells + (7 - totalCells % 7) % 7
+        // The full month always renders, days that have not happened included —
+        // they are styled and announced as future (see DayCell.isFuture), but a
+        // trimmed grid hides that the rest of the month exists at all.
         gridDays = (0..<totalDays).compactMap {
             calendar.date(byAdding: .day, value: $0, to: gridStart)
+        }
+    }
+
+    /// The one licensed secondary money line: a comparison, never a restated
+    /// amount. Both sides come from `snapshot.range(_:)` over the same span
+    /// of days one month apart, so the two figures are the same basis by
+    /// construction — an in-progress month is never set against a whole
+    /// prior one. Nil when either side is not a complete earnedIncome figure
+    /// (a delta across two bases), when the prior window has no shifts in it
+    /// (a first-ever month has no comparison to make), or when there is no
+    /// snapshot behind the screen at all.
+    private static func monthDelta(
+        snapshot: EarningsSnapshot,
+        month: YearMonth,
+        current: EarningsFigure,
+        today: CivilDay,
+        zone: TimeZone
+    ) -> MonthDelta? {
+        guard isTotalBasis(current), let currentCents = current.cents else { return nil }
+        let prior = month.previous
+        let inProgress = month.range.contains(today)
+        let windowEnd = inProgress
+            ? CivilDay(year: prior.year, month: prior.month, day: min(today.day, prior.dayCount))
+            : prior.lastDay
+        let priorResult = snapshot.range(DayRange(start: prior.firstDay, end: windowEnd))
+        guard !priorResult.shiftIDs.isEmpty else { return nil }
+        let priorFigure = EarningsFigure.earnedIncome(priorResult)
+        guard isTotalBasis(priorFigure), let priorCents = priorFigure.cents else { return nil }
+        let windowLabel = inProgress
+            ? "\(prior.firstDay.shortLabel)–\(windowEnd.day)"
+            : prior.firstDay.date(in: zone).formatted(.dateTime.month(.wide))
+        return MonthDelta(cents: currentCents - priorCents, windowLabel: windowLabel)
+    }
+
+    /// "May this figure enter a same-basis delta" — what `mayBeCalledATotal`
+    /// is really after, checked on the STATE rather than the label: the
+    /// label-level predicate also rejects "You kept", which is the same
+    /// complete earnedIncome basis a month with a tip-out already shows, so
+    /// using it would suppress the line on nearly every real month.
+    /// `.partial` is out (wages unknown is a different basis), `.off` is out
+    /// (nonWageEarnings is a different metric), `.estimated` is in (a
+    /// complete wage picture on an assumed rate is still a total in kind).
+    private static func isTotalBasis(_ figure: EarningsFigure) -> Bool {
+        guard figure.metric == .earnedIncome else { return false }
+        switch figure.completeness.state {
+        case .complete, .estimated, .noShifts: return true
+        case .partial, .off: return false
         }
     }
 
@@ -396,32 +474,56 @@ struct CalendarView: View {
         // history inside the interactive budget.
         let resolvedCalendar = calendar
         let facts = makeFacts(calendar: resolvedCalendar)
+        // "A day you haven't lived", in the same frozen payroll zone the
+        // grid and the snapshot are built in — a travelling device must not
+        // re-bucket a cell.
+        let todayCivil = CivilDay(.now, in: resolvedCalendar.timeZone)
         ScrollViewReader { proxy in
         ScrollView {
-            VStack(spacing: PaydaySpacing.p16) {
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 7), spacing: 6) {
-                    ForEach(facts.gridDays, id: \.self) { day in
-                        Button {
-                            daySelection = DaySelection(date: day)
-                        } label: {
-                            DayCell(
-                                day: day,
-                                tile: facts.tile(on: day),
-                                monthMaxCents: facts.brightestTileCents,
-                                isCurrentMonth: resolvedCalendar.isDate(day, equalTo: displayedMonth, toGranularity: .month),
-                                isToday: resolvedCalendar.isDateInToday(day)
-                            )
+            // ONE object, not a grid with a box underneath it: the month's
+            // tiles and the figure they sum to live on the same card, and
+            // the breakdown drawer tucks under THAT card — the recess is
+            // visibly a slice of the calendar itself, the same shape
+            // Dashboard's hero and its drawer make. The old composition put
+            // a bare grid over a floating summary card, and the drawer
+            // under that read as a third thing appended to the page
+            // (Tyler, 2026-09-20: "that last thing looks really tacked onto
+            // the bottom").
+            HeroBreakdownDrawer(
+                rows: facts.monthBreakdownRows,
+                total: facts.monthBreakdownTotal,
+                hasBreakdown: facts.monthHasBreakdown,
+                isExpanded: $monthBreakdownExpanded
+            ) {
+                VStack(spacing: PaydaySpacing.p16) {
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 7), spacing: 6) {
+                        ForEach(facts.gridDays, id: \.self) { day in
+                            Button {
+                                daySelection = DaySelection(date: day)
+                            } label: {
+                                DayCell(
+                                    day: day,
+                                    tile: facts.tile(on: day),
+                                    monthMaxCents: facts.brightestTileCents,
+                                    isCurrentMonth: resolvedCalendar.isDate(day, equalTo: displayedMonth, toGranularity: .month),
+                                    isToday: resolvedCalendar.isDateInToday(day),
+                                    isFuture: CivilDay(day, in: resolvedCalendar.timeZone) > todayCivil
+                                )
+                            }
+                            .buttonStyle(PressableButtonStyle())
                         }
-                        .buttonStyle(PressableButtonStyle())
                     }
-                }
-                .id(displayedMonth)
-                .transition(.opacity)
-                .gesture(monthSwipeGesture)
+                    .id(displayedMonth)
+                    .transition(.opacity)
+                    .gesture(monthSwipeGesture)
 
-                monthSummarySection(facts)
-                    .id("calendar-summary")
+                    Divider()
+
+                    monthSummarySection(facts)
+                }
+                .paydayCard(padding: PaydaySpacing.p16)
             }
+            .id("calendar-summary")
             .padding(.horizontal, PaydaySpacing.p16)
             .padding(.top, PaydaySpacing.p8)
         }
@@ -475,7 +577,8 @@ struct CalendarView: View {
                 payrollTimeZone: zone
             ),
             displayedMonth: displayedMonth,
-            calendar: calendar
+            calendar: calendar,
+            now: .now
         )
     }
 
@@ -512,8 +615,9 @@ struct CalendarView: View {
     /// the cheapest thing on the screen to keep and the most expensive to
     /// lose.
     ///
-    /// The hero and its drawer deliberately stay BELOW the grid and scroll
-    /// normally. Lifting the month's figure up here as well would make a
+    /// The month's figure and its drawer deliberately stay IN the grid's
+    /// card and scroll normally. Lifting the figure up here as well would
+    /// make a
     /// ~150pt permanent header out of a screen whose subject is the grid, and
     /// would strand the breakdown drawer, whose whole geometry is a recess
     /// tucked under the card directly above it.
@@ -553,7 +657,10 @@ struct CalendarView: View {
     }
 
     private var weekdayHeader: some View {
-        HStack {
+        // Same spacing as the grid's and the same total inset — the scroll
+        // padding plus the card's own padding — so each letter sits exactly
+        // over the column it names.
+        HStack(spacing: 6) {
             ForEach(Array(orderedWeekdaySymbols.enumerated()), id: \.offset) { _, symbol in
                 Text(symbol)
                     .font(PaydayFont.caption)
@@ -561,7 +668,7 @@ struct CalendarView: View {
                     .frame(maxWidth: .infinity)
             }
         }
-        .padding(.horizontal)
+        .padding(.horizontal, PaydaySpacing.p32)
     }
 
     private var orderedWeekdaySymbols: [String] {
@@ -570,94 +677,87 @@ struct CalendarView: View {
         return Array(symbols[start...] + symbols[..<start])
     }
 
-    /// The screen's hero moved here (Tyler, 2026-07-28): the grid is what a
-    /// glance at this screen is for, so the month total no longer sits above
-    /// it demanding first read. This cluster is the second surface: the
-    /// total leads, then exact hours worked, its best day (all-in, matching
-    /// the tiles above), and a quiet weekday shape. Collapses to a single
-    /// line when nothing's logged yet so an empty month never shows
-    /// zeroed-out stats.
+    /// The month's figure, rendered as the grid card's own footer — the
+    /// tiles above and this number are one object now, separated by a rule
+    /// rather than by a second card (Tyler, 2026-09-20). The total leads,
+    /// then exact hours worked and its days. Collapses to a single line
+    /// when nothing's logged yet so an empty month never shows zeroed-out
+    /// stats.
     @ViewBuilder
     private func monthSummarySection(_ facts: CalendarMonthFacts) -> some View {
         if facts.isUnbacked {
             // A failed read. Not "nothing logged this month", which would be a
             // claim about the person's history, and not `$0.00`.
-            VStack(spacing: PaydaySpacing.p12) {
-                Divider()
-                VStack(spacing: 2) {
-                    Text(ShiftDayRow.unavailablePlaceholder)
-                        .font(PaydayFont.displayMedium)
-                        .monospacedDigit()
-                        .foregroundStyle(PaydayColor.textSecondary)
-                    Text(facts.monthCaption)
-                        .font(PaydayFont.caption)
-                        .foregroundStyle(PaydayColor.textSecondary)
-                }
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel("Amount unavailable for this month.")
+            VStack(spacing: 2) {
+                Text(ShiftDayRow.unavailablePlaceholder)
+                    .font(PaydayFont.displayMedium)
+                    .monospacedDigit()
+                    .foregroundStyle(PaydayColor.textSecondary)
+                Text(facts.monthCaption)
+                    .font(PaydayFont.caption)
+                    .foregroundStyle(PaydayColor.textSecondary)
             }
+            .frame(maxWidth: .infinity)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Amount unavailable for this month.")
         } else if !facts.hasAnythingLogged {
             Text("Nothing logged this month.")
                 .font(PaydayFont.footnote)
                 .foregroundStyle(PaydayColor.textSecondary)
                 .frame(maxWidth: .infinity, alignment: .center)
-                .padding(.top, PaydaySpacing.p4)
         } else {
-            // The same drawer Dashboard and PeriodDetail use, over the
-            // month's own `EarningsResult`. A person can now see that this
-            // figure is cash + credit + gratuity + wages MINUS tip-out
-            // rather than having to be told.
-            HeroBreakdownDrawer(
-                rows: facts.monthBreakdownRows,
-                total: facts.monthBreakdownTotal,
-                hasBreakdown: facts.monthHasBreakdown,
-                isExpanded: $monthBreakdownExpanded
-            ) {
-                VStack(spacing: 2) {
-                    Text(facts.monthFigure.text ?? ShiftDayRow.unavailablePlaceholder)
-                        .font(PaydayFont.displayMedium)
-                        .monospacedDigit()
-                        .foregroundStyle(PaydayColor.textPrimary)
-                        .contentTransition(.numericText())
-                        .animation(
-                            reduceMotion ? nil : PaydayAnimation.premiumSpring,
-                            value: facts.monthFigure.cents
-                        )
-                    // The days and hours ride the completeness caption
-                    // instead of standing alone under the drawer, where they
-                    // were a .subheadline in primary ink -- the weight of a
-                    // headline, orphaned below a grey slab, describing the
-                    // number two elements above it. They describe the same
-                    // selection the caption does, so they belong on its line.
-                    Text("\(facts.monthCaption) · \(facts.daysWorkedCount) day\(facts.daysWorkedCount == 1 ? "" : "s") · \(facts.monthHoursLabel)")
+            VStack(spacing: 2) {
+                Text(facts.monthFigure.text ?? ShiftDayRow.unavailablePlaceholder)
+                    .font(PaydayFont.displayMedium)
+                    .monospacedDigit()
+                    .foregroundStyle(PaydayColor.textPrimary)
+                    .contentTransition(.numericText())
+                    .animation(
+                        reduceMotion ? nil : PaydayAnimation.premiumSpring,
+                        value: facts.monthFigure.cents
+                    )
+                // The days and hours ride the completeness caption
+                // instead of standing alone under the drawer, where they
+                // were a .subheadline in primary ink -- the weight of a
+                // headline, orphaned below a grey slab, describing the
+                // number two elements above it. They describe the same
+                // selection the caption does, so they belong on its line.
+                Text("\(facts.monthCaption) · \(facts.daysWorkedCount) day\(facts.daysWorkedCount == 1 ? "" : "s") · \(facts.monthHoursLabel)")
+                    .font(PaydayFont.caption)
+                    .foregroundStyle(PaydayColor.textSecondary)
+                    .monospacedDigit()
+                    .multilineTextAlignment(.center)
+                // The one secondary money line this card is allowed: a
+                // comparison, not a restated amount. Its window is named
+                // because an in-progress month is compared against the same
+                // span one month back, never a whole month it hasn't lived.
+                // Green-positive / error-red-negative is Periods' existing
+                // delta semantics (DESIGN.md), not a new color rule.
+                if let delta = facts.monthDelta {
+                    Text(monthDeltaText(delta))
                         .font(PaydayFont.caption)
-                        .foregroundStyle(PaydayColor.textSecondary)
                         .monospacedDigit()
-                        .multilineTextAlignment(.center)
-                    // `.estimated` carries its caption, per the completeness
-                    // presentation rules: a wage priced off an assumed rate
-                    // says so on the surface that shows it. It stays on the
-                    // hero rather than moving onto the drawer's Wages row --
-                    // Dashboard and PeriodDetail both print it under their
-                    // heroes too, so putting it on the shared row as well
-                    // would state it twice on three screens.
-                    if let caption = facts.monthWagesCaption ?? facts.monthFigure.caption {
-                        Text(caption)
-                            .font(PaydayFont.caption2)
-                            .foregroundStyle(PaydayColor.textTertiary)
-                            .multilineTextAlignment(.center)
-                    }
+                        .foregroundStyle(
+                            delta.cents < 0 ? PaydayColor.error
+                                : delta.cents > 0 ? PaydayColor.primary
+                                : PaydayColor.textSecondary
+                        )
                 }
-                .frame(maxWidth: .infinity)
-                // The drawer tucks itself -PaydayRadius.xl + 2 UNDER its
-                // card, so the card has to actually be one. Without this the
-                // grey recess slid up over the hero's own caption lines and
-                // printed "you kept this month" on a grey slab that started
-                // mid-sentence. Dashboard and PeriodDetail both end their
-                // card closure with exactly this, which is why neither of
-                // them showed it.
-                .paydayCard(padding: PaydaySpacing.p24)
+                // `.estimated` carries its caption, per the completeness
+                // presentation rules: a wage priced off an assumed rate
+                // says so on the surface that shows it. It stays on the
+                // hero rather than moving onto the drawer's Wages row --
+                // Dashboard and PeriodDetail both print it under their
+                // heroes too, so putting it on the shared row as well
+                // would state it twice on three screens.
+                if let caption = facts.monthWagesCaption ?? facts.monthFigure.caption {
+                    Text(caption)
+                        .font(PaydayFont.caption2)
+                        .foregroundStyle(PaydayColor.textTertiary)
+                        .multilineTextAlignment(.center)
+                }
             }
+            .frame(maxWidth: .infinity)
 
             // Weekday mini-bars deleted (Tyler, 2026-07-20): the heatmap
             // grid directly above already tells the which-days story —
@@ -670,9 +770,16 @@ struct CalendarView: View {
             displayedMonth = newMonth
         }
     }
+
+    /// "↑ $312 vs Aug 1–20" / "↓ $96 vs August". A zero delta carries no
+    /// arrow — there is no direction to point.
+    private func monthDeltaText(_ delta: MonthDelta) -> String {
+        let arrow = delta.cents > 0 ? "↑ " : delta.cents < 0 ? "↓ " : ""
+        return "\(arrow)\(Money.string(fromCents: abs(delta.cents))) vs \(delta.windowLabel)"
+    }
 }
 
-private struct DayCell: View {
+struct DayCell: View {
     let day: Date
     /// This day's tile, or nil for a neighbouring month's day.
     let tile: CalendarDayTile?
@@ -681,6 +788,9 @@ private struct DayCell: View {
     let monthMaxCents: Int
     let isCurrentMonth: Bool
     let isToday: Bool
+    /// After today, in the payroll zone. A day that has not happened renders
+    /// quiet unless a logged shift says otherwise.
+    let isFuture: Bool
 
     @Environment(\.colorScheme) private var colorScheme
 
@@ -744,15 +854,33 @@ private struct DayCell: View {
             .foregroundStyle(
                 hasTips
                     ? CalendarHeat.textColor(fraction: heatFraction, colorScheme: colorScheme)
-                    : (isCurrentMonth ? PaydayColor.textSecondary : PaydayColor.textTertiary)
+                    // A future day with nothing on it is quieted to the same
+                    // tertiary ink neighbouring-month days already take — a
+                    // day you haven't lived is not a day you earned nothing.
+                    // Not gated on isFuture alone: a shift logged for
+                    // tomorrow is real data and renders with its heat.
+                    : (isCurrentMonth && !isFuture ? PaydayColor.textSecondary : PaydayColor.textTertiary)
             )
     }
 
-    /// Three different facts, said differently, where the old label said "no
-    /// shifts" for all three: a day with money on it, a day somebody worked
-    /// for nothing, and a day the engine could not answer for.
+    /// Four different facts, said differently, where the old label said "no
+    /// shifts" for all of them: a day with money on it, a day somebody
+    /// worked for nothing, a day the engine could not answer for, and a day
+    /// that has not arrived yet.
     private var accessibilityLabel: String {
+        Self.label(day: day, tile: tile, isCurrentMonth: isCurrentMonth, isFuture: isFuture)
+    }
+
+    /// The VoiceOver text, on a static seam so the upcoming/no-shifts/
+    /// amount-unavailable states are assertable without rendering a view.
+    static func label(day: Date, tile: CalendarDayTile?, isCurrentMonth: Bool, isFuture: Bool) -> String {
         let dateText = day.formatted(.dateTime.month(.wide).day())
+        // A day that has not arrived is upcoming, not "no shifts" — and only
+        // a logged shift, which is real data, says otherwise.
+        if isFuture, tile?.hasShifts != true {
+            return "\(dateText), upcoming"
+        }
+        let figure = isCurrentMonth ? tile?.figure : nil
         guard let figure, isCurrentMonth, tile?.hasShifts == true else {
             return "\(dateText), no shifts"
         }

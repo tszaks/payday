@@ -116,7 +116,12 @@ enum DashboardEarnings {
             asOf: CivilDay(.distantFuture, in: payrollTimeZone),
             unreadableReceiptShiftIDs: adapted.unreadableReceiptShiftIDs
         ))
-        return Dataset(snapshot: snapshot, shiftDays: [], shiftRecordDays: records)
+        return Dataset(
+            snapshot: snapshot,
+            shiftDays: [],
+            shiftRecordDays: records,
+            tipRecords: StatsRecordAdapter.tipRecords(from: records)
+        )
     }
 
     static func build(
@@ -143,7 +148,8 @@ enum DashboardEarnings {
                 asOf: .distantFuture
             ),
             shiftDays: shiftDays,
-            shiftRecordDays: []
+            shiftRecordDays: [],
+            tipRecords: entries.map(TipRecord.init)
         )
     }
 
@@ -165,5 +171,15 @@ enum DashboardEarnings {
         /// The same rows in the shift representation. Exactly one of the two
         /// is populated, because `build` chooses a source rather than merging.
         let shiftRecordDays: [ShiftRecord]
+        /// The `StatsEngine` input, already flattened out of whichever
+        /// representation built this dataset — `StatsRecordAdapter`'s rows on
+        /// the records arm, `TipRecord.init` over the entries on the legacy
+        /// arm. Rows rather than the raw models, so **no consumer can tell
+        /// which representation is underneath**: `DashboardFacts` used to
+        /// flatten `allShifts` itself, which read as correct on both arms but
+        /// silently fed the pace comparison an empty history the moment an
+        /// account flipped — the same starvation class `InsightsEarnings
+        /// .Dataset.tipRecords` exists to prevent.
+        let tipRecords: [TipRecord]
     }
 }
