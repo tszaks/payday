@@ -579,7 +579,13 @@ final class PaydaySyncService {
         /// how `.shiftCacheWiped` stayed unreachable; here the default IS
         /// the production behaviour, so nothing is silently skipped by
         /// leaving it alone.
-        userID injectedUserID: UUID? = nil
+        userID injectedUserID: UUID? = nil,
+        /// What the session would answer if asked NOW. Default reads the
+        /// live session -- the production path. A test can supply a provider
+        /// so the re-check below is exercisable: inject a different id than
+        /// `userID` and the pass must abort rather than apply one account's
+        /// pulled rows into another's store.
+        liveSessionUserID: (() async throws -> UUID)? = nil
     ) async throws -> PaydaySyncOutcome {
         let userID: UUID
         if let injectedUserID {
@@ -874,6 +880,28 @@ final class PaydaySyncService {
         Self.logger.notice(
             "Sync download. baseline=\(needsServerBaseline) tips=\(remoteTips.count) paychecks=\(remotePaychecks.count) settings=\(remoteSettings.map { _ in 1 } ?? 0)"
         )
+
+        // The account this pass resolved at the top can change underneath
+        // it: `deleteAccount` calls `forget(userID:)`, which frees the
+        // registration for a different Apple ID, and `signOut` does not
+        // clear it. Everything fetched above is scoped to `userID`; if the
+        // session has moved to another account, applying those rows would
+        // write one account's data into another's store. Re-resolve before
+        // the FIRST write the pull produces and abort the pass; the next
+        // pass runs under whoever is registered now. A test that injects
+        // `userID` without a live provider has no session to compare
+        // against, so the check is skipped only then.
+        if injectedUserID == nil || liveSessionUserID != nil {
+            let live: UUID
+            if let liveSessionUserID {
+                live = try await liveSessionUserID()
+            } else {
+                live = try await client.auth.session.user.id
+            }
+            if live != userID {
+                throw PaydayMigrationError.accountMismatch
+            }
+        }
 
         let tipVersionsBeforeReconcile = try PaydayRowFingerprint.values(
             try context.fetch(FetchDescriptor<TipEntry>())
