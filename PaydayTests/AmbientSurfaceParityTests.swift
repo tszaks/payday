@@ -23,29 +23,18 @@ import Testing
 ///
 /// ## What this file actually adds
 ///
-/// Two things the existing suite does not cover, both created by the flip:
+/// The ambient figure against the app's own builder, on the one stored
+/// representation — the flip's two-arm leg retired with the legacy arm.
 ///
-/// 1. **Both representation arms of the ambient figure.** The existing
-///    assertions run one dataset; these run the same shifts as records AND as
-///    mirrored legacy entries, so the agreement is not an artifact of one arm.
-/// 2. **The widget's pace baseline**, below.
-///
-/// ## And the defect that was NOT structural
+/// ## The defect that was NOT structural
 ///
 /// The widget shows a second number the shared path does not produce: the
 /// pace delta, from its own `StatsEngine`. That engine was fed
 /// `context.fetch(FetchDescriptor<TipEntry>())` directly -- the legacy
 /// representation, unswitched -- while the money figure above it went through
-/// `buildOnce(shiftsAreAuthoritative:)`. Post-flip the pace would have been
-/// measured against a history missing every shift logged since conversion,
-/// and since the deriver only ever runs legacy-to-records, that truncation is
-/// permanent and grows with use. A pace delta over a shrinking fraction of
-/// the history is a wrong number, not a stale one.
-///
-/// It was found by running rule 23 against `PaydayWidget` by hand and
-/// discovering the rule had been scoped to `Payday` alone -- so the widget
-/// target was entirely unchecked by the lint written to prevent exactly this.
-/// Same narrower-than-the-family error rule 20 already paid for.
+/// `buildOnce`. Post-flip the pace would have been measured against a history
+/// missing every shift logged since conversion. The adapter is now the single
+/// boundary, so the truncation bug the switch prevented cannot re-form.
 @Suite("Ambient surface parity", .serialized)
 @MainActor
 struct AmbientSurfaceParityTests {
@@ -80,19 +69,6 @@ struct AmbientSurfaceParityTests {
             ShiftRecord(workDate: day(1), shiftPeriod: .dinner, cashTipsCents: 5_600,
                         creditTipsCents: 9_900, hoursWorked: 5.5, recordedAt: day(1)),
         ]
-    }
-
-    private static func mirroredEntries(_ records: [ShiftRecord]) -> [TipEntry] {
-        records.flatMap { ShiftProjection.rows(for: $0) }.map { row in
-            TipEntry(
-                id: row.id, date: row.date, amountCents: row.amountCents, kind: row.kind,
-                note: row.note, recordedAt: row.recordedAt, hoursWorked: row.hoursWorked,
-                tipOutCents: row.tipOutCents, salesCents: row.salesCents,
-                shiftPeriod: row.shiftPeriod, shiftID: row.shiftID, clockIn: row.clockIn,
-                clockOut: row.clockOut, serverCount: row.serverCount,
-                receiptMetrics: row.receiptMetrics
-            )
-        }
     }
 
     // MARK: - Siri == widget == app, on the money figure
@@ -136,93 +112,15 @@ struct AmbientSurfaceParityTests {
         #expect((ambient.figure.cents ?? 0) > 0)
     }
 
-    /// The same, through the legacy representation, so the agreement is not an
-    /// artifact of one arm.
-    @Test("the ambient figure equals the app's own period figure, on legacy entries")
-    func ambientFigureEqualsAppOnLegacy() throws {
-        let policies = Self.policies()
-        let entries = Self.mirroredEntries(Self.records())
-        let schedule = PaySchedule.fallback
-        let now = Self.day(1)
-
-        let appBuild = HistoryEarnings.build(
-            entries: entries, policies: policies, payrollTimeZone: Self.zone
-        )
-        let snapshot = try #require(appBuild.snapshot)
-        let ambient = AmbientPeriodFigure.answer(
-            from: snapshot, schedule: schedule, payrollTimeZone: Self.zone, now: now
-        )
-
-        let calculator = PayPeriodCalculator(payrollTimeZone: Self.zone, schedule: schedule)
-        let period = calculator.period(containing: now)
-        let appResult = snapshot.range(DayRange(
-            start: CivilDay(period.start, in: Self.zone),
-            end: CivilDay(period.end, in: Self.zone)
-        ))
-
-        #expect(ambient.figure.cents == appResult.knownComponents.earnedIncomeCents)
-        #expect((ambient.figure.cents ?? 0) > 0)
-    }
-
-    // MARK: - The widget's pace baseline reads the switched representation
-
-    /// The two arms of `StatsRecordAdapter.tipRecords` describe the same
-    /// shifts, so the widget's pace delta cannot depend on which one it read.
-    ///
-    /// Compared as TOTALS per shift rather than row-for-row, because the
-    /// legacy arm emits one row per stored `TipEntry` and the record arm emits
-    /// one per non-zero kind: the same shift, expressed with a different
-    /// number of rows. What must match is what `StatsEngine` derives from
-    /// them, which is the per-shift sum.
-    @Test("both representations give StatsEngine the same per-shift money")
-    func paceBaselineArmsAgree() throws {
-        let records = Self.records()
-        let entries = Self.mirroredEntries(records)
-
-        let fromRecords = StatsRecordAdapter.tipRecords(
-            entries: [], records: records, representation: .records
-        )
-        let fromEntries = StatsRecordAdapter.tipRecords(
-            entries: entries, records: [], representation: .legacy
-        )
-
-        #expect(!fromRecords.isEmpty)
-        #expect(!fromEntries.isEmpty)
-
-        func netByShift(_ rows: [TipRecord]) -> [UUID: Int] {
-            var out: [UUID: Int] = [:]
-            for row in rows {
-                guard let id = row.shiftID else { continue }
-                out[id, default: 0] += row.netCents
-            }
-            return out
-        }
-
-        let recordTotals = netByShift(fromRecords)
-        let entryTotals = netByShift(fromEntries)
-        #expect(recordTotals == entryTotals,
-                "the pace baseline must not depend on which representation it read")
-        #expect(recordTotals.values.reduce(0, +) > 0, "and it must not be two empty maps agreeing")
-    }
-
-    /// The defect's own signature, pinned: on a records-only dataset the
-    /// legacy arm sees nothing at all.
-    ///
-    /// This is what the widget's pace baseline used to do, and stating it as
-    /// the DEFECT rather than as the fix means the test fails if anyone
-    /// reintroduces the shape.
-    @Test("the legacy arm over a records-only dataset yields nothing, which is why the switch exists")
-    func legacyArmOverRecordsOnlyIsEmpty() {
-        let records = Self.records()
-        let legacyOverRecordsOnly = StatsRecordAdapter.tipRecords(
-            entries: [], records: records, representation: .legacy
-        )
-        #expect(legacyOverRecordsOnly.isEmpty,
-                "post-flip there are no TipEntry rows, so an unswitched pace baseline measures against an empty history")
-
-        let switched = StatsRecordAdapter.tipRecords(
-            entries: [], records: records, representation: .records
-        )
-        #expect(!switched.isEmpty)
+    /// The pace baseline's single arm — `StatsRecordAdapter.tipRecords` over
+    /// records — must actually SEE the stored shifts. An adapter returning
+    /// empty here is the truncation defect's residual shape.
+    @Test("the pace baseline sees every stored shift")
+    func paceBaselineSeesTheRecords() {
+        let rows = StatsRecordAdapter.tipRecords(from: Self.records())
+        #expect(!rows.isEmpty)
+        let total = rows.reduce(0) { $0 + $1.netCents }
+        #expect(total == (2_200 + 3_100 - 400) + (5_600 + 9_900),
+                "the pace baseline must sum the same shifts the ledger values")
     }
 }

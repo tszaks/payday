@@ -1,6 +1,7 @@
 import Testing
 import Foundation
 @testable import Payday
+@testable import PaydayCore
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  The post-save reveal card has TWO lines, and until this change they were
@@ -47,13 +48,29 @@ private func revealShiftID(_ index: Int) -> UUID {
     UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", 500 + index))!
 }
 
+/// A stored history row, in the only shape the app keeps since the flip.
+private func record(
+    _ index: Int, on day: Date, cashCents: Int = 0, creditCents: Int = 0,
+    hoursWorked: Double? = nil, recordedAt: Date
+) -> ShiftRecord {
+    ShiftRecord(
+        id: revealShiftID(index),
+        workDate: day,
+        shiftPeriod: .dinner,
+        cashTipsCents: cashCents,
+        creditTipsCents: creditCents,
+        hoursWorked: hoursWorked,
+        recordedAt: recordedAt
+    )
+}
+
 /// The reveal's own engine, built the way `LogTipSheet.saveNew` builds it:
 /// the ledger's per-shift `earnedIncome` on the history side, the ledger's
 /// figure on the tonight side.
-private func ledgerBasisEngine(records: [TipEntry], snapshot: EarningsSnapshot?) -> StatsEngine {
+private func ledgerBasisEngine(records: [ShiftRecord], snapshot: EarningsSnapshot?) -> StatsEngine {
     StatsEngine(
         payrollTimeZone: PaydayTestZone.payroll,
-        records: records.map(TipRecord.init),
+        records: records.flatMap { ShiftProjection.rows(for: $0).map(TipRecord.init) },
         calendar: revealCalendar(),
         valuedShiftCents: snapshot.map { snap in
             Dictionary(
@@ -65,10 +82,10 @@ private func ledgerBasisEngine(records: [TipEntry], snapshot: EarningsSnapshot?)
 }
 
 /// What shipped before this change: a scalar rate on both sides.
-private func scalarBasisEngine(records: [TipEntry], rateCents: Int) -> StatsEngine {
+private func scalarBasisEngine(records: [ShiftRecord], rateCents: Int) -> StatsEngine {
     StatsEngine(
         payrollTimeZone: PaydayTestZone.payroll,
-        records: records.map(TipRecord.init),
+        records: records.flatMap { ShiftProjection.rows(for: $0).map(TipRecord.init) },
         calendar: revealCalendar(),
         wageCentsPerHour: rateCents
     )
@@ -111,20 +128,32 @@ private func raisePolicies() -> CompensationPolicies {
     )
 }
 
+/// The saved-history snapshot, built the way `DashboardEarnings` builds it —
+/// the adapter is the single boundary now that the bridge is gone.
+@MainActor
+private func savedSnapshot(
+    records: [ShiftRecord],
+    policies: CompensationPolicies,
+    asOf: Date
+) -> EarningsSnapshot? {
+    let adapted = ShiftInputAdapter.adapt(records, calendars: policies.calendars)
+    return try? EarningsSnapshot.build(EarningsInputs(
+        shifts: adapted.inputs,
+        rates: policies.rates,
+        calendars: policies.calendars,
+        asOf: CivilDay(asOf, in: PaydayTestZone.payroll),
+        unreadableReceiptShiftIDs: adapted.unreadableReceiptShiftIDs
+    ))
+}
+
 @Suite("Log Shift reveal: one basis for both lines of the card")
 @MainActor
 struct LogShiftRevealBasisTests {
     /// The previous best: $260.00 of credit and NO hours, so it is worth
     /// exactly $260.00 on either basis. Sat 2026-07-04, its own week.
-    private static func previousBest() -> TipEntry {
-        TipEntry(
-            date: on(2026, 7, 4),
-            amountCents: 26_000,
-            kind: .credit,
-            recordedAt: on(2026, 7, 4, hour: 23),
-            shiftPeriod: .dinner,
-            shiftID: revealShiftID(1)
-        )
+    private static func previousBest() -> ShiftRecord {
+        record(1, on: on(2026, 7, 4), creditCents: 26_000,
+               recordedAt: on(2026, 7, 4, hour: 23))
     }
 
     /// The draft: a March shift backfilled long after the raise. Ten hours at
@@ -134,8 +163,8 @@ struct LogShiftRevealBasisTests {
     private static let draftID = revealShiftID(2)
     private static let draftDate = on(2026, 3, 13)
 
-    private static func draftRows() -> [TipEntry] {
-        ShiftDraftPreview.rows(
+    private static func draftInput() -> ShiftInput? {
+        ShiftDraftPreview.draftInput(
             date: draftDate,
             cashCents: 0,
             creditCents: 15_000,
@@ -148,7 +177,9 @@ struct LogShiftRevealBasisTests {
             clockIn: nil,
             clockOut: nil,
             serverCount: nil,
-            receiptMetrics: nil
+            receiptMetrics: nil,
+            normalizeEarnings: false,
+            policies: raisePolicies()
         )
     }
 
@@ -158,29 +189,21 @@ struct LogShiftRevealBasisTests {
     /// lives outside this week almost by definition, so a windowed comparison
     /// set would leave most of the history on the scalar fallback, mixing the
     /// two bases inside one comparison instead of removing one of them.
-    private static func revealSnapshot(history: [TipEntry]) -> EarningsSnapshot? {
+    private static func revealSnapshot(history: [ShiftRecord]) -> EarningsSnapshot? {
         ShiftDraftPreview.snapshot(
-            draft: ShiftDraftPreview.draftInput(
-                rows: draftRows(),
-                shiftID: draftID,
-                payrollTimeZone: PaydayTestZone.payroll
-            ),
-            entries: history,
+            draft: draftInput(),
+            records: history,
             policies: raisePolicies(),
             payrollTimeZone: PaydayTestZone.payroll,
             windowed: false
         )
     }
 
-    private static func draftFigure(history: [TipEntry]) -> EarningsFigure {
+    private static func draftFigure(history: [ShiftRecord]) -> EarningsFigure {
         LogShiftFacts(
             snapshot: ShiftDraftPreview.snapshot(
-                draft: ShiftDraftPreview.draftInput(
-                    rows: draftRows(),
-                    shiftID: draftID,
-                    payrollTimeZone: PaydayTestZone.payroll
-                ),
-                entries: history,
+                draft: draftInput(),
+                records: history,
                 policies: raisePolicies(),
                 payrollTimeZone: PaydayTestZone.payroll
             ),
@@ -256,14 +279,10 @@ struct LogShiftRevealBasisTests {
         // A prior shift whose ledger value and scalar value differ: ten hours
         // in March, $0 of tips. The ledger says $100.00; the scalar at today's
         // $30.00/hr says $300.00.
-        let prior = TipEntry(
-            date: on(2026, 3, 6),
-            amountCents: 0,
-            kind: .credit,
-            recordedAt: on(2026, 3, 6, hour: 23),
+        let prior = record(
+            3, on: on(2026, 3, 6),
             hoursWorked: 10,
-            shiftPeriod: .dinner,
-            shiftID: revealShiftID(3)
+            recordedAt: on(2026, 3, 6, hour: 23)
         )
         let history = [prior]
         let snapshot = try #require(Self.revealSnapshot(history: history))
@@ -313,11 +332,10 @@ struct LogShiftRevealBasisTests {
 /// to see: only the sentence underneath disagreed.
 ///
 /// The two sides below build their comparison inputs the way each screen does:
-/// Dashboard from a `LegacySnapshotBridge` snapshot of the SAVED history, the
-/// log sheet from a `ShiftDraftPreview` snapshot with tonight still a DRAFT.
-/// That is the substantive claim — a draft that has not been written yet and
-/// the row it becomes are the same dataset to the ledger, so the copy is
-/// byte-identical.
+/// Dashboard from the adapter's snapshot of the SAVED history, the log sheet
+/// from a `ShiftDraftPreview` snapshot with tonight still a DRAFT. That is the
+/// substantive claim — a draft that has not been written yet and the row it
+/// becomes are the same dataset to the ledger, so the copy is byte-identical.
 @Suite("Reveal comparison parity: the log sheet and Dashboard's echo say one thing")
 @MainActor
 struct RevealComparisonParityTests {
@@ -352,16 +370,13 @@ struct RevealComparisonParityTests {
     /// comparison that prints NO figure — so both bases produce the same
     /// sentence and the fixture proves nothing. MEASURED: "Your quietest
     /// dinner in a while." on both sides.
-    private static func priorWeek() -> [TipEntry] {
+    private static func priorWeek() -> [ShiftRecord] {
         (7...11).map { day in
-            TipEntry(
-                date: on(2026, 9, day),
-                amountCents: day == 11 ? 5_000 : 1_000,
-                kind: .credit,
-                recordedAt: on(2026, 9, day, hour: 23),
+            record(
+                10 + day, on: on(2026, 9, day),
+                creditCents: day == 11 ? 5_000 : 1_000,
                 hoursWorked: 10,
-                shiftPeriod: .dinner,
-                shiftID: revealShiftID(10 + day)
+                recordedAt: on(2026, 9, day, hour: 23)
             )
         }
     }
@@ -370,8 +385,19 @@ struct RevealComparisonParityTests {
     private static let tonightID = revealShiftID(30)
     private static let tonightDate = on(2026, 9, 18)
 
-    private static func tonightRows(shiftID: UUID) -> [TipEntry] {
-        ShiftDraftPreview.rows(
+    private static func tonightRecord(shiftID: UUID) -> ShiftRecord {
+        ShiftRecord(
+            id: shiftID,
+            workDate: tonightDate,
+            shiftPeriod: .dinner,
+            creditTipsCents: 5_000,
+            hoursWorked: 10,
+            recordedAt: on(2026, 9, 18, hour: 23)
+        )
+    }
+
+    private static func tonightDraftInput(shiftID: UUID, policies: CompensationPolicies) -> ShiftInput? {
+        ShiftDraftPreview.draftInput(
             date: tonightDate,
             cashCents: 0,
             creditCents: 5_000,
@@ -384,16 +410,17 @@ struct RevealComparisonParityTests {
             clockIn: nil,
             clockOut: nil,
             serverCount: nil,
-            receiptMetrics: nil
+            receiptMetrics: nil,
+            normalizeEarnings: false,
+            policies: policies
         )
     }
 
     @Test("the prior Friday's overtime is exactly what the two bases disagreed about")
     func thePriorFridayCarriesOvertime() throws {
-        let snapshot = try #require(LegacySnapshotBridge.snapshot(
-            entries: Self.priorWeek(),
+        let snapshot = try #require(savedSnapshot(
+            records: Self.priorWeek(),
             policies: Self.mondayStartPolicies(),
-            payrollTimeZone: PaydayTestZone.payroll,
             asOf: Self.tonightDate
         ))
         let friday = try #require(snapshot.valuation(Self.priorFridayID))
@@ -416,12 +443,11 @@ struct RevealComparisonParityTests {
         let night = revealCalendar().startOfDay(for: Self.tonightDate)
 
         // ── DASHBOARD's echo: tonight is SAVED, and the snapshot is the
-        //    bridge's over the whole stored history.
-        let saved = Self.tonightRows(shiftID: Self.tonightID)
-        let dashboardSnapshot = try #require(LegacySnapshotBridge.snapshot(
-            entries: history + saved,
+        //    adapter's over the whole stored history.
+        let saved = Self.tonightRecord(shiftID: Self.tonightID)
+        let dashboardSnapshot = try #require(savedSnapshot(
+            records: history + [saved],
             policies: policies,
-            payrollTimeZone: PaydayTestZone.payroll,
             asOf: Self.tonightDate
         ))
         let dashboardFigure = EarningsFigure.shiftEarnedIncome(
@@ -430,7 +456,7 @@ struct RevealComparisonParityTests {
         )
         let dashboardCents = try #require(dashboardFigure.cents)
         let dashboardResult = ledgerBasisEngine(
-            records: history + saved,
+            records: history + [saved],
             snapshot: dashboardSnapshot
         ).reveal(
             forNightAt: night,
@@ -441,29 +467,15 @@ struct RevealComparisonParityTests {
 
         // ── THE LOG SHEET: tonight is still a DRAFT, and the snapshot is the
         //    preview's over the same history with the draft substituted in.
-        let draftRows = Self.tonightRows(shiftID: Self.tonightID)
         let logSnapshot = try #require(ShiftDraftPreview.snapshot(
-            draft: ShiftDraftPreview.draftInput(
-                rows: draftRows,
-                shiftID: Self.tonightID,
-                payrollTimeZone: PaydayTestZone.payroll
-            ),
-            entries: history,
+            draft: Self.tonightDraftInput(shiftID: Self.tonightID, policies: policies),
+            records: history,
             policies: policies,
             payrollTimeZone: PaydayTestZone.payroll,
             windowed: false
         ))
         let logFigure = LogShiftFacts(
-            snapshot: ShiftDraftPreview.snapshot(
-                draft: ShiftDraftPreview.draftInput(
-                    rows: draftRows,
-                    shiftID: Self.tonightID,
-                    payrollTimeZone: PaydayTestZone.payroll
-                ),
-                entries: history,
-                policies: policies,
-                payrollTimeZone: PaydayTestZone.payroll
-            ),
+            snapshot: logSnapshot,
             draftID: Self.tonightID,
             date: Self.tonightDate,
             shiftPeriod: .dinner,

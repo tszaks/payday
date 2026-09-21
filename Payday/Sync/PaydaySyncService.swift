@@ -1095,13 +1095,6 @@ final class PaydaySyncService {
         let followUp = !tipsChangedDuringSync.isEmpty
             || !paychecksChangedDuringSync.isEmpty
             || settingsChangedDuringSync
-            // THE LIVENESS REQUIREMENT. Nothing inside the deferral re-arms
-            // it, so a caller treating `.deferPromotion` as a no-op would
-            // strand the account on the legacy representation for the rest of
-            // the session -- a guard against a few-seconds straddle turned
-            // into an indefinite one. Asking for a follow-up pass is what
-            // makes the deferral a DELAY rather than a cancellation.
-            || authority.deferred
 
         // Read the watermark LAST, after every push and pull this pass will
         // do. Reading it earlier would record a number that this pass's own
@@ -1185,9 +1178,6 @@ final class PaydaySyncService {
     /// A struct rather than a tuple so adding a third fact later cannot
     /// silently reorder the two that exist.
     struct ShiftAuthorityLegResult: Equatable {
-        /// Whether a promotion was held back; the caller maps this onto
-        /// `requiresFollowUpSync`.
-        let deferred: Bool
         /// Legacy groups the server has not folded yet, or nil when this pass
         /// learned nothing -- an absent row, or a read that failed.
         ///
@@ -1198,7 +1188,7 @@ final class PaydaySyncService {
         /// kept at the type.
         let remainingGroupCount: Int?
 
-        static let unknown = ShiftAuthorityLegResult(deferred: false, remainingGroupCount: nil)
+        static let unknown = ShiftAuthorityLegResult(remainingGroupCount: nil)
     }
 
     static func applyShiftAuthorityLeg(
@@ -1215,7 +1205,6 @@ final class PaydaySyncService {
             let state = try row.authorityState()
             let outcome = PaydaySyncState.applyShiftAuthority(state, for: userID)
             return ShiftAuthorityLegResult(
-                deferred: outcome == .deferPromotion,
                 // Read from the PARSED state, not from `row`, so the count
                 // and the authority decision can never come from different
                 // readings of the same response.

@@ -50,11 +50,8 @@ struct HistoryView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(PayScheduleStore.self) private var scheduleStore
     @Environment(PolicyStore.self) private var policyStore
-    @Query private var allEntries: [TipEntry]
-    /// The other representation, for the export. On a converted account a
-    /// shift logged since conversion has NO `TipEntry` at all, so an export
-    /// built from `allEntries` alone omits it permanently -- the deriver runs
-    /// legacy-to-records only and nothing ever writes a `TipEntry` back.
+    /// The export's only representation: a shift logged post-flip has no
+    /// `TipEntry` at all, and nothing ever writes one back.
     @Query private var shiftRecords: [ShiftRecord]
     @Query private var paycheckRecords: [PaycheckRecord]
 
@@ -100,7 +97,6 @@ struct HistoryView: View {
                     ShareLink(
                         item: CSVExport {
                             CSVExporter.export(
-                                entries: allEntries,
                                 records: shiftRecords,
                                 paycheckRecords: paycheckRecords,
                                 calculator: calculator

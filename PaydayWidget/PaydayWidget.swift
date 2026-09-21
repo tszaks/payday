@@ -163,11 +163,10 @@ struct PaydayWidgetProvider: TimelineProvider {
         // had been scoped to `Payday` alone, so this whole target was
         // unchecked by the lint written to prevent this class of miss.
         let context = ModelContext(SharedModelContainer.shared)
-        let allEntries = (try? context.fetch(FetchDescriptor<TipEntry>())) ?? []
         let allRecords = (try? context.fetch(FetchDescriptor<ShiftRecord>())) ?? []
         let engine = StatsEngine(
             payrollTimeZone: policyStore.payrollTimeZone,
-            records: StatsRecordAdapter.tipRecords(entries: allEntries, records: allRecords)
+            records: StatsRecordAdapter.tipRecords(from: allRecords)
         )
         return dates.map {
             Self.buildEntry(at: $0, schedule: schedule, snapshot: snapshot, engine: engine, policyStore: policyStore)

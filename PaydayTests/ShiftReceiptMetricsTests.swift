@@ -62,13 +62,18 @@ struct ShiftReceiptMetricsTests {
         #expect(ShiftDetails.resolve(from: [cash, credit]).receiptMetrics == metrics)
     }
 
-    @Test("delete undo snapshot preserves receipt metrics")
-    func undoSnapshotPreservesMetrics() {
-        let entry = TipEntry(date: .now, amountCents: 2_400, kind: .credit, receiptMetrics: metrics)
+    @Test("the delete capture preserves receipt metrics")
+    func deleteCapturePreservesMetrics() {
+        let captured = ShiftCommands.DeletedShift(
+            id: UUID(), workDate: .now, shiftPeriod: .dinner,
+            cashTipsCents: 0, creditTipsCents: 2_400,
+            tipOutCents: nil, salesCents: nil, hoursWorked: nil,
+            clockIn: nil, clockOut: nil, serverCount: nil,
+            receiptMetrics: metrics, note: nil, recordedAt: nil,
+            source: .device, legacyEntryIDs: [], deletedAt: .now
+        )
 
-        let restored = DeletedTipSnapshot(entry: entry).restored()
-
-        #expect(restored.receiptMetrics == metrics)
+        #expect(captured.receiptMetrics == metrics)
     }
 
     @Test("a partial rescan updates known values without erasing prior facts")

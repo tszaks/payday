@@ -46,12 +46,13 @@ private func sundayStartPolicies(rateCents: Int = 1_000) -> CompensationPolicies
 /// Three properties of this shape are load-bearing, and each one was measured
 /// rather than assumed:
 ///
-/// 1. **The week is in the PAST.** `ShiftWriter.insertShift` clamps a shift's
+/// 1. **The week is in the PAST.** `ShiftCommands.create` clamps a shift's
 ///    date with `min(date, .now)` because a shift can never be logged for the
-///    future, and `ShiftDraftPreview.rows` restates that clamp so the preview
-///    values what the save will write. A fixture dated next month collapses
-///    BOTH sides onto today, into an empty workweek — the first cut of this
-///    suite read 22883 == 22883 with straight-time wages and looked green.
+///    future, and `ShiftDraftPreview.draftInput` restates that clamp so the
+///    preview values what the save will write. A fixture dated next month
+///    collapses BOTH sides onto today, into an empty workweek — the first cut
+///    of this suite read 22883 == 22883 with straight-time wages and looked
+///    green.
 /// 2. **The existing shifts are LUNCH and the draft is DINNER.** The ledger
 ///    orders a workweek by (work day, period rank, recordedAt, id) and lunch
 ///    ranks before dinner, so the draft lands AFTER Wednesday's own shift and
@@ -62,19 +63,18 @@ private func sundayStartPolicies(rateCents: Int = 1_000) -> CompensationPolicies
 ///    minutes before the draft and the draft is entirely overtime. At 6h the
 ///    threshold cuts the draft in half, which is the case a per-shift
 ///    calculation cannot reproduce at all.
-private func weekOfFiftyHours() -> [TipEntry] {
+private func weekOfFiftyHours() -> [ShiftRecord] {
     [
         (2026, 8, 30, 1, 10.0), (2026, 8, 31, 2, 10.0), (2026, 9, 1, 3, 10.0),
         (2026, 9, 2, 4, 6.0), (2026, 9, 3, 5, 10.0)
     ].map { year, month, day, index, hours in
-        TipEntry(
-            date: at(year, month, day),
-            amountCents: 1_000,
-            kind: .credit,
-            recordedAt: at(year, month, day, hour: 23),
-            hoursWorked: hours,
+        ShiftRecord(
+            id: logShiftID(index),
+            workDate: at(year, month, day),
             shiftPeriod: .lunch,
-            shiftID: logShiftID(index)
+            creditTipsCents: 1_000,
+            hoursWorked: hours,
+            recordedAt: at(year, month, day, hour: 23)
         )
     }
 }
@@ -105,13 +105,18 @@ private func at(_ year: Int, _ month: Int, _ day: Int, hour: Int, minute: Int) -
 @MainActor
 private func makeContext() throws -> ModelContext {
     let config = ModelConfiguration(isStoredInMemoryOnly: true)
-    let container = try ModelContainer(for: TipEntry.self, PaycheckRecord.self, configurations: config)
+    let container = try ModelContainer(for: ShiftRecord.self, configurations: config)
     return ModelContext(container)
 }
 
-/// The draft rows the sheet previews, exactly as the sheet builds them.
-private func draftRows() -> [TipEntry] {
-    ShiftDraftPreview.rows(
+/// The draft the sheet previews, built as the `ShiftInput` the save writes —
+/// the only shape `ShiftDraftPreview` speaks since the flip. A NEW shift, so
+/// `normalizeEarnings` is false: `ShiftCommands.create` stores the fields raw.
+@MainActor
+private func standardDraftInput(
+    policies: CompensationPolicies = sundayStartPolicies()
+) -> ShiftInput? {
+    ShiftDraftPreview.draftInput(
         date: Draft.date,
         cashCents: Draft.cashCents,
         creditCents: Draft.creditCents,
@@ -124,27 +129,26 @@ private func draftRows() -> [TipEntry] {
         clockIn: nil,
         clockOut: nil,
         serverCount: nil,
-        receiptMetrics: nil
+        receiptMetrics: nil,
+        normalizeEarnings: false,
+        policies: policies
     )
 }
 
-/// The facts the sheet renders for that draft, over that history.
+/// The facts the sheet renders for a draft, over a record history. `draft` is
+/// the caller's own `ShiftInput` — pass nil for the untouched-sheet case.
+@MainActor
 private func draftFacts(
-    entries: [TipEntry] = weekOfFiftyHours(),
+    records: [ShiftRecord] = weekOfFiftyHours(),
     policies: CompensationPolicies = sundayStartPolicies(),
-    rows: [TipEntry]? = nil,
+    draft: ShiftInput?,
     hoursWorked: Double? = Draft.hoursWorked,
     shiftID: UUID = logShiftID(99),
     windowed: Bool = true
 ) -> LogShiftFacts {
-    let rows = rows ?? draftRows()
     let snapshot = ShiftDraftPreview.snapshot(
-        draft: ShiftDraftPreview.draftInput(
-            rows: rows,
-            shiftID: shiftID,
-            payrollTimeZone: PaydayTestZone.payroll
-        ),
-        entries: entries,
+        draft: draft,
+        records: records,
         policies: policies,
         payrollTimeZone: PaydayTestZone.payroll,
         windowed: windowed
@@ -160,6 +164,43 @@ private func draftFacts(
         calendar: logCalendar(),
         now: Draft.recordedAt
     )
+}
+
+/// The common case: the standard draft's facts.
+@MainActor
+private func draftFacts(
+    records: [ShiftRecord] = weekOfFiftyHours(),
+    policies: CompensationPolicies = sundayStartPolicies(),
+    hoursWorked: Double? = Draft.hoursWorked,
+    shiftID: UUID = logShiftID(99),
+    windowed: Bool = true
+) -> LogShiftFacts {
+    draftFacts(
+        records: records,
+        policies: policies,
+        draft: standardDraftInput(policies: policies),
+        hoursWorked: hoursWorked,
+        shiftID: shiftID,
+        windowed: windowed
+    )
+}
+
+/// The saved-history snapshot, built the way `DashboardEarnings` builds it —
+/// the adapter is the single boundary now that the bridge is gone.
+@MainActor
+private func savedSnapshot(
+    records: [ShiftRecord],
+    policies: CompensationPolicies,
+    asOf: Date
+) -> EarningsSnapshot? {
+    let adapted = ShiftInputAdapter.adapt(records, calendars: policies.calendars)
+    return try? EarningsSnapshot.build(EarningsInputs(
+        shifts: adapted.inputs,
+        rates: policies.rates,
+        calendars: policies.calendars,
+        asOf: CivilDay(asOf, in: PaydayTestZone.payroll),
+        unreadableReceiptShiftIDs: adapted.unreadableReceiptShiftIDs
+    ))
 }
 
 /// Definition of Done #5, on the one screen where a person sees the same shift
@@ -182,34 +223,32 @@ struct LogShiftPreSaveParityTests {
         let policies = sundayStartPolicies()
 
         // BEFORE the save: what the header renders.
-        let facts = draftFacts(entries: history, policies: policies)
+        let facts = draftFacts(records: history, policies: policies)
         let headerCents = try #require(facts.total.cents)
 
         // THE SAVE, through the real writer, into a real context.
         let context = try makeContext()
-        let saved = ShiftWriter.insertShift(
-            into: context,
-            date: Draft.date,
-            cashCents: Draft.cashCents,
-            creditCents: Draft.creditCents,
-            recordedAt: Draft.recordedAt,
-            hoursWorked: Draft.hoursWorked,
+        let saved = try ShiftCommands.create(
+            in: context,
+            workDate: Draft.date,
+            shiftPeriod: .dinner,
+            cashTipsCents: Draft.cashCents,
+            creditTipsCents: Draft.creditCents,
             tipOutCents: Draft.tipOutCents,
-            shiftPeriod: .dinner
+            hoursWorked: Draft.hoursWorked,
+            recordedAt: Draft.recordedAt
         )
-        let savedShiftID = try #require(saved.first?.shiftID)
 
         // AFTER the save: what `ShiftDayRow` renders on Dashboard, off the
-        // bridge's snapshot of the whole history including the new rows.
-        let afterSnapshot = try #require(LegacySnapshotBridge.snapshot(
-            entries: history + saved,
+        // adapted snapshot of the whole history including the new record.
+        let afterSnapshot = try #require(savedSnapshot(
+            records: history + [saved],
             policies: policies,
-            payrollTimeZone: PaydayTestZone.payroll,
             asOf: at(2026, 9, 10)
         ))
         let row = ShiftDayRowFacts(
             snapshot: afterSnapshot,
-            shiftID: savedShiftID,
+            shiftID: saved.id,
             day: Draft.date,
             period: .dinner,
             dayHasMultipleShifts: true
@@ -247,27 +286,23 @@ struct LogShiftPreSaveParityTests {
 
     @Test("the preview's draft input is the same input the save produces, field for field")
     func previewInputMatchesTheSavedInput() throws {
+        let policies = sundayStartPolicies()
         let context = try makeContext()
-        let saved = ShiftWriter.insertShift(
-            into: context,
-            date: Draft.date,
-            cashCents: Draft.cashCents,
-            creditCents: Draft.creditCents,
-            recordedAt: Draft.recordedAt,
-            hoursWorked: Draft.hoursWorked,
+        let saved = try ShiftCommands.create(
+            in: context,
+            workDate: Draft.date,
+            shiftPeriod: .dinner,
+            cashTipsCents: Draft.cashCents,
+            creditTipsCents: Draft.creditCents,
             tipOutCents: Draft.tipOutCents,
-            shiftPeriod: .dinner
+            hoursWorked: Draft.hoursWorked,
+            recordedAt: Draft.recordedAt
         )
-        let savedShiftID = try #require(saved.first?.shiftID)
-        let savedInput = try #require(LegacySnapshotBridge.shiftInput(
-            for: (day: Draft.date, shiftID: savedShiftID, items: saved),
-            payrollTimeZone: PaydayTestZone.payroll
+        let savedInput = try #require(ShiftInputAdapter.input(
+            from: saved,
+            calendars: policies.calendars
         ))
-        var previewInput = try #require(ShiftDraftPreview.draftInput(
-            rows: draftRows(),
-            shiftID: logShiftID(99),
-            payrollTimeZone: PaydayTestZone.payroll
-        ))
+        var previewInput = try #require(standardDraftInput(policies: policies))
 
         // The id is the ONE field that legitimately differs: the save mints
         // its own. Everything the ledger values a shift on has to be equal, so
@@ -308,7 +343,7 @@ struct LogShiftFactsTests {
 
     @Test("a draft with no hours logged is headed 'Known so far', never 'Total'")
     func partialDraftIsNeverATotal() throws {
-        let rows = ShiftDraftPreview.rows(
+        let draft = ShiftDraftPreview.draftInput(
             date: Draft.date,
             cashCents: Draft.cashCents,
             creditCents: Draft.creditCents,
@@ -321,9 +356,11 @@ struct LogShiftFactsTests {
             clockIn: nil,
             clockOut: nil,
             serverCount: nil,
-            receiptMetrics: nil
+            receiptMetrics: nil,
+            normalizeEarnings: false,
+            policies: sundayStartPolicies()
         )
-        let facts = draftFacts(rows: rows, hoursWorked: nil)
+        let facts = draftFacts(draft: draft, hoursWorked: nil)
 
         #expect(facts.total.label == "Known so far")
         #expect(facts.total.mayBeCalledATotal == false)
@@ -387,12 +424,8 @@ struct LogShiftFactsTests {
     @Test("the draft's minutes are the engine's minutes, so the caption and the wage describe one shift")
     func draftMinutesAreTheEngineMinutes() throws {
         let snapshot = try #require(ShiftDraftPreview.snapshot(
-            draft: ShiftDraftPreview.draftInput(
-                rows: draftRows(),
-                shiftID: logShiftID(99),
-                payrollTimeZone: PaydayTestZone.payroll
-            ),
-            entries: weekOfFiftyHours(),
+            draft: standardDraftInput(),
+            records: weekOfFiftyHours(),
             policies: sundayStartPolicies(),
             payrollTimeZone: PaydayTestZone.payroll
         ))
@@ -427,7 +460,7 @@ struct LogShiftFactsTests {
         // changing a tip amount.
         let history = weekOfFiftyHours()
         let editedID = logShiftID(3)   // the stored Tuesday shift
-        let rows = ShiftDraftPreview.rows(
+        let draft = ShiftDraftPreview.draftInput(
             date: at(2026, 9, 1),
             cashCents: 0,
             creditCents: 2_000,        // was 1000: the one edit
@@ -440,15 +473,13 @@ struct LogShiftFactsTests {
             clockIn: nil,
             clockOut: nil,
             serverCount: nil,
-            receiptMetrics: nil
+            receiptMetrics: nil,
+            normalizeEarnings: true,   // an edit: commitLiveEdit's fold runs
+            policies: sundayStartPolicies()
         )
         let snapshot = try #require(ShiftDraftPreview.snapshot(
-            draft: ShiftDraftPreview.draftInput(
-                rows: rows,
-                shiftID: editedID,
-                payrollTimeZone: PaydayTestZone.payroll
-            ),
-            entries: history,
+            draft: draft,
+            records: history,
             policies: sundayStartPolicies(),
             payrollTimeZone: PaydayTestZone.payroll
         ))
@@ -478,7 +509,7 @@ struct LogShiftFactsTests {
         #expect(facts.isUnbacked == false)
         #expect(stamp.digest == draftFacts().stamp?.digest)
         // And a different draft is a different dataset.
-        let otherRows = ShiftDraftPreview.rows(
+        let otherDraft = ShiftDraftPreview.draftInput(
             date: Draft.date,
             cashCents: Draft.cashCents + 100,
             creditCents: Draft.creditCents,
@@ -491,9 +522,11 @@ struct LogShiftFactsTests {
             clockIn: nil,
             clockOut: nil,
             serverCount: nil,
-            receiptMetrics: nil
+            receiptMetrics: nil,
+            normalizeEarnings: false,
+            policies: sundayStartPolicies()
         )
-        #expect(draftFacts(rows: otherRows).stamp?.digest != stamp.digest)
+        #expect(draftFacts(draft: otherDraft).stamp?.digest != stamp.digest)
     }
 }
 
@@ -506,43 +539,41 @@ struct LogShiftFactsTests {
 struct LogShiftPreviewPerformanceTests {
     static let budgetScale: Double = ProcessInfo.processInfo.environment["CI"] == nil ? 1 : 4
 
-    @Test("one preview over a 10,000-row history stays inside a per-keystroke budget")
-    func previewOverATenThousandRowHistory() throws {
+    @Test("one preview over a 10,000-shift history stays inside a per-keystroke budget")
+    func previewOverATenThousandShiftHistory() throws {
         let calendar = logCalendar()
         let start = try #require(calendar.date(from: DateComponents(year: 2016, month: 1, day: 1)))
-        let entries = (0..<10_000).map { index in
-            TipEntry(
-                date: calendar.date(byAdding: .day, value: index / 2, to: start) ?? start,
-                amountCents: 4_000 + index,
-                kind: index.isMultiple(of: 2) ? .cash : .credit,
-                recordedAt: calendar.date(byAdding: .day, value: index / 2, to: start),
+        let records = (0..<10_000).map { index in
+            ShiftRecord(
+                id: logShiftID(1_000 + index),
+                workDate: calendar.date(byAdding: .day, value: index, to: start) ?? start,
+                cashTipsCents: index.isMultiple(of: 2) ? 4_000 + index : 0,
+                creditTipsCents: index.isMultiple(of: 2) ? 0 : 4_000 + index,
                 hoursWorked: index.isMultiple(of: 2) ? 8 : nil,
-                shiftID: logShiftID(1_000 + index / 2)
+                recordedAt: calendar.date(byAdding: .day, value: index, to: start)
             )
         }
 
         let began = Date()
-        let facts = draftFacts(entries: entries)
+        let facts = draftFacts(records: records)
         let elapsed = Date().timeIntervalSince(began)
 
         #expect(facts.total.cents != nil)
         // 0.05s is deliberately an order of magnitude below the 0.5s the
         // render-once facts get: this path runs per KEYSTROKE, and SwiftUI
-        // evaluates a body more than once per change. MEASURED at 0.245s over
-        // this history before the workweek window and 0.028s after — an 8.7x
-        // cut. What is left is the O(n) `ShiftDays.groupedByShift` pass over
-        // every row, which runs before the window can be applied because a
-        // group's work day is its earliest row's; it is the same pass Dashboard
-        // already makes once per render. A regression here means the window
-        // stopped working, not that the machine is busy.
+        // evaluates a body more than once per change. What is left is the O(n)
+        // `ShiftInputAdapter` pass over every record, which runs before the
+        // window can be applied because a record's work day is already
+        // resolved. A regression here means the window stopped working, not
+        // that the machine is busy.
         #expect(
             elapsed < 0.05 * Self.budgetScale,
-            "Log Shift preview took \(elapsed) seconds over \(entries.count) rows against a 0.05s budget scaled x\(Self.budgetScale)"
+            "Log Shift preview took \(elapsed) seconds over \(records.count) records against a 0.05s budget scaled x\(Self.budgetScale)"
         )
     }
 
     @Test("the reveal's whole-history snapshot stays inside a per-save budget")
-    func revealSnapshotOverATenThousandRowHistory() throws {
+    func revealSnapshotOverATenThousandShiftHistory() throws {
         // `LogTipSheet.revealHistorySnapshot()` deliberately does NOT take the
         // workweek window: the reveal compares tonight against every prior
         // shift, and an all-time record lives outside this week almost by
@@ -551,28 +582,23 @@ struct LogShiftPreviewPerformanceTests {
         // ONCE PER SAVE rather than per keystroke — a budget two orders of
         // magnitude looser than the one above, and it is bounded here so a
         // future change cannot quietly move this cost onto a keystroke.
-        // MEASURED at 0.2335s over the 10,000 rows below.
         let calendar = logCalendar()
         let start = try #require(calendar.date(from: DateComponents(year: 2016, month: 1, day: 1)))
-        let entries = (0..<10_000).map { index in
-            TipEntry(
-                date: calendar.date(byAdding: .day, value: index / 2, to: start) ?? start,
-                amountCents: 4_000 + index,
-                kind: index.isMultiple(of: 2) ? .cash : .credit,
-                recordedAt: calendar.date(byAdding: .day, value: index / 2, to: start),
+        let records = (0..<10_000).map { index in
+            ShiftRecord(
+                id: logShiftID(1_000 + index),
+                workDate: calendar.date(byAdding: .day, value: index, to: start) ?? start,
+                cashTipsCents: index.isMultiple(of: 2) ? 4_000 + index : 0,
+                creditTipsCents: index.isMultiple(of: 2) ? 0 : 4_000 + index,
                 hoursWorked: index.isMultiple(of: 2) ? 8 : nil,
-                shiftID: logShiftID(1_000 + index / 2)
+                recordedAt: calendar.date(byAdding: .day, value: index, to: start)
             )
         }
 
         let began = Date()
         let snapshot = ShiftDraftPreview.snapshot(
-            draft: ShiftDraftPreview.draftInput(
-                rows: draftRows(),
-                shiftID: logShiftID(99),
-                payrollTimeZone: PaydayTestZone.payroll
-            ),
-            entries: entries,
+            draft: standardDraftInput(),
+            records: records,
             policies: sundayStartPolicies(),
             payrollTimeZone: PaydayTestZone.payroll,
             windowed: false
@@ -587,10 +613,10 @@ struct LogShiftPreviewPerformanceTests {
         }
         let elapsed = Date().timeIntervalSince(began)
 
-        #expect(valued?.count == 5_001)
+        #expect(valued?.count == 10_001)
         #expect(
             elapsed < 0.6 * Self.budgetScale,
-            "the reveal's whole-history snapshot took \(elapsed) seconds over \(entries.count) rows against a 0.6s budget scaled x\(Self.budgetScale)"
+            "the reveal's whole-history snapshot took \(elapsed) seconds over \(records.count) records against a 0.6s budget scaled x\(Self.budgetScale)"
         )
     }
 }
@@ -605,7 +631,7 @@ struct LogShiftPreviewWindowTests {
     @Test("the windowed preview and the whole-history preview give the identical figure")
     func windowedEqualsWholeHistory() throws {
         // Four years of shifts BEFORE the fixture week, so the window is
-        // throwing away 1,500 rows rather than none. Deliberately not
+        // throwing away 1,500 records rather than none. Deliberately not
         // overlapping it: the first cut of this test ran the noise from
         // 2024-01-01 for 1,500 consecutive days, which reached into September
         // 2026 and added nine hours to the fixture week itself. The two sides
@@ -616,20 +642,19 @@ struct LogShiftPreviewWindowTests {
         let calendar = logCalendar()
         let anchor = try #require(calendar.date(from: DateComponents(year: 2022, month: 1, day: 1)))
         let noise = (0..<1_500).map { index in
-            TipEntry(
-                date: calendar.date(byAdding: .day, value: index, to: anchor) ?? anchor,
-                amountCents: 3_000 + index,
-                kind: .credit,
-                recordedAt: calendar.date(byAdding: .day, value: index, to: anchor),
-                hoursWorked: 9,
+            ShiftRecord(
+                id: logShiftID(5_000 + index),
+                workDate: calendar.date(byAdding: .day, value: index, to: anchor) ?? anchor,
                 shiftPeriod: .dinner,
-                shiftID: logShiftID(5_000 + index)
+                creditTipsCents: 3_000 + index,
+                hoursWorked: 9,
+                recordedAt: calendar.date(byAdding: .day, value: index, to: anchor)
             )
         }
         let history = weekOfFiftyHours() + noise
 
-        let windowed = draftFacts(entries: history, windowed: true)
-        let whole = draftFacts(entries: history, windowed: false)
+        let windowed = draftFacts(records: history, windowed: true)
+        let whole = draftFacts(records: history, windowed: false)
 
         #expect(windowed.total.cents == whole.total.cents)
         #expect(windowed.total.label == whole.total.label)
@@ -638,7 +663,7 @@ struct LogShiftPreviewWindowTests {
         #expect(windowed.hoursCaption == whole.hoursCaption)
         #expect(windowed.draftMinutes == whole.draftMinutes)
         #expect(windowed.includesNonTipIncome == whole.includesNonTipIncome)
-        // The noise rows sit on their own days, so the fixture week's own
+        // The noise records sit on their own days, so the fixture week's own
         // allocation is unchanged and the figure is still the measured one.
         #expect(windowed.total.cents == 24_075)
         // The stamps DO differ, and that is correct rather than a defect: they
@@ -688,39 +713,35 @@ struct LogShiftPreviewWindowTests {
 /// The P0 wave 1 review found by execution: a shift that carries HOURS but no
 /// money is a real persisted shape, and the preview refused it.
 ///
-/// `ShiftWriter.insertShift` writes no row for $0 of tips, but it is not the
-/// only writer. The EDIT path is `commitLiveEdit`, which sets
-/// `row.amountCents = cents` and never deletes the anchor, and
-/// `pruneZeroedRows` deliberately keeps one ("Every row is zero: keep the
-/// anchor"). So a shift with ten hours and no tips lives on disk as a single
-/// zero-cents row holding every shift-level detail. `ShiftDraftPreview.rows`
-/// restated only the insert's rule, produced no rows, and made `draftInput`
-/// nil — so the sheet's whole preview snapshot was nil and its header rendered
-/// the unavailable placeholder over a shift Dashboard was showing at $100.00
-/// through the same bridge.
+/// `ShiftCommands.create` saves a wage-only shift fine — hours alone are
+/// `hasSomethingToSave` — and the record sits on disk holding every
+/// shift-level detail at zero cents. The preview's substance rule now matches
+/// the save's: hours, punches or receipt metrics all make a draft worth
+/// valuing. Before that match the sheet's whole preview snapshot was nil and
+/// its header rendered the unavailable placeholder over a shift Dashboard was
+/// showing at $100.00.
 @Suite("Log Shift: a shift with hours and no money still has a figure")
 @MainActor
 struct LogShiftZeroMoneyDraftTests {
-    /// Wed 2026-09-02, ten hours, no tips: one zero-cents credit row carrying
-    /// the hours, exactly what the edit writers leave behind.
+    /// Wed 2026-09-02, ten hours, no tips: what the save writes for a
+    /// wage-only shift, in the only stored shape since the flip.
     private static let savedID = logShiftID(7)
 
-    private static func savedShift() -> [TipEntry] {
-        [TipEntry(
-            date: at(2026, 9, 2),
-            amountCents: 0,
-            kind: .credit,
-            recordedAt: at(2026, 9, 2, hour: 23),
-            hoursWorked: 10,
+    private static func savedShift() -> [ShiftRecord] {
+        [ShiftRecord(
+            id: savedID,
+            workDate: at(2026, 9, 2),
             shiftPeriod: .dinner,
-            shiftID: savedID
+            hoursWorked: 10,
+            recordedAt: at(2026, 9, 2, hour: 23)
         )]
     }
 
     /// The draft the Edit sheet holds for that shift: both money fields at
     /// zero, the hours still there.
-    private static func zeroMoneyRows() -> [TipEntry] {
-        ShiftDraftPreview.rows(
+    @MainActor
+    private static func zeroMoneyDraft() -> ShiftInput? {
+        ShiftDraftPreview.draftInput(
             date: at(2026, 9, 2),
             cashCents: 0,
             creditCents: 0,
@@ -733,21 +754,20 @@ struct LogShiftZeroMoneyDraftTests {
             clockIn: nil,
             clockOut: nil,
             serverCount: nil,
-            receiptMetrics: nil
+            receiptMetrics: nil,
+            normalizeEarnings: true,   // an edit: commitLiveEdit's fold runs
+            policies: sundayStartPolicies()
         )
     }
 
-    @Test("the draft's rows are the shape the EDIT writers persist: one zero-cents anchor")
-    func zeroMoneyDraftStillHasAnAnchorRow() throws {
-        let rows = Self.zeroMoneyRows()
-        #expect(rows.count == 1)
-        let anchor = try #require(rows.first)
-        #expect(anchor.amountCents == 0)
-        // Credit is detail rank 1, so this is the row `ShiftDetails.write`
-        // lands the details on and `resolve` reads them back from.
-        #expect(anchor.kind == .credit)
-        #expect(anchor.hoursWorked == 10)
-        #expect(anchor.shiftID == Self.savedID)
+    @Test("a draft carrying only hours still has substance: the preview does not refuse it")
+    func hoursOnlyDraftStillHasAnInput() throws {
+        let input = try #require(Self.zeroMoneyDraft())
+        #expect(input.minutesWorked == 600)
+        #expect(input.voluntaryCashCents == 0)
+        #expect(input.voluntaryCreditCents == 0)
+        #expect(input.id == Self.savedID)
+        #expect(input.period == .dinner)
     }
 
     @Test("the Edit sheet's header equals the Dashboard row for the SAME saved shift at $0 of tips")
@@ -755,12 +775,11 @@ struct LogShiftZeroMoneyDraftTests {
         let history = Self.savedShift()
         let policies = sundayStartPolicies()
 
-        // Dashboard's own row, off the bridge — the surface that was already
-        // right.
-        let historySnapshot = try #require(LegacySnapshotBridge.snapshot(
-            entries: history,
+        // Dashboard's own row, off the adapter's snapshot — the surface that
+        // was already right.
+        let historySnapshot = try #require(savedSnapshot(
+            records: history,
             policies: policies,
-            payrollTimeZone: PaydayTestZone.payroll,
             asOf: at(2026, 9, 10)
         ))
         let row = ShiftDayRowFacts(
@@ -774,9 +793,9 @@ struct LogShiftZeroMoneyDraftTests {
         // The Edit sheet, over the same history, with the same shift as its
         // draft.
         let facts = draftFacts(
-            entries: history,
+            records: history,
             policies: policies,
-            rows: Self.zeroMoneyRows(),
+            draft: Self.zeroMoneyDraft(),
             hoursWorked: 10,
             shiftID: Self.savedID
         )
@@ -801,7 +820,7 @@ struct LogShiftZeroMoneyDraftTests {
         // Neither `shiftPeriod` nor `salesCents` can move a cents figure, so
         // neither counts as substance — otherwise this sheet would open with
         // "$0.00 / Total", a zero standing in for "nothing entered yet".
-        let rows = ShiftDraftPreview.rows(
+        let input = ShiftDraftPreview.draftInput(
             date: at(2026, 9, 2),
             cashCents: 0,
             creditCents: 0,
@@ -814,16 +833,13 @@ struct LogShiftZeroMoneyDraftTests {
             clockIn: nil,
             clockOut: nil,
             serverCount: nil,
-            receiptMetrics: nil
+            receiptMetrics: nil,
+            normalizeEarnings: false,
+            policies: sundayStartPolicies()
         )
-        #expect(rows.isEmpty)
-        #expect(ShiftDraftPreview.draftInput(
-            rows: rows,
-            shiftID: logShiftID(8),
-            payrollTimeZone: PaydayTestZone.payroll
-        ) == nil)
+        #expect(input == nil)
 
-        let facts = draftFacts(rows: rows, hoursWorked: nil, shiftID: logShiftID(8))
+        let facts = draftFacts(draft: nil, hoursWorked: nil, shiftID: logShiftID(8))
         #expect(facts.isUnbacked)
         #expect(facts.total.text == nil)
         #expect(facts.total.cents == nil)
@@ -835,7 +851,7 @@ struct LogShiftZeroMoneyDraftTests {
         // the hours, and the person has not typed a tip yet. The pre-migration
         // header showed $100.00 here; before this fix it showed the
         // unavailable placeholder.
-        let rows = ShiftDraftPreview.rows(
+        let draft = ShiftDraftPreview.draftInput(
             date: at(2026, 9, 2),
             cashCents: 0,
             creditCents: 0,
@@ -848,180 +864,12 @@ struct LogShiftZeroMoneyDraftTests {
             clockIn: at(2026, 9, 2, hour: 13, minute: 0),
             clockOut: at(2026, 9, 2, hour: 23, minute: 0),
             serverCount: nil,
-            receiptMetrics: nil
+            receiptMetrics: nil,
+            normalizeEarnings: false,
+            policies: sundayStartPolicies()
         )
-        #expect(rows.count == 1)
-        let facts = draftFacts(entries: [], rows: rows, hoursWorked: 10, shiftID: logShiftID(9))
+        let facts = draftFacts(records: [], draft: draft, hoursWorked: 10, shiftID: logShiftID(9))
         #expect(facts.total.cents == 10_000)
         #expect(facts.total.text != nil)
-    }
-}
-
-/// The P1 wave 1 review found by execution: a LEGACY row with no `shiftID`
-/// was substituted under the wrong id, so the shift being edited existed
-/// TWICE in its own workweek.
-///
-/// `LogTipSheet.init(.edit)` seeded `entry.shiftID ?? entry.id`, and the
-/// history snapshot keys a nil-`shiftID` group under
-/// `ShiftDays.deterministicShiftID(for: entry.date)`. So
-/// `EarningsInputs.substituting(draft)` found no match and APPENDED: the
-/// week's hours doubled and the draft was handed overtime it had not earned,
-/// on the largest type on the screen, while the person was changing a tip
-/// amount. `seedShiftDetailDefaults` repaired it in `onAppear`, but the first
-/// body pass renders before `onAppear` and its own guard early-returns while
-/// the @Query-backed `allEntries` is momentarily empty — and `onAppear` fires
-/// once.
-@Suite("Log Shift: editing a legacy row substitutes it on the first body pass")
-@MainActor
-struct LogShiftLegacyEditIDTests {
-    /// `weekOfFiftyHours` with Wednesday's 6-hour shift made LEGACY: the row
-    /// carries no `shiftID`, the way every row logged before shift grouping
-    /// existed does.
-    private static func weekWithALegacyWednesday() -> [TipEntry] {
-        weekOfFiftyHours().map { entry in
-            guard entry.shiftID == logShiftID(4) else { return entry }
-            return TipEntry(
-                date: entry.date,
-                amountCents: entry.amountCents,
-                kind: entry.kind,
-                recordedAt: entry.recordedAt,
-                hoursWorked: entry.hoursWorked,
-                shiftPeriod: entry.shiftPeriod,
-                shiftID: nil
-            )
-        }
-    }
-
-    private static func anchor(in history: [TipEntry]) throws -> TipEntry {
-        try #require(history.first { $0.shiftID == nil })
-    }
-
-    /// The draft for that shift, unchanged: the same 6 hours and the same
-    /// $10.00 of credit it already holds, substituted under `id`.
-    private static func unchangedDraftRows(for anchor: TipEntry, id: UUID) -> [TipEntry] {
-        ShiftDraftPreview.rows(
-            date: anchor.date,
-            cashCents: 0,
-            creditCents: anchor.amountCents,
-            recordedAt: anchor.recordedAt ?? anchor.date,
-            shiftID: id,
-            hoursWorked: anchor.hoursWorked,
-            tipOutCents: 0,
-            salesCents: 0,
-            shiftPeriod: anchor.shiftPeriod,
-            clockIn: nil,
-            clockOut: nil,
-            serverCount: nil,
-            receiptMetrics: nil
-        )
-    }
-
-    @Test("the seeded id IS the id the history snapshot keys that shift under")
-    func seededIDMatchesTheGroupingsOwnID() throws {
-        let history = Self.weekWithALegacyWednesday()
-        let anchor = try Self.anchor(in: history)
-        let group = try #require(ShiftDays.groupedByShift(
-            history,
-            shiftID: \.shiftID,
-            date: \.date,
-            period: \.shiftPeriod
-        ).first { $0.items.contains { $0.id == anchor.id } })
-
-        // What `init(.edit)` seeds, synchronously, before any body pass.
-        #expect(ShiftDraftPreview.editDraftShiftID(for: anchor) == group.shiftID)
-        // Not a content hash the sheet cannot reproduce: a pure function of
-        // the calendar day, and the same one `MigrationRunner.backfillShiftIDs`
-        // will eventually write onto the row.
-        #expect(group.shiftID == ShiftDays.deterministicShiftID(for: anchor.date))
-        // And the anchor ROW's own id, which `init` used to seed, is not it.
-        #expect(anchor.id != group.shiftID)
-    }
-
-    @Test("the edit preview's shift count equals the history's, and its figure equals the saved row's")
-    func editPreviewDoesNotDuplicateTheShift() throws {
-        let history = Self.weekWithALegacyWednesday()
-        let anchor = try Self.anchor(in: history)
-        let policies = sundayStartPolicies()
-        let groups = ShiftDays.groupedByShift(history, shiftID: \.shiftID, date: \.date, period: \.shiftPeriod)
-        let correctID = ShiftDraftPreview.editDraftShiftID(for: anchor)
-
-        let snapshot = try #require(ShiftDraftPreview.snapshot(
-            draft: ShiftDraftPreview.draftInput(
-                rows: Self.unchangedDraftRows(for: anchor, id: correctID),
-                shiftID: correctID,
-                payrollTimeZone: PaydayTestZone.payroll
-            ),
-            entries: history,
-            policies: policies,
-            payrollTimeZone: PaydayTestZone.payroll
-        ))
-        // Five shifts in the draft's own workweek, not six.
-        #expect(snapshot.shifts.count == groups.count)
-        #expect(snapshot.shifts.count == 5)
-
-        // An UNCHANGED draft must read exactly what the stored shift reads,
-        // because it is the stored shift.
-        let historySnapshot = try #require(LegacySnapshotBridge.snapshot(
-            entries: history,
-            policies: policies,
-            payrollTimeZone: PaydayTestZone.payroll,
-            asOf: at(2026, 9, 10)
-        ))
-        let stored = try #require(historySnapshot.valuation(correctID))
-        let drafted = try #require(snapshot.valuation(correctID))
-        #expect(drafted.components.earnedIncomeCents == stored.components.earnedIncomeCents)
-        #expect(drafted.minutesWorked == stored.minutesWorked)
-    }
-
-    @Test("the anchor row's own id appends a phantom duplicate and inflates the week")
-    func theOldSeedAppendedADuplicate() throws {
-        let history = Self.weekWithALegacyWednesday()
-        let anchor = try Self.anchor(in: history)
-        let policies = sundayStartPolicies()
-        let correctID = ShiftDraftPreview.editDraftShiftID(for: anchor)
-
-        // What `entry.shiftID ?? entry.id` produced: no match to substitute
-        // onto, so the ledger sees SIX shifts where five exist.
-        let wrongID = anchor.id
-        let wrong = try #require(ShiftDraftPreview.snapshot(
-            draft: ShiftDraftPreview.draftInput(
-                rows: Self.unchangedDraftRows(for: anchor, id: wrongID),
-                shiftID: wrongID,
-                payrollTimeZone: PaydayTestZone.payroll
-            ),
-            entries: history,
-            policies: policies,
-            payrollTimeZone: PaydayTestZone.payroll
-        ))
-        #expect(wrong.shifts.count == 6)
-
-        let right = try #require(ShiftDraftPreview.snapshot(
-            draft: ShiftDraftPreview.draftInput(
-                rows: Self.unchangedDraftRows(for: anchor, id: correctID),
-                shiftID: correctID,
-                payrollTimeZone: PaydayTestZone.payroll
-            ),
-            entries: history,
-            policies: policies,
-            payrollTimeZone: PaydayTestZone.payroll
-        ))
-
-        // The week, not the draft's own slice: which of two identical
-        // Wednesday shifts the ledger orders first is decided by their ids,
-        // and one of the two ids is the anchor ROW's random UUID. The week
-        // total is order-independent, and it is the load-bearing claim — the
-        // phantom copy carries the week past the 40-hour threshold, and every
-        // shift in it is then repriced.
-        let week = DayRange(
-            start: CivilDay(year: 2026, month: 8, day: 30),
-            end: CivilDay(year: 2026, month: 9, day: 5)
-        )
-        let rightWeek = right.range(week, asOf: CivilDay.distantFuture).knownComponents.wagesCents
-        let wrongWeek = wrong.range(week, asOf: CivilDay.distantFuture).knownComponents.wagesCents
-        // 46 hours: 40 at $10.00 plus 6 at $15.00 = $490.00. MEASURED.
-        #expect(rightWeek == 49_000)
-        // 52 hours from editing one tip amount: 40 at $10.00 plus 12 at
-        // $15.00 = $580.00. MEASURED.
-        #expect(wrongWeek == 58_000)
     }
 }

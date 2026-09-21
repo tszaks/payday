@@ -22,25 +22,14 @@ import Foundation
 /// rows per shift and a value on both rows is a value counted twice.
 @MainActor
 enum StatsRecordAdapter {
-    /// **The one entry point.** Both representations in, one row list out.
+    /// **The one entry point.** `ShiftRecord`s in, `TipRecord` rows out.
     ///
-    /// Same shape as the combined earnings builders, and for the same reason:
-    /// `InsightsEarnings` and the widget's pace baseline both feed a
-    /// `StatsEngine`, and a caller that picks its own representation is a
-    /// caller that can forget to. The widget DID forget -- it fetched
-    /// `TipEntry` directly, so post-flip its pace delta would have compared
-    /// against a history that silently lost every post-conversion shift.
-    static func tipRecords(
-        entries: [TipEntry],
-        records: [ShiftRecord],
-        representation: ShiftRepresentation = .automatic
-    ) -> [TipRecord] {
-        representation.usesRecords
-            ? tipRecords(from: records)
-            : entries.map(TipRecord.init)
-    }
-
-    /// Newest-first is not imposed here; `StatsEngine` orders what it needs.
+    /// There used to be a second arm over `TipEntry` rows, switched by
+    /// `ShiftRepresentation`; the flip made `ShiftRecord` the only stored
+    /// shape and the legacy arm is gone with it. A caller that fetched
+    /// `TipEntry` directly measured against an empty history post-flip --
+    /// the widget's pace baseline did exactly that, which is why this
+    /// adapter is the only door.
     static func tipRecords(from records: [ShiftRecord]) -> [TipRecord] {
         var out: [TipRecord] = []
         out.reserveCapacity(records.count * 2)

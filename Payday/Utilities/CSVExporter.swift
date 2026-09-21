@@ -27,51 +27,18 @@ enum CSVExporter {
     /// zero: a blank says "not computed", a zero says "the engine says you
     /// earned nothing", and in a file someone may take to a payroll dispute
     /// those are not interchangeable.
-    /// The one entry point. Takes BOTH representations and resolves which
-    /// to read itself — see `ShiftRepresentation` for why callers no longer
-    /// get to choose, and `export(records:)` below for what this file in
-    /// particular gets wrong when a caller chooses legacy by accident.
-    @MainActor
-    static func export(
-        entries: [TipEntry],
-        records: [ShiftRecord],
-        paycheckRecords: [PaycheckRecord],
-        calculator: PayPeriodCalculator,
-        calendar: Calendar = .current,
-        valuations: [UUID: ShiftValuation] = [:],
-        representation: ShiftRepresentation = .automatic
-    ) -> String {
-        representation.usesRecords
-            ? export(records: records, paycheckRecords: paycheckRecords, calculator: calculator, calendar: calendar, valuations: valuations)
-            : export(entries: entries, paycheckRecords: paycheckRecords, calculator: calculator, calendar: calendar, valuations: valuations)
-    }
-
-    static func export(
-        entries: [TipEntry],
-        paycheckRecords: [PaycheckRecord],
-        calculator: PayPeriodCalculator,
-        calendar: Calendar = .current,
-        valuations: [UUID: ShiftValuation] = [:]
-    ) -> String {
-        let shifts = ShiftDays.groupedByShift(entries, shiftID: \.shiftID, date: \.date, period: \.shiftPeriod, calendar: calendar)
-            .map(RowShift.init(legacyGroup:))
-        return export(shifts: shifts, paycheckRecords: paycheckRecords, calculator: calculator, calendar: calendar, valuations: valuations)
-    }
-
-    /// The same export from the new representation.
+    /// The one entry point — `ShiftRecord`s, the only stored shape since the
+    /// flip. A `TipEntry` arm existed while the representations ran in
+    /// parallel; it went away with the flip.
     ///
-    /// This exists because of what the export IS on a converted account.
-    /// `LogTipSheet.saveNew` writes a `ShiftRecord` and no `TipEntry` once
-    /// the account is authoritative, so a shift logged after conversion has
-    /// no legacy row at all — and an exporter reading `entries` would omit
-    /// it silently. `DeleteAccountSheet` offers this file directly above the
+    /// Why the representation mattered here in particular: `saveNew` writes
+    /// a `ShiftRecord` and no `TipEntry` on an authoritative account, so an
+    /// exporter reading `entries` would omit every post-conversion shift
+    /// silently. `DeleteAccountSheet` offers this file directly above the
     /// delete button, calling it the honest alternative to losing the
     /// record, so a short export there is the safety net failing quietly at
     /// the one moment it is the only thing standing between someone and
     /// permanently losing their own history.
-    ///
-    /// Both entry points funnel into `export(shifts:)`. One row builder, so
-    /// the two representations cannot drift into two different files.
     @MainActor
     static func export(
         records: [ShiftRecord],
@@ -126,29 +93,6 @@ enum CSVExporter {
         let serverCount: Int?
         let shiftPeriod: ShiftPeriod?
         let note: String
-
-        /// The legacy pair-of-rows shape, resolved by the same two helpers
-        /// every other legacy reader uses: `TipBreakdown.total` for the money
-        /// and `ShiftDetails.resolve` for the shift-level facts. Unchanged
-        /// behaviour — this is the code that was inline in `row`.
-        init(legacyGroup group: (day: Date, shiftID: UUID, items: [TipEntry])) {
-            let breakdown = TipBreakdown.total(of: group.items)
-            let details = ShiftDetails.resolve(from: group.items)
-            day = group.day
-            shiftID = group.shiftID
-            cashCents = breakdown.cashCents
-            creditCents = breakdown.creditCents
-            gratuityFeesCents = breakdown.gratuityFeesCents
-            nonWageEarningsCents = breakdown.netTotalCents
-            tipOutCents = details.tipOutCents
-            hoursWorked = details.hoursWorked
-            clockIn = details.clockIn
-            clockOut = details.clockOut
-            salesCents = details.salesCents
-            serverCount = details.serverCount
-            shiftPeriod = details.shiftPeriod
-            note = group.items.compactMap(\.note).joined(separator: "; ")
-        }
 
         /// One record, one shift, no resolution step: the fields ARE the
         /// shift's facts. `nonWageEarningsCents` is the model's own helper
