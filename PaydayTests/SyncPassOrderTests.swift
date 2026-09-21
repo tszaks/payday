@@ -387,6 +387,70 @@ struct SyncPassOrderTests {
         )
     }
 
+    /// The pass resolves its account once, at the top, and previously never
+    /// asked again -- so a response fetched for account A could be applied
+    /// after the session moved to account B (reachable via `deleteAccount`,
+    /// which frees the registration). The re-check sits before the first
+    /// pulled-row write: a moved session aborts the pass and applies
+    /// nothing, rather than writing one account's data into another's
+    /// store.
+    ///
+    /// The seam is `liveSessionUserID`: production reads the real session;
+    /// a test answers with a different id to stand in for "the account
+    /// changed mid-flight". `injectedUserID` alone cannot test this -- it
+    /// pins the account precisely because a stub client has no session.
+    @Test("a session that changed mid-pass aborts before applying pulled rows")
+    func aMovedSessionAbortsThePass() async throws {
+        let service = PaydaySyncService(client: client())
+        let ctx = try context()
+        let other = UUID(uuidString: "90000000-0000-4000-8000-0000000000ff")!
+
+        do {
+            _ = try await service.synchronize(
+                context: ctx,
+                scheduleStore: PayScheduleStore(),
+                preferencesStore: UserPreferencesStore(),
+                moveLedgerStore: MoveLedgerStore(),
+                policyStore: PolicyStore(),
+                userID: Self.user,
+                liveSessionUserID: { other }
+            )
+            Issue.record("the pass applied account A's rows under account B's session")
+        } catch {
+            #expect(error as? PaydayMigrationError == .accountMismatch,
+                    "expected accountMismatch, got \(error)")
+        }
+
+        #expect(try ctx.fetch(FetchDescriptor<TipEntry>()).isEmpty,
+                "a moved session still wrote pulled tip rows")
+        #expect(try ctx.fetch(FetchDescriptor<PaycheckRecord>()).isEmpty,
+                "a moved session still wrote pulled paycheck rows")
+        #expect(try ctx.fetch(FetchDescriptor<ShiftRecord>()).isEmpty,
+                "a moved session still wrote pulled shift rows")
+    }
+
+    /// The same re-check must not fire when the session DIDN'T move -- an
+    /// abort on every pass would be worse than the gap it closes.
+    @Test("an unmoved session passes the re-check and completes")
+    func anUnmovedSessionCompletes() async throws {
+        let service = PaydaySyncService(client: client())
+        let ctx = try context()
+
+        do {
+            _ = try await service.synchronize(
+                context: ctx,
+                scheduleStore: PayScheduleStore(),
+                preferencesStore: UserPreferencesStore(),
+                moveLedgerStore: MoveLedgerStore(),
+                policyStore: PolicyStore(),
+                userID: Self.user,
+                liveSessionUserID: { Self.user }
+            )
+        } catch {
+            Issue.record("an unmoved session aborted the pass: \(error)")
+        }
+    }
+
 }
 
 /// Routes by URL path and records the order, because one canned body for
