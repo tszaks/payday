@@ -80,7 +80,7 @@ difference between a test and a ritual.
 - Build number: _MDDYY+seq_
 - Date: _fill in_
 
-## Evidence recorded 2026-09-21, against the post-PR-8 tree (`paydaycore/pr8-flip-deletion` at `bf89da9`, which contains #135 and #138)
+## Evidence recorded 2026-09-21, against the post-PR-8 tree (`paydaycore/pr8-flip-deletion` at `bf89da9`, merged to production as `0f436df`, which contains #135 and #138)
 
 The deletions landed, so this block measures a tree with no legacy arm.
 The suite count is lower than the block below precisely because the
