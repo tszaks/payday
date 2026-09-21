@@ -394,11 +394,11 @@ select pg_temp.expect('ordinaryFoldsNeverFlagConservation',
   'cons=' || coalesce(conservation_failed_at::text,'null')
   || ' last=' || coalesce(last_legacy_write_at::text,'null')
   || ' bulk=' || coalesce(bulk_legacy_rewrite_at::text,'null'))
-from public.shift_migration_state where user_id = '53000000-0000-4000-8000-000000000001';
+from public.shift_migration_ledger where user_id = '53000000-0000-4000-8000-000000000001';
 
 -- last_legacy_write_at is stamped only when the stored value is older than an
 -- hour, so a chatty device cannot turn every legacy write into a state UPDATE.
-update public.shift_migration_state set last_legacy_write_at = now() - interval '10 minutes'
+update public.shift_migration_ledger set last_legacy_write_at = now() - interval '10 minutes'
  where user_id = '53000000-0000-4000-8000-000000000001';
 select pg_temp.device_upsert('53000000-0000-4000-8000-000000000001', '[
   {"id":"53000000-0000-0000-0000-000000000122",
@@ -408,9 +408,9 @@ select pg_temp.device_upsert('53000000-0000-4000-8000-000000000001', '[
 select pg_temp.expect('aTenMinuteOldStampIsNotRefreshed',
   last_legacy_write_at < now() - interval '5 minutes',
   'last=' || last_legacy_write_at::text)
-from public.shift_migration_state where user_id = '53000000-0000-4000-8000-000000000001';
+from public.shift_migration_ledger where user_id = '53000000-0000-4000-8000-000000000001';
 
-update public.shift_migration_state set last_legacy_write_at = now() - interval '2 hours'
+update public.shift_migration_ledger set last_legacy_write_at = now() - interval '2 hours'
  where user_id = '53000000-0000-4000-8000-000000000001';
 select pg_temp.device_upsert('53000000-0000-4000-8000-000000000001', '[
   {"id":"53000000-0000-0000-0000-000000000123",
@@ -420,7 +420,7 @@ select pg_temp.device_upsert('53000000-0000-4000-8000-000000000001', '[
 select pg_temp.expect('anHourOldStampIsRefreshed',
   last_legacy_write_at > now() - interval '1 minute',
   'last=' || last_legacy_write_at::text)
-from public.shift_migration_state where user_id = '53000000-0000-4000-8000-000000000001';
+from public.shift_migration_ledger where user_id = '53000000-0000-4000-8000-000000000001';
 
 -- =============================================================================
 -- 3. The touched set is old keys UNION new keys
@@ -747,7 +747,7 @@ begin
           from generate_series(1, 6) g));
 end;
 $$;
-update public.shift_migration_state set bulk_legacy_rewrite_at = null
+update public.shift_migration_ledger set bulk_legacy_rewrite_at = null
  where user_id = '53000000-0000-4000-8000-000000000001';
 -- reopen FIVE of the six
 select pg_temp.device_upsert('53000000-0000-4000-8000-000000000001',
@@ -760,7 +760,7 @@ select pg_temp.device_upsert('53000000-0000-4000-8000-000000000001',
    from generate_series(1, 5) g));
 
 select pg_temp.expect('fiveReopenedTombstonesDoNotStampTheBulkBanner',
-  (select bulk_legacy_rewrite_at is null from public.shift_migration_state
+  (select bulk_legacy_rewrite_at is null from public.shift_migration_ledger
     where user_id = '53000000-0000-4000-8000-000000000001')
   and (select count(*) from public.shifts
         where user_id = '53000000-0000-4000-8000-000000000001'
@@ -768,7 +768,7 @@ select pg_temp.expect('fiveReopenedTombstonesDoNotStampTheBulkBanner',
                      from generate_series(1, 6) g)
           and deleted_at is null) = 5,
   (select 'bulk=' || coalesce(bulk_legacy_rewrite_at::text, 'null')
-     from public.shift_migration_state where user_id = '53000000-0000-4000-8000-000000000001')
+     from public.shift_migration_ledger where user_id = '53000000-0000-4000-8000-000000000001')
   || ' reopened=' || (select count(*)::text from public.shifts
        where user_id = '53000000-0000-4000-8000-000000000001'
          and id in (select ('53000000-0000-0000-1000-' || lpad((300 + g)::text, 12, '0'))::uuid
@@ -779,7 +779,7 @@ select pg_temp.expect('fiveReopenedTombstonesDoNotStampTheBulkBanner',
 select pg_temp.device_delete('53000000-0000-4000-8000-000000000001',
   array(select ('53000000-0000-0000-0000-' || lpad((300 + g)::text, 12, '0'))::uuid
         from generate_series(1, 6) g), now() + interval '1 second');
-update public.shift_migration_state set bulk_legacy_rewrite_at = null
+update public.shift_migration_ledger set bulk_legacy_rewrite_at = null
  where user_id = '53000000-0000-4000-8000-000000000001';
 select pg_temp.device_upsert('53000000-0000-4000-8000-000000000001',
   (select jsonb_agg(jsonb_build_object(
@@ -791,7 +791,7 @@ select pg_temp.device_upsert('53000000-0000-4000-8000-000000000001',
    from generate_series(1, 6) g));
 
 select pg_temp.expect('sixReopenedTombstonesStampTheBulkBannerOnce',
-  (select bulk_legacy_rewrite_at is not null from public.shift_migration_state
+  (select bulk_legacy_rewrite_at is not null from public.shift_migration_ledger
     where user_id = '53000000-0000-4000-8000-000000000001')
   and (select count(*) from public.shifts
         where user_id = '53000000-0000-4000-8000-000000000001'
@@ -799,7 +799,7 @@ select pg_temp.expect('sixReopenedTombstonesStampTheBulkBannerOnce',
                      from generate_series(1, 6) g)
           and deleted_at is null) = 6,
   (select 'bulk=' || coalesce(bulk_legacy_rewrite_at::text, 'null')
-     from public.shift_migration_state where user_id = '53000000-0000-4000-8000-000000000001'));
+     from public.shift_migration_ledger where user_id = '53000000-0000-4000-8000-000000000001'));
 
 -- =============================================================================
 -- 5. A non-object receipt payload, and the jsonb_set fact behind the CASE guard
@@ -1157,7 +1157,7 @@ select pg_temp.expect('theReservedTenRollIntoTheTouchedKeysWhenTheBacklogIsEmpty
 select pg_temp.expect('overFiftyTouchedGroupsStampsTheBulkBanner',
   bulk_legacy_rewrite_at is not null,
   'bulk=' || coalesce(bulk_legacy_rewrite_at::text, 'null'))
-from public.shift_migration_state where user_id = '53000000-0000-4000-8000-000000000003';
+from public.shift_migration_ledger where user_id = '53000000-0000-4000-8000-000000000003';
 
 -- Nothing in the whole budget exercise ever raised.
 select pg_temp.expect('theWholeBudgetExerciseRecordedZeroFailures',
@@ -1387,11 +1387,11 @@ from pg_temp.shift_facts('53000000-0000-4000-8000-000000000005',
 -- per-account advisory lock.
 select pg_temp.expect('eachAccountInAMultiAccountStatementGetsItsOwnStateRow',
   (select count(*) = 2 and bool_and(last_legacy_write_at is not null)
-     from public.shift_migration_state
+     from public.shift_migration_ledger
     where user_id = any(array['53000000-0000-4000-8000-000000000005'::uuid,
                               '53000000-0000-4000-8000-000000000006'::uuid])),
   (select coalesce(string_agg(right(user_id::text, 4) || '=' || coalesce(last_legacy_write_at::text, 'null'), ' '), 'none')
-     from public.shift_migration_state
+     from public.shift_migration_ledger
     where user_id = any(array['53000000-0000-4000-8000-000000000005'::uuid,
                               '53000000-0000-4000-8000-000000000006'::uuid])));
 
@@ -1428,7 +1428,7 @@ values ('53000000-0000-4000-8000-000000000004',
 select pg_temp.expect('allFiveTablesHoldRowsBeforeTheAccountDeletion',
   (select count(*) > 0 from public.shifts where user_id = '53000000-0000-4000-8000-000000000004')
   and (select count(*) > 0 from public.shift_legacy_conflicts where user_id = '53000000-0000-4000-8000-000000000004')
-  and (select count(*) > 0 from public.shift_migration_state where user_id = '53000000-0000-4000-8000-000000000004')
+  and (select count(*) > 0 from public.shift_migration_ledger where user_id = '53000000-0000-4000-8000-000000000004')
   and (select count(*) > 0 from private.shift_fold_backlog where user_id = '53000000-0000-4000-8000-000000000004')
   and (select count(*) > 0 from private.shift_fold_failures where user_id = '53000000-0000-4000-8000-000000000004')
   and (select count(*) > 0 from public.tip_entries where user_id = '53000000-0000-4000-8000-000000000004'),
@@ -1461,7 +1461,7 @@ select pg_temp.expect('theCascadeLeftNothingBehindAndTheFoldRecordedNoFailure',
   (select count(*) = 0 from public.shifts where user_id = '53000000-0000-4000-8000-000000000004')
   and (select count(*) = 0 from public.tip_entries where user_id = '53000000-0000-4000-8000-000000000004')
   and (select count(*) = 0 from public.shift_legacy_conflicts where user_id = '53000000-0000-4000-8000-000000000004')
-  and (select count(*) = 0 from public.shift_migration_state where user_id = '53000000-0000-4000-8000-000000000004')
+  and (select count(*) = 0 from public.shift_migration_ledger where user_id = '53000000-0000-4000-8000-000000000004')
   and (select count(*) = 0 from private.shift_fold_backlog where user_id = '53000000-0000-4000-8000-000000000004')
   and (select count(*) = 0 from private.shift_fold_failures where user_id = '53000000-0000-4000-8000-000000000004'),
   'shifts=' || (select count(*)::text from public.shifts where user_id = '53000000-0000-4000-8000-000000000004')
