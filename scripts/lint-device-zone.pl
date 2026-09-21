@@ -14,8 +14,9 @@ my %allow = (
   # a policy, so this is unreachable afterwards.
   "Payday/Earnings/ShiftInputAdapter.swift" => 1,
   "Payday/Earnings/EarningsStore.swift"     => 1,
-  # Draft PREVIEW only, pre-save, never a stored or valued figure.
-  "Payday/Earnings/ShiftDraftPreview.swift" => 2,
+  # Draft PREVIEW only, pre-save, never a stored or valued figure. Was 2
+  # until the legacy TipEntry arm was deleted; the one left is "today".
+  "Payday/Earnings/ShiftDraftPreview.swift" => 1,
 );
 
 my @files;

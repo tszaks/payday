@@ -347,20 +347,6 @@ enum PaydaySyncState {
         AppGroup.defaults.string(forKey: currentUserKey).flatMap(UUID.init(uuidString:))
     }
 
-    static func recordTipDeletions(_ ids: some Sequence<UUID>, at date: Date = .now) {
-        guard let userID = currentUserID else { return }
-        var pending = loadPending(for: userID)
-        for id in ids { pending.tipEntries[id] = date }
-        savePending(pending, for: userID)
-    }
-
-    static func cancelTipDeletions(_ ids: some Sequence<UUID>) {
-        guard let userID = currentUserID else { return }
-        var pending = loadPending(for: userID)
-        for id in ids { pending.tipEntries.removeValue(forKey: id) }
-        savePending(pending, for: userID)
-    }
-
     static func recordPaycheckDeletion(_ id: UUID, at date: Date = .now) {
         guard let userID = currentUserID else { return }
         var pending = loadPending(for: userID)
@@ -368,6 +354,10 @@ enum PaydaySyncState {
         savePending(pending, for: userID)
     }
 
+    /// The tip-deletion queue has no writer on this build's code paths —
+    /// deletes go through shift tombstones now. The read side stays because a
+    /// queue written by a build that still had tip deletes must still flush:
+    /// this is the only record that those deletions ever happened.
     static func pendingTipDeletions(for userID: UUID) -> [UUID: Date] {
         loadPending(for: userID).tipEntries
     }
