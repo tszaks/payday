@@ -41,30 +41,35 @@ enum ShiftDays {
             buckets[id, default: []].append(item)
         }
 
-        // Sort key per shift: newest day first, then lunch before dinner
-        // (nil period last), then earliest item as a stable tie-break.
-        func periodRank(_ p: ShiftPeriod?) -> Int {
-            switch p {
-            case .lunch: return 0
-            case .dinner: return 1
-            case nil: return 2
-            }
-        }
         return order
             .map { id -> (day: Date, shiftID: UUID, items: [T]) in
                 let group = buckets[id] ?? []
                 let day = calendar.startOfDay(for: group.map(date).min() ?? .now)
                 return (day: day, shiftID: id, items: group)
             }
+            // Sort key per shift: newest day first, then lunch before dinner
+            // (nil period last), then earliest item as a stable tie-break.
             .sorted { lhs, rhs in
                 if lhs.day != rhs.day { return lhs.day > rhs.day }
-                let lp = periodRank(lhs.items.compactMap(period).first)
-                let rp = periodRank(rhs.items.compactMap(period).first)
+                let lp = Self.periodRank(lhs.items.compactMap(period).first)
+                let rp = Self.periodRank(rhs.items.compactMap(period).first)
                 if lp != rp { return lp < rp }
                 let lEarliest = lhs.items.map(date).min() ?? .now
                 let rEarliest = rhs.items.map(date).min() ?? .now
                 return lEarliest < rEarliest
             }
+    }
+
+    /// Lunch before dinner, unknowns last — the within-day order every shift
+    /// list shares. `groupedByShift` uses it over the legacy representation
+    /// and `DashboardFacts` uses the same rank over `ShiftRecord`s, so a
+    /// flipped account's rows read in the same order as before.
+    static func periodRank(_ period: ShiftPeriod?) -> Int {
+        switch period {
+        case .lunch: return 0
+        case .dinner: return 1
+        case nil: return 2
+        }
     }
 
     /// The label for one shift's row. Shift labels stay structurally stable:

@@ -514,6 +514,21 @@ struct NightlyEarningsChartSnapshotTests {
         // Mon + Tue + Wed: 3000c tips and 2901 + 2759 + 2972 of wages.
         #expect(facts.points.reduce(0) { $0 + $1.cents } == 3000 + 2901 + 2759 + 2972)
     }
+
+    /// The axis label budget, pinned at the exact sizes that broke: a
+    /// ten-week chart labeled every week and the dates printed as one
+    /// continuous smear (Tyler, 2026-09-20). Six labels is the budget; the
+    /// stride widens past it.
+    @Test("the axis thins its labels instead of colliding them")
+    func axisStrideThinsLabels() {
+        #expect(EarningsChartAxisGranularity.axisLabelStride(pointCount: 0) == 1)
+        #expect(EarningsChartAxisGranularity.axisLabelStride(pointCount: 6) == 1)
+        #expect(EarningsChartAxisGranularity.axisLabelStride(pointCount: 7) == 2)
+        // The measured failure: ten weekly bars, every one labeled.
+        #expect(EarningsChartAxisGranularity.axisLabelStride(pointCount: 10) == 2)
+        // Two years of months: every fourth, not all twenty-four.
+        #expect(EarningsChartAxisGranularity.axisLabelStride(pointCount: 24) == 4)
+    }
 }
 
 // MARK: - ShiftContextMenu (Duplicate)
