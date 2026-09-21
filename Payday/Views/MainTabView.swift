@@ -2,22 +2,21 @@ import SwiftUI
 import SwiftData
 
 enum AppTab: String, CaseIterable, Identifiable {
-    case dashboard, history, insights, logTips
+    case dashboard, calendar, periods, insights, logTips
     var id: String { rawValue }
 }
 
 /// Lets any tab's content switch the selected tab (e.g. Dashboard's "days
-/// left" tile jumping to History) without MainTabView needing to know about
+/// left" tile jumping to Periods) without MainTabView needing to know about
 /// every screen that wants to do that.
 @Observable
 final class TabRouter {
     var selected: AppTab = .dashboard
-    /// Set alongside `selected = .history` (and the periods lens) by
-    /// anything that wants to land inside the CURRENT period's detail, not
-    /// just the periods list — HistoryView/PeriodsView clears it once it's
-    /// consumed the request. A plain enum case rather than a full deep-link
-    /// target because periods is the only screen anything currently jumps
-    /// this deep into.
+    /// Set alongside `selected = .periods` by anything that wants to land
+    /// inside the CURRENT period's detail, not just the periods list —
+    /// PeriodsView clears it once it's consumed the request. A plain flag
+    /// rather than a full deep-link target because periods is the only
+    /// screen anything currently jumps this deep into.
     var pendingCurrentPeriodDetail = false
 }
 
@@ -36,11 +35,14 @@ struct MainTabView: View {
 
     var body: some View {
         TabView(selection: $tabRouter.selected) {
-            Tab("Dashboard", systemImage: "house.fill", value: .dashboard) {
+            Tab("Home", systemImage: "house.fill", value: .dashboard) {
                 DashboardView()
             }
-            Tab("History", systemImage: "clock.arrow.circlepath", value: .history) {
-                HistoryView()
+            Tab("Calendar", systemImage: "calendar", value: .calendar) {
+                CalendarView()
+            }
+            Tab("Periods", systemImage: "list.bullet.rectangle.portrait", value: .periods) {
+                PeriodsView()
             }
             Tab("Insights", systemImage: "chart.line.uptrend.xyaxis", value: .insights) {
                 InsightsView()
@@ -80,8 +82,7 @@ struct MainTabView: View {
         .onChange(of: deepLink.pendingCurrentPeriodDetail) { _, shouldOpen in
             guard shouldOpen else { return }
             tabRouter.pendingCurrentPeriodDetail = true
-            HistoryLens.periods.select()
-            tabRouter.selected = .history
+            tabRouter.selected = .periods
             deepLink.pendingCurrentPeriodDetail = false
         }
         // A shift ended from Control Center, Siri, the Live Activity's own
@@ -97,22 +98,12 @@ struct MainTabView: View {
         #if DEBUG || targetEnvironment(simulator)
         .onAppear {
             let args = ProcessInfo.processInfo.arguments
-            // "periods"/"calendar" are legacy tab names from before the
-            // History merge — mapped to the merged tab plus the matching
-            // lens so old QA scripts keep working unmodified.
-            if let index = args.firstIndex(of: "-InitialTab"), args.count > index + 1 {
-                switch args[index + 1] {
-                case "periods":
-                    HistoryLens.periods.select()
-                    tabRouter.selected = .history
-                case "calendar":
-                    HistoryLens.calendar.select()
-                    tabRouter.selected = .history
-                case let raw:
-                    if let tab = AppTab(rawValue: raw) {
-                        tabRouter.selected = tab
-                    }
-                }
+            // "periods" and "calendar" are real tab names again — the
+            // History merge's lens mapping is gone, so a rawValue parse is
+            // the whole handler.
+            if let index = args.firstIndex(of: "-InitialTab"), args.count > index + 1,
+               let tab = AppTab(rawValue: args[index + 1]) {
+                tabRouter.selected = tab
             }
             if args.contains("-OpenLogSheet") {
                 deepLink.pendingLogTarget = .new(defaultDate: .now)
@@ -122,8 +113,7 @@ struct MainTabView: View {
             // so it can be captured without tapping through the Periods list.
             if args.contains("-OpenCurrentPeriodDetail") {
                 tabRouter.pendingCurrentPeriodDetail = true
-                HistoryLens.periods.select()
-                tabRouter.selected = .history
+                tabRouter.selected = .periods
             }
             // Screenshot/QA hook only: open the edit sheet directly for the
             // most recent entry of a given kind, so a cash+credit night's

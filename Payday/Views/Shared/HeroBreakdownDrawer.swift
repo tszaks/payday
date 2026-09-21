@@ -287,6 +287,16 @@ struct HeroBreakdownDrawer<Card: View>: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(drawerShape.fill(PaydayColor.fieldBackground))
         .clipShape(drawerShape)
+        // The drawer itself is the affordance — the "Breakdown" lip, and
+        // the expanded rows beneath it, all toggle the same way the card
+        // above does. The lip had contentShape and a hit height but no
+        // gesture: the one element that LOOKED like the control was the
+        // one dead spot on the card (Tyler, 2026-09-21: "if I press the
+        // gray card underneath the calendar, it doesn't open the drawer").
+        .contentShape(Rectangle())
+        .onTapGesture {
+            HeroBreakdownToggle.fire($isExpanded, reduceMotion: reduceMotion)
+        }
     }
 
     /// `.firstTextBaseline` so the amount sits on the LABEL's baseline. With
