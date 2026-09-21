@@ -24,17 +24,12 @@ struct PeriodDetailFacts: SnapshotFacts {
     let payDate: Date
     /// The period's shifts, newest first, with the rows a tap edits.
     ///
-    /// Selected by `result.shiftIDs`, NOT by re-filtering entries on their
+    /// Selected by `result.shiftIDs`, NOT by re-filtering records on their
     /// dates. The engine selects a shift by its work day in the FROZEN
-    /// payroll zone; this screen's old filter compared `entry.date` against
-    /// the period bounds in `Calendar.current`, so a late-night shift near a
-    /// period boundary could be listed under a period whose total did not
-    /// include it. Reading the selection back off the result makes the rows
-    /// and the hero the same set by construction.
-    let shiftDays: [(day: Date, shiftID: UUID, items: [TipEntry])]
-    /// The same rows in the shift representation, selected by the same engine
-    /// ids. Empty unless the caller passed records, so the two lists are never
-    /// both populated and a screen cannot render both representations.
+    /// payroll zone; a caller-side date filter compared against the period
+    /// bounds in `Calendar.current` could list a late-night shift under a
+    /// period whose total did not include it. Reading the selection back off
+    /// the result makes the rows and the hero the same set by construction.
     ///
     /// `[ShiftRecord]` and not a projection because these rows are the edit
     /// and delete targets: `ProjectedShiftRow` is deliberately un-persistable.
@@ -72,28 +67,13 @@ struct PeriodDetailFacts: SnapshotFacts {
     /// `chartFacts.whole`, which is the same range query the hero is.
     let chartFacts: EarningsChartFacts
 
-    /// Whether this period has any shift, in EITHER representation.
+    /// Whether this period has any shift.
     ///
-    /// The same one-arm gate that hid the Dashboard's Shifts section from the
-    /// first flipped account. `shiftDays` is legacy-only and
-    /// `HistoryEarnings.build`'s record arm returns it empty by construction,
-    /// so a flipped account's chart was gated on a list that is always empty
-    /// for it. The empty-state sentence below already asked BOTH arms, which
-    /// is why only the chart silently vanished.
-    var hasShifts: Bool {
-        Self.hasShifts(shiftDays: shiftDays, shiftRecordDays: shiftRecordDays)
-    }
-
-    /// The rule itself, reachable without building a whole facts struct, so a
-    /// test can state it over BOTH arms directly. A screen-level gate that
-    /// can only be exercised by constructing an entire render is a gate that
-    /// gets one arm tested and the other one shipped.
-    static func hasShifts(
-        shiftDays: [(day: Date, shiftID: UUID, items: [TipEntry])],
-        shiftRecordDays: [ShiftRecord]
-    ) -> Bool {
-        !shiftDays.isEmpty || !shiftRecordDays.isEmpty
-    }
+    /// The gate is `shiftRecordDays`, not a re-derivation: the one-arm gate
+    /// that hid the Dashboard's Shifts section from the first flipped
+    /// account is the bug that taught this screen to ask the same list it
+    /// renders.
+    var hasShifts: Bool { !shiftRecordDays.isEmpty }
 
     /// `MetricID.expectedPaycheckGross` for the period, read off
     /// `expectation` — the value handed to `PaycheckEntrySheet` — so the
@@ -119,8 +99,8 @@ struct PeriodDetailFacts: SnapshotFacts {
     ///   - snapshot: `HistoryEarnings.build`'s, over the WHOLE history, so a
     ///     workweek straddling this period's boundary keeps the overtime it
     ///     produced. PR 2 S7 makes it `earningsStore.snapshot`.
-    ///   - shiftDays: the same grouping the snapshot was built from, so a
-    ///     `shiftID` here indexes it.
+    ///   - shiftRecordDays: the same records the snapshot was built from, so
+    ///     a record's `id` here indexes it.
     ///   - schedule: the pay-period GRID, for the pay DATE only. Its
     ///     `firstWeekday` reaches no money path from this screen: PR 3
     ///     severed the grid's weekday from the workweek, and the one
@@ -128,10 +108,7 @@ struct PeriodDetailFacts: SnapshotFacts {
     ///     here.
     init(
         snapshot: EarningsSnapshot?,
-        shiftDays: [(day: Date, shiftID: UUID, items: [TipEntry])],
-        /// Defaulted, so every existing caller is unchanged. The writer flip
-        /// passes records here instead of entries above.
-        shiftRecordDays: [ShiftRecord] = [],
+        shiftRecordDays: [ShiftRecord],
         paycheckRecords: [PaycheckRecord],
         period: PayPeriod,
         schedule: PaySchedule?,
@@ -152,14 +129,11 @@ struct PeriodDetailFacts: SnapshotFacts {
         result = periodResult
 
         let selected = Set(periodResult?.shiftIDs ?? [])
-        let rows = shiftDays.filter { selected.contains($0.shiftID) }
-        self.shiftDays = rows
-        // Selected by the SAME engine ids, so the record rows and the hero are
-        // one set by construction exactly as the legacy rows are.
+        // Selected by the SAME engine ids, so the rows and the hero are one
+        // set by construction.
         let recordRows = shiftRecordDays.filter { selected.contains($0.id) }
         self.shiftRecordDays = recordRows
         var shiftCounts: [Date: Int] = [:]
-        for shift in rows { shiftCounts[shift.day, default: 0] += 1 }
         for record in recordRows { shiftCounts[record.workDate, default: 0] += 1 }
         multiShiftDays = Set(shiftCounts.filter { $0.value >= 2 }.keys)
 
@@ -230,7 +204,6 @@ struct PeriodDetailView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(PayScheduleStore.self) private var scheduleStore
     @Environment(PolicyStore.self) private var policyStore
-    @Query private var allEntries: [TipEntry]
     /// The other representation. `snapshotBuild()` picks one; never both.
     @Query private var shiftRecords: [ShiftRecord]
     @Query private var paycheckRecords: [PaycheckRecord]
@@ -252,7 +225,6 @@ struct PeriodDetailView: View {
         let build = snapshotBuild()
         let facts = PeriodDetailFacts(
             snapshot: build.snapshot,
-            shiftDays: build.shiftDays,
             shiftRecordDays: build.shiftRecordDays,
             paycheckRecords: paycheckRecords,
             period: period,
@@ -350,7 +322,6 @@ struct PeriodDetailView: View {
         // which is what stops a total from one source sitting over rows from
         // another.
         return HistoryEarnings.build(
-            entries: allEntries,
             records: shiftRecords,
             policies: policies,
             payrollTimeZone: zone
@@ -402,11 +373,6 @@ struct PeriodDetailView: View {
                     .foregroundStyle(PaydayColor.textSecondary)
                     .padding(.bottom, PaydaySpacing.p8)
 
-                // Exactly one of these is populated, by construction.
-                ForEach(Array(facts.shiftDays.enumerated()), id: \.element.shiftID) { index, group in
-                    if index > 0 { Divider() }
-                    shiftRow(for: group, facts: facts)
-                }
                 ForEach(Array(facts.shiftRecordDays.enumerated()), id: \.element.id) { index, record in
                     if index > 0 { Divider() }
                     shiftRow(for: record, facts: facts)
@@ -488,33 +454,6 @@ struct PeriodDetailView: View {
         }
         .buttonStyle(.plain)
         .shiftContextMenu(record: record, sheetTarget: $sheetTarget, undoState: undoState, context: modelContext)
-    }
-
-    @ViewBuilder
-    private func shiftRow(
-        for group: (day: Date, shiftID: UUID, items: [TipEntry]),
-        facts: PeriodDetailFacts
-    ) -> some View {
-        if let anchor = group.items.first {
-            Button {
-                sheetTarget = .edit(anchor)
-            } label: {
-                ShiftDayRow(facts: ShiftDayRowFacts(
-                    snapshot: facts.snapshot,
-                    shiftID: group.shiftID,
-                    day: group.day,
-                    period: ShiftDetails.resolve(from: group.items).shiftPeriod,
-                    dayHasMultipleShifts: facts.multiShiftDays.contains(group.day)
-                ))
-                .padding(.vertical, PaydaySpacing.p12)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            // Swipe-to-delete was List-only and went with the List
-            // conversion — delete stays one long-press away via the context
-            // menu, with the same undo toast, matching the Dashboard.
-            .shiftContextMenu(group.items, sheetTarget: $sheetTarget, undoState: undoState, context: modelContext)
-        }
     }
 
     /// The card used to carry its own date range as a caption; folding it

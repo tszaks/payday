@@ -22,13 +22,11 @@ enum SmartNudgeScheduler {
     /// actual relevant value, never on launch.
     static func reschedule(
         preferencesStore: UserPreferencesStore,
-        allEntries: [TipEntry],
         shiftRecords: [ShiftRecord]
     ) {
         Task {
             await performReschedule(
                 preferencesStore: preferencesStore,
-                allEntries: allEntries,
                 shiftRecords: shiftRecords
             )
         }
@@ -36,44 +34,28 @@ enum SmartNudgeScheduler {
 
     private static func performReschedule(
         preferencesStore: UserPreferencesStore,
-        allEntries: [TipEntry],
         shiftRecords: [ShiftRecord]
     ) async {
         let center = UNUserNotificationCenter.current()
         center.removePendingNotificationRequests(withIdentifiers: [notificationIdentifier])
         guard preferencesStore.isSmartNudgeEnabled else { return }
 
-        guard let fireDate = rhythmFireDate(allEntries: allEntries, shiftRecords: shiftRecords) else { return }
+        guard let fireDate = rhythmFireDate(shiftRecords: shiftRecords) else { return }
 
         guard await isCurrentlyAuthorized(center: center) else { return }
         schedule(at: fireDate, center: center)
     }
 
-    /// The per-account switch, in ONE place for this reader.
-    ///
-    /// Both representations exist at once during the conversion window -- a
-    /// converted shift is a `ShiftRecord` AND its original `TipEntry` rows,
-    /// which are never rewritten -- so reading the union would count that
-    /// shift twice. `shiftsAreAuthoritative` is therefore a switch, not a
-    /// merge: `ShiftRecord` when true, `TipEntry` when false.
-    ///
-    /// It lives here rather than at the call sites because this reader has
-    /// FOUR of them -- `RootView`, `LogTipsIntent`, `BackfillSheet` and
-    /// `LogTipSheet` -- and a switch duplicated four ways is a switch that
-    /// can disagree with itself.
-    ///
-    /// No shipped account is authoritative yet, so today this always takes
-    /// the `TipEntry` branch and the behaviour is byte-identical to before.
-    /// `switchIsANoOpForAnAccountThatHasNotConverted` asserts exactly that.
+    /// The rhythm, computed over `ShiftRecord` projected into the row shape
+    /// the heuristic was built on. It lives here rather than at the call
+    /// sites because this reader has FOUR of them -- `RootView`,
+    /// `LogTipsIntent`, `BackfillSheet` and `LogTipSheet` -- and a rule
+    /// duplicated four ways is a rule that can disagree with itself.
     static func rhythmFireDate(
-        allEntries: [TipEntry],
         shiftRecords: [ShiftRecord],
         from now: Date = .now
     ) -> Date? {
-        if PaydaySyncState.shiftsAreAuthoritativeForCurrentAccount {
-            return rhythmFireDate(rows: ShiftProjection.rows(for: shiftRecords), from: now)
-        }
-        return rhythmFireDate(rows: allEntries, from: now)
+        rhythmFireDate(rows: ShiftProjection.rows(for: shiftRecords), from: now)
     }
 
     /// The learned typical-hour heuristic keeps reminders useful without

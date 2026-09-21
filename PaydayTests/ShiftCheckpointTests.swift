@@ -20,11 +20,9 @@ struct ShiftCheckpointTests {
         return id
     }
 
-    /// A fresh account that is also the REGISTERED one, for the two shipped
-    /// queue functions that resolve the account from the registration rather
-    /// than taking it as an argument. Deliberately not widening those: S10
-    /// annotates `recordTipDeletions` as unavailable, so adding a parameter to
-    /// it now would be work in the opposite direction.
+    /// A fresh account that is also the REGISTERED one, for the shipped queue
+    /// functions that resolve the account from the registration rather than
+    /// taking it as an argument.
     private func registeredAccount() -> UUID {
         if let existing = PaydaySyncState.registeredUserID {
             PaydaySyncState.forget(userID: existing)
@@ -227,15 +225,27 @@ struct ShiftCheckpointTests {
     /// `soft_delete_tip_entries` call ever being issued**: the shift tombstone
     /// reaches the server and the legacy rows stay live forever.
     @Test("a legacy deletion queue entry survives a restore-cancel pass")
-    func aLegacyDeletionQueueEntrySurvivesARestoreCancelPass() {
-        let userID = registeredAccount()
+    func aLegacyDeletionQueueEntrySurvivesARestoreCancelPass() throws {
+        let userID = newAccount()
         let sourceRow = UUID()
 
-        // A shift was deleted, so its legacy sources are queued.
+        // The same id is in the shipped tip queue, as a 1.0 build would have
+        // left it. Planted through the real key by encoding — the 1.0
+        // recorder is gone with the code path that called it, and a
+        // hand-written fixture would not survive the `[UUID: Date]` shape
+        // (see `pendingDeletionsDecodeA10ShapedBlob`).
+        struct LegacyPendingDeletions: Encodable {
+            var tipEntries: [UUID: Date]
+        }
+        let data = try JSONEncoder().encode(LegacyPendingDeletions(
+            tipEntries: [sourceRow: Date(timeIntervalSince1970: 0)]
+        ))
+        AppGroup.defaults.set(data, forKey: PaydaySyncState.deletionKey(for: userID))
+
+        // A shift was deleted, so its legacy sources are queued — written
+        // SECOND so the save merges into the planted blob rather than
+        // replacing it.
         PaydaySyncState.recordLegacyEntryDeletions([sourceRow], for: userID)
-        // The same id is also in the shipped tip queue, as a 1.0 build would
-        // have left it.
-        PaydaySyncState.recordTipDeletions([sourceRow])
 
         // The restore-cancel arm: the local row still exists, so the TIP
         // deletion is cancelled.

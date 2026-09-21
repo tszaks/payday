@@ -78,8 +78,6 @@ struct ToastShiftPathTests {
         // The one signal the view layer reads, so the toast is actually up.
         #expect(state.hasPendingUndo)
         #expect(state.deletedShift?.id == id)
-        // And the legacy path is untouched, so the two do not interfere.
-        #expect(state.snapshot == nil)
     }
 
     /// Gate 2's `restore` witness: the record comes back, and no `TipEntry` is

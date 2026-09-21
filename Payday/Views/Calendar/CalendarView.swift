@@ -44,19 +44,6 @@ enum CalendarEarnings {
         return calendar
     }
 
-    /// Every shift in the dataset, grouped by the app's one grouping rule.
-    static func shiftGroups(
-        entries: [TipEntry],
-        payrollTimeZone: TimeZone
-    ) -> [(day: Date, shiftID: UUID, items: [TipEntry])] {
-        ShiftDays.groupedByShift(
-            entries,
-            shiftID: \.shiftID,
-            date: \.date,
-            period: \.shiftPeriod,
-            calendar: groupingCalendar(payrollTimeZone: payrollTimeZone)
-        )
-    }
 
     /// One snapshot over every shift, valued with the user's OWN rate and
     /// workweek history, effective dates intact.
@@ -69,21 +56,10 @@ enum CalendarEarnings {
     /// keeps `range(_:)` and `days(in:)` clamping identically, which is the
     /// whole `Σ tiles == headline` guarantee — `day(_:)` is unclamped in the
     /// engine and a half-clamped screen would disagree with itself.
-    static func snapshot(
-        shifts: [(day: Date, shiftID: UUID, items: [TipEntry])],
-        policies: CompensationPolicies,
-        payrollTimeZone: TimeZone
-    ) -> EarningsSnapshot? {
-        LegacySnapshotBridge.snapshot(
-            shifts: shifts,
-            policies: policies,
-            payrollTimeZone: payrollTimeZone,
-            asOf: .distantFuture
-        )
-    }
-
-    /// The same snapshot from the new representation. Main actor because
-    /// `ShiftRecord` is a `@Model`, the same reason `ShiftInputAdapter` is.
+    ///
+    /// `ShiftRecord`s are the only input — the only stored shape since the
+    /// flip. Main actor because `ShiftRecord` is a `@Model`, the same reason
+    /// `ShiftInputAdapter` is.
     @MainActor
     static func snapshot(
         records: [ShiftRecord],
@@ -106,32 +82,6 @@ enum CalendarEarnings {
         ))
     }
 
-    /// **The one entry point for this screen's snapshot.**
-    ///
-    /// Takes BOTH representations and resolves which to read itself. The
-    /// month grid was the last whole-screen reader still on a legacy-only
-    /// path: `makeFacts` called `shiftGroups(entries:)` with no switch, so
-    /// after the flip the tiles would have rendered only the shifts logged
-    /// BEFORE conversion and silently dropped every one since. It survived
-    /// the earlier sweep because the per-screen audit that cleared it counted
-    /// edit and delete TARGETS -- of which this screen has none -- and that
-    /// zero was carried forward as though it were a statement about reads.
-    @MainActor
-    static func snapshot(
-        entries: [TipEntry],
-        records: [ShiftRecord],
-        policies: CompensationPolicies,
-        payrollTimeZone: TimeZone,
-        representation: ShiftRepresentation = .automatic
-    ) -> EarningsSnapshot? {
-        representation.usesRecords
-            ? snapshot(records: records, policies: policies, payrollTimeZone: payrollTimeZone)
-            : snapshot(
-                shifts: shiftGroups(entries: entries, payrollTimeZone: payrollTimeZone),
-                policies: policies,
-                payrollTimeZone: payrollTimeZone
-            )
-    }
 }
 
 /// One tile of the month grid.
@@ -430,10 +380,8 @@ struct CalendarView: View {
     /// header's hairline, which should not be drawn while the header is
     /// simply sitting on the page with nothing behind it.
     @State private var gridIsUnderHeader = false
-    @Query private var allEntries: [TipEntry]
-    /// The other representation. `CalendarEarnings.snapshot` resolves which
-    /// one this screen reads; see its header for why the choice is no longer
-    /// made here.
+    /// The grid's only input — `ShiftRecord` is the only stored shape since
+    /// the flip.
     @Query private var shiftRecords: [ShiftRecord]
 
     @State private var displayedMonth: Date = Calendar.current.startOfDay(for: .now)
@@ -571,7 +519,6 @@ struct CalendarView: View {
         let zone = policyStore.payrollTimeZone
         return CalendarMonthFacts(
             snapshot: CalendarEarnings.snapshot(
-                entries: allEntries,
                 records: shiftRecords,
                 policies: policyStore.policies,
                 payrollTimeZone: zone

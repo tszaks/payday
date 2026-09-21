@@ -84,22 +84,10 @@ enum DashboardEarnings {
     /// This is that swap, and it keeps the snapshot and the rows on the SAME
     /// representation so the hero cannot sit over rows drawn from the other
     /// one.
-    /// **The one entry point.** Both representations in, one resolved
-    /// dataset out; see `ShiftRepresentation`.
-    @MainActor
-    static func build(
-        entries: [TipEntry],
-        records: [ShiftRecord],
-        policies: CompensationPolicies,
-        payrollTimeZone: TimeZone,
-        calendar: Calendar,
-        representation: ShiftRepresentation = .automatic
-    ) -> Dataset {
-        representation.usesRecords
-            ? build(records: records, policies: policies, payrollTimeZone: payrollTimeZone)
-            : build(entries: entries, policies: policies, payrollTimeZone: payrollTimeZone, calendar: calendar)
-    }
-
+    /// **The one entry point.** `ShiftRecord`s — the only stored shape since
+    /// the flip — in, one dataset out. The snapshot and the rows come from
+    /// the same input so the hero cannot sit over rows drawn from a
+    /// different representation.
     @MainActor
     static func build(
         records: [ShiftRecord],
@@ -118,42 +106,12 @@ enum DashboardEarnings {
         ))
         return Dataset(
             snapshot: snapshot,
-            shiftDays: [],
             shiftRecordDays: records,
             tipRecords: StatsRecordAdapter.tipRecords(from: records)
         )
     }
 
-    static func build(
-        entries: [TipEntry],
-        policies: CompensationPolicies,
-        payrollTimeZone: TimeZone,
-        calendar: Calendar
-    ) -> Dataset {
-        let shiftDays = ShiftDays.groupedByShift(
-            entries,
-            shiftID: \.shiftID,
-            date: \.date,
-            period: \.shiftPeriod,
-            calendar: calendar
-        )
-        return Dataset(
-            snapshot: LegacySnapshotBridge.snapshot(
-                shifts: shiftDays,
-                policies: policies,
-                payrollTimeZone: payrollTimeZone,
-                // Unclamped, matching History, Calendar and the log
-                // preview. The to-date cutoff is the HERO's scope, not the
-                // dataset's; see the type header.
-                asOf: .distantFuture
-            ),
-            shiftDays: shiftDays,
-            shiftRecordDays: [],
-            tipRecords: entries.map(TipRecord.init)
-        )
-    }
-
-    /// A snapshot and the grouping whose `shiftID`s index it.
+    /// A snapshot and the rows whose `id`s index it.
     ///
     /// Internal rather than private for the reason `DashboardFacts` is: the
     /// plan's completion rule 2 is "its parity test passes against the real
@@ -165,21 +123,15 @@ enum DashboardEarnings {
         /// Nil only when the inputs could not be canonically fingerprinted,
         /// which is a refusal and renders as unavailable, never as `$0.00`.
         let snapshot: EarningsSnapshot?
-        /// Newest day first, lunch before dinner — `ShiftDays`' order, which
-        /// is what the rows render in.
-        let shiftDays: [(day: Date, shiftID: UUID, items: [TipEntry])]
-        /// The same rows in the shift representation. Exactly one of the two
-        /// is populated, because `build` chooses a source rather than merging.
+        /// The period rows in the shift representation — the only shape
+        /// since the flip.
         let shiftRecordDays: [ShiftRecord]
-        /// The `StatsEngine` input, already flattened out of whichever
-        /// representation built this dataset — `StatsRecordAdapter`'s rows on
-        /// the records arm, `TipRecord.init` over the entries on the legacy
-        /// arm. Rows rather than the raw models, so **no consumer can tell
-        /// which representation is underneath**: `DashboardFacts` used to
-        /// flatten `allShifts` itself, which read as correct on both arms but
-        /// silently fed the pace comparison an empty history the moment an
-        /// account flipped — the same starvation class `InsightsEarnings
-        /// .Dataset.tipRecords` exists to prevent.
+        /// The `StatsEngine` input, already flattened by `StatsRecordAdapter`.
+        /// Rows rather than the raw models, so no consumer re-derives them:
+        /// `DashboardFacts` used to flatten `allShifts` itself, which read as
+        /// correct on both arms but silently fed the pace comparison an
+        /// empty history the moment an account flipped — the same starvation
+        /// class `InsightsEarnings.Dataset.tipRecords` exists to prevent.
         let tipRecords: [TipRecord]
     }
 }

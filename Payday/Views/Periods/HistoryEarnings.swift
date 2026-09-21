@@ -60,27 +60,12 @@ enum HistoryEarnings {
     /// legacy store would show one figure over rows summing to something else
     /// under any bug -- which is criterion 5 broken by construction, on the
     /// most scrutinised screens in the app.
-    /// **The one entry point.** Takes BOTH representations and resolves
-    /// which to read itself, so a caller cannot read one representation's
-    /// money over the other's rows -- and, more to the point, cannot forget
-    /// to choose at all. `PeriodsView` called the legacy arm directly with
-    /// no switch, which would have put the History list on the legacy rows
-    /// while the detail it pushes into read records: the audit's original
-    /// criterion-5 defect, reintroduced by the PR meant to end it.
-    @MainActor
-    static func build(
-        entries: [TipEntry],
-        records: [ShiftRecord],
-        policies: CompensationPolicies,
-        payrollTimeZone: TimeZone,
-        calendar: Calendar = .current,
-        representation: ShiftRepresentation = .automatic
-    ) -> Build {
-        representation.usesRecords
-            ? build(records: records, policies: policies, payrollTimeZone: payrollTimeZone)
-            : build(entries: entries, policies: policies, payrollTimeZone: payrollTimeZone, calendar: calendar)
-    }
-
+    /// **The one entry point.** `ShiftRecord`s — the only stored shape since
+    /// the flip — in, one `Build` out. Four consumers reach their money
+    /// through here (`PeriodDetailView`, `DashboardEarnings`,
+    /// `InsightsEarnings` and `PeriodsView`), so one build is what keeps a
+    /// screen's total over rows drawn from a different representation from
+    /// ever being expressible.
     @MainActor
     static func build(
         records: [ShiftRecord],
@@ -100,53 +85,16 @@ enum HistoryEarnings {
             asOf: CivilDay(.distantFuture, in: payrollTimeZone),
             unreadableReceiptShiftIDs: adapted.unreadableReceiptShiftIDs
         ))
-        return Build(snapshot: snapshot, shiftDays: [], shiftRecordDays: records)
+        return Build(snapshot: snapshot, shiftRecordDays: records)
     }
 
-    static func build(
-        entries: [TipEntry],
-        policies: CompensationPolicies,
-        payrollTimeZone: TimeZone,
-        calendar: Calendar = .current
-    ) -> Build {
-        let shiftDays = ShiftDays.groupedByShift(
-            entries,
-            shiftID: \.shiftID,
-            date: \.date,
-            period: \.shiftPeriod,
-            calendar: calendar
-        )
-        return Build(
-            snapshot: LegacySnapshotBridge.snapshot(
-                shifts: shiftDays,
-                policies: policies,
-                payrollTimeZone: payrollTimeZone,
-                // History has never applied a to-date cutoff — HP-01 and
-                // HP-05 both record "no asOf, future-dated entries inside
-                // the current period are included". Saying that ONCE, as the
-                // snapshot's own cutoff, is safer than passing
-                // `asOf: .distantFuture` at a dozen query sites and having
-                // one of them be forgotten: a missed override there is a
-                // silent clamp, not an error.
-                asOf: .distantFuture
-            ),
-            shiftDays: shiftDays,
-            shiftRecordDays: []
-        )
-    }
-
-    /// A snapshot and the grouping whose `shiftID`s index it.
+    /// A snapshot and the rows whose `id`s index it.
     struct Build {
         /// Nil only when the inputs could not be canonically fingerprinted,
         /// which is a refusal and renders as unavailable, never as `$0.00`.
         let snapshot: EarningsSnapshot?
-        /// Newest day first, lunch before dinner — `ShiftDays`' order, kept
-        /// because it is what the rows render in.
-        let shiftDays: [(day: Date, shiftID: UUID, items: [TipEntry])]
-        /// The same rows in the shift representation. Exactly one of the two
-        /// is ever populated, because `build` chooses a source rather than
-        /// merging -- a converted shift exists in BOTH representations at
-        /// once, so reading the union would count it twice.
+        /// The period rows — `ShiftRecord` is the only stored shape since
+        /// the flip.
         let shiftRecordDays: [ShiftRecord]
     }
 
@@ -314,10 +262,10 @@ struct PeriodCheckComparison: Equatable {
         // `reconciliationObservedTipsSideCents`. The inference is now a
         // proposal the sheet offers (`PaycheckReconciler.Proposal`), so this
         // comparison reports the person's own figure.
-        paidTipEarningsCents = PredictedPaycheck.paidTipEarningsCents(
-            tipsCents: paycheck.paidTipsCents,
+        paidTipEarningsCents = PaycheckReconciler.Observation(
+            paidTipsCents: paycheck.paidTipsCents,
             gratuityCents: paycheck.gratuityCents
-        )
+        ).paidTipEarningsCents ?? paycheck.paidTipsCents
         // `MetricID.reconciliationDelta`, the tips-and-gratuity component,
         // off the same reconciliation the sheet holds rather than a second
         // subtraction here.

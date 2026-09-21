@@ -26,10 +26,6 @@ import SwiftData
 /// disagree with the test that was supposed to pin it.
 struct DayDetailFacts: SnapshotFacts {
     /// Exactly the shifts the day result selected, in the engine's order.
-    let shifts: [(day: Date, shiftID: UUID, items: [TipEntry])]
-    /// The same, in the shift representation. Populated by
-    /// `init(shiftRecords:...)` and empty from the legacy initializer, so the
-    /// two never both hold rows and a screen cannot accidentally render both.
     ///
     /// A live `[ShiftRecord]` rather than a projection, because these rows ARE
     /// the edit and delete targets: `ProjectedShiftRow` is deliberately
@@ -43,55 +39,12 @@ struct DayDetailFacts: SnapshotFacts {
     /// "Total", and a failed read renders no currency at all.
     let total: EarningsFigure
 
-    init(allEntries: [TipEntry], date: Date, policies: CompensationPolicies, payrollTimeZone: TimeZone) {
-        // The same civil day the tile that opened this sheet drew, in the same
-        // frozen payroll zone.
-        let calendar = CalendarEarnings.groupingCalendar(payrollTimeZone: payrollTimeZone)
-        let civilDay = CivilDay(date, in: payrollTimeZone)
-        let allShifts = CalendarEarnings.shiftGroups(entries: allEntries, payrollTimeZone: payrollTimeZone)
-        // The USER'S rate and workweek history, effective dates intact, whole
-        // and unmodified. A scalar weekday here is what let this sheet bucket
-        // overtime into a different week than the tile above it: it used to
-        // read `policyStore.latestCalendarPolicy`, which is `calendars.last`
-        // and therefore a QUEUED FUTURE policy.
-        let resolvedSnapshot = CalendarEarnings.snapshot(
-            shifts: allShifts,
-            policies: policies,
-            payrollTimeZone: payrollTimeZone
-        )
-        snapshot = resolvedSnapshot
-        stamp = resolvedSnapshot?.stamp
-
-        let groupsByID = Dictionary(
-            allShifts.map { ($0.shiftID, $0) },
-            uniquingKeysWith: { first, _ in first }
-        )
-        if let dayResult = resolvedSnapshot?.day(civilDay) {
-            total = .earnedIncome(dayResult)
-            shifts = dayResult.shiftIDs.compactMap { groupsByID[$0] }
-        } else {
-            // No snapshot is a failed read, not an empty day (contract rule
-            // 4). The rows are still listed, from the grouping, so the person
-            // sees that the shifts exist; every amount on them renders as
-            // unavailable because no valuation stands behind it.
-            total = .unavailable()
-            shifts = allShifts.filter { calendar.isDate($0.day, inSameDayAs: date) }
-        }
-        shiftRecords = []
-    }
-
-    /// The same day, from the shift representation.
+    /// The day, from the shift representation — the only stored shape since
+    /// the flip.
     ///
-    /// Additive: nothing calls this until the writer flip. It exists now so
-    /// the equivalence can be asserted against the legacy initializer before
-    /// anything depends on it -- `DayDetailShiftFactsTests` pins that both
-    /// produce the same total, the same stamp and the same shift ids for
-    /// equivalent data.
-    ///
-    /// Deliberately mirrors the legacy initializer's structure line for line,
-    /// including the no-snapshot branch: a failed read is a failed read, not
-    /// an empty day, so the rows are still listed and every amount renders
-    /// unavailable rather than as `$0`.
+    /// The no-snapshot branch is load-bearing: a failed read is a failed
+    /// read, not an empty day, so the rows are still listed and every amount
+    /// renders unavailable rather than as `$0`.
     /// `@MainActor` because `ShiftInputAdapter.adapt` is: SwiftData models
     /// must not cross an isolation domain, and that rule does not relax for a
     /// facts initializer. Views build these on the main actor already.
@@ -123,7 +76,6 @@ struct DayDetailFacts: SnapshotFacts {
             total = .unavailable()
             shiftRecords = records.filter { calendar.isDate($0.workDate, inSameDayAs: date) }
         }
-        shifts = []
     }
 
     /// The row's facts need three scalars, not a representation.
@@ -154,21 +106,6 @@ struct DayDetailFacts: SnapshotFacts {
         )
     }
 
-    /// The legacy shape, delegating, so this change moves no behaviour.
-    func rowFacts(
-        for group: (day: Date, shiftID: UUID, items: [TipEntry]),
-        shiftCount: Int,
-        note: String?
-    ) -> ShiftDayRowFacts {
-        rowFacts(
-            shiftID: group.shiftID,
-            day: group.day,
-            period: ShiftDetails.resolve(from: group.items).shiftPeriod,
-            shiftCount: shiftCount,
-            note: note
-        )
-    }
-
     /// The record shape. One record already holds the canonical period, so
     /// there is nothing to resolve -- which is the two-row model's cost
     /// disappearing rather than being ported.
@@ -192,10 +129,8 @@ struct DayDetailSheet: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(PolicyStore.self) private var policyStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Query private var allEntries: [TipEntry]
-    /// The other representation. Which one this screen reads is decided once,
-    /// below, by `shiftsAreAuthoritativeForCurrentAccount` -- never both, or a
-    /// converted shift counts twice.
+    /// The only representation — `ShiftRecord` is the only stored shape
+    /// since the flip.
     @Query private var shiftRecords: [ShiftRecord]
 
     let date: Date
@@ -213,27 +148,15 @@ struct DayDetailSheet: View {
     var body: some View {
         // No `Key` and no `dataRevision`: the facts carry the snapshot's
         // stamp, which is the computed dependency list (contract rule 3).
-        // The representation switch for this screen, in ONE place. Both
-        // initializers are proven to agree on the total, the stamp digest and
-        // the selected ids (`DayDetailShiftFactsTests`), so this chooses a
-        // source and changes no arithmetic.
-        let authoritative = PaydaySyncState.shiftsAreAuthoritativeForCurrentAccount
-        let facts = authoritative
-            ? DayDetailFacts(
-                shiftRecords: shiftRecords,
-                date: date,
-                policies: policyStore.policies,
-                payrollTimeZone: policyStore.payrollTimeZone
-            )
-            : DayDetailFacts(
-                allEntries: allEntries,
-                date: date,
-                policies: policyStore.policies,
-                payrollTimeZone: policyStore.payrollTimeZone
-            )
+        let facts = DayDetailFacts(
+            shiftRecords: shiftRecords,
+            date: date,
+            policies: policyStore.policies,
+            payrollTimeZone: policyStore.payrollTimeZone
+        )
         NavigationStack {
             List {
-                if facts.shifts.isEmpty {
+                if facts.shiftRecords.isEmpty {
                     Text(facts.isUnbacked ? "Payday couldn't read this day." : "No tips logged this day.")
                         .foregroundStyle(PaydayColor.textSecondary)
                         .listRowSeparator(.hidden)
@@ -246,18 +169,6 @@ struct DayDetailSheet: View {
                     .listRowSeparator(.hidden)
 
                     Section("Shifts") {
-                        // Exactly one of these is populated, by construction:
-                        // the facts leave the other empty.
-                        ForEach(facts.shifts, id: \.shiftID) { group in
-                            shiftRow(
-                                for: group,
-                                rowFacts: facts.rowFacts(
-                                    for: group,
-                                    shiftCount: facts.shifts.count,
-                                    note: Self.shiftNote(from: group.items)
-                                )
-                            )
-                        }
                         ForEach(facts.shiftRecords, id: \.id) { record in
                             shiftRow(
                                 for: record,
@@ -304,14 +215,6 @@ struct DayDetailSheet: View {
     /// the sheet's background rather than inside its own card: this sheet
     /// has no second object competing for attention, so a shadow here would
     /// mark nothing.
-    /// A shift's note. Not a ShiftDetails field: `note` lives per-entry
-    /// rather than on the one canonical row, and LogTipSheet writes the
-    /// same text onto every row of a shift, so this takes the first
-    /// non-empty one rather than joining duplicates.
-    private static func shiftNote(from entries: [TipEntry]) -> String? {
-        entries.compactMap(\.note).first { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-    }
-
     /// The label is the figure's own — `EarningsFigure` decides whether this
     /// day may be called a "Total", and `.partial` never may.
     private func heroCard(figure: EarningsFigure) -> some View {
@@ -363,26 +266,4 @@ struct DayDetailSheet: View {
         }
     }
 
-    @ViewBuilder
-    private func shiftRow(
-        for group: (day: Date, shiftID: UUID, items: [TipEntry]),
-        rowFacts: ShiftDayRowFacts
-    ) -> some View {
-        if let anchor = group.items.first {
-            Button {
-                sheetTarget = .edit(anchor)
-            } label: {
-                ShiftDayRow(facts: rowFacts)
-            }
-            .buttonStyle(.plain)
-            .swipeActions(edge: .trailing) {
-                Button(role: .destructive) {
-                    undoState.delete(group.items, in: modelContext)
-                } label: {
-                    Label("Delete", systemImage: "trash")
-                }
-            }
-            .shiftContextMenu(group.items, sheetTarget: $sheetTarget, undoState: undoState, context: modelContext)
-        }
-    }
 }

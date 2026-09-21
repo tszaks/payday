@@ -59,6 +59,105 @@ private func groups(_ entries: [TipEntry], firstWeekday: Int = 2) -> [(day: Date
     )
 }
 
+/// Folds one legacy shift group into the record it would have become under
+/// the deriver: `ShiftDetails.resolve` for the detail fields, `metricsOwner`
+/// for the receipt payload's home, and the receipt's own
+/// `voluntaryTipsCents(fromStoredAmount:)` normalization on the owner row
+/// only -- the same split `TipBreakdown.total` implemented and
+/// `private.derive_shifts` was written to match. This is test scaffolding
+/// for fixtures authored as `TipEntry` rows; production never folds
+/// entries, it reads `ShiftRecord` directly.
+@MainActor
+private func record(from group: (day: Date, shiftID: UUID, items: [TipEntry])) -> ShiftRecord {
+    let details = ShiftDetails.resolve(from: group.items)
+    let owner = ShiftDetails.metricsOwner(of: group.items)
+    var cash = 0
+    var credit = 0
+    for row in group.items {
+        let metrics = row.id == owner?.id ? details.receiptMetrics : nil
+        let voluntary = metrics?.voluntaryTipsCents(fromStoredAmount: row.amountCents) ?? row.amountCents
+        switch row.kind {
+        case .cash: cash += voluntary
+        case .credit: credit += voluntary
+        }
+    }
+    return ShiftRecord(
+        id: group.shiftID,
+        workDate: group.day,
+        shiftPeriod: details.shiftPeriod,
+        cashTipsCents: cash,
+        creditTipsCents: credit,
+        tipOutCents: details.tipOutCents,
+        salesCents: details.salesCents,
+        hoursWorked: details.hoursWorked,
+        clockIn: details.clockIn,
+        clockOut: details.clockOut,
+        serverCount: details.serverCount,
+        receiptMetrics: details.receiptMetrics,
+        note: group.items.lazy.compactMap(\.note).first,
+        recordedAt: group.items.compactMap(\.recordedAt).min(),
+        legacyEntryIDs: Set(group.items.map(\.id))
+    )
+}
+
+/// The one snapshot construction every suite in this file shares: legacy
+/// fixtures folded into `ShiftRecord`s, adapted by `ShiftInputAdapter`, and
+/// built by `EarningsSnapshot.build` -- the same engine and stamp the app's
+/// own path produces, so a figure asserted here is the figure a screen shows.
+@MainActor
+private func fixtureSnapshot(
+    shifts: [(day: Date, shiftID: UUID, items: [TipEntry])],
+    policies: CompensationPolicies,
+    payrollTimeZone: TimeZone,
+    asOf: Date
+) -> EarningsSnapshot? {
+    fixtureSnapshot(
+        records: shifts.map(record(from:)),
+        policies: policies,
+        payrollTimeZone: payrollTimeZone,
+        asOf: asOf
+    )
+}
+
+@MainActor
+private func fixtureSnapshot(
+    entries: [TipEntry],
+    policies: CompensationPolicies,
+    payrollTimeZone: TimeZone,
+    asOf: Date
+) -> EarningsSnapshot? {
+    fixtureSnapshot(
+        records: shifts(entries),
+        policies: policies,
+        payrollTimeZone: payrollTimeZone,
+        asOf: asOf
+    )
+}
+
+/// The records-native spelling, for tests whose fixtures are already
+/// `ShiftRecord`s (the undo round-trips).
+@MainActor
+private func fixtureSnapshot(
+    records: [ShiftRecord],
+    policies: CompensationPolicies,
+    payrollTimeZone: TimeZone,
+    asOf: Date
+) -> EarningsSnapshot? {
+    let adapted = ShiftInputAdapter.adapt(records, calendars: policies.calendars)
+    return try? EarningsSnapshot.build(EarningsInputs(
+        shifts: adapted.inputs,
+        rates: policies.rates,
+        calendars: policies.calendars,
+        asOf: CivilDay(asOf, in: payrollTimeZone),
+        unreadableReceiptShiftIDs: adapted.unreadableReceiptShiftIDs
+    ))
+}
+
+@MainActor
+private func shifts(_ entries: [TipEntry]) -> [ShiftRecord] {
+    groups(entries).map(record(from:))
+}
+
 /// W1: 4.25h lunch and 5.5h dinner on one Monday at $2.83, 5000c and 6000c
 /// of credit tips. The week's wages are 2759, allocated 1203 to lunch and
 /// 1556 to dinner. Independent per-shift rounding gives 1557 for the dinner
@@ -74,8 +173,9 @@ private func w1Entries() -> [TipEntry] {
     ]
 }
 
+@MainActor
 private func w1Snapshot(rateCents: Int? = 283) -> EarningsSnapshot {
-    let snapshot = LegacySnapshotBridge.snapshot(
+    let snapshot = fixtureSnapshot(
         shifts: groups(w1Entries()),
         policies: testPolicies(rateCents: rateCents),
         payrollTimeZone: PaydayTestZone.payroll,
@@ -89,6 +189,7 @@ private func w1Snapshot(rateCents: Int? = 283) -> EarningsSnapshot {
 /// [SC-01] The row's figure is the ledger's, and it is the ledger's by
 /// construction rather than by agreement.
 @Suite("ShiftDayRow reads its figure from the snapshot")
+@MainActor
 struct ShiftDayRowSnapshotTests {
     private func rowFacts(_ snapshot: EarningsSnapshot?, _ id: UUID) -> ShiftDayRowFacts {
         ShiftDayRowFacts(
@@ -155,7 +256,7 @@ struct ShiftDayRowSnapshotTests {
         let entries = [
             TipEntry(date: at(2026, 9, 28), amountCents: 0, kind: .cash, shiftID: shiftID(7))
         ]
-        let snapshot = try #require(LegacySnapshotBridge.snapshot(
+        let snapshot = try #require(fixtureSnapshot(
             shifts: groups(entries),
             policies: testPolicies(rateCents: nil),
             payrollTimeZone: PaydayTestZone.payroll,
@@ -181,7 +282,7 @@ struct ShiftDayRowSnapshotTests {
         let entries = [
             TipEntry(date: at(2026, 9, 28), amountCents: 4000, kind: .credit, shiftID: shiftID(3))
         ]
-        let snapshot = try #require(LegacySnapshotBridge.snapshot(
+        let snapshot = try #require(fixtureSnapshot(
             shifts: groups(entries),
             policies: testPolicies(rateCents: 283),
             payrollTimeZone: PaydayTestZone.payroll,
@@ -215,6 +316,7 @@ struct ShiftDayRowSnapshotTests {
 /// [SC-02] / [SC-03] The drawer's itemization and its bottom line, composed
 /// once from one `EarningsResult`.
 @Suite("HeroBreakdownDrawer is composed from one EarningsResult")
+@MainActor
 struct HeroBreakdownDrawerSnapshotTests {
     /// W1's day, plus a 1000c tip-out on the dinner shift so the subtotal
     /// and the subtraction rows appear.
@@ -226,7 +328,7 @@ struct HeroBreakdownDrawerSnapshotTests {
             TipEntry(date: day.addingTimeInterval(3600), amountCents: 6000, kind: .credit, hoursWorked: 5.5,
                      tipOutCents: 1000, shiftPeriod: .dinner, shiftID: shiftID(2))
         ]
-        return try #require(LegacySnapshotBridge.snapshot(
+        return try #require(fixtureSnapshot(
             shifts: groups(entries),
             policies: testPolicies(rateCents: 283),
             payrollTimeZone: PaydayTestZone.payroll,
@@ -294,7 +396,7 @@ struct HeroBreakdownDrawerSnapshotTests {
             TipEntry(date: day.addingTimeInterval(3600), amountCents: 6000, kind: .credit,
                      shiftPeriod: .dinner, shiftID: shiftID(2))
         ]
-        let snapshot = try #require(LegacySnapshotBridge.snapshot(
+        let snapshot = try #require(fixtureSnapshot(
             shifts: groups(entries),
             policies: testPolicies(rateCents: 283),
             payrollTimeZone: PaydayTestZone.payroll,
@@ -335,7 +437,7 @@ struct HeroBreakdownDrawerSnapshotTests {
             TipEntry(date: at(2026, 9, 28 + index), amountCents: 1000, kind: .credit,
                      hoursWorked: worked, shiftID: shiftID(10 + index))
         }
-        let snapshot = try #require(LegacySnapshotBridge.snapshot(
+        let snapshot = try #require(fixtureSnapshot(
             shifts: groups(entries),
             policies: testPolicies(rateCents: 283),
             payrollTimeZone: PaydayTestZone.payroll,
@@ -360,6 +462,7 @@ struct HeroBreakdownDrawerSnapshotTests {
 
 /// [SC-04] through [SC-07] and [SC-09]. The chart's bars are engine answers.
 @Suite("NightlyEarningsChart bars are snapshot queries")
+@MainActor
 struct NightlyEarningsChartSnapshotTests {
     /// Five days in one Mon-start week, each with tips and hours, so the
     /// week carries overtime the M1 defect used to hide.
@@ -369,7 +472,7 @@ struct NightlyEarningsChartSnapshotTests {
             TipEntry(date: at(2026, 9, 28 + index), amountCents: 1000, kind: .credit,
                      hoursWorked: worked, shiftID: shiftID(10 + index))
         }
-        return try #require(LegacySnapshotBridge.snapshot(
+        return try #require(fixtureSnapshot(
             shifts: groups(entries),
             policies: testPolicies(rateCents: 283),
             payrollTimeZone: PaydayTestZone.payroll,
@@ -470,7 +573,7 @@ struct NightlyEarningsChartSnapshotTests {
             TipEntry(date: day.addingTimeInterval(3600), amountCents: 6000, kind: .credit,
                      shiftPeriod: .dinner, shiftID: shiftID(2))
         ]
-        let snapshot = try #require(LegacySnapshotBridge.snapshot(
+        let snapshot = try #require(fixtureSnapshot(
             shifts: groups(entries),
             policies: testPolicies(rateCents: 283),
             payrollTimeZone: PaydayTestZone.payroll,
@@ -568,7 +671,7 @@ struct DuplicateShiftValuationTests {
             )
         }
 
-        let snapshot = try #require(LegacySnapshotBridge.snapshot(
+        let snapshot = try #require(fixtureSnapshot(
             shifts: groups(source + copy),
             policies: testPolicies(rateCents: 283),
             payrollTimeZone: PaydayTestZone.payroll,
@@ -621,7 +724,7 @@ struct DuplicateShiftValuationTests {
             TipEntry(date: at(2026, 9, 29), amountCents: 1000, kind: .credit, recordedAt: .now,
                      hoursWorked: 39, shiftID: shiftID(2))
         ]
-        let snapshot = try #require(LegacySnapshotBridge.snapshot(
+        let snapshot = try #require(fixtureSnapshot(
             shifts: groups(source + copy),
             policies: testPolicies(rateCents: 283),
             payrollTimeZone: PaydayTestZone.payroll,
@@ -642,9 +745,9 @@ struct DuplicateShiftValuationTests {
 @Suite("Undo restores a shift the engine values identically")
 @MainActor
 struct UndoDeleteInverseTests {
-    private func valuation(of entries: [TipEntry], id: UUID) throws -> ShiftValuation {
-        let snapshot = try #require(LegacySnapshotBridge.snapshot(
-            shifts: groups(entries),
+    private func valuation(of records: [ShiftRecord], id: UUID) throws -> ShiftValuation {
+        let snapshot = try #require(fixtureSnapshot(
+            records: records,
             policies: testPolicies(rateCents: 283),
             payrollTimeZone: PaydayTestZone.payroll,
             asOf: at(2026, 9, 30)
@@ -652,50 +755,103 @@ struct UndoDeleteInverseTests {
         return try #require(snapshot.valuation(id))
     }
 
+    /// The exact value round trip `ShiftCommands.delete` captures and
+    /// `ShiftCommands.restore` rebuilds -- mirrored at the value level so the
+    /// claim does not need a store.
+    private func restored(_ deleted: ShiftCommands.DeletedShift) -> ShiftRecord {
+        ShiftRecord(
+            id: deleted.id,
+            workDate: deleted.workDate,
+            shiftPeriod: deleted.shiftPeriod,
+            cashTipsCents: deleted.cashTipsCents,
+            creditTipsCents: deleted.creditTipsCents,
+            tipOutCents: deleted.tipOutCents,
+            salesCents: deleted.salesCents,
+            hoursWorked: deleted.hoursWorked,
+            clockIn: deleted.clockIn,
+            clockOut: deleted.clockOut,
+            serverCount: deleted.serverCount,
+            receiptMetrics: deleted.receiptMetrics,
+            note: deleted.note,
+            recordedAt: deleted.recordedAt,
+            source: deleted.source,
+            legacyEntryIDs: deleted.legacyEntryIDs
+        )
+    }
+
+    private func capture(_ record: ShiftRecord) -> ShiftCommands.DeletedShift {
+        ShiftCommands.DeletedShift(
+            id: record.id,
+            workDate: record.workDate,
+            shiftPeriod: record.shiftPeriod,
+            cashTipsCents: record.cashTipsCents,
+            creditTipsCents: record.creditTipsCents,
+            tipOutCents: record.tipOutCents,
+            salesCents: record.salesCents,
+            hoursWorked: record.hoursWorked,
+            clockIn: record.clockIn,
+            clockOut: record.clockOut,
+            serverCount: record.serverCount,
+            receiptMetrics: record.receiptMetrics,
+            note: record.note,
+            recordedAt: record.recordedAt,
+            source: record.source,
+            legacyEntryIDs: record.legacyEntryIDs,
+            deletedAt: .now
+        )
+    }
+
     @Test("undoIsAnExactInverseThroughTheEngine: the restored shift values to the same cents and minutes")
     func undoIsAnExactInverseThroughTheEngine() throws {
-        let entries = [
+        // One shift, logged as the two closeout rows the fold combines.
+        let record = shifts([
             TipEntry(date: at(2026, 9, 28), amountCents: 5000, kind: .credit, hoursWorked: 6.5,
                      tipOutCents: 800, salesCents: 120_000, shiftPeriod: .dinner, shiftID: shiftID(1),
                      serverCount: 4),
             TipEntry(date: at(2026, 9, 28), amountCents: 2000, kind: .cash, shiftID: shiftID(1))
-        ]
-        let before = try valuation(of: entries, id: shiftID(1))
+        ])[0]
+        let before = try valuation(of: [record], id: shiftID(1))
 
-        // The exact round trip `UndoDeleteToastState` performs: snapshot
-        // every row, then rebuild every row from its snapshot.
-        let restored = entries.map { DeletedTipSnapshot(entry: $0).restored() }
-        let after = try valuation(of: restored, id: shiftID(1))
+        let after = try valuation(of: [restored(capture(record))], id: shiftID(1))
 
         #expect(after == before)
     }
 
     @Test("the round trip preserves every stored field the engine reads, named one by one")
     func everyEngineRelevantFieldSurvives() throws {
-        let entry = TipEntry(
-            date: at(2026, 9, 28), amountCents: 5000, kind: .credit, note: "slammed",
-            recordedAt: at(2026, 9, 28, hour: 23), hoursWorked: 6.5, tipOutCents: 800,
-            salesCents: 120_000, shiftPeriod: .dinner, shiftID: shiftID(1),
-            clockIn: at(2026, 9, 28, hour: 16), clockOut: at(2026, 9, 28, hour: 22),
-            serverCount: 4
+        let record = ShiftRecord(
+            id: shiftID(1),
+            workDate: at(2026, 9, 28),
+            shiftPeriod: .dinner,
+            cashTipsCents: 2_000,
+            creditTipsCents: 5_000,
+            tipOutCents: 800,
+            salesCents: 120_000,
+            hoursWorked: 6.5,
+            clockIn: at(2026, 9, 28, hour: 16),
+            clockOut: at(2026, 9, 28, hour: 22),
+            serverCount: 4,
+            note: "slammed",
+            recordedAt: at(2026, 9, 28, hour: 23)
         )
-        let restored = DeletedTipSnapshot(entry: entry).restored()
+        let restored = restored(capture(record))
 
-        #expect(restored.id == entry.id)
-        #expect(restored.date == entry.date)
-        #expect(restored.amountCents == entry.amountCents)
-        #expect(restored.kind == entry.kind)
-        #expect(restored.note == entry.note)
-        #expect(restored.recordedAt == entry.recordedAt)
-        #expect(restored.shiftID == entry.shiftID)
-        #expect(restored.hoursWorked == entry.hoursWorked)
-        #expect(restored.tipOutCents == entry.tipOutCents)
-        #expect(restored.salesCents == entry.salesCents)
-        #expect(restored.shiftPeriod == entry.shiftPeriod)
-        #expect(restored.clockIn == entry.clockIn)
-        #expect(restored.clockOut == entry.clockOut)
-        #expect(restored.serverCount == entry.serverCount)
-        #expect(restored.receiptMetrics == entry.receiptMetrics)
+        #expect(restored.id == record.id)
+        #expect(restored.workDate == record.workDate)
+        #expect(restored.cashTipsCents == record.cashTipsCents)
+        #expect(restored.creditTipsCents == record.creditTipsCents)
+        #expect(restored.note == record.note)
+        #expect(restored.recordedAt == record.recordedAt)
+        #expect(restored.hoursWorked == record.hoursWorked)
+        #expect(restored.tipOutCents == record.tipOutCents)
+        #expect(restored.salesCents == record.salesCents)
+        #expect(restored.shiftPeriod == record.shiftPeriod)
+        #expect(restored.clockIn == record.clockIn)
+        #expect(restored.clockOut == record.clockOut)
+        #expect(restored.serverCount == record.serverCount)
+        #expect(restored.receiptMetrics == record.receiptMetrics)
+        #expect(restored.legacyEntryIDs == record.legacyEntryIDs)
+        #expect(restored.source == record.source)
     }
 
     @Test("a deleted shift is absent from the snapshot, and its row renders no currency rather than $0")
@@ -707,7 +863,7 @@ struct UndoDeleteInverseTests {
                      shiftID: shiftID(2))
         ]
         let surviving = entries.filter { $0.shiftID != shiftID(1) }
-        let snapshot = try #require(LegacySnapshotBridge.snapshot(
+        let snapshot = try #require(fixtureSnapshot(
             shifts: groups(surviving),
             policies: testPolicies(rateCents: 283),
             payrollTimeZone: PaydayTestZone.payroll,
@@ -727,8 +883,9 @@ struct UndoDeleteInverseTests {
 
 /// The wave-0 feed. It is not a second engine, and these tests are how that
 /// claim is checked rather than asserted.
-@Suite("LegacySnapshotBridge is the same engine over the legacy table")
-struct LegacySnapshotBridgeTests {
+@Suite("The fixture snapshot is the same engine over the stored table")
+@MainActor
+struct FixtureSnapshotEngineTests {
     @Test("the bridge's wages are exactly WageEstimate.centsByShiftID's, which is the ledger's")
     func bridgeWagesMatchTheExistingPath() throws {
         let entries = w1Entries()
@@ -748,22 +905,20 @@ struct LegacySnapshotBridgeTests {
         }
     }
 
-    @Test("the bridge's tips are exactly TipBreakdown's, per shift and in total")
-    func bridgeTipsMatchTipBreakdown() throws {
-        let entries = w1Entries()
-        let shifts = groups(entries)
+    @Test("the snapshot's tips are exactly the records', per shift and in total")
+    func snapshotTipsMatchTheRecords() throws {
+        let records = shifts(w1Entries())
         let snapshot = w1Snapshot()
-        for shift in shifts {
-            let breakdown = TipBreakdown.total(of: shift.items)
-            let components = try #require(snapshot.valuation(shift.shiftID)?.components)
-            #expect(components.voluntaryCashCents == breakdown.cashCents)
-            #expect(components.voluntaryCreditCents == breakdown.creditCents)
-            #expect(components.gratuityFeesCents == breakdown.gratuityFeesCents)
-            #expect(components.tipOutCents == breakdown.tipOutCents)
-            #expect(components.nonWageEarningsCents == breakdown.netTotalCents)
+        for record in records {
+            let components = try #require(snapshot.valuation(record.id)?.components)
+            #expect(components.voluntaryCashCents == record.cashTipsCents)
+            #expect(components.voluntaryCreditCents == record.creditTipsCents)
+            #expect(components.tipOutCents == (record.tipOutCents ?? 0))
+            #expect(components.nonWageEarningsCents == record.nonWageEarningsCents)
         }
         let day = snapshot.day(CivilDay(at(2026, 9, 28), in: PaydayTestZone.payroll))
-        #expect(day.knownComponents.nonWageEarningsCents == TipBreakdown.total(of: entries).netTotalCents)
+        #expect(day.knownComponents.nonWageEarningsCents
+                == records.reduce(0) { $0 + $1.nonWageEarningsCents })
     }
 
     @Test("a group's own shiftID is the snapshot's key, so a row can never miss its own valuation")
@@ -776,7 +931,7 @@ struct LegacySnapshotBridgeTests {
         let shifts = groups(entries)
         let group = try #require(shifts.first)
         #expect(group.items.first?.shiftID == nil)
-        let snapshot = try #require(LegacySnapshotBridge.snapshot(
+        let snapshot = try #require(fixtureSnapshot(
             shifts: shifts,
             policies: testPolicies(rateCents: 283),
             payrollTimeZone: PaydayTestZone.payroll,
@@ -834,7 +989,7 @@ struct LegacySnapshotBridgeTests {
                 payrollTimeZone: PaydayTestZone.payroll
             )]
         )
-        let snapshot = try #require(LegacySnapshotBridge.snapshot(
+        let snapshot = try #require(fixtureSnapshot(
             shifts: groups(entries),
             policies: policies,
             payrollTimeZone: PaydayTestZone.payroll,
@@ -878,7 +1033,7 @@ struct LegacySnapshotBridgeTests {
                 payrollTimeZone: PaydayTestZone.payroll
             )]
         )
-        let snapshot = try #require(LegacySnapshotBridge.snapshot(
+        let snapshot = try #require(fixtureSnapshot(
             shifts: groups(w1Entries()),
             policies: policies,
             payrollTimeZone: PaydayTestZone.payroll,
@@ -899,7 +1054,7 @@ struct LegacySnapshotBridgeTests {
         // The row type is spelled out because the bridge is generic over
         // `LegacyShiftRow` now, and an empty literal gives inference nothing
         // to work from. The assertion is unchanged.
-        let snapshot = try #require(LegacySnapshotBridge.snapshot(
+        let snapshot = try #require(fixtureSnapshot(
             shifts: [(day: Date, shiftID: UUID, items: [TipEntry])](),
             policies: testPolicies(rateCents: 283),
             payrollTimeZone: PaydayTestZone.payroll,

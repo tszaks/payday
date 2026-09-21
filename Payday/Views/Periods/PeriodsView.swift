@@ -161,7 +161,6 @@ struct PeriodsView: View {
     @Environment(PayScheduleStore.self) private var scheduleStore
     @Environment(PolicyStore.self) private var policyStore
     @Environment(TabRouter.self) private var tabRouter
-    @Query private var allEntries: [TipEntry]
     /// The other representation. `snapshotBuild` picks one, and it must be
     /// the SAME one `PeriodDetailView` picks: this list pushes into that
     /// detail, so a row total from one source over a detail from the other
@@ -268,7 +267,6 @@ struct PeriodsView: View {
         // is the audit's original criterion-5 defect, and a screen that
         // cannot make the choice cannot make it differently.
         return HistoryEarnings.build(
-            entries: allEntries,
             records: shiftRecords,
             policies: policies,
             payrollTimeZone: zone

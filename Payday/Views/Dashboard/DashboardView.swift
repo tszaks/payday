@@ -3,12 +3,6 @@ import SwiftUI
 import SwiftData
 import TipKit
 
-/// The latest wall-clock a shift was logged, for ordering today's shifts —
-/// falls back to the shift's date when no recordedAt was captured.
-private func shiftRecordedAt(_ items: [TipEntry]) -> Date {
-    items.compactMap(\.recordedAt).max() ?? items.map(\.date).max() ?? .distantPast
-}
-
 /// Everything the Dashboard shows, and nothing it computes.
 ///
 /// A PR 5 wave 1 adapter, to the contract in `Payday/Earnings/SnapshotFacts.swift`:
@@ -84,10 +78,6 @@ struct DashboardFacts: SnapshotFacts {
     // MARK: Presentation
 
     let calculator: PayPeriodCalculator
-    /// The current period's entries, selected by the same civil-day range the
-    /// hero's query uses. Drives the empty state and the screenshot hook
-    /// only; nothing reads money off it.
-    let periodEntries: [TipEntry]
     let daysRemaining: Int
     /// The period the hero number represents — usually the current one, but
     /// the just-finished one on the morning after a close, while the new
@@ -104,34 +94,17 @@ struct DashboardFacts: SnapshotFacts {
     /// closed, or the day the check actually lands. nil when the card is not
     /// showing at all.
     let paydayPhase: PaydayMoment.Phase?
+    /// Whether this period has any shift to draw — the gate the empty state
+    /// hangs off. It used to ask `periodEntries.isEmpty`, which is
+    /// legacy-only: the first account to flip saw "No shifts this period."
+    /// under a correct, non-zero hero.
     let shiftCount: Int
 
-    /// Whether this period has any shift to draw, in EITHER representation.
-    ///
-    /// The screen used to branch on `periodEntries.isEmpty`, and
-    /// `periodEntries` is legacy-only -- it is `periodShifts.flatMap(\.items)`
-    /// over `allShifts`, and `DashboardEarnings.build`'s record arm returns
-    /// `shiftDays: []` by construction, because the Dataset holds exactly one
-    /// representation and never merges them.
-    ///
-    /// So the first account to flip saw "No shifts this period." under a
-    /// correct, non-zero hero. Every other consumer on this screen was
-    /// already right: `shiftsSection` renders BOTH arms and says "Exactly one
-    /// of these is populated, by construction", and `shiftCount` sums both.
-    /// Only the gate deciding whether to draw any of it asked one arm.
-    ///
-    /// It lives here rather than in the view so it can be tested. The legacy
-    /// coupling had a test (`noShiftsKeepsItsZero` asserts
-    /// `periodEntries.isEmpty` IS what draws the sentence) and the record arm
-    /// had none, which is exactly why a green suite shipped this.
     var hasShiftsThisPeriod: Bool { shiftCount > 0 }
-    let shiftDays: [(day: Date, shiftID: UUID, items: [TipEntry])]
-    /// The same rows in the shift representation, filtered by the same civil
-    /// work-day rule. Empty unless the caller passed records, so the two are
-    /// never both populated.
-    ///
-    /// `[ShiftRecord]` and not a projection because these rows are the edit
-    /// and delete targets: `ProjectedShiftRow` is deliberately un-persistable.
+    /// The period's rows, filtered by the civil work-day rule — the engine's
+    /// rule. `[ShiftRecord]` and not a projection because these rows are the
+    /// edit and delete targets: `ProjectedShiftRow` is deliberately
+    /// un-persistable.
     let shiftRecordDays: [ShiftRecord]
     /// Calendar days that hold 2+ shifts — a "double" — so a row can label
     /// itself "Today · Lunch" / "Today · Dinner" only when it needs to.
@@ -210,18 +183,19 @@ struct DashboardFacts: SnapshotFacts {
     ///     `CompensationPolicies` and reached this struct inside `snapshot`.
     init(
         snapshot: EarningsSnapshot?,
-        allShifts: [(day: Date, shiftID: UUID, items: [TipEntry])],
-        /// Defaulted, so every existing caller is unchanged. The writer flip
-        /// passes records here instead of entries above.
-        allShiftRecords: [ShiftRecord] = [],
+        /// The period's `ShiftRecord`s — the only stored shape since the
+        /// flip. This struct deliberately does not group anything itself:
+        /// it used to, with the payroll-zone calendar, while the snapshot
+        /// was built with the device's, and a row with no `shiftID`
+        /// therefore got a different deterministic id from the two and its
+        /// valuation lookup missed (see `DashboardEarnings`).
+        allShiftRecords: [ShiftRecord],
         /// The `StatsEngine` rows, from `DashboardEarnings.Dataset
-        /// .tipRecords` — already flattened out of whichever arm built the
-        /// dataset. NOT defaulted and never derived from `allShifts` here:
-        /// on the records arm `allShifts` is empty by construction, and the
-        /// old `flatMap(\.items)` read that as a person with no history, so
-        /// the pace line and tonight's reveal silently vanished the moment
-        /// an account flipped. A defaulted parameter is exactly how that
-        /// caller forgets.
+        /// .tipRecords` — already flattened by `StatsRecordAdapter`. NOT
+        /// defaulted and never derived here: the old `flatMap(\.items)` over
+        /// a legacy grouping read a flipped account as a person with no
+        /// history, so the pace line and tonight's reveal silently vanished.
+        /// A defaulted parameter is exactly how that caller forgets.
         allTipRecords: [TipRecord],
         schedule: PaySchedule?,
         now: Date,
@@ -247,19 +221,14 @@ struct DashboardFacts: SnapshotFacts {
         // type header for the final-day shifts the old entry-date filter
         // dropped.
         let currentRange = Self.range(of: period, in: payrollTimeZone)
-        let periodShifts = allShifts.filter {
-            currentRange.contains(CivilDay($0.day, in: payrollTimeZone))
-        }
-        shiftDays = periodShifts
-        // The same civil-work-day membership rule, which is the engine's.
+        // Membership by civil work day, which is the engine's rule.
         let periodRecords = allShiftRecords.filter {
             currentRange.contains(CivilDay($0.workDate, in: payrollTimeZone))
         }
-        // `@Query` delivers records unordered — insertion order on a flipped
-        // account, which presented oldest-first. The legacy arm's order is
-        // `ShiftDays.groupedByShift`'s: newest day first, lunch before
-        // dinner inside a day, earliest closeout as the tie-break. The list
-        // reads identically whichever arm is underneath.
+        // `@Query` delivers records unordered — insertion order, which
+        // presented oldest-first. The list's order is `ShiftDays`'s: newest
+        // day first, lunch before dinner inside a day, earliest closeout as
+        // the tie-break.
         shiftRecordDays = periodRecords.sorted { lhs, rhs in
             let lhsDay = calendar.startOfDay(for: lhs.workDate)
             let rhsDay = calendar.startOfDay(for: rhs.workDate)
@@ -270,13 +239,14 @@ struct DashboardFacts: SnapshotFacts {
             return (lhs.clockIn ?? lhs.recordedAt ?? lhs.workDate)
                 < (rhs.clockIn ?? rhs.recordedAt ?? rhs.workDate)
         }
-        periodEntries = periodShifts.flatMap(\.items)
-        // A "shift" counts closeouts, not calendar days. Either
-        // representation supplies it; only one is ever populated.
-        shiftCount = periodShifts.count + periodRecords.count
-        // Days that hold more than one shift — the emergent doubles.
+        // A "shift" counts closeouts, not calendar days.
+        shiftCount = periodRecords.count
+        // Days that hold more than one shift — the emergent doubles, counted
+        // on the same grid-calendar day the sort and the row labels use.
         var dayCounts: [Date: Int] = [:]
-        for shift in periodShifts { dayCounts[shift.day, default: 0] += 1 }
+        for record in periodRecords {
+            dayCounts[calendar.startOfDay(for: record.workDate), default: 0] += 1
+        }
         multiShiftDays = Set(dayCounts.filter { $0.value >= 2 }.keys)
 
         // The StatsEngine rows arrive flattened by the dataset itself
@@ -430,7 +400,7 @@ struct DashboardFacts: SnapshotFacts {
         // rendered. The card deliberately does not repeat the pay date,
         // because the progress bar a few lines above already labels where the
         // period ends ([DB-22]), and `heroPayDate` is what draws that.
-        predictedPaycheck = PredictedPaycheck.figure(from: paydayResult?.1)
+        predictedPaycheck = PaycheckReconciler.Expectation(result: paydayResult?.1, stamp: snapshot?.stamp).grossFigure
         // Cash tips in the payday-moment period — the ENTIRE gap between
         // "You kept" and the check, since cash is the one thing that never
         // runs through payroll. Named on the card so nobody has to subtract
@@ -456,16 +426,11 @@ struct DashboardFacts: SnapshotFacts {
         // on sight" is true by construction and not by two derivations
         // agreeing. `.unavailable` prints no line at all rather than an echo
         // with a placeholder where the money goes.
-        let todayShifts = periodShifts.filter { calendar.isDateInToday($0.day) }
-        // The records arm has no grouped shifts to filter, so the lookup is
-        // representation-neutral: ONE latest closeout today, whichever arm is
-        // populated, carrying the two facts the reveal needs.
+        // ONE latest closeout today, carrying the two facts the reveal needs.
         let todayRecords = periodRecords.filter { calendar.isDateInToday($0.workDate) }
         let latestToday: (shiftID: UUID, shiftPeriod: ShiftPeriod?)?
         if let latest = todayRecords.max(by: { ($0.recordedAt ?? $0.workDate) < ($1.recordedAt ?? $1.workDate) }) {
             latestToday = (latest.id, latest.shiftPeriod)
-        } else if let latest = todayShifts.max(by: { shiftRecordedAt($0.items) < shiftRecordedAt($1.items) }) {
-            latestToday = (latest.shiftID, ShiftDetails.resolve(from: latest.items).shiftPeriod)
         } else {
             latestToday = nil
         }
@@ -637,8 +602,8 @@ struct DashboardView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
-    @Query(sort: \TipEntry.date, order: .reverse) private var allEntries: [TipEntry]
-    /// The other representation. `DashboardEarnings.build` picks one.
+    /// The screen's only input — `ShiftRecord` is the only stored shape
+    /// since the flip.
     @Query private var shiftRecords: [ShiftRecord]
 
     @State private var sheetTarget: TipEntrySheetTarget?
@@ -734,11 +699,9 @@ struct DashboardView: View {
         let dataset = renderCache?.revision == snapshotRevision
             ? renderCache!.dataset
             : DashboardEarnings.build(
-                entries: allEntries,
                 records: shiftRecords,
                 policies: policyStore.policies,
-                payrollTimeZone: payrollTimeZone,
-                calendar: payrollCalendar
+                payrollTimeZone: payrollTimeZone
             )
         let snapshot = dataset.snapshot
         // Rule 3: the facts are keyed on the dataset's own digest, the
@@ -747,7 +710,6 @@ struct DashboardView: View {
             ? renderCache!.facts
             : DashboardFacts(
                 snapshot: snapshot,
-                allShifts: dataset.shiftDays,
                 allShiftRecords: dataset.shiftRecordDays,
                 allTipRecords: dataset.tipRecords,
                 schedule: scheduleStore.schedule,
@@ -814,8 +776,8 @@ struct DashboardView: View {
                 // MainTabView's "-OpenEditSheetKind <kind>" hook so passing
                 // one can never accidentally also satisfy the other and
                 // double-present a sheet.
-                if ProcessInfo.processInfo.arguments.contains("-OpenEditSheet"), let first = facts.periodEntries.first {
-                    sheetTarget = .edit(first)
+                if ProcessInfo.processInfo.arguments.contains("-OpenEditSheet"), let first = facts.shiftRecordDays.first {
+                    sheetTarget = .editShift(first)
                 }
                 if ProcessInfo.processInfo.arguments.contains("-OpenSettings") {
                     showSettings = true
@@ -1229,11 +1191,6 @@ struct DashboardView: View {
             .padding(.top, PaydaySpacing.p16)
             .padding(.bottom, PaydaySpacing.p8)
 
-            // Exactly one of these is populated, by construction.
-            ForEach(Array(facts.shiftDays.prefix(Self.maxShiftRows).enumerated()), id: \.element.shiftID) { index, group in
-                if index > 0 { Divider() }
-                shiftRow(for: group, facts: facts)
-            }
             ForEach(Array(facts.shiftRecordDays.prefix(Self.maxShiftRows).enumerated()), id: \.element.id) { index, record in
                 if index > 0 { Divider() }
                 shiftRow(for: record, facts: facts)
@@ -1281,37 +1238,6 @@ struct DashboardView: View {
         }
         .buttonStyle(.plain)
         .shiftContextMenu(record: record, sheetTarget: $sheetTarget, undoState: undoState, context: modelContext)
-    }
-
-    @ViewBuilder
-    private func shiftRow(
-        for group: (day: Date, shiftID: UUID, items: [TipEntry]),
-        facts: DashboardFacts
-    ) -> some View {
-        // A shift, single-entry or merged cash+credit, is one row now — the
-        // edit sheet is shaped like a shift regardless of how many TipEntry
-        // rows it took to log it, so there's no separate "open this shift's
-        // entries" destination anymore.
-        // Swipe-to-delete went with the List conversion (swipeActions is
-        // List-only); delete stays one long-press away via the context menu,
-        // with the same undo toast, and PeriodDetailView still swipes.
-        if let anchor = group.items.first {
-            Button {
-                sheetTarget = .edit(anchor)
-            } label: {
-                ShiftDayRow(facts: ShiftDayRowFacts(
-                    snapshot: facts.snapshot,
-                    shiftID: group.shiftID,
-                    day: group.day,
-                    period: ShiftDetails.resolve(from: group.items).shiftPeriod,
-                    dayHasMultipleShifts: facts.multiShiftDays.contains(group.day)
-                ))
-                .padding(.vertical, PaydaySpacing.p12)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .shiftContextMenu(group.items, sheetTarget: $sheetTarget, undoState: undoState, context: modelContext)
-        }
     }
 
     /// Deliberately NOT ContentUnavailableView any more: its intrinsic height

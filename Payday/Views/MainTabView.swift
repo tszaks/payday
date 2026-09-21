@@ -135,9 +135,11 @@ struct MainTabView: View {
             // tripping a "already presenting" SwiftUI/UIKit conflict.
             if let index = args.firstIndex(of: "-OpenEditSheetKind"), args.count > index + 1,
                let kind = TipKind(rawValue: args[index + 1]) {
-                let descriptor = FetchDescriptor<TipEntry>(sortBy: [SortDescriptor(\.date, order: .reverse)])
-                if let entry = (try? modelContext.fetch(descriptor))?.first(where: { $0.kind == kind }) {
-                    deepLink.pendingLogTarget = .edit(entry)
+                let descriptor = FetchDescriptor<ShiftRecord>(sortBy: [SortDescriptor(\.workDate, order: .reverse)])
+                if let record = (try? modelContext.fetch(descriptor))?.first(where: {
+                    kind == .cash ? $0.cashTipsCents > 0 : $0.creditTipsCents > 0
+                }) {
+                    deepLink.pendingLogTarget = .editShift(record)
                 }
             }
             // Screenshot/QA hook only: starts a session 47 minutes ago and

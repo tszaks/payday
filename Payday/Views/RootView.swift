@@ -10,7 +10,6 @@ struct RootView: View {
     @State private var lockController = AppLockController()
     @State private var hasEvaluatedInitialLock = false
     @State private var onboardingViewModel = PaydayOnboardingViewModel()
-    @Query private var allEntries: [TipEntry]
     @Query private var paycheckRecords: [PaycheckRecord]
     /// The other representation. SmartNudgeScheduler picks between this and
     /// `allEntries` on `shiftsAreAuthoritative`; it must never read both, or a
@@ -52,8 +51,8 @@ struct RootView: View {
             case .background:
                 lockController.armIfEnabled(preferencesStore)
             case .active:
-                SmartNudgeScheduler.reschedule(preferencesStore: preferencesStore, allEntries: allEntries, shiftRecords: shiftRecords)
-                PaydayPushScheduler.reschedule(preferencesStore: preferencesStore, schedule: scheduleStore.schedule, allEntries: allEntries, shiftRecords: shiftRecords, paycheckRecords: paycheckRecords)
+                SmartNudgeScheduler.reschedule(preferencesStore: preferencesStore, shiftRecords: shiftRecords)
+                PaydayPushScheduler.reschedule(preferencesStore: preferencesStore, schedule: scheduleStore.schedule, shiftRecords: shiftRecords, paycheckRecords: paycheckRecords)
             default:
                 break
             }
@@ -80,15 +79,15 @@ struct RootView: View {
         //
         // `PolicyStore.didChange` alone and NOT `LegacySnapshotRevision`'s
         // merged publisher, deliberately: that set includes
-        // `ModelContext.didSave`, and `@Query allEntries` has not
+        // `ModelContext.didSave`, and `@Query shiftRecords` has not
         // necessarily caught up when a save posts. That is exactly why
-        // `LogTipSheet` and `BackfillSheet` hand `reschedule` `allEntries +
-        // newEntries` by hand. Subscribing to the save here would race those
+        // `LogTipSheet` and `BackfillSheet` hand `reschedule` `shiftRecords +
+        // newRecords` by hand. Subscribing to the save here would race those
         // two call sites and could overwrite a correct decision with one
-        // computed from the pre-save entry list. A policy edit changes no
-        // shift, so `allEntries` is already current for this trigger.
+        // computed from the pre-save record list. A policy edit changes no
+        // shift, so `shiftRecords` is already current for this trigger.
         .onReceive(NotificationCenter.default.publisher(for: PolicyStore.didChange)) { _ in
-            PaydayPushScheduler.reschedule(preferencesStore: preferencesStore, schedule: scheduleStore.schedule, allEntries: allEntries, shiftRecords: shiftRecords, paycheckRecords: paycheckRecords)
+            PaydayPushScheduler.reschedule(preferencesStore: preferencesStore, schedule: scheduleStore.schedule, shiftRecords: shiftRecords, paycheckRecords: paycheckRecords)
         }
         .task {
             // Backgrounding an already-running app arms the lock via the

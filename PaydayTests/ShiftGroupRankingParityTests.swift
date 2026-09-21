@@ -53,6 +53,44 @@ struct ShiftGroupRankingParityTests {
         ]
     }
 
+
+    /// The fold `private.derive_shifts` performs server-side, restated over
+    /// the live Swift primitives: `ShiftDetails` for the ranking and
+    /// `ShiftReceiptMetrics.voluntaryTipsCents` for the owner's normalization.
+    /// `TipBreakdown.total(of:)` was the production spelling until the legacy
+    /// read arm was deleted; the contract it pinned is still the server's,
+    /// and the SQL suite still fails if the ranking or the normalization here
+    /// drifts from `derive_shifts`.
+    private func fold(_ rows: [TipEntry]) -> (cash: Int, credit: Int, gratuity: Int, tipOut: Int, net: Int) {
+        var cash = 0, credit = 0, gratuity = 0, tipOut = 0
+        for shift in ShiftDays.groupedByShift(
+            rows, shiftID: \.shiftID, date: \.date, period: \.shiftPeriod
+        ) {
+            let details = ShiftDetails.resolve(from: shift.items)
+            let owner = ShiftDetails.metricsOwner(of: shift.items)
+            for row in shift.items {
+                // Only the canonical owner's payload normalizes; a payload on
+                // any other row must not subtract gratuity twice.
+                let metrics = row.id == owner?.id ? details.receiptMetrics : nil
+                let voluntary = metrics?.voluntaryTipsCents(fromStoredAmount: row.amountCents)
+                    ?? row.amountCents
+                switch row.kind {
+                case .cash: cash += voluntary
+                case .credit: credit += voluntary
+                }
+            }
+            tipOut += details.tipOutCents ?? 0
+            gratuity += details.receiptMetrics?.employeeGratuityFeesCents ?? 0
+        }
+        let net = EarningsComponents(
+            voluntaryCashCents: cash,
+            voluntaryCreditCents: credit,
+            gratuityFeesCents: gratuity,
+            tipOutCents: tipOut
+        ).nonWageEarningsCents
+        return (cash, credit, gratuity, tipOut, net)
+    }
+
     /// Every ordering of a fixed array, so "order-independent" is measured
     /// over all of them rather than asserted about two.
     private func permutations<T>(_ items: [T]) -> [[T]] {
@@ -68,42 +106,42 @@ struct ShiftGroupRankingParityTests {
 
     @Test("P7: the fold's split is 6000 / 2000 / 4200 / 1000 / 11200")
     func p7MatchesTheDeriver() {
-        let breakdown = TipBreakdown.total(of: fixtureP7())
+        let fold = fold(fixtureP7())
         // MEASURED on Postgres 17.11, all 17 migrations applied from clean,
         // private.derive_shifts called directly on these four rows:
         //   cash 6000  credit 2000  gratuity 4200  tip_out 1000  non_wage 11200
-        #expect(breakdown.cashCents == 6000)
-        #expect(breakdown.creditCents == 2000)
-        #expect(breakdown.gratuityFeesCents == 4200)
-        #expect(breakdown.tipOutCents == 1000)
-        #expect(breakdown.netTotalCents == 11200)
+        #expect(fold.cash == 6000)
+        #expect(fold.credit == 2000)
+        #expect(fold.gratuity == 4200)
+        #expect(fold.tipOut == 1000)
+        #expect(fold.net == 11200)
     }
 
     @Test("P7: the two array-order answers the old rule produced are both excluded")
     func p7ExcludesBothOldAnswers() {
-        let breakdown = TipBreakdown.total(of: fixtureP7())
+        let fold = fold(fixtureP7())
         // id order used to give 6000 / 5000 / 0 / 1000 / 10000 — $12.00 short
         // of the fold and $30.00 off on the credit split, because the receipt
         // on the second credit row was invisible.
-        #expect(!(breakdown.creditCents == 5000 && breakdown.gratuityFeesCents == 0))
-        #expect(breakdown.netTotalCents != 10000)
+        #expect(!(fold.credit == 5000 && fold.gratuity == 0))
+        #expect(fold.net != 10000)
         // Receipt-row-first used to give 6000 / 2000 / 4200 / 0 / 12200 —
         // $10.00 over, because the tip-out on the non-first credit row was
         // then the invisible one.
-        #expect(breakdown.tipOutCents != 0)
-        #expect(breakdown.netTotalCents != 12200)
+        #expect(fold.tipOut != 0)
+        #expect(fold.net != 12200)
     }
 
     @Test("P7: all 24 orderings of the same four rows give one answer")
     func p7IsOrderIndependent() {
         for ordering in permutations(fixtureP7()) {
-            let breakdown = TipBreakdown.total(of: ordering)
+            let fold = fold(ordering)
             let ids = ordering.map { String($0.id.uuidString.suffix(3)) }.joined(separator: ",")
-            #expect(breakdown.cashCents == 6000, "order \(ids)")
-            #expect(breakdown.creditCents == 2000, "order \(ids)")
-            #expect(breakdown.gratuityFeesCents == 4200, "order \(ids)")
-            #expect(breakdown.tipOutCents == 1000, "order \(ids)")
-            #expect(breakdown.netTotalCents == 11200, "order \(ids)")
+            #expect(fold.cash == 6000, "order \(ids)")
+            #expect(fold.credit == 2000, "order \(ids)")
+            #expect(fold.gratuity == 4200, "order \(ids)")
+            #expect(fold.tipOut == 1000, "order \(ids)")
+            #expect(fold.net == 11200, "order \(ids)")
         }
     }
 
@@ -155,11 +193,11 @@ struct ShiftGroupRankingParityTests {
                      shiftID: Self.groupID)
         ]
         #expect(ShiftDetails.metricsOwner(of: entries)?.id == Self.cashAID)
-        let breakdown = TipBreakdown.total(of: entries)
-        #expect(breakdown.cashCents == 800)
-        #expect(breakdown.creditCents == 2000)
-        #expect(breakdown.gratuityFeesCents == 4200)
-        #expect(breakdown.netTotalCents == 7000)
+        let fold = fold(entries)
+        #expect(fold.cash == 800)
+        #expect(fold.credit == 2000)
+        #expect(fold.gratuity == 4200)
+        #expect(fold.net == 7000)
     }
 
     @Test("two payloads in one group tie on object-ness and credit wins, subtracting once")
@@ -175,11 +213,11 @@ struct ShiftGroupRankingParityTests {
                      receiptMetrics: ShiftReceiptMetrics(guestCount: 42, gratuityFeesCents: 4200))
         ]
         #expect(ShiftDetails.metricsOwner(of: entries)?.id == Self.creditBID)
-        let breakdown = TipBreakdown.total(of: entries)
-        #expect(breakdown.cashCents == 5000)
-        #expect(breakdown.creditCents == 0)
-        #expect(breakdown.gratuityFeesCents == 4200)
-        #expect(breakdown.netTotalCents == 9200)
+        let fold = fold(entries)
+        #expect(fold.cash == 5000)
+        #expect(fold.credit == 0)
+        #expect(fold.gratuity == 4200)
+        #expect(fold.net == 9200)
     }
 
     @Test("write puts the shift's values on detail rank 1, whatever the array order")

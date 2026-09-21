@@ -21,6 +21,7 @@ private func date(_ year: Int, _ month: Int, _ day: Int) -> Date {
 /// wage-inclusive month header), and no wage is fabricated when no rate is on
 /// file.
 @Suite("Calendar/DayDetail day total — Total basis (tips net + wages)")
+@MainActor
 struct CalendarDayTotalTests {
     private func policies(rateCents: Int?) -> CompensationPolicies {
         let calendar = PayrollCalendarPolicy(
@@ -43,7 +44,7 @@ struct CalendarDayTotalTests {
 
     /// The tile and the sheet, over one dataset, for the same day.
     private func surfaces(
-        entries: [TipEntry],
+        records: [ShiftRecord],
         on day: Date,
         rateCents: Int?
     ) -> (tile: CalendarDayTile?, sheet: DayDetailFacts) {
@@ -53,7 +54,7 @@ struct CalendarDayTotalTests {
         let resolved = policies(rateCents: rateCents)
         let month = CalendarMonthFacts(
             snapshot: CalendarEarnings.snapshot(
-                shifts: CalendarEarnings.shiftGroups(entries: entries, payrollTimeZone: PaydayTestZone.payroll),
+                records: records,
                 policies: resolved,
                 payrollTimeZone: PaydayTestZone.payroll
             ),
@@ -63,7 +64,7 @@ struct CalendarDayTotalTests {
         return (
             month.tile(on: day),
             DayDetailFacts(
-                allEntries: entries,
+                shiftRecords: records,
                 date: day,
                 policies: resolved,
                 payrollTimeZone: PaydayTestZone.payroll
@@ -71,21 +72,33 @@ struct CalendarDayTotalTests {
         )
     }
 
+    /// One lunch shift and one dinner shift on the same day: $60.00 cash and
+    /// $40.00 credit, $10.00 tipped out, ten hours total. Tips net = 9000.
+    private func twoShiftDay() -> [ShiftRecord] {
+        [
+            ShiftRecord(
+                workDate: date(2026, 7, 15), shiftPeriod: .lunch,
+                cashTipsCents: 6_000, tipOutCents: 1_000, hoursWorked: 5,
+                recordedAt: date(2026, 7, 15)
+            ),
+            ShiftRecord(
+                workDate: date(2026, 7, 15).addingTimeInterval(3600), shiftPeriod: .dinner,
+                creditTipsCents: 4_000, hoursWorked: 5,
+                recordedAt: date(2026, 7, 15).addingTimeInterval(3600)
+            ),
+        ]
+    }
+
     @Test("with hours logged and a rate set, the day total is tips net PLUS wages, on both surfaces")
     func totalIsTipsNetPlusWagesWhenRateSet() throws {
         let day = date(2026, 7, 15)
-        let entries = [
-            TipEntry(date: day, amountCents: 6000, kind: .cash, hoursWorked: 5, tipOutCents: 1000,
-                     shiftPeriod: .lunch, shiftID: UUID()),
-            TipEntry(date: day.addingTimeInterval(3600), amountCents: 4000, kind: .credit, hoursWorked: 5,
-                     shiftPeriod: .dinner, shiftID: UUID())
-        ]
+        let records = twoShiftDay()
         // Tips net: (6000 + 4000) - 1000 = 9000. Wages: 10h at 283c/hr, one
         // week, under the threshold, so 2830c straight time.
-        let (tile, sheet) = surfaces(entries: entries, on: day, rateCents: 283)
+        let (tile, sheet) = surfaces(records: records, on: day, rateCents: 283)
         let total = try #require(sheet.total.cents)
-        #expect(total == 9000 + 2830)
-        #expect(total != TipBreakdown.total(of: entries).netTotalCents)
+        #expect(total == 9_000 + 2_830)
+        #expect(total != 9_000)
         // The tile that opens the sheet reads the same figure.
         #expect(tile?.figure.cents == total)
     }
@@ -93,16 +106,10 @@ struct CalendarDayTotalTests {
     @Test("with no wage rate set, the day total is exactly tips net — no wages fabricated")
     func totalIsTipsNetOnlyWhenNoRate() throws {
         let day = date(2026, 7, 15)
-        let entries = [
-            TipEntry(date: day, amountCents: 6000, kind: .cash, hoursWorked: 5, tipOutCents: 1000,
-                     shiftPeriod: .lunch, shiftID: UUID()),
-            TipEntry(date: day.addingTimeInterval(3600), amountCents: 4000, kind: .credit, hoursWorked: 5,
-                     shiftPeriod: .dinner, shiftID: UUID())
-        ]
-        let (tile, sheet) = surfaces(entries: entries, on: day, rateCents: nil)
+        let records = twoShiftDay()
+        let (tile, sheet) = surfaces(records: records, on: day, rateCents: nil)
         let total = try #require(sheet.total.cents)
-        #expect(total == TipBreakdown.total(of: entries).netTotalCents)
-        #expect(total == 9000)
+        #expect(total == 9_000)
         #expect(tile?.figure.cents == total)
         // Wages off, so the figure IS non-wage earnings and takes a non-wage
         // label rather than naming a metric it is not.
