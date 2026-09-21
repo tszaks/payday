@@ -28,6 +28,21 @@ Criteria 2, 3, 4 and 5 are green as of this date, each measured by running it
 and recorded in `docs/RELEASE_GATE.md`. Criterion 6 is half done: the lint
 side is in, the deletion side is blocked behind the flip.
 
+**Status, measured 2026-09-21.** The 09-18 paragraph above is now stale in
+the understating direction. Merged since: #135 (authority synthesis — new
+accounts read `migrated_at` through the `shift_migration_state` view; the
+"new account never flips" blocker is closed on production), #136 (the
+deferred session re-check in `synchronize` — the apply path now defends
+the forget-and-re-register window), #138 (`SyncWireFaultTests`, 25 tests,
+the wire-level fault sweep). #137 (the PR 8 deletions — the dual
+representation arm gone; `TipBreakdown`, `PredictedPaycheck`,
+`PeriodIncome`, `ShiftWriter`, `LegacySnapshotBridge` and all eleven
+flip-gated sites records-only) merged 2026-09-21 as `0f436df`. PR 7's list is closed including its
+two reopened rows. What remains is not machine work: the device lines,
+the upgrade/downgrade probes, the shadow comparison, and the human
+review the gate keeps open. Evidence in `docs/RELEASE_GATE.md`, top
+block, measured against `bf89da9`.
+
 The governing rule, which every PR is measured against:
 
 > The same metric, date scope, cutoff, source revision, compensation policy, and engine version must return the same integer-cents result and the same completeness state on every consumer.

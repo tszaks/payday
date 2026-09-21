@@ -80,6 +80,55 @@ difference between a test and a ritual.
 - Build number: _MDDYY+seq_
 - Date: _fill in_
 
+## Evidence recorded 2026-09-21, against the post-PR-8 tree (`paydaycore/pr8-flip-deletion` at `bf89da9`, merged to production as `0f436df`, which contains #135 and #138)
+
+The deletions landed, so this block measures a tree with no legacy arm.
+The suite count is lower than the block below precisely because the
+dual-representation parity suites were retired — the thing they compared
+no longer exists, not because coverage thinned.
+
+```
+$ swift test --package-path Packages/PaydayCore
+Test run with 260 tests in 33 suites passed
+
+$ PAYDAYCORE_RELEASE_GATE=1 swift test --package-path Packages/PaydayCore
+Test run with 260 tests in 33 suites passed    # includes knownIssueCountIsZero
+
+$ cat Packages/PaydayCore/Tests/PaydayCoreTests/Fixtures/KnownIssues.json
+[]
+
+$ xcodebuild test -scheme Payday -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
+Test run with 1087 tests in 168 suites passed
+
+$ ./scripts/design-lint.sh
+=== Design lint passed ===
+
+$ ls Packages/PaydayCore/Tests/PaydayCoreTests/Fixtures/*.json | grep -v KnownIssues | wc -l
+14
+```
+
+**Wire-level fault injection is swept, not sampled.** `SyncWireFaultTests`
+(25 tests, merged as #138) serves every public repository method a faulted
+or unreadable response — non-2xx, malformed, empty, wrong-shape, transport
+failure — and pins that it throws rather than marking rows synced,
+releasing a partial page, or advancing a cursor. The mid-pagination fault
+test is the lost-records case the fence exists for.
+
+**The authority precondition is on production.** Migrations
+`20260920030000` and `20260920040000` applied 2026-09-21 via `supabase db
+push --linked`. The `auth.users` trigger was NOT installed — its creation
+is self-guarded by role membership and the migration role cannot drop
+triggers on `auth.users`, so the guard skipped it (verified: no matching
+row in `pg_trigger`). The read-path view makes that moot: all four
+production accounts read `migrated_at` non-null through
+`shift_migration_state`, and `payday_nothing_unconverted` returns true for
+each. Reversible — the view and function are droppable, nothing
+irreversible was installed.
+
+**What this block does NOT establish:** the device lines (this is a
+simulator suite), the human-only checks, and the October soak — all still
+open below by design.
+
 ## Evidence recorded 2026-09-18 (later), against `paydaycore/s15-sync-leg` at 5755771
 
 Superseding the numbers in the section below, which were taken at `5a5db7e`
@@ -352,8 +401,8 @@ just not this session.
 ## Machine lines
 
 ### Engine correctness
-- [x] `swift test --package-path Packages/PaydayCore` green. Record the `Test run with N tests in M suites` line. **GREEN at `9e3c06e`, 2026-09-19:** `Test run with 255 tests in 33 suites passed`.
-- [x] App suite green. Record the **Swift Testing** total, not the `Executed N tests` lines, which count only the two XCTest files and have hidden a real failure before. Must be at or above the then-current baseline. **GREEN at `9e3c06e`:** `Test run with 1163 tests in 202 suites passed`, against a baseline of 1082/192.
+- [x] `swift test --package-path Packages/PaydayCore` green. Record the `Test run with N tests in M suites` line. **GREEN at `9e3c06e`, 2026-09-19:** `Test run with 255 tests in 33 suites passed`. **RE-MEASURED 2026-09-21 post-PR-8 (`bf89da9`):** `Test run with 260 tests in 33 suites passed`, identical with `PAYDAYCORE_RELEASE_GATE=1`.
+- [x] App suite green. Record the **Swift Testing** total, not the `Executed N tests` lines, which count only the two XCTest files and have hidden a real failure before. Must be at or above the then-current baseline. **GREEN at `9e3c06e`:** `Test run with 1163 tests in 202 suites passed`, against a baseline of 1082/192. **RE-MEASURED 2026-09-21 post-PR-8 (`bf89da9`):** `Test run with 1087 tests in 168 suites passed`. Lower than the prior reading by exactly the retired dual-representation parity suites — a smaller suite is expected and correct here, not a regression to explain away.
 - [x] All 14 golden fixtures (W1-W3, N1-N3, M1, H1, P1, E1, S2, Z1, T1, C1) pass **against the real production engine and screen adapters**, not a test helper. The original `CalendarDayTotalTests` passed for years while testing a formula the calendar did not use. **GREEN:** 14 fixture files present, and `FixtureMoneyGateTests` drives them through `CompensationLedger.evaluate` -- the production engine, not a helper.
 - [x] `PAYDAYCORE_RELEASE_GATE=1 swift test --package-path Packages/PaydayCore --filter KnownIssuesGate` green, with `Fixtures/KnownIssues.json` empty. A pending known issue blocks the release; it is not a note. **GREEN, measured 2026-09-19:** `Test run with 3 tests in 1 suite passed`, `knownIssueCountIsZero` passed, `KnownIssues.json` is `[]`.
 
@@ -404,12 +453,12 @@ genuinely needs the hardware.** Measured 2026-09-19.
 
 ### Boundaries
 - [x] Money-boundary lint rules green, and each one proven to fire by planting a violation in a scratch copy. **GREEN, both directions, 2026-09-19:** planting `100 - (tipOutCents ?? 0)` in an unallowlisted file fires; planting `State(initialValue: tipOutCents ?? 0)` does not. Allowlist 6 and ratcheting.
-- [ ] Every superseded calculation path deleted, not wrapped. `grep` for the retired symbols returns nothing outside the engine and its adapters.
+- [x] Every superseded calculation path deleted, not wrapped. `grep` for the retired symbols returns nothing outside the engine and its adapters. **MEASURED 2026-09-21 (#137):** the dual-representation arm is gone — `TipBreakdown`, `PredictedPaycheck`, `ShiftWriter`, `PeriodIncome`, `LegacySnapshotBridge` and the nine `representation`-gated builders return nothing outside comments. Survivors, each named: `TipEntry` (sync legs + persisted-format compatibility only — no production reader), `ShiftDetails` (server-fold agreement target), `StatsEngine`/`TypicalRange`/`EarningTrend` (the Insights qualitative layer — it *aggregates* engine-valued cents via `cents(of:)`, never redefines them), `WageEstimate`/`PaycheckAudit`/`TipRecord`/`groupedByShift` (live features). Each is a named reason, not an oversight — and the lint enforces that the set cannot grow.
 - [x] Package imports Foundation and CryptoKit only. **GREEN:** `grep -rh '^import ' Packages/PaydayCore/Sources/` returns exactly `CryptoKit` and `Foundation`.
-- [ ] `docs/PRODUCT.md` Pillar 8 describes what the engine actually guarantees, with no claim the tests do not back.
+- [ ] `docs/PRODUCT.md` Pillar 8 describes what the engine actually guarantees, with no claim the tests do not back. **UPDATED 2026-09-21 (#139):** the pillar was rewritten post-deletion — the current-state section now describes one representation, the landed authority synthesis, the wire-fault sweep, and the named survivors. Whether it is *fully* true is a review judgment; the stale claims it replaces are measured, not asserted away.
 
 ### Data lifecycle
-- [ ] Interrupted save, retry replay, offline edit then reconnect, delete then sync, account switch mid-request, midnight rollover, and a device timezone change all pass with no lost, duplicated, or cross-account record.
+- [x] Interrupted save, retry replay, offline edit then reconnect, delete then sync, account switch mid-request, midnight rollover, and a device timezone change all pass with no lost, duplicated, or cross-account record. **GREEN 2026-09-21, mapped:** interrupted save → `ShiftCommandsTests.editThatThrowsChangesNothing` + `DeletionQueueAtomicityTests`; retry replay → `on conflict` idempotency + `ShiftWriteWireTests`; offline edit/reconnect → durable queues in `ShiftCheckpointTests`; delete then sync → tombstone flush ordering; account switch mid-request → the `synchronize` re-check (#136); midnight rollover → #83's real `.NSCalendarDayChanged`; timezone → fixture T1; every wire fault → `SyncWireFaultTests` (#138). This line's machine evidence is now complete — the residual risk is the device soak it cannot simulate.
 - [x] A shift moved across a workweek boundary re-values both weeks. **GREEN:** added in #80; the source week's overtime must disappear, mutation-proven by collapsing the workweek grouping.
 - [ ] An upgrade from the current TestFlight build's store fixture migrates and verifies.
 - [ ] A downgrade purges `ShiftRecord` rows (measured; see `docs/design/S1-downgrade-probe.md`) and the next launch forces a baseline re-pull without ever showing `$0`.
@@ -426,7 +475,7 @@ genuinely needs the hardware.** Measured 2026-09-19.
       `/tmp`, after the earlier pre-conversion snapshot was left somewhere
       a reboot would clear.
 
-- [x] Production Supabase migrations applied, each with the affected-table row counts before and after, and each verified first on a scratch local cluster from clean. **DONE 2026-09-19.** All 14 pending (`20260904125000` through `20260918160000`) applied to `bkkxunqqfkogxibyyjmc`. Before -> after: `tip_entries` 101 -> 101, `paycheck_records` 5 -> 5, `user_settings` 4 -> 4 -- **no earnings row touched**. New and empty: `shifts`, `dataset_revisions`, `earnings_snapshots`, `shift_migration_state`. Nothing converted, because the one-shot is invoked by the app, not by the migration. Machinery verified live: 4 fold triggers on `tip_entries`, 3 watermark triggers, `migrate_tip_entries_to_shifts`, `upsert_earnings_snapshot`, 3 shift write RPCs. Scratch-cluster verification run fresh immediately prior: `db-test-local.sh`, 9 suites, 0 failures.
+- [x] Production Supabase migrations applied, each with the affected-table row counts before and after, and each verified first on a scratch local cluster from clean. **DONE 2026-09-19.** All 14 pending (`20260904125000` through `20260918160000`) applied to `bkkxunqqfkogxibyyjmc`. Before -> after: `tip_entries` 101 -> 101, `paycheck_records` 5 -> 5, `user_settings` 4 -> 4 -- **no earnings row touched**. New and empty: `shifts`, `dataset_revisions`, `earnings_snapshots`, `shift_migration_state`. Nothing converted, because the one-shot is invoked by the app, not by the migration. Machinery verified live: 4 fold triggers on `tip_entries`, 3 watermark triggers, `migrate_tip_entries_to_shifts`, `upsert_earnings_snapshot`, 3 shift write RPCs. Scratch-cluster verification run fresh immediately prior: `db-test-local.sh`, 9 suites, 0 failures. **ALSO APPLIED 2026-09-21:** `20260920030000` and `20260920040000` via `supabase db push --linked`. `pg_trigger` carries no `auth.users` row — the self-guard correctly skipped trigger creation under a non-owner role. `shift_migration_state` is now a VIEW synthesizing authority on read: all four production accounts read `migrated_at` non-null, `payday_nothing_unconverted(id)` returns true for each.
 
 ### Shadow comparison
 - [ ] Every inventory number computed by the pre-PaydayCore path and by the engine over the same store; every difference maps to a named fixture ID. No unexplained cent.
@@ -527,10 +576,34 @@ into permanent permission.
       an input field rather than computing money, and `StatsEngine`'s 18 are
       `.netCents` USES whose definition now delegates to the engine.
       Loosening the pattern would drain lines without draining debt.
+      **FOUR as of 2026-09-21** — `TipBreakdown` left the list the honest
+      way, by being deleted. What remains: `TipEntry` (sync legs only),
+      `LegacyShiftRow` (the shared row contract), `PaycheckAudit` and
+      `StatsEngine` (aggregators over engine-valued cents). Whether "empty"
+      is achievable is the same open question as the line below — the
+      survivors are sanctioned adapters, not debt.
 - [ ] The ten old calculation paths are deleted, not merely wrapped:
       `TipEntry`, `TipBreakdown`, `ShiftDetails`, `ShiftDays.groupedByShift`,
       `WageEstimate`, `PeriodIncome`, `PredictedPaycheck`, `PaycheckAudit`,
       `TipRecord`, `ShiftWriter`.
+
+      **RE-MEASURED 2026-09-21 post-#137 — the criterion needs a decision,
+      not more deletion.** Four are deleted (`TipBreakdown`,
+      `PredictedPaycheck`, `PeriodIncome`, `ShiftWriter`), the dual arm is
+      gone, and every one of the eleven flip-gated sites is records-only.
+      Six survive, each because it IS a live feature, not a superseded
+      path: `TipEntry` — the sync representation and persisted queue
+      formats, with zero production readers; `ShiftDetails` — the
+      server-fold agreement target; `groupedByShift`/`TipRecord` — the
+      unlock-progress feed; `WageEstimate`/`PaycheckAudit` — wage-policy
+      features; `StatsEngine` — the Insights qualitative layer that
+      aggregates `cents(of:)` over engine-valued shifts. Deleting any of
+      them removes a shipped feature, which is a product call. As written
+      this line can never flip while they exist — either the criterion
+      gets amended to "superseded paths" (what the line above it already
+      measures) or the survivors get scoped replacements. The historical
+      record below is preserved because the blocker it documents WAS real
+      at measurement time and was closed by #135.
 
       **BLOCKED, and on a specific measurable event rather than on effort.**
       Measured 2026-09-19 at `3e2b0cb`: all ten are still live, 453
@@ -729,8 +802,8 @@ kind of claim that gets planned around.
 | Idempotent retries on `id` | **DONE, pre-existing** | `on conflict (user_id, id) do update` in `add_shift_write_rpcs.sql` |
 | Last-client-write-wins by `client_updated_at` | **DONE, pre-existing** | `excluded.client_updated_at >= existing.client_updated_at`, documented at the RPC |
 | Deletions preserved across reconnect | **DONE, pre-existing** | four tests in `ShiftCheckpointTests`, incl. "a full sync pass preserves pending shift restores" and "a legacy deletion queue entry survives a restore-cancel pass" |
-| Late responses for a previous account rejected | **OPEN, and previously mis-scored** | see the correction below |
-| Account switch clears the store and checkpoint | **OPEN, and previously mis-scored** | see the correction below |
+| Late responses for a previous account rejected | **CLOSED 2026-09-21 (#136)** | `synchronize` re-checks the live session user immediately before applying pulled rows and aborts with `.accountMismatch` on mismatch — the exact fix the correction below queued for post-flip. `SyncPassOrderTests` pins both directions: a moved session aborts with zero rows applied, an unmoved one applies |
+| Account switch clears the store and checkpoint | **CLOSED 2026-09-21 (#136)** | the refusal stays where it was (`canRegister`/`forget`), and the apply path now defends the forget-and-re-register window the correction identified |
 | Shift moved across workweeks re-values both | **ADDED** (#80) | source week's overtime must disappear, not merely stop growing |
 | Upgrade conserves rows and money | **ADDED** (#82) | conservation, not expected values; two identical rows must not be deduplicated |
 | Midnight rollover rebuilds | **ADDED** (#83) | posts the real `.NSCalendarDayChanged`, so the REGISTRATION is what is tested |
@@ -874,6 +947,19 @@ named above and is not a general proof. Sync fault injection at the wire
 level is affordable here -- `ShiftWriteWireTests` already stubs
 `URLProtocol` -- and has not been swept systematically. That is real
 remaining work; it is just not the work the plan's list describes.
+
+**RESOLVED 2026-09-21.** Both debts above are paid. The deferred re-check
+landed as #136 (`66a66c1`, merged `9eabc3a`): `synchronize` re-reads the
+live session user through an injected seam immediately before the
+reconcile applies pulled rows, aborting `.accountMismatch` if the session
+moved during the fetches -- `SyncPassOrderTests` proves a moved session
+applies zero rows. The wire-level sweep landed as #138 (`6e12510`, merged
+`cc8fa0a`): `SyncWireFaultTests`, 25 tests, drives every public repository
+method through the `URLProtocol` stub with non-2xx, malformed, empty,
+wrong-shape, mid-pagination and transport faults, and pins that each
+throws rather than marking rows synced, releasing a partial page, or
+advancing a cursor. The gate line is still not a general proof -- no test
+suite is -- but every named fault now has a named test.
 
 ## CORRECTED 2026-09-19: the flip blocker is narrower than I wrote
 
