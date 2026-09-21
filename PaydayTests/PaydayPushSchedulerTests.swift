@@ -39,6 +39,7 @@ private func policies(
 }
 
 @Suite("Payday push scheduling")
+@MainActor
 struct PaydayPushSchedulerTests {
     // Weekly close on Sunday Jul 19, paid the following Friday (5-day lag) —
     // same shape as PaydayMoment's own weekly-lag fixture.
@@ -49,12 +50,12 @@ struct PaydayPushSchedulerTests {
         )
     }
 
-    private func creditEntry(cents: Int, on day: Date) -> TipEntry {
-        TipEntry(date: day, amountCents: cents, kind: .credit)
+    private func creditRecord(cents: Int, on day: Date) -> ShiftRecord {
+        ShiftRecord(workDate: day, creditTipsCents: cents)
     }
 
-    private func cashEntry(cents: Int, on day: Date) -> TipEntry {
-        TipEntry(date: day, amountCents: cents, kind: .cash)
+    private func cashRecord(cents: Int, on day: Date) -> ShiftRecord {
+        ShiftRecord(workDate: day, cashTipsCents: cents)
     }
 
     /// Every case's call, with the wage feature off unless the case says
@@ -63,18 +64,19 @@ struct PaydayPushSchedulerTests {
     private func makeDecision(
         now: Date,
         calculator: PayPeriodCalculator? = nil,
-        entries: [TipEntry] = [],
+        records: [ShiftRecord] = [],
         paycheckRecords: [PaycheckRecord] = [],
         isReminderEnabled: Bool = true,
         policies compensation: CompensationPolicies? = nil
     ) -> PaydayPushScheduler.Decision? {
-        PaydayPushScheduler.decision(
+        let compensation = compensation ?? policies(rateCents: nil)
+        return PaydayPushScheduler.decision(
             now: now,
             calculator: calculator ?? weeklyPaidFriday(),
-            allEntries: entries,
+            shiftInputs: ShiftInputAdapter.adapt(records, calendars: compensation.calendars),
             paycheckRecords: paycheckRecords,
             isReminderEnabled: isReminderEnabled,
-            policies: compensation ?? policies(rateCents: nil),
+            policies: compensation,
             payrollTimeZone: PaydayTestZone.payroll
         )
     }
@@ -83,7 +85,7 @@ struct PaydayPushSchedulerTests {
     func firesOnPayday() {
         let decision = makeDecision(
             now: date(2026, 7, 19, hour: 20),
-            entries: [creditEntry(cents: 15000, on: date(2026, 7, 15))]
+            records: [creditRecord(cents: 15000, on: date(2026, 7, 15))]
         )
         #expect(decision?.fireDate == date(2026, 7, 24, hour: 9))
     }
@@ -104,7 +106,7 @@ struct PaydayPushSchedulerTests {
         let record = PaycheckRecord(periodStart: date(2026, 7, 13), periodEnd: date(2026, 7, 19), paidTipsCents: 15000)
         let decision = makeDecision(
             now: date(2026, 7, 19, hour: 20),
-            entries: [creditEntry(cents: 15000, on: date(2026, 7, 15))],
+            records: [creditRecord(cents: 15000, on: date(2026, 7, 15))],
             paycheckRecords: [record]
         )
         #expect(decision == nil)
@@ -115,11 +117,11 @@ struct PaydayPushSchedulerTests {
         // $150 credit + $40 cash, wage feature off. The check carries the
         // credit net of tip-out and never the cash: cash does not run
         // through payroll.
-        let entries = [
-            creditEntry(cents: 15000, on: date(2026, 7, 15)),
-            cashEntry(cents: 4000, on: date(2026, 7, 16))
+        let records = [
+            creditRecord(cents: 15000, on: date(2026, 7, 15)),
+            cashRecord(cents: 4000, on: date(2026, 7, 16))
         ]
-        let decision = try #require(makeDecision(now: date(2026, 7, 19, hour: 20), entries: entries))
+        let decision = try #require(makeDecision(now: date(2026, 7, 19, hour: 20), records: records))
         #expect(decision.body == "Your check should show about $150.00 before tax. Card tips, gratuity and wages, less tip-out.")
         let figure = try #require(decision.figure)
         #expect(figure.cents == 15_000)
@@ -133,16 +135,15 @@ struct PaydayPushSchedulerTests {
     /// $150.00 and $40.50 spoken separately against the card's $190.50.
     @Test("Toast gratuity is inside the one check figure, not a second clause")
     func gratuityIsInsideTheOneFigure() throws {
-        let entry = TipEntry(
-            date: date(2026, 7, 15),
-            amountCents: 15_000,
-            kind: .credit,
+        let record = ShiftRecord(
+            workDate: date(2026, 7, 15),
+            creditTipsCents: 15_000,
             receiptMetrics: ShiftReceiptMetrics(
                 earningsSchemaVersion: 2,
                 gratuityFeesCents: 4_050
             )
         )
-        let decision = try #require(makeDecision(now: date(2026, 7, 19, hour: 20), entries: [entry]))
+        let decision = try #require(makeDecision(now: date(2026, 7, 19, hour: 20), records: [record]))
         #expect(decision.figure?.cents == 19_050)
         #expect(decision.body == "Your check should show about $190.50 before tax. Card tips, gratuity and wages, less tip-out.")
         #expect(!decision.body.contains("in gratuity"))
@@ -151,15 +152,14 @@ struct PaydayPushSchedulerTests {
     @Test("wages are inside the figure once a rate policy exists")
     func wagesAreInsideTheFigure() throws {
         // One 8h shift at $20/hr: $150 credit tips + $160 of wages.
-        let entry = TipEntry(
-            date: date(2026, 7, 15, hour: 17),
-            amountCents: 15_000,
-            kind: .credit,
+        let record = ShiftRecord(
+            workDate: date(2026, 7, 15, hour: 17),
+            creditTipsCents: 15_000,
             hoursWorked: 8
         )
         let decision = try #require(makeDecision(
             now: date(2026, 7, 19, hour: 20),
-            entries: [entry],
+            records: [record],
             policies: policies(rateCents: 2_000)
         ))
         #expect(decision.figure?.cents == 15_000 + 16_000)
@@ -185,10 +185,9 @@ struct PaydayPushSchedulerTests {
     func policyEditMovesTheDecision() throws {
         // One 8h shift with $150.00 of credit tips, inside the weekly period
         // closing Sunday 2026-07-19 and paid Friday 2026-07-24.
-        let entries = [TipEntry(
-            date: date(2026, 7, 15, hour: 17),
-            amountCents: 15_000,
-            kind: .credit,
+        let records = [ShiftRecord(
+            workDate: date(2026, 7, 15, hour: 17),
+            creditTipsCents: 15_000,
             hoursWorked: 8
         )]
         let now = date(2026, 7, 19, hour: 20)
@@ -196,7 +195,7 @@ struct PaydayPushSchedulerTests {
         func spokenBody(rateCents: Int?) throws -> String {
             let decision = try #require(makeDecision(
                 now: now,
-                entries: entries,
+                records: records,
                 policies: policies(rateCents: rateCents)
             ))
             // Same shift, same period, same payday every time: the ONLY
@@ -218,15 +217,14 @@ struct PaydayPushSchedulerTests {
 
     @Test("an estimated rate carries its caption instead of the basis line")
     func estimatedCarriesItsCaption() throws {
-        let entry = TipEntry(
-            date: date(2026, 7, 15, hour: 17),
-            amountCents: 15_000,
-            kind: .credit,
+        let record = ShiftRecord(
+            workDate: date(2026, 7, 15, hour: 17),
+            creditTipsCents: 15_000,
             hoursWorked: 8
         )
         let decision = try #require(makeDecision(
             now: date(2026, 7, 19, hour: 20),
-            entries: [entry],
+            records: [record],
             policies: policies(rateCents: 2_000, provenance: .assumedFromLegacySetting)
         ))
         #expect(decision.figure?.completeness.state == .estimated)
@@ -239,16 +237,15 @@ struct PaydayPushSchedulerTests {
     /// with hours, one without, both with credit tips.
     @Test("a partial period speaks no figure at all")
     func partialSpeaksNoFigure() throws {
-        let withHours = TipEntry(
-            date: date(2026, 7, 15, hour: 17),
-            amountCents: 15_000,
-            kind: .credit,
+        let withHours = ShiftRecord(
+            workDate: date(2026, 7, 15, hour: 17),
+            creditTipsCents: 15_000,
             hoursWorked: 8
         )
-        let withoutHours = creditEntry(cents: 9_000, on: date(2026, 7, 16, hour: 17))
+        let withoutHours = creditRecord(cents: 9_000, on: date(2026, 7, 16, hour: 17))
         let decision = try #require(makeDecision(
             now: date(2026, 7, 19, hour: 20),
-            entries: [withHours, withoutHours],
+            records: [withHours, withoutHours],
             policies: policies(rateCents: 2_000)
         ))
         #expect(decision.figure == nil)
@@ -265,7 +262,7 @@ struct PaydayPushSchedulerTests {
     func fallbackBodyWithNoCreditTips() throws {
         let decision = try #require(makeDecision(
             now: date(2026, 7, 19, hour: 20),
-            entries: [cashEntry(cents: 4000, on: date(2026, 7, 16))]
+            records: [cashRecord(cents: 4000, on: date(2026, 7, 16))]
         ))
         #expect(decision.figure == nil)
         #expect(decision.body == "Your check lands today. Open Payday to check the period.")
@@ -275,7 +272,7 @@ struct PaydayPushSchedulerTests {
     func disabledPreferenceSchedulesNothing() {
         let decision = makeDecision(
             now: date(2026, 7, 19, hour: 20),
-            entries: [creditEntry(cents: 15000, on: date(2026, 7, 15))],
+            records: [creditRecord(cents: 15000, on: date(2026, 7, 15))],
             isReminderEnabled: false
         )
         #expect(decision == nil)
@@ -290,10 +287,9 @@ struct PaydayPushSchedulerTests {
         // — the honest engine answer, and `.partial` for the selection.
         let decision = try #require(makeDecision(
             now: date(2026, 7, 19, hour: 20),
-            entries: [TipEntry(
-                date: date(2026, 7, 15, hour: 17),
-                amountCents: 15_000,
-                kind: .credit,
+            records: [ShiftRecord(
+                workDate: date(2026, 7, 15, hour: 17),
+                creditTipsCents: 15_000,
                 hoursWorked: 8
             )],
             policies: CompensationPolicies(rates: [PayRatePolicy(
@@ -331,6 +327,7 @@ struct PaydayPushSchedulerTests {
 /// `PaydayPushScheduler.decision` as `performReschedule` calls it. Neither
 /// side is restated here, which is the plan's completion rule 2.
 @Suite("Payday notification equals the Dashboard payday card")
+@MainActor
 struct PaydayNotificationParityTests {
     private static let payrollTimeZone = PaydayTestZone.payroll
 
@@ -344,11 +341,10 @@ struct PaydayNotificationParityTests {
 
     /// One 8h shift at $20/hr with $150 of credit tips and $40.50 of Toast
     /// gratuity: $150.00 tips line + $40.50 gratuity + $160.00 wages.
-    private static func entries() -> [TipEntry] {
-        [TipEntry(
-            date: date(2026, 7, 15, hour: 17),
-            amountCents: 15_000,
-            kind: .credit,
+    private static func records() -> [ShiftRecord] {
+        [ShiftRecord(
+            workDate: date(2026, 7, 15, hour: 17),
+            creditTipsCents: 15_000,
             hoursWorked: 8,
             receiptMetrics: ShiftReceiptMetrics(
                 earningsSchemaVersion: 2,
@@ -360,14 +356,14 @@ struct PaydayNotificationParityTests {
     @Test("the spoken figure is the card's figure, metric, label and cents")
     func notificationFigureEqualsTheDashboardCard() throws {
         let compensation = policies(rateCents: 2_000)
-        let entries = Self.entries()
+        let records = Self.records()
         // 2026-07-19 20:00 is inside the period closing that day, so the
         // scheduler announces it and fires on its payday, 2026-07-24.
         let scheduledAt = date(2026, 7, 19, hour: 20)
         let decision = try #require(PaydayPushScheduler.decision(
             now: scheduledAt,
             calculator: Self.calculator(),
-            allEntries: entries,
+            shiftInputs: ShiftInputAdapter.adapt(records, calendars: compensation.calendars),
             paycheckRecords: [],
             isReminderEnabled: true,
             policies: compensation,
@@ -377,14 +373,13 @@ struct PaydayNotificationParityTests {
         // The Dashboard, on the morning the notification fires, with the
         // payday card pinned to that same period.
         let dataset = DashboardEarnings.build(
-            entries: entries,
+            records: records,
             policies: compensation,
-            payrollTimeZone: Self.payrollTimeZone,
-            calendar: PayrollCalendar.gridCalendar(in: Self.payrollTimeZone)
+            payrollTimeZone: Self.payrollTimeZone
         )
         let facts = DashboardFacts(
             snapshot: dataset.snapshot,
-            allShifts: dataset.shiftDays,
+            allShiftRecords: dataset.shiftRecordDays,
             allTipRecords: dataset.tipRecords,
             schedule: PaySchedule(frequency: .weekly, anchorPeriodEnd: date(2026, 7, 19), payDelayDays: 5, firstWeekday: nil),
             now: scheduledAt,
@@ -410,14 +405,15 @@ struct PaydayNotificationParityTests {
         #expect(decision.body.contains(amount))
         #expect(!decision.body.contains("in tips and"))
 
-        // The SUPERSEDED answer, measured with the helper the old body
-        // called, and asserted against so a revert is visible here rather
-        // than on somebody's lock screen: the tips LINE alone, $150.00,
-        // against the $350.50 the card shows for the same period.
-        let legacyTipsLine = PredictedPaycheck.tipsLineCents(from: TipBreakdown.total(of: entries))
-        #expect(legacyTipsLine == 15_000)
-        #expect(Money.string(fromCents: legacyTipsLine) == "$150.00")
-        #expect(spoken.cents != legacyTipsLine)
+        // The SUPERSEDED answer, stated as its literal so a revert is
+        // visible here rather than on somebody's lock screen: the tips LINE
+        // alone, $150.00, against the $350.50 the card shows for the same
+        // period. `PredictedPaycheck.tipsLineCents` is deleted now — the
+        // wage-exclusive figure is unspellable in production, and this pin
+        // is what keeps it that way.
+        let supersededTipsLineCents = 15_000
+        #expect(Money.string(fromCents: supersededTipsLineCents) == "$150.00")
+        #expect(spoken.cents != supersededTipsLineCents)
     }
 
     /// The figure the notification refuses to speak is never a DIFFERENT
@@ -427,30 +423,28 @@ struct PaydayNotificationParityTests {
     func silenceIsNotADisagreement() throws {
         let compensation = policies(rateCents: 2_000)
         // The same shift, plus one with credit tips and no hours logged.
-        let entries = Self.entries() + [TipEntry(
-            date: date(2026, 7, 16, hour: 17),
-            amountCents: 9_000,
-            kind: .credit
+        let records = Self.records() + [ShiftRecord(
+            workDate: date(2026, 7, 16, hour: 17),
+            creditTipsCents: 9_000
         )]
         let scheduledAt = date(2026, 7, 19, hour: 20)
         let decision = try #require(PaydayPushScheduler.decision(
             now: scheduledAt,
             calculator: Self.calculator(),
-            allEntries: entries,
+            shiftInputs: ShiftInputAdapter.adapt(records, calendars: compensation.calendars),
             paycheckRecords: [],
             isReminderEnabled: true,
             policies: compensation,
             payrollTimeZone: Self.payrollTimeZone
         ))
         let dataset = DashboardEarnings.build(
-            entries: entries,
+            records: records,
             policies: compensation,
-            payrollTimeZone: Self.payrollTimeZone,
-            calendar: PayrollCalendar.gridCalendar(in: Self.payrollTimeZone)
+            payrollTimeZone: Self.payrollTimeZone
         )
         let facts = DashboardFacts(
             snapshot: dataset.snapshot,
-            allShifts: dataset.shiftDays,
+            allShiftRecords: dataset.shiftRecordDays,
             allTipRecords: dataset.tipRecords,
             schedule: PaySchedule(frequency: .weekly, anchorPeriodEnd: date(2026, 7, 19), payDelayDays: 5, firstWeekday: nil),
             now: scheduledAt,

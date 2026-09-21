@@ -72,26 +72,6 @@ extension View {
         }
     }
 
-    func shiftContextMenu(_ entries: [TipEntry], sheetTarget: Binding<TipEntrySheetTarget?>, undoState: UndoDeleteToastState, context: ModelContext) -> some View {
-        contextMenu {
-            Button {
-                guard let first = entries.first else { return }
-                sheetTarget.wrappedValue = .edit(first)
-            } label: {
-                Label("Edit", systemImage: "pencil")
-            }
-            Button {
-                duplicateShift(entries, into: context)
-            } label: {
-                Label("Duplicate", systemImage: "plus.square.on.square")
-            }
-            Button(role: .destructive) {
-                undoState.delete(entries, in: context)
-            } label: {
-                Label("Delete", systemImage: "trash")
-            }
-        }
-    }
 }
 
 /// Duplicates one record verbatim, through the command boundary.
@@ -118,51 +98,6 @@ private func duplicateShift(_ record: ShiftRecord, into context: ModelContext) {
             receiptMetrics: record.receiptMetrics,
             note: record.note
         )
-    } catch {
-        return
-    }
-    PaydayHaptics.medium()
-}
-
-@MainActor
-private func duplicateShift(_ entries: [TipEntry], into context: ModelContext) {
-    guard !entries.isEmpty else { return }
-    // A duplicate is a NEW closeout, so every copied row shares one fresh
-    // shiftID (never the source's) — dropping a copy onto the same day
-    // becomes an emergent second shift. Copying every stored field per row
-    // (rather than re-deriving the shift-level ones) automatically preserves
-    // the canonical rule: only the row that held hours/tip-out/sales/period/
-    // clock times/server-count in the source still holds them in the copy.
-    let shiftID = UUID()
-
-    // Through the atomic boundary, and the haptic only on success. With
-    // `autosaveEnabled = false` a `try?` here meant a failed save duplicated
-    // nothing at all while still firing the haptic, so the gesture reported
-    // that it had worked and the copy was simply absent. The inserts sit
-    // INSIDE the boundary because these rows are one closeout sharing one
-    // fresh shiftID, and half of them is not a shift.
-    do {
-        try ShiftCommands.commit(in: context) {
-            for entry in entries {
-                let copy = TipEntry(
-                    date: entry.date,
-                    amountCents: entry.amountCents,
-                    kind: entry.kind,
-                    note: entry.note,
-                    recordedAt: .now,
-                    hoursWorked: entry.hoursWorked,
-                    tipOutCents: entry.tipOutCents,
-                    salesCents: entry.salesCents,
-                    shiftPeriod: entry.shiftPeriod,
-                    shiftID: shiftID,
-                    clockIn: entry.clockIn,
-                    clockOut: entry.clockOut,
-                    serverCount: entry.serverCount,
-                    receiptMetrics: entry.receiptMetrics
-                )
-                context.insert(copy)
-            }
-        }
     } catch {
         return
     }

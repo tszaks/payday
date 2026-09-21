@@ -183,17 +183,17 @@ struct ShiftProjectionTests {
         #expect(ids.count == 2)
     }
 
-    // MARK: - Zero delta against the legacy path
+    // MARK: - The projection carries the shift's own arithmetic
 
-    /// The arithmetic proof, which is also the calendar fix.
+    /// The arithmetic the calendar depends on.
     ///
-    /// For cash C, credit R, v2 gratuity G and tip-out T, `TipBreakdown.total`
-    /// gives `C + R + G - T`, and the row-by-row `netCents` path the calendar
-    /// uses gives `(R + G - T) + C`. Equal, and no longer double-subtracting
-    /// the tip-out, which is what the old two-row storage did when a receipt
-    /// payload was duplicated onto both rows.
-    @Test("the projection and the legacy rows agree to the cent")
-    func projectionIsZeroDeltaAgainstLegacyRows() {
+    /// For cash C, credit R, v2 gratuity G and tip-out T the shift nets
+    /// `C + R + G - T`, and the row-by-row `netCents` path must give
+    /// `(R + G - T) + C` — equal, with the tip-out subtracted exactly once.
+    /// The old two-row storage double-subtracted when a receipt payload was
+    /// duplicated onto both rows, which is what this fixture pins.
+    @Test("the projection's rows sum to the shift's net, tip-out subtracted once")
+    func projectionCarriesTheShiftsNet() {
         let workDay = Self.day(2026, 9, 9)
         let cash = 5_000, credit = 2_000, gratuity = 1_200, tipOut = 1_000
         let metrics = ShiftReceiptMetrics(earningsSchemaVersion: 2, gratuityFeesCents: gratuity)
@@ -210,42 +210,23 @@ struct ShiftProjectionTests {
         )
         let projected = ShiftProjection.rows(for: shift)
 
-        // The same shift as the legacy two-row pair the writer would have
-        // produced: shift-level facts on the credit row only.
-        let shiftID = UUID()
-        let legacy: [TipEntry] = [
-            TipEntry(date: workDay, amountCents: credit, kind: .credit, note: "N",
-                     hoursWorked: 6.5, tipOutCents: tipOut, shiftPeriod: .dinner,
-                     shiftID: shiftID, receiptMetrics: metrics),
-            TipEntry(date: workDay, amountCents: cash, kind: .cash, note: "N",
-                     shiftID: shiftID)
-        ]
-
-        // 1. The breakdown, through the real generic function.
-        let projectedTotal = TipBreakdown.total(of: projected)
-        let legacyTotal = TipBreakdown.total(of: legacy)
-        #expect(projectedTotal == legacyTotal)
-
-        // 2. The row-by-row path the calendar uses, which must agree with it.
+        // The row-by-row path the calendar uses.
         let projectedNet = projected.reduce(0) { $0 + $1.netCents }
-        let legacyNet = legacy.reduce(0) { $0 + $1.netCents }
-        #expect(projectedNet == legacyNet)
         #expect(projectedNet == cash + credit + gratuity - tipOut)
 
-        // 3. And the resolver sees the same shift-level facts either way.
-        let projectedDetails = ShiftDetails.resolve(from: projected)
-        let legacyDetails = ShiftDetails.resolve(from: legacy)
-        #expect(projectedDetails.tipOutCents == legacyDetails.tipOutCents)
-        #expect(projectedDetails.hoursWorked == legacyDetails.hoursWorked)
-        #expect(projectedDetails.shiftPeriod == legacyDetails.shiftPeriod)
-        #expect(projectedDetails.receiptMetrics?.gratuityFeesCents
-            == legacyDetails.receiptMetrics?.gratuityFeesCents)
+        // And the resolver sees the shift-level facts.
+        let details = ShiftDetails.resolve(from: projected)
+        #expect(details.tipOutCents == tipOut)
+        #expect(details.hoursWorked == 6.5)
+        #expect(details.shiftPeriod == .dinner)
+        #expect(details.receiptMetrics?.gratuityFeesCents == gratuity)
     }
 
-    /// The cash-only variant of the same proof, which is the shape the naive
-    /// suppression rule broke.
-    @Test("a cash-only shift is zero delta against its single legacy row")
-    func cashOnlyIsZeroDelta() {
+    /// The cash-only variant of the same arithmetic, which is the shape the
+    /// naive suppression rule broke: suppress the credit row and the
+    /// shift-level fields have nowhere to live.
+    @Test("a cash-only shift still carries its own net and note")
+    func cashOnlyCarriesTheDetails() {
         let workDay = Self.day(2026, 9, 10)
         let metrics = ShiftReceiptMetrics(earningsSchemaVersion: 2, gratuityFeesCents: 1_200)
 
@@ -257,21 +238,11 @@ struct ShiftProjectionTests {
             receiptMetrics: metrics,
             note: "N"
         )
-        let legacy: [TipEntry] = [
-            TipEntry(date: workDay, amountCents: 5_000, kind: .cash, note: "N",
-                     tipOutCents: 1_000, shiftID: UUID(), receiptMetrics: metrics)
-        ]
 
         let projected = ShiftProjection.rows(for: shift)
-        #expect(TipBreakdown.total(of: projected) == TipBreakdown.total(of: legacy))
-        // Split out rather than inlined: the compiler cannot type-check the
-        // combined reduce-and-compare expression in reasonable time.
         let projectedNet = projected.reduce(0) { $0 + $1.netCents }
-        let legacyNet = legacy.reduce(0) { $0 + $1.netCents }
-        #expect(projectedNet == legacyNet)
-        let projectedNotes: [String] = projected.compactMap(\.note)
-        let legacyNotes: [String] = legacy.compactMap(\.note)
-        #expect(projectedNotes.joined(separator: "; ") == legacyNotes.joined(separator: "; "))
+        #expect(projectedNet == 5_000 + 1_200 - 1_000)
+        #expect(projected.compactMap(\.note) == ["N"])
     }
 
     @Test("projecting several shifts preserves each one's rows")

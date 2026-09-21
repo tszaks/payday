@@ -37,7 +37,6 @@ struct PaycheckEntrySheet: View {
     @Environment(PayScheduleStore.self) private var scheduleStore
     @Environment(UserPreferencesStore.self) private var preferencesStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Query private var allEntries: [TipEntry]
     /// The other representation. Handed to `PaydayPushScheduler` so the
     /// figure the payday notification SPEAKS comes from the same source the
     /// screens show; this sheet itself reads its money from the snapshot.
@@ -780,7 +779,7 @@ struct PaycheckEntrySheet: View {
         // reschedule so a pending payday push for it clears immediately
         // instead of surviving until the next unrelated reschedule call.
         let updatedRecords = paycheckRecords.contains(where: { $0.id == record.id }) ? paycheckRecords : paycheckRecords + [record]
-        PaydayPushScheduler.reschedule(preferencesStore: preferencesStore, schedule: scheduleStore.schedule, allEntries: allEntries, shiftRecords: shiftRecords, paycheckRecords: updatedRecords)
+        PaydayPushScheduler.reschedule(preferencesStore: preferencesStore, schedule: scheduleStore.schedule, shiftRecords: shiftRecords, paycheckRecords: updatedRecords)
         dismiss()
     }
 

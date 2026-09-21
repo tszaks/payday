@@ -68,7 +68,7 @@ struct FlipGate1SessionLoggedTests {
         // the nudge is tonight.
         let queried = Self.history()
         let beforeLogging = SmartNudgeScheduler.rhythmFireDate(
-            allEntries: [], shiftRecords: queried, from: Self.now
+            shiftRecords: queried, from: Self.now
         )
         let tonight = try? #require(beforeLogging)
         #expect(tonight != nil, "the fixture must produce a nudge, or this proves nothing")
@@ -83,7 +83,7 @@ struct FlipGate1SessionLoggedTests {
             cashTipsCents: 9_000, hoursWorked: 6, recordedAt: Self.now
         )
         let afterLogging = SmartNudgeScheduler.rhythmFireDate(
-            allEntries: [], shiftRecords: queried + [justCreated], from: Self.now
+            shiftRecords: queried + [justCreated], from: Self.now
         )
 
         // Tonight is now logged, so the nudge moves off tonight.
@@ -106,10 +106,10 @@ struct FlipGate1SessionLoggedTests {
         // The wrong call: the record exists in the store but was not handed
         // in, and `@Query` has not caught up.
         let forgotten = SmartNudgeScheduler.rhythmFireDate(
-            allEntries: [], shiftRecords: queried, from: Self.now
+            shiftRecords: queried, from: Self.now
         )
         let appended = SmartNudgeScheduler.rhythmFireDate(
-            allEntries: [], shiftRecords: queried + [ShiftRecord(
+            shiftRecords: queried + [ShiftRecord(
                 workDate: Self.calendar.startOfDay(for: Self.now),
                 cashTipsCents: 9_000, hoursWorked: 6, recordedAt: Self.now
             )], from: Self.now

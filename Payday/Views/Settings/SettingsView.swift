@@ -12,7 +12,6 @@ struct SettingsView: View {
     @Environment(PolicyStore.self) private var policyStore
     @Environment(PaydayCloudState.self) private var cloudState
     @Environment(\.dismiss) private var dismiss
-    @Query private var allEntries: [TipEntry]
     @Query private var paycheckRecords: [PaycheckRecord]
     /// Only for "does this person have any history at all", which is what
     /// gates the one-time rate-history prompt. Both representations count:
@@ -92,7 +91,7 @@ struct SettingsView: View {
                 // not part of WHEN you get paid, it is part of what you are
                 // paid, and it now has a history and a workweek attached
                 // (PaydayCore Design 1, "Severing calendar from payroll").
-                PayrollSettingsSection(shiftCount: allEntries.count + shiftRecords.count)
+                PayrollSettingsSection(shiftCount: shiftRecords.count)
                     .id(Self.payrollSectionID)
 
                 Section("Data") {
@@ -175,7 +174,7 @@ struct SettingsView: View {
             }
             .onChange(of: isPaydayReminderEnabled) { _, newValue in
                 preferencesStore.isPaydayReminderEnabled = newValue
-                PaydayPushScheduler.reschedule(preferencesStore: preferencesStore, schedule: scheduleStore.schedule, allEntries: allEntries, shiftRecords: shiftRecords, paycheckRecords: paycheckRecords)
+                PaydayPushScheduler.reschedule(preferencesStore: preferencesStore, schedule: scheduleStore.schedule, shiftRecords: shiftRecords, paycheckRecords: paycheckRecords)
             }
             .onAppear {
                 firstName = preferencesStore.firstName ?? ""

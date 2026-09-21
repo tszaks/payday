@@ -38,7 +38,7 @@ enum DebugSeeder {
     @MainActor
     static func seedShowcaseData(scheduleStore: PayScheduleStore, insightsStore: InsightsStore, preferencesStore: UserPreferencesStore) {
         let context = SharedModelContainer.shared.mainContext
-        try? context.delete(model: TipEntry.self)
+        try? context.delete(model: ShiftRecord.self)
         try? context.delete(model: PaycheckRecord.self)
         insightsStore.snapshot = nil
 
@@ -143,11 +143,12 @@ enum DebugSeeder {
 
         // Verified paychecks for every closed period but the most recent —
         // so the paycheck surfaces have real history to show.
-        let allEntries = (try? context.fetch(FetchDescriptor<TipEntry>())) ?? []
+        let allRecords = (try? context.fetch(FetchDescriptor<ShiftRecord>())) ?? []
         var cursor = calculator.period(containing: calendar.date(byAdding: .day, value: -14, to: today) ?? today)
         for _ in 0..<11 {
-            let periodEntries = allEntries.filter { $0.date >= cursor.start && $0.date <= cursor.end }
-            let creditCents = TipBreakdown.total(of: periodEntries).creditCents
+            let creditCents = allRecords
+                .filter { $0.workDate >= cursor.start && $0.workDate <= cursor.end }
+                .reduce(0) { $0 + $1.creditTipsCents }
             if creditCents > 0 {
                 // A real stub almost never equals your own tally: a late
                 // closeout lands on the next check, a comp gets adjusted,
@@ -188,8 +189,8 @@ enum DebugSeeder {
         PaydayWidgetRefresh.request()
     }
 
-    /// One closeout: cash + credit rows sharing a shiftID, with the
-    /// shift-level facts on the canonical entry (see ShiftDetails).
+    /// One closeout: a single `ShiftRecord` carrying both kinds and the
+    /// shift-level facts — the shape the app writes post-flip.
     @MainActor
     private static func insertShift(
         context: ModelContext,
@@ -211,20 +212,20 @@ enum DebugSeeder {
         let outDate = calendar.date(bySettingHour: clockOut.0, minute: clockOut.1, second: 0, of: day) ?? day
         let recordedAt = calendar.date(byAdding: .minute, value: 20, to: outDate) ?? outDate
         let hours = ShiftTimes.hours(clockIn: inDate, clockOut: outDate)
-        let shiftID = UUID()
 
-        var entries: [TipEntry] = []
-        if cashCents > 0 {
-            let entry = TipEntry(date: day, amountCents: cashCents, kind: .cash, note: nil, recordedAt: recordedAt, shiftID: shiftID)
-            context.insert(entry)
-            entries.append(entry)
-        }
-        if creditCents > 0 {
-            let entry = TipEntry(date: day, amountCents: creditCents, kind: .credit, note: nil, recordedAt: recordedAt, shiftID: shiftID)
-            context.insert(entry)
-            entries.append(entry)
-        }
-        ShiftDetails.write(hoursWorked: hours, tipOutCents: tipOutCents, salesCents: salesCents, shiftPeriod: period, clockIn: inDate, clockOut: outDate, serverCount: 4 + next(3), into: entries)
+        context.insert(ShiftRecord(
+            workDate: day,
+            shiftPeriod: period,
+            cashTipsCents: cashCents,
+            creditTipsCents: creditCents,
+            tipOutCents: tipOutCents,
+            salesCents: salesCents,
+            hoursWorked: hours,
+            clockIn: inDate,
+            clockOut: outDate,
+            serverCount: 4 + next(3),
+            recordedAt: recordedAt
+        ))
     }
 
     /// QA-only fixture for the cold-start surfaces: exactly 3 shifts, below
@@ -234,7 +235,7 @@ enum DebugSeeder {
     @MainActor
     static func seedColdStartData(scheduleStore: PayScheduleStore, insightsStore: InsightsStore) {
         let context = SharedModelContainer.shared.mainContext
-        try? context.delete(model: TipEntry.self)
+        try? context.delete(model: ShiftRecord.self)
         try? context.delete(model: PaycheckRecord.self)
         insightsStore.snapshot = nil
 
@@ -250,7 +251,7 @@ enum DebugSeeder {
         for (daysAgo, cents) in [(1, 14200), (3, 9800), (6, 11600)] {
             guard let day = calendar.date(byAdding: .day, value: -daysAgo, to: today) else { continue }
             let at = calendar.date(bySettingHour: 21, minute: 30, second: 0, of: day) ?? day
-            context.insert(TipEntry(date: day, amountCents: cents, kind: .credit, note: nil, recordedAt: at, shiftID: UUID()))
+            context.insert(ShiftRecord(workDate: day, creditTipsCents: cents, recordedAt: at))
         }
 
         try? context.save()
@@ -266,7 +267,7 @@ enum DebugSeeder {
     @MainActor
     static func seedFollowUpDemoData(insightsStore: InsightsStore, moveLedgerStore: MoveLedgerStore) {
         let context = SharedModelContainer.shared.mainContext
-        try? context.delete(model: TipEntry.self)
+        try? context.delete(model: ShiftRecord.self)
         try? context.delete(model: PaycheckRecord.self)
         insightsStore.snapshot = nil
 
@@ -291,7 +292,7 @@ enum DebugSeeder {
         }
         func insertNight(_ date: Date, cents: Int) {
             let at = calendar.date(bySettingHour: 20, minute: 0, second: 0, of: date) ?? date
-            context.insert(TipEntry(date: date, amountCents: cents, kind: .credit, note: nil, recordedAt: at, hoursWorked: 5.0, tipOutCents: nil, salesCents: nil, shiftPeriod: .dinner, shiftID: UUID()))
+            context.insert(ShiftRecord(workDate: date, shiftPeriod: .dinner, creditTipsCents: cents, hoursWorked: 5.0, recordedAt: at))
         }
 
         // BEFORE the move was shown (weeks 12 down to 5 ago): Friday every
@@ -323,7 +324,7 @@ enum DebugSeeder {
 
         // Idempotent: reseeding always starts from a clean slate instead of
         // stacking duplicate entries on top of whatever was already there.
-        try? context.delete(model: TipEntry.self)
+        try? context.delete(model: ShiftRecord.self)
         try? context.delete(model: PaycheckRecord.self)
         insightsStore.snapshot = nil
 
@@ -378,13 +379,15 @@ enum DebugSeeder {
             (4, 9800, .credit, "lunch", 12, 45, 4, 4.0, 1000, 49000, .lunch, 11, 0, 15, 0),
             (6, 7300, .cash, nil, 18, 40, 5, 5.0, nil, nil, .dinner, 17, 0, 22, 0)
         ]
-        var currentShiftIDs: [Int: UUID] = [:]
+        // `shift` groups rows into closeouts: rows sharing one shift index
+        // become ONE ShiftRecord carrying both kinds.
+        var currentShifts: [Int: (day: Date, at: Date, cashCents: Int, creditCents: Int, note: String?, hoursWorked: Double?, tipOutCents: Int?, salesCents: Int?, shiftPeriod: ShiftPeriod?, clockIn: Date?, clockOut: Date?)] = [:]
+        // Kept out of the accumulator: receipt metrics belong to the
+        // ShiftRecord, set in the same step as its cash and credit.
+        var currentMetrics: [Int: ShiftReceiptMetrics] = [:]
         for sample in sampleOffsets {
             guard let r = recorded(daysAgo: sample.daysAgo, from: today, hour: sample.hour, minute: sample.minute),
                   r.day >= currentPeriod.start else { continue }
-            let shiftID = currentShiftIDs[sample.shift] ?? {
-                let id = UUID(); currentShiftIDs[sample.shift] = id; return id
-            }()
             let clockIn = sample.clockInHour.map { clockTime(hour: $0, minute: sample.clockInMinute, on: r.day) }
             let clockOut = sample.clockOutHour.map { clockTime(hour: $0, minute: sample.clockOutMinute, on: r.day) }
             let receiptMetrics: ShiftReceiptMetrics? = sample.shift == 0 && sample.kind == .credit
@@ -400,7 +403,34 @@ enum DebugSeeder {
                     totalAmountCents: 54_800
                 )
                 : nil
-            context.insert(TipEntry(date: r.day, amountCents: sample.cents, kind: sample.kind, note: sample.note, recordedAt: r.at, hoursWorked: sample.hoursWorked, tipOutCents: sample.tipOutCents, salesCents: sample.salesCents, shiftPeriod: sample.shiftPeriod, shiftID: shiftID, clockIn: clockIn, clockOut: clockOut, receiptMetrics: receiptMetrics))
+            var shift = currentShifts[sample.shift] ?? (r.day, r.at, 0, 0, nil, nil, nil, nil, nil, nil, nil)
+            if sample.kind == .cash { shift.cashCents += sample.cents } else { shift.creditCents += sample.cents }
+            shift.at = max(shift.at, r.at)
+            shift.note = shift.note ?? sample.note
+            shift.hoursWorked = shift.hoursWorked ?? sample.hoursWorked
+            shift.tipOutCents = shift.tipOutCents ?? sample.tipOutCents
+            shift.salesCents = shift.salesCents ?? sample.salesCents
+            shift.shiftPeriod = shift.shiftPeriod ?? sample.shiftPeriod
+            shift.clockIn = shift.clockIn ?? clockIn
+            shift.clockOut = shift.clockOut ?? clockOut
+            currentMetrics[sample.shift] = currentMetrics[sample.shift] ?? receiptMetrics
+            currentShifts[sample.shift] = shift
+        }
+        for (index, shift) in currentShifts {
+            context.insert(ShiftRecord(
+                workDate: shift.day,
+                shiftPeriod: shift.shiftPeriod,
+                cashTipsCents: shift.cashCents,
+                creditTipsCents: shift.creditCents,
+                tipOutCents: shift.tipOutCents,
+                salesCents: shift.salesCents,
+                hoursWorked: shift.hoursWorked,
+                clockIn: shift.clockIn,
+                clockOut: shift.clockOut,
+                receiptMetrics: currentMetrics[index],
+                note: shift.note,
+                recordedAt: shift.at
+            ))
         }
 
         if let priorPeriodEnd = calendar.date(byAdding: .day, value: -1, to: currentPeriod.start) {
@@ -414,18 +444,40 @@ enum DebugSeeder {
                 (8, 7600, .credit, "lunch", 12, 30, 4, 4.0, 1000, 38000, .lunch, 11, 0, 15, 0),
                 (10, 10400, .cash, nil, 13, 20, 5, 4.5, nil, nil, .lunch, 11, 0, 15, 30)
             ]
-            var priorShiftIDs: [Int: UUID] = [:]
+            var priorShifts: [Int: (day: Date, at: Date, cashCents: Int, creditCents: Int, note: String?, hoursWorked: Double?, tipOutCents: Int?, salesCents: Int?, shiftPeriod: ShiftPeriod?, clockIn: Date?, clockOut: Date?)] = [:]
             var loggedCreditTotal = 0
             for sample in priorOffsets {
                 guard let r = recorded(daysAgo: sample.daysAgo, from: priorPeriod.end, hour: sample.hour, minute: sample.minute),
                       r.day >= priorPeriod.start, r.day <= priorPeriod.end else { continue }
                 if sample.kind == .credit { loggedCreditTotal += sample.cents }
-                let shiftID = priorShiftIDs[sample.shift] ?? {
-                    let id = UUID(); priorShiftIDs[sample.shift] = id; return id
-                }()
                 let clockIn = sample.clockInHour.map { clockTime(hour: $0, minute: sample.clockInMinute, on: r.day) }
                 let clockOut = sample.clockOutHour.map { clockTime(hour: $0, minute: sample.clockOutMinute, on: r.day) }
-                context.insert(TipEntry(date: r.day, amountCents: sample.cents, kind: sample.kind, note: sample.note, recordedAt: r.at, hoursWorked: sample.hoursWorked, tipOutCents: sample.tipOutCents, salesCents: sample.salesCents, shiftPeriod: sample.shiftPeriod, shiftID: shiftID, clockIn: clockIn, clockOut: clockOut))
+                var shift = priorShifts[sample.shift] ?? (r.day, r.at, 0, 0, nil, nil, nil, nil, nil, nil, nil)
+                if sample.kind == .cash { shift.cashCents += sample.cents } else { shift.creditCents += sample.cents }
+                shift.at = max(shift.at, r.at)
+                shift.note = shift.note ?? sample.note
+                shift.hoursWorked = shift.hoursWorked ?? sample.hoursWorked
+                shift.tipOutCents = shift.tipOutCents ?? sample.tipOutCents
+                shift.salesCents = shift.salesCents ?? sample.salesCents
+                shift.shiftPeriod = shift.shiftPeriod ?? sample.shiftPeriod
+                shift.clockIn = shift.clockIn ?? clockIn
+                shift.clockOut = shift.clockOut ?? clockOut
+                priorShifts[sample.shift] = shift
+            }
+            for shift in priorShifts.values {
+                context.insert(ShiftRecord(
+                    workDate: shift.day,
+                    shiftPeriod: shift.shiftPeriod,
+                    cashTipsCents: shift.cashCents,
+                    creditTipsCents: shift.creditCents,
+                    tipOutCents: shift.tipOutCents,
+                    salesCents: shift.salesCents,
+                    hoursWorked: shift.hoursWorked,
+                    clockIn: shift.clockIn,
+                    clockOut: shift.clockOut,
+                    note: shift.note,
+                    recordedAt: shift.at
+                ))
             }
             // Paycheck reflects credit tips only (cash is walked nightly),
             // a hair under what was logged — a realistic small discrepancy.
@@ -444,7 +496,7 @@ enum DebugSeeder {
     @MainActor
     static func clearAll(scheduleStore: PayScheduleStore, insightsStore: InsightsStore, moveLedgerStore: MoveLedgerStore, policyStore: PolicyStore) {
         let context = SharedModelContainer.shared.mainContext
-        try? context.delete(model: TipEntry.self)
+        try? context.delete(model: ShiftRecord.self)
         try? context.delete(model: PaycheckRecord.self)
         try? context.save()
         PaydayWidgetRefresh.request()

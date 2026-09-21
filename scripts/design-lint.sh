@@ -397,7 +397,6 @@ MONEY_BOUNDARY_ALLOWLIST="
 Payday/Models/TipEntry.swift
 Payday/Models/LegacyShiftRow.swift
 Payday/Utilities/PaycheckAudit.swift
-Payday/Utilities/TipBreakdown.swift
 Payday/Utilities/StatsEngine.swift
 "
 

@@ -73,17 +73,17 @@ private let testPeriod = PayPeriod(start: at(2026, 9, 27, hour: 0), end: at(2026
 /// Credit tips $700.00, wages $610.00 (40h regular + 10h overtime in the
 /// Sunday week at $10/hr, plus 6h regular in the next), expected check
 /// $1,310.00.
-private func dividedFixtureEntries() -> [TipEntry] {
-    let week: [TipEntry] = [
+private func dividedFixtureRecords() -> [ShiftRecord] {
+    let week: [ShiftRecord] = [
         (2026, 9, 27, 1), (2026, 9, 28, 2), (2026, 9, 29, 3),
         (2026, 9, 30, 4), (2026, 10, 1, 5)
     ].map { year, month, day, index in
-        TipEntry(date: at(year, month, day), amountCents: 10_000, kind: .credit,
-                 hoursWorked: 10, shiftID: shiftID(index))
+        ShiftRecord(id: shiftID(index), workDate: at(year, month, day),
+                    creditTipsCents: 10_000, hoursWorked: 10)
     }
-    let finalDay = TipEntry(
-        date: at(2026, 10, 10, hour: 18), amountCents: 20_000, kind: .credit,
-        hoursWorked: 6, shiftID: shiftID(6)
+    let finalDay = ShiftRecord(
+        id: shiftID(6), workDate: at(2026, 10, 10, hour: 18),
+        creditTipsCents: 20_000, hoursWorked: 6
     )
     return week + [finalDay]
 }
@@ -97,8 +97,9 @@ private struct PaycheckRender {
     let detail: PeriodDetailFacts
     let sheet: PaycheckEntryFacts
 
+    @MainActor
     init(
-        entries: [TipEntry],
+        records: [ShiftRecord],
         paychecks: [PaycheckRecord] = [],
         stub: PaycheckReconciler.Observation = .empty,
         policies: CompensationPolicies = testPolicies(),
@@ -107,15 +108,14 @@ private struct PaycheckRender {
     ) {
         let calendar = payrollCalendar()
         let build = HistoryEarnings.build(
-            entries: entries,
+            records: records,
             policies: policies,
-            payrollTimeZone: PaydayTestZone.payroll,
-            calendar: calendar
+            payrollTimeZone: PaydayTestZone.payroll
         )
         snapshot = build.snapshot
         detail = PeriodDetailFacts(
             snapshot: build.snapshot,
-            shiftDays: build.shiftDays,
+            shiftRecordDays: build.shiftRecordDays,
             paycheckRecords: paychecks,
             period: period,
             schedule: schedule,
@@ -170,10 +170,11 @@ private func p1Record() -> PaycheckRecord {
 /// sheet so a person auditing a stub sees the figure the screen behind it
 /// showed.
 @Suite("The paycheck sheet and the period it opens are one expectation")
+@MainActor
 struct PaycheckSheetEqualsPeriodExpectationTests {
     @Test("every expected component in the sheet equals the period's, to the cent")
     func sheetExpectationEqualsPeriods() throws {
-        let render = PaycheckRender(entries: dividedFixtureEntries())
+        let render = PaycheckRender(records: dividedFixtureRecords())
         let snapshot = try #require(render.snapshot)
         let result = try #require(render.detail.result)
 
@@ -225,9 +226,9 @@ struct PaycheckSheetEqualsPeriodExpectationTests {
     /// input on either comes from `PaySchedule` any more.
     @Test("the pay-period grid's weekday moves no expected figure on either surface")
     func gridWeekdayMovesNothing() {
-        let entries = dividedFixtureEntries()
-        let monday = PaycheckRender(entries: entries, schedule: testSchedule(firstWeekday: 2))
-        let sunday = PaycheckRender(entries: entries, schedule: testSchedule(firstWeekday: 1))
+        let records = dividedFixtureRecords()
+        let monday = PaycheckRender(records: records, schedule: testSchedule(firstWeekday: 2))
+        let sunday = PaycheckRender(records: records, schedule: testSchedule(firstWeekday: 1))
         #expect(monday.sheet.expectation.grossCents == 131_000)
         // The DATASET is identical, which is the strongest form of this
         // claim: same manifest digest, so the grid weekday is not even an
@@ -282,12 +283,12 @@ struct PaycheckSheetEqualsPeriodExpectationTests {
     /// expected check falls from $1,310.00 to $1,250.00 with a caption.
     @Test("a partial period's expected check carries its caption and is never a Total")
     func partialExpectationIsCaptioned() {
-        var entries = dividedFixtureEntries()
-        entries[5] = TipEntry(
-            date: at(2026, 10, 10, hour: 18), amountCents: 20_000, kind: .credit,
-            hoursWorked: nil, shiftID: shiftID(6)
+        var records = dividedFixtureRecords()
+        records[5] = ShiftRecord(
+            id: shiftID(6), workDate: at(2026, 10, 10, hour: 18),
+            creditTipsCents: 20_000
         )
-        let render = PaycheckRender(entries: entries)
+        let render = PaycheckRender(records: records)
         #expect(render.detail.result?.completeness.state == .partial(missingHours: 1, missingRate: 0))
         #expect(render.sheet.expectation.wagesCents == 55_000)
         #expect(render.sheet.expectedGross.cents == 125_000)
@@ -314,9 +315,9 @@ struct PaycheckSheetEqualsPeriodExpectationTests {
     @Test("a cash-only period prints no tips-line figure, and a credit period prints the audited one")
     func tipsLineFigureMatchesTheAudit() {
         // Cash only. One 8h shift, $120.00 cash, at $10/hr.
-        let cashOnly = PaycheckRender(entries: [TipEntry(
-            date: at(2026, 9, 28), amountCents: 12_000, kind: .cash,
-            hoursWorked: 8, shiftID: shiftID(11)
+        let cashOnly = PaycheckRender(records: [ShiftRecord(
+            id: shiftID(11), workDate: at(2026, 9, 28),
+            cashTipsCents: 12_000, hoursWorked: 8
         )])
         #expect(cashOnly.sheet.isUnbacked == false, "there IS a dataset; only the tips line is unknowable")
         #expect(cashOnly.sheet.expectation.tipsLineCents == 12_000, "the registry's cash fallback is unchanged")
@@ -337,7 +338,7 @@ struct PaycheckSheetEqualsPeriodExpectationTests {
         // Credit tips, same shape, so this cannot pass by withholding
         // everything: the printed figure IS the audited cents.
         let credit = PaycheckRender(
-            entries: dividedFixtureEntries(),
+            records: dividedFixtureRecords(),
             stub: PaycheckReconciler.Observation(paidTipsCents: 60_000)
         )
         #expect(credit.sheet.expectation.auditableTipsLineCents == 70_000)
@@ -354,7 +355,7 @@ struct PaycheckSheetEqualsPeriodExpectationTests {
     /// Every label the sheet renders is one the registry sanctions.
     @Test("the sheet's figures carry registry labels only")
     func labelsAreFromTheRegistry() {
-        let render = PaycheckRender(entries: dividedFixtureEntries())
+        let render = PaycheckRender(records: dividedFixtureRecords())
         #expect(render.sheet.expectedGross.label == "Expected")
         #expect(MetricID.expectedPaycheckGross.allowedLabels
             .contains(render.sheet.expectedGross.label))
@@ -377,12 +378,13 @@ struct PaycheckSheetEqualsPeriodExpectationTests {
 /// prefill. All five went through `PaycheckRecord.reconciledPaidTipsCents`,
 /// which group 2.5 deleted.
 @Suite("P1: the stub's tips line is never rewritten, only a correction is proposed")
+@MainActor
 struct ObservedPaidTipsAreNeverMutatedTests {
     @Test("the reconciler proposes 10050 and leaves the observation at 10000")
     func proposalDoesNotMutate() {
         let record = p1Record()
         let render = PaycheckRender(
-            entries: dividedFixtureEntries(),
+            records: dividedFixtureRecords(),
             paychecks: [record],
             stub: observation(of: record)
         )
@@ -471,6 +473,7 @@ struct ObservedPaidTipsAreNeverMutatedTests {
 /// The key is now `SnapshotStamp`, whose `digest` is a SHA-256 over every
 /// input that can move a result, the rate history and the workweek included.
 @Suite("The paycheck sheet's facts are keyed on the snapshot stamp")
+@MainActor
 struct PaycheckEntryFactsStampKeyTests {
     /// MEASURED: the same six shifts at $10/hr expect $1,310.00 and at
     /// $20/hr expect $1,920.00. A wage change made while the sheet is open is
@@ -478,14 +481,14 @@ struct PaycheckEntryFactsStampKeyTests {
     /// the sheet went on auditing against $1,310.00.
     @Test("a wage change is a new stamp, a new expectation and a new audit sentence")
     func aWageChangeInvalidatesTheCache() throws {
-        let entries = dividedFixtureEntries()
+        let records = dividedFixtureRecords()
         let stub = PaycheckReconciler.Observation(
             paidTipsCents: 70_000,
             regularWagesCents: 46_000,
             overtimeWagesCents: 15_000
         )
-        let tenDollars = PaycheckRender(entries: entries, stub: stub, policies: testPolicies(rateCents: 1_000))
-        let twentyDollars = PaycheckRender(entries: entries, stub: stub, policies: testPolicies(rateCents: 2_000))
+        let tenDollars = PaycheckRender(records: records, stub: stub, policies: testPolicies(rateCents: 1_000))
+        let twentyDollars = PaycheckRender(records: records, stub: stub, policies: testPolicies(rateCents: 2_000))
 
         let cheapStamp = try #require(tenDollars.sheet.stamp)
         let dearStamp = try #require(twentyDollars.sheet.stamp)
@@ -522,7 +525,7 @@ struct PaycheckEntryFactsStampKeyTests {
     @Test("the same stamp and the same stub reuse the cached facts")
     func anUnchangedKeyReuses() {
         let stub = PaycheckReconciler.Observation(paidTipsCents: 70_000)
-        let render = PaycheckRender(entries: dividedFixtureEntries(), stub: stub)
+        let render = PaycheckRender(records: dividedFixtureRecords(), stub: stub)
         let reused = PaycheckEntryFacts.reusing(
             render.sheet,
             expectation: render.detail.expectation,
@@ -537,7 +540,7 @@ struct PaycheckEntryFactsStampKeyTests {
     @Test("a change to the stub re-derives while the stamp stays the same")
     func aStubChangeInvalidatesTheCache() {
         let render = PaycheckRender(
-            entries: dividedFixtureEntries(),
+            records: dividedFixtureRecords(),
             stub: PaycheckReconciler.Observation(paidTipsCents: 70_000)
         )
         let typed = PaycheckReconciler.Observation(paidTipsCents: 60_000)
@@ -561,9 +564,9 @@ struct PaycheckEntryFactsStampKeyTests {
     /// the payroll CALENDAR POLICY, which the sheet never read.
     @Test("a workweek-start change is a new stamp and a new overtime picture")
     func aWorkweekChangeInvalidatesTheCache() throws {
-        let entries = dividedFixtureEntries()
-        let sunday = PaycheckRender(entries: entries, policies: testPolicies(workweekStartWeekday: 1))
-        let monday = PaycheckRender(entries: entries, policies: testPolicies(workweekStartWeekday: 2))
+        let records = dividedFixtureRecords()
+        let sunday = PaycheckRender(records: records, policies: testPolicies(workweekStartWeekday: 1))
+        let monday = PaycheckRender(records: records, policies: testPolicies(workweekStartWeekday: 2))
 
         let sundayStamp = try #require(sunday.sheet.stamp)
         let mondayStamp = try #require(monday.sheet.stamp)

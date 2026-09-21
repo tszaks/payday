@@ -16,7 +16,6 @@ struct BackfillSheet: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(PayScheduleStore.self) private var scheduleStore
     @Environment(UserPreferencesStore.self) private var preferencesStore
-    @Query(sort: \TipEntry.date, order: .reverse) private var allEntries: [TipEntry]
     @Query private var paycheckRecords: [PaycheckRecord]
     /// The other representation. SmartNudgeScheduler picks between this and
     /// `allEntries` on `shiftsAreAuthoritative`; it must never read both, or a
@@ -36,7 +35,6 @@ struct BackfillSheet: View {
     /// the nudge at dismiss — same defensive concatenation LogTipSheet.saveNew
     /// uses, since allEntries' @Query isn't guaranteed to have refreshed by
     /// the time onDisappear fires for the very last save.
-    @State private var sessionEntries: [TipEntry] = []
     /// The same, in the shift representation. Backfill enters a whole history
     /// in one sitting, so `@Query` lags badly here -- this is why the session
     /// list exists at all, and the record path needs its own for the same
@@ -130,8 +128,8 @@ struct BackfillSheet: View {
                 // sitting, so the session list is the only thing that knows what
                 // was just entered -- appending it on the correct representation
                 // is what stops the nudge firing for a night the user just typed in.
-                SmartNudgeScheduler.reschedule(preferencesStore: preferencesStore, allEntries: allEntries + sessionEntries, shiftRecords: shiftRecords + sessionRecords)
-                PaydayPushScheduler.reschedule(preferencesStore: preferencesStore, schedule: scheduleStore.schedule, allEntries: allEntries + sessionEntries, shiftRecords: shiftRecords + sessionRecords, paycheckRecords: paycheckRecords)
+                SmartNudgeScheduler.reschedule(preferencesStore: preferencesStore, shiftRecords: shiftRecords + sessionRecords)
+                PaydayPushScheduler.reschedule(preferencesStore: preferencesStore, schedule: scheduleStore.schedule, shiftRecords: shiftRecords + sessionRecords, paycheckRecords: paycheckRecords)
                 PaydayWidgetRefresh.request()
             }
             .task {
@@ -198,34 +196,17 @@ struct BackfillSheet: View {
         // with autosave off a backfilled shift would vanish on relaunch --
         // and backfill is used to enter a whole history at once, so the loss
         // would be many nights rather than one.
-        // The writer flip, same single decision as `LogTipSheet.saveNew`, and
-        // the two paths are mutually exclusive so the session append below
-        // cannot double-count. `create` owns its own save and rollback, so it
-        // is not wrapped in `commit`.
-        let entries: [TipEntry]
+        // `create` owns its own save and rollback, so it is not wrapped in
+        // `commit`.
         let records: [ShiftRecord]
         do {
-            if PaydaySyncState.shiftsAreAuthoritativeForCurrentAccount {
-                records = [try ShiftCommands.create(
-                    in: modelContext,
-                    workDate: selectedDate,
-                    cashTipsCents: cashCents,
-                    creditTipsCents: creditCents,
-                    tipOutCents: tipOutCents > 0 ? tipOutCents : nil
-                )]
-                entries = []
-            } else {
-                entries = try ShiftCommands.commit(in: modelContext) {
-                    ShiftWriter.insertShift(
-                        into: modelContext,
-                        date: selectedDate,
-                        cashCents: cashCents,
-                        creditCents: creditCents,
-                        tipOutCents: tipOutCents > 0 ? tipOutCents : nil
-                    )
-                }
-                records = []
-            }
+            records = [try ShiftCommands.create(
+                in: modelContext,
+                workDate: selectedDate,
+                cashTipsCents: cashCents,
+                creditTipsCents: creditCents,
+                tipOutCents: tipOutCents > 0 ? tipOutCents : nil
+            )]
         } catch {
             // Rolled back. The amounts stay on screen so the night can be
             // re-entered rather than silently lost, and the counter does not
@@ -233,7 +214,6 @@ struct BackfillSheet: View {
             saveFailed = true
             return
         }
-        sessionEntries.append(contentsOf: entries)
         sessionRecords.append(contentsOf: records)
         datesWithExistingShifts.insert(Calendar.current.startOfDay(for: selectedDate))
         PaydayHaptics.success()
@@ -241,17 +221,12 @@ struct BackfillSheet: View {
     }
 
     private func refreshExistingShiftDates() {
-        // Both representations, because this set is what stops backfill
-        // offering a night the user has already entered. Reading only the
-        // legacy side after the flip would re-offer every night just written.
-        let legacyDays = (allEntries + sessionEntries).compactMap { entry -> Date? in
-            guard entry.shiftID != nil else { return nil }
-            return Calendar.current.startOfDay(for: entry.date)
-        }
+        // This set is what stops backfill offering a night the user has
+        // already entered.
         let recordDays = (shiftRecords + sessionRecords).map {
             Calendar.current.startOfDay(for: $0.workDate)
         }
-        datesWithExistingShifts = Set(legacyDays + recordDays)
+        datesWithExistingShifts = Set(recordDays)
     }
 
     /// Saves, then resets for the next entry: clears the three amounts,

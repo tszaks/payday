@@ -38,7 +38,6 @@ struct InsightsView: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(MoveLedgerStore.self) private var moveLedgerStore
     @Environment(PolicyStore.self) private var policyStore
-    @Query(sort: \TipEntry.date, order: .reverse) private var allEntries: [TipEntry]
     /// The other representation. `InsightsEarnings.build` picks one, and it
     /// has to be the same one Dashboard picks: group 2.6's whole point is
     /// that this page and the headline above it share a basis, and reading a
@@ -93,11 +92,9 @@ struct InsightsView: View {
         let dataset = renderCache?.revision == snapshotRevision
             ? renderCache!.dataset
             : InsightsEarnings.build(
-                entries: allEntries,
                 records: shiftRecords,
                 policies: policyStore.policies,
-                payrollTimeZone: payrollTimeZone,
-                calendar: payrollCalendar
+                payrollTimeZone: payrollTimeZone
             )
         // Rule 3: the facts are keyed on the dataset's own digest, the
         // complete computed key, plus this screen's presentational selection.

@@ -86,8 +86,8 @@ enum InsightsEarnings {
     // MARK: - The dataset
 
     /// - Parameters:
-    ///   - entries: every local `TipEntry`. Whole history, not a window: the
-    ///     ledger allocates the overtime threshold across the complete
+    ///   - records: every local `ShiftRecord`. Whole history, not a window:
+    ///     the ledger allocates the overtime threshold across the complete
     ///     workweek of the shifts it is handed, so a windowed slice cannot
     ///     price the forty-first hour of a week that began before the window.
     ///     The recent-window scoping Insights applies is a QUERY argument
@@ -100,51 +100,12 @@ enum InsightsEarnings {
     ///     a QUEUED FUTURE policy) while Period detail read the pay-period
     ///     GRID's weekday, so the two allocated overtime into different weeks
     ///     over the same days.
-    ///   - calendar: the GRID calendar in the frozen payroll zone
-    ///     (`PayrollCalendar.gridCalendar(in:)`). It groups; it prices
-    ///     nothing. It must be the same calendar `StatsEngine` is built with,
-    ///     or the two mint different fallback ids for a nil-`shiftID` row and
-    ///     `pricing(_:_:)` comes back incomplete.
-    static func build(
-        entries: [TipEntry],
-        policies: CompensationPolicies,
-        payrollTimeZone: TimeZone,
-        calendar: Calendar
-    ) -> Dataset {
-        let shiftDays = ShiftDays.groupedByShift(
-            entries,
-            shiftID: \.shiftID,
-            date: \.date,
-            period: \.shiftPeriod,
-            calendar: calendar
-        )
-        return Dataset(
-            snapshot: LegacySnapshotBridge.snapshot(
-                shifts: shiftDays,
-                policies: policies,
-                payrollTimeZone: payrollTimeZone,
-                // Unclamped, matching Dashboard, History, Calendar and the
-                // log preview, so every screen's stamp is the same stamp.
-                // Insights has never applied a to-date cutoff at all — the
-                // all-history chart deliberately shows future-dated rows
-                // (see `EarningsChartFacts.init(wholeOf:)`) — so there is no
-                // cutoff to move to a query site here, only one to stop
-                // baking into the data.
-                asOf: .distantFuture
-            ),
-            tipRecords: shiftDays.flatMap(\.items).map(TipRecord.init),
-            shiftIDs: shiftDays.map(\.shiftID)
-        )
-    }
-
-    /// The same dataset from the new representation.
-    ///
-    /// The twin of `build(entries:)`, and the reason this screen can be
-    /// switched at all: `StatsEngine` still wants rows, so
+    /// **The one entry point.** `ShiftRecord`s — the only stored shape since
+    /// the flip — in, one dataset out. `StatsEngine` still wants rows, so
     /// `StatsRecordAdapter` shapes one record into the one or two rows it
     /// came from while the snapshot is built from the records directly
-    /// through `ShiftInputAdapter` — the same adapter every other switched
-    /// screen uses, so Insights and Dashboard cannot price the same shift
+    /// through `ShiftInputAdapter` — the same adapter every other screen
+    /// uses, so Insights and Dashboard cannot price the same shift
     /// differently.
     ///
     /// `shiftIDs` comes from the records rather than from the snapshot, on
@@ -153,22 +114,6 @@ enum InsightsEarnings {
     /// set; reading the ids back off the snapshot would make the check
     /// tautological and it would pass while the page mixed bases, which is
     /// the one thing it exists to catch.
-    /// **The one entry point.** Both representations in, one resolved
-    /// dataset out; see `ShiftRepresentation`.
-    @MainActor
-    static func build(
-        entries: [TipEntry],
-        records: [ShiftRecord],
-        policies: CompensationPolicies,
-        payrollTimeZone: TimeZone,
-        calendar: Calendar,
-        representation: ShiftRepresentation = .automatic
-    ) -> Dataset {
-        representation.usesRecords
-            ? build(records: records, policies: policies, payrollTimeZone: payrollTimeZone)
-            : build(entries: entries, policies: policies, payrollTimeZone: payrollTimeZone, calendar: calendar)
-    }
-
     @MainActor
     static func build(
         records: [ShiftRecord],
