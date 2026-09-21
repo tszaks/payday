@@ -56,13 +56,14 @@ final class UndoDeleteToastState {
     /// Restores through the same boundary, and un-queues the server deletion
     /// only once the rows are actually back.
     ///
-    /// Mirror of the hazard in `delete`. The shipped version called
-    /// `cancelTipDeletions` first, so a failed insert left the rows gone
+    /// Mirror of the hazard in `delete`. The shipped version cleared the
+    /// queued deletion first, so a failed insert left the rows gone
     /// locally with the server deletion cancelled: the row exists on the
     /// server, is absent on the device, and the toast has already been
-    /// dismissed, so the user has no way back to it. Cancelling only after a
-    /// successful save means a failure leaves the deletion still queued and
-    /// the toast still up, so Undo can simply be tapped again.
+    /// dismissed, so the user has no way back to it. `ShiftCommands.restore`
+    /// clears the queue only after the save succeeds, so a failure leaves
+    /// the deletion still queued and the toast still up, and Undo can simply
+    /// be tapped again.
     func undo(in context: ModelContext) {
         if let captured = deletedShift {
             do {

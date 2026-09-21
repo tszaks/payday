@@ -381,7 +381,10 @@ enum DebugSeeder {
         ]
         // `shift` groups rows into closeouts: rows sharing one shift index
         // become ONE ShiftRecord carrying both kinds.
-        var currentShifts: [Int: (day: Date, at: Date, cashCents: Int, creditCents: Int, note: String?, hoursWorked: Double?, tipOutCents: Int?, salesCents: Int?, shiftPeriod: ShiftPeriod?, clockIn: Date?, clockOut: Date?, receiptMetrics: ShiftReceiptMetrics?)] = [:]
+        var currentShifts: [Int: (day: Date, at: Date, cashCents: Int, creditCents: Int, note: String?, hoursWorked: Double?, tipOutCents: Int?, salesCents: Int?, shiftPeriod: ShiftPeriod?, clockIn: Date?, clockOut: Date?)] = [:]
+        // Kept out of the accumulator: receipt metrics belong to the
+        // ShiftRecord, set in the same step as its cash and credit.
+        var currentMetrics: [Int: ShiftReceiptMetrics] = [:]
         for sample in sampleOffsets {
             guard let r = recorded(daysAgo: sample.daysAgo, from: today, hour: sample.hour, minute: sample.minute),
                   r.day >= currentPeriod.start else { continue }
@@ -400,7 +403,7 @@ enum DebugSeeder {
                     totalAmountCents: 54_800
                 )
                 : nil
-            var shift = currentShifts[sample.shift] ?? (r.day, r.at, 0, 0, nil, nil, nil, nil, nil, nil, nil, nil)
+            var shift = currentShifts[sample.shift] ?? (r.day, r.at, 0, 0, nil, nil, nil, nil, nil, nil, nil)
             if sample.kind == .cash { shift.cashCents += sample.cents } else { shift.creditCents += sample.cents }
             shift.at = max(shift.at, r.at)
             shift.note = shift.note ?? sample.note
@@ -410,10 +413,10 @@ enum DebugSeeder {
             shift.shiftPeriod = shift.shiftPeriod ?? sample.shiftPeriod
             shift.clockIn = shift.clockIn ?? clockIn
             shift.clockOut = shift.clockOut ?? clockOut
-            shift.receiptMetrics = shift.receiptMetrics ?? receiptMetrics
+            currentMetrics[sample.shift] = currentMetrics[sample.shift] ?? receiptMetrics
             currentShifts[sample.shift] = shift
         }
-        for shift in currentShifts.values {
+        for (index, shift) in currentShifts {
             context.insert(ShiftRecord(
                 workDate: shift.day,
                 shiftPeriod: shift.shiftPeriod,
@@ -424,7 +427,7 @@ enum DebugSeeder {
                 hoursWorked: shift.hoursWorked,
                 clockIn: shift.clockIn,
                 clockOut: shift.clockOut,
-                receiptMetrics: shift.receiptMetrics,
+                receiptMetrics: currentMetrics[index],
                 note: shift.note,
                 recordedAt: shift.at
             ))

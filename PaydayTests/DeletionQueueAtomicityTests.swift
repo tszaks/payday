@@ -6,14 +6,14 @@ import Testing
 /// The invariant that makes four call sites wrong, and the misconception it
 /// closes.
 ///
-/// `LogTipSheet.delete` carried this comment, directly above a
-/// `recordTipDeletions` call placed INSIDE a `ShiftCommands.commit` body:
+/// The shipped delete path once carried this comment, directly above a
+/// deletion-queue write placed INSIDE a `ShiftCommands.commit` body:
 ///
 ///   "Queued and deleted together, so the server cannot be told about a
 ///    deletion the device then fails to make, or the reverse."
 ///
 /// Co-locating the two does not achieve that, and cannot. The pending-deletion
-/// queue is App Group `UserDefaults` -- `recordTipDeletions` ends in
+/// queue is App Group `UserDefaults` -- `recordShiftDeletion` ends in
 /// `AppGroup.defaults.set(...)`, which takes effect immediately -- while the
 /// rows are SwiftData. `ModelContext.rollback()` restores the rows and has no
 /// power over the queue at all. Putting the call inside the transaction body
@@ -21,8 +21,8 @@ import Testing
 ///
 /// So this suite asserts the uncomfortable fact rather than the comforting
 /// comment: a rolled-back transaction leaves the queue written. Everything
-/// that follows from it -- recording the deletion only after a successful
-/// save, at every call site -- depends on this being true, so it is asserted
+/// that follows from it -- `ShiftCommands.delete` recording the deletion only
+/// after a successful save -- depends on this being true, so it is asserted
 /// once, here, instead of being re-argued per site.
 @Suite("Deletion queue atomicity", .serialized)
 @MainActor
@@ -57,7 +57,7 @@ struct DeletionQueueAtomicityTests {
     func rollbackDoesNotUndoTheQueueWrite() throws {
         let userID = registeredAccount()
         let context = try context()
-        let row = TipEntry(date: Self.day, amountCents: 4_200, kind: .cash, shiftID: UUID())
+        let row = ShiftRecord(workDate: Self.day, shiftPeriod: .dinner, cashTipsCents: 4_200)
         context.insert(row)
         try context.save()
         let rowID = row.id
@@ -65,20 +65,20 @@ struct DeletionQueueAtomicityTests {
         struct Boom: Error {}
         #expect(throws: Boom.self) {
             try ShiftCommands.commit(in: context) {
-                // Exactly the shipped shape: queue inside the transaction.
-                PaydaySyncState.recordTipDeletions([rowID])
+                // Exactly the shape that shipped: queue inside the transaction.
+                PaydaySyncState.recordShiftDeletion(rowID)
                 context.delete(row)
                 throw Boom()
             }
         }
 
         // SwiftData rolled back, as designed.
-        #expect(try context.fetch(FetchDescriptor<TipEntry>()).count == 1)
+        #expect(try context.fetch(FetchDescriptor<ShiftRecord>()).count == 1)
 
         // And the queue did NOT, which is the whole point. The row is back on
         // the device while its id is still queued for deletion on the server,
         // so the next sync removes money the user can still see.
-        #expect(PaydaySyncState.pendingTipDeletions(for: userID).keys.contains(rowID))
+        #expect(PaydaySyncState.pendingShiftDeletions(for: userID).keys.contains(rowID))
     }
 
     /// The correct ordering, asserted as the positive case: queue only after
@@ -87,7 +87,7 @@ struct DeletionQueueAtomicityTests {
     func recordingAfterTheCommitIsSafeInBothDirections() throws {
         let userID = registeredAccount()
         let context = try context()
-        let row = TipEntry(date: Self.day, amountCents: 4_200, kind: .cash, shiftID: UUID())
+        let row = ShiftRecord(workDate: Self.day, shiftPeriod: .dinner, cashTipsCents: 4_200)
         context.insert(row)
         try context.save()
         let rowID = row.id
@@ -101,17 +101,17 @@ struct DeletionQueueAtomicityTests {
                 throw Boom()
             }
         }
-        #expect(try context.fetch(FetchDescriptor<TipEntry>()).count == 1)
-        #expect(PaydaySyncState.pendingTipDeletions(for: userID).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<ShiftRecord>()).count == 1)
+        #expect(PaydaySyncState.pendingShiftDeletions(for: userID).isEmpty)
 
         // Now the succeeding direction, with the record AFTER the commit.
-        let survivor = try #require(try context.fetch(FetchDescriptor<TipEntry>()).first)
+        let survivor = try #require(try context.fetch(FetchDescriptor<ShiftRecord>()).first)
         try ShiftCommands.commit(in: context) {
             context.delete(survivor)
         }
-        PaydaySyncState.recordTipDeletions([rowID])
+        PaydaySyncState.recordShiftDeletion(rowID)
 
-        #expect(try context.fetch(FetchDescriptor<TipEntry>()).isEmpty)
-        #expect(PaydaySyncState.pendingTipDeletions(for: userID).keys.contains(rowID))
+        #expect(try context.fetch(FetchDescriptor<ShiftRecord>()).isEmpty)
+        #expect(PaydaySyncState.pendingShiftDeletions(for: userID).keys.contains(rowID))
     }
 }
