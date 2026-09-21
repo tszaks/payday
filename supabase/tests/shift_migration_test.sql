@@ -155,7 +155,7 @@ end;
 $$;
 
 create function pg_temp.state(p_user uuid) returns jsonb language sql as $$
-  select coalesce((select to_jsonb(st) from public.shift_migration_state st
+  select coalesce((select to_jsonb(st) from public.shift_migration_ledger st
                     where st.user_id = p_user), 'null'::jsonb);
 $$;
 
@@ -590,7 +590,7 @@ update public.tip_entries set work_date = '2026-08-04',
 alter table public.tip_entries enable trigger tip_entries_fold_update;
 
 -- The headline: five nights at $100 folded live, then a bulk legacy rewrite
--- re-keys two of them with the triggers off. shift_migration_state carries
+-- re-keys two of them with the triggers off. shift_migration_ledger carries
 -- bulk_legacy_rewrite_at precisely because this is a contemplated operation,
 -- and rollback_shift_migration disables all three triggers globally.
 select pg_temp.device_upsert('56000000-0000-4000-8000-000000000019', (
@@ -1160,7 +1160,7 @@ begin
   for i in 1..p_passes loop
     v_touched := (pg_temp.one_shot(p_user, p_budget) ->> 'conservation_touched_count');
     select st.remaining_group_count into v_remaining
-      from public.shift_migration_state st where st.user_id = p_user;
+      from public.shift_migration_ledger st where st.user_id = p_user;
     v_out := v_out || case when v_out = '' then '' else ' ' end
                    || v_touched || '/' || coalesce(v_remaining::text, 'NULL');
   end loop;
@@ -1429,7 +1429,7 @@ select pg_temp.device_upsert('56000000-0000-4000-8000-000000000072',
      "client_updated_at":"2026-07-21T23:00:00Z"}]'::jsonb);
 select pg_temp.one_shot('56000000-0000-4000-8000-000000000072');
 
--- AN ACCOUNT WITH LEGACY ROWS AND NO shift_migration_state ROW AT ALL. This is
+-- AN ACCOUNT WITH LEGACY ROWS AND NO shift_migration_ledger ROW AT ALL. This is
 -- the population the kill switch used to be INVISIBLE to, and it is the
 -- majority population at the moment a rollback would actually be ordered: a row
 -- exists only once private.note_legacy_write has fired (a legacy write after S4
@@ -1441,10 +1441,24 @@ insert into public.tip_entries (id, user_id, work_date, amount_cents, kind, clie
  ('56000000-0000-0000-0000-000000000751','56000000-0000-4000-8000-000000000073','2026-07-26',5000,'cash','2026-07-26T23:00:00Z'),
  ('56000000-0000-0000-0000-000000000752','56000000-0000-4000-8000-000000000073','2026-07-27',5500,'cash','2026-07-27T23:00:00Z');
 alter table public.tip_entries enable trigger tip_entries_fold_insert;
+-- The population above is a PRE-EXISTING account -- one whose 1.0 device has
+-- not written since S4 deployed. Creating it here goes through
+-- `insert into auth.users`, which since
+-- 20260920030000_stamp_authority_at_account_creation now stamps a state row
+-- on every NEW account. That trigger is correct and this fixture is not a new
+-- account, so the fixture undoes it rather than the trigger being weakened.
+--
+-- Production is not affected the same way: the trigger fires only on new
+-- inserts, and that migration's backfill deliberately excludes any account
+-- holding tip_entries -- which this one does. So the row below is an artifact
+-- of building a pre-trigger fixture with a post-trigger INSERT, and deleting
+-- it restores the state this fixture claims to model.
+delete from public.shift_migration_ledger
+ where user_id = '56000000-0000-4000-8000-000000000073';
 
 insert into calls (name, n, txt)
 select 'no_state_row_before', 0,
-  'rows=' || (select count(*) from public.shift_migration_state
+  'rows=' || (select count(*) from public.shift_migration_ledger
                where user_id = '56000000-0000-4000-8000-000000000073')
   || ' stamp=' || coalesce(pg_temp.rollback_stamp('56000000-0000-4000-8000-000000000073')::text, 'NULL');
 
@@ -1544,11 +1558,11 @@ select pg_temp.expect('rollback_disables_all_three_fold_triggers',
     'tip_entries_fold_delete=D tip_entries_fold_insert=D tip_entries_fold_update=D',
   pg_temp.trigger_states());
 
-select pg_temp.expect('rollback_stamps_every_shift_migration_state_row',
-  (select count(*) = 0 from public.shift_migration_state where rollback_at is null)
+select pg_temp.expect('rollback_stamps_every_shift_migration_ledger_row',
+  (select count(*) = 0 from public.shift_migration_ledger where rollback_at is null)
   and pg_temp.rollback_stamp('56000000-0000-4000-8000-000000000071') is not null
   and pg_temp.rollback_stamp('56000000-0000-4000-8000-000000000072') is not null,
-  'unstamped=' || (select count(*) from public.shift_migration_state where rollback_at is null)
+  'unstamped=' || (select count(*) from public.shift_migration_ledger where rollback_at is null)
     || ' rb1=' || coalesce(pg_temp.rollback_stamp('56000000-0000-4000-8000-000000000071')::text,'null')
     || ' rb2=' || coalesce(pg_temp.rollback_stamp('56000000-0000-4000-8000-000000000072')::text,'null'));
 
@@ -1561,11 +1575,11 @@ select pg_temp.expect('rollback_stamps_every_shift_migration_state_row',
 select pg_temp.expect('rollbackStampsAnAccountThatHasNoStateRowYet',
   pg_temp.rollback_stamp('56000000-0000-4000-8000-000000000073') is not null
   and (select count(*) = 0 from auth.users u
-        where not exists (select 1 from public.shift_migration_state st
+        where not exists (select 1 from public.shift_migration_ledger st
                            where st.user_id = u.id and st.rollback_at is not null)),
   'stamp=' || coalesce(pg_temp.rollback_stamp('56000000-0000-4000-8000-000000000073')::text,'NULL')
     || ' unstamped_accounts=' || (select count(*) from auth.users u
-         where not exists (select 1 from public.shift_migration_state st
+         where not exists (select 1 from public.shift_migration_ledger st
                             where st.user_id = u.id and st.rollback_at is not null)));
 
 -- ...AND THE ONE-SHOT WILL NOT CONVERT IT. Being told is half of it; the other
@@ -1578,7 +1592,7 @@ select pg_temp.expect('rollbackStampsAnAccountThatHasNoStateRowYet',
 -- shiftsAreAuthoritativeAt at the new leg DURING a global rollback.
 --
 -- ON READING THE REFUSAL, MEASURED RATHER THAN ASSUMED: `return
--- null::public.shift_migration_state` from a composite-returning function
+-- null::public.shift_migration_ledger` from a composite-returning function
 -- called in FROM position does NOT give SQL NULL, it gives ONE ROW OF ALL
 -- NULLS, so to_jsonb of it is an object of nulls and not 'null'. That is the
 -- same shape the deleted-account no-op already returns, so the refusal is
@@ -1658,16 +1672,16 @@ select pg_temp.expect('a_legacy_write_after_rollback_is_accepted_and_converts_no
 -- rollback_at is never overwritten, including by a second rollback.
 insert into calls (name, n, txt)
 select 'rb_twice', 0,
-  (select rollback_at::text from public.shift_migration_state
+  (select rollback_at::text from public.shift_migration_ledger
     where user_id = '56000000-0000-4000-8000-000000000072');
 select public.rollback_shift_migration();
 
 select pg_temp.expect('rollback_at_is_never_overwritten_by_a_second_rollback',
   pg_temp.called_txt('rb_twice') =
-    (select rollback_at::text from public.shift_migration_state
+    (select rollback_at::text from public.shift_migration_ledger
       where user_id = '56000000-0000-4000-8000-000000000072'),
   'first=[' || coalesce(pg_temp.called_txt('rb_twice'),'null') || '] second=['
-    || coalesce((select rollback_at::text from public.shift_migration_state
+    || coalesce((select rollback_at::text from public.shift_migration_ledger
                   where user_id = '56000000-0000-4000-8000-000000000072'),'null') || ']');
 
 -- A PLAIN ONE-SHOT RUN AFTER ROLLBACK CONVERTS NOTHING AT ALL, AND THIS
@@ -1842,7 +1856,7 @@ select pg_temp.expect('theReopenStepLeavesAUserDeletedNightDeleted',
 
 -- RUNBOOK STEP 6, LAST: let the clients back onto the new leg. Ordered after
 -- step 5 so no client ever reads a history with the edited nights missing.
-update public.shift_migration_state set rollback_at = null;
+update public.shift_migration_ledger set rollback_at = null;
 
 select pg_temp.expect('afterTheFullSixStatementRunbookTheClientIsBackAndNothingIsMissing',
   pg_temp.rollback_stamp('56000000-0000-4000-8000-000000000071') is null
