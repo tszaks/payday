@@ -37,8 +37,7 @@ the forget-and-re-register window), #138 (`SyncWireFaultTests`, 25 tests,
 the wire-level fault sweep). #137 (the PR 8 deletions — the dual
 representation arm gone; `TipBreakdown`, `PredictedPaycheck`,
 `PeriodIncome`, `ShiftWriter`, `LegacySnapshotBridge` and all eleven
-flip-gated sites records-only) is verified green on its merge-prepared
-head and staged to land. PR 7's list is closed including its
+flip-gated sites records-only) merged 2026-09-21 as `0f436df`. PR 7's list is closed including its
 two reopened rows. What remains is not machine work: the device lines,
 the upgrade/downgrade probes, the shadow comparison, and the human
 review the gate keeps open. Evidence in `docs/RELEASE_GATE.md`, top
