@@ -62,6 +62,14 @@ struct SettingsView: View {
                     TextField("First name", text: $firstName)
                         .textInputAutocapitalization(.words)
                         .autocorrectionDisabled()
+                }
+                .listRowBackground(PaydayColor.fieldBackground)
+
+                // Its own card: a name you typed and a theme choice are not
+                // one setting, and squeezed into "Profile" the segmented
+                // picker read as an attribute of the name field (Tyler,
+                // 2026-09-20).
+                Section("Appearance") {
                     Picker("Appearance", selection: appearanceBinding) {
                         ForEach(AppAppearance.allCases) { option in
                             Text(option.displayName).tag(option)

@@ -45,6 +45,17 @@ enum EarningsChartAxisGranularity: Equatable {
         }
     }
 
+    /// How many axis labels the chart can carry before they collide, as the
+    /// stride for `.stride(by:count:)`: at caption3 a "Sep 13" is ~34pt and
+    /// the plot is ~120pt tall on a phone-width card, so about six labels is
+    /// the budget and the stride widens past it. Measured the hard way —
+    /// every week of a ten-week range printed its dates as one continuous
+    /// smear (Tyler, 2026-09-20). `.day` never calls this: a narrow weekday
+    /// letter is ~8pt and already fits at every stride.
+    static func axisLabelStride(pointCount: Int) -> Int {
+        max(1, Int(ceil(Double(pointCount) / 6)))
+    }
+
     /// The civil-day ranges this granularity divides `range` into: a
     /// PARTITION, so no day is in two buckets and none is left out.
     ///
@@ -362,6 +373,12 @@ struct NightlyEarningsChart: View {
         return facts.points.first { $0.cents == facts.maxCents }
     }
 
+    /// Axis labels thin out as bars multiply — see
+    /// `EarningsChartAxisGranularity.axisLabelStride`, which owns the budget.
+    private var axisLabelStride: Int {
+        EarningsChartAxisGranularity.axisLabelStride(pointCount: facts.points.count)
+    }
+
     var body: some View {
         let selected = selectedPoint
         VStack(alignment: .leading, spacing: 8) {
@@ -410,7 +427,7 @@ struct NightlyEarningsChart: View {
                             .foregroundStyle(PaydayColor.textSecondary)
                     }
                 case .week:
-                    AxisMarks(values: .stride(by: .weekOfYear)) { value in
+                    AxisMarks(values: .stride(by: .weekOfYear, count: axisLabelStride)) { value in
                         if let date = value.as(Date.self) {
                             AxisValueLabel {
                                 Text(date.formatted(.dateTime.month(.abbreviated).day()))
@@ -420,7 +437,7 @@ struct NightlyEarningsChart: View {
                         }
                     }
                 case .month:
-                    AxisMarks(values: .stride(by: .month)) { value in
+                    AxisMarks(values: .stride(by: .month, count: axisLabelStride)) { value in
                         if let date = value.as(Date.self) {
                             AxisValueLabel {
                                 Text(date.formatted(.dateTime.month(.abbreviated)))
@@ -430,7 +447,7 @@ struct NightlyEarningsChart: View {
                         }
                     }
                 case .year:
-                    AxisMarks(values: .stride(by: .year)) { value in
+                    AxisMarks(values: .stride(by: .year, count: axisLabelStride)) { value in
                         if let date = value.as(Date.self) {
                             AxisValueLabel {
                                 Text(date.formatted(.dateTime.year()))

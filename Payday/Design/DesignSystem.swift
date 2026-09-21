@@ -238,7 +238,33 @@ extension View {
 struct PaydayPremiumShadowModifier: ViewModifier {
     @Environment(\.colorScheme) var colorScheme
 
+    /// Every layer below has a positive `y` but a blur radius larger than it,
+    /// so each one paints ABOVE the card's top edge as well as below — up to
+    /// 16pt of it (layer 1: radius 32, y 16). On Calendar that halo lands in
+    /// the 20pt gap between the pinned weekday letters and the card and reads
+    /// as a smudge under the header rather than as light falling on a card.
+    /// Light comes from above: a card casts down, never up. The mask cuts the
+    /// halo at the card's own top edge and leaves the sides and the bottom —
+    /// the part that falls on the breakdown drawer, which has no shadow of
+    /// its own and depends entirely on this one to read as a recess —
+    /// untouched.
     func body(content: Content) -> some View {
+        layers(content)
+            .compositingGroup()
+            .mask(alignment: .top) {
+                Rectangle()
+                    // Deeper and wider than the largest layer can reach
+                    // (radius 32 + y 16 = 48), so nothing real is clipped.
+                    .padding(.horizontal, -Self.reach)
+                    .padding(.bottom, -Self.reach)
+            }
+    }
+
+    /// Must exceed every layer's `radius + y`.
+    private static let reach: CGFloat = 64
+
+    @ViewBuilder
+    private func layers(_ content: Content) -> some View {
         if colorScheme == .light {
             // Light Mode: 3-layer "Cloudy Day" diffusion. These opacities run
             // noticeably stronger than Vero's own literal values (byte-for-byte

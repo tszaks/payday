@@ -135,14 +135,17 @@ struct FlipFactsParallelRowTests {
         let snap = Self.snapshot(records)
         let schedule = PaySchedule(frequency: .biweekly, anchorPeriodEnd: Self.day(13))
 
+        let legacyGroups = Self.legacyGroups(records)
         let legacy = DashboardFacts(
-            snapshot: snap, allShifts: Self.legacyGroups(records),
+            snapshot: snap, allShifts: legacyGroups,
+            allTipRecords: legacyGroups.flatMap(\.items).map(TipRecord.init),
             schedule: schedule, now: Self.day(1), forcedPaydayPhase: nil,
             dismissedClosedEnd: nil, dismissedCheckEnd: nil,
             payrollTimeZone: Self.zone
         )
         let viaRecords = DashboardFacts(
             snapshot: snap, allShifts: [], allShiftRecords: records,
+            allTipRecords: StatsRecordAdapter.tipRecords(from: records),
             schedule: schedule, now: Self.day(1), forcedPaydayPhase: nil,
             dismissedClosedEnd: nil, dismissedCheckEnd: nil,
             payrollTimeZone: Self.zone
