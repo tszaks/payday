@@ -774,7 +774,7 @@ enum PaydaySyncState {
     /// pass". Swallowing it would turn a few-seconds delay into a permanent
     /// one, since nothing else would ever reconsider.
     ///
-    /// Main actor because the deferral reads `LegacyEditSheetPresence`, which
+    /// Main actor because the callers are.
     /// is a fact about what is on screen.
     /// NOT `@discardableResult`, deliberately. The header above warns that
     /// swallowing `.deferPromotion` "would turn a few-seconds delay into a
@@ -790,8 +790,7 @@ enum PaydaySyncState {
     ) -> ShiftReadAuthority.Outcome {
         let outcome = ShiftReadAuthority.resolve(
             state,
-            currentlyAuthoritative: shiftsAreAuthoritative(for: userID),
-            legacyEditSheetPresented: LegacyEditSheetPresence.isPresented
+            currentlyAuthoritative: shiftsAreAuthoritative(for: userID)
         )
         switch outcome {
         case .promote:
@@ -805,7 +804,7 @@ enum PaydaySyncState {
             mutate(userID: userID) {
                 $0.shiftsAreAuthoritativeAt = nil
             }
-        case .deferPromotion, .unchanged:
+        case .unchanged:
             break
         }
         return outcome

@@ -49,9 +49,10 @@ private func policies(
 }
 
 /// One snapshot, built exactly as both Calendar surfaces build it.
-private func snapshot(entries: [TipEntry], policies: CompensationPolicies) -> EarningsSnapshot? {
+@MainActor
+private func snapshot(records: [ShiftRecord], policies: CompensationPolicies) -> EarningsSnapshot? {
     CalendarEarnings.snapshot(
-        shifts: CalendarEarnings.shiftGroups(entries: entries, payrollTimeZone: PaydayTestZone.payroll),
+        records: records,
         policies: policies,
         payrollTimeZone: PaydayTestZone.payroll
     )
@@ -71,30 +72,30 @@ private func snapshot(entries: [TipEntry], policies: CompensationPolicies) -> Ea
 /// a per-day ledger slice carries no week overtime at all, and a per-month one
 /// splits the week into two fragments and allocates the threshold twice.
 @Suite("Calendar parity: tile == sheet == Σ shifts == chart point")
+@MainActor
 struct CalendarSnapshotParityTests {
     /// Mon 2026-09-28 through Fri 2026-10-02, 10h a day, $10.00/hr, workweek
     /// starting Monday. 50 hours in ONE week that straddles the month edge:
     /// 40h regular ($400) plus 10h at 1.5x ($150) is $550.00, and Friday
     /// 10/02 is the day carrying all ten overtime hours.
-    private func straddlingWeek() -> [TipEntry] {
+    private func straddlingWeek() -> [ShiftRecord] {
         (0..<5).map { index in
-            TipEntry(
-                date: calendarInPayrollZone().date(
+            ShiftRecord(
+                id: id(index + 1),
+                workDate: calendarInPayrollZone().date(
                     byAdding: .day, value: index, to: day(2026, 9, 28)
                 )!,
-                amountCents: 1_000,
-                kind: .credit,
-                hoursWorked: 10,
                 shiftPeriod: .dinner,
-                shiftID: id(index + 1)
+                creditTipsCents: 1_000,
+                hoursWorked: 10
             )
         }
     }
 
     @Test("the tile, the day sheet's hero, that day's rows and the chart point are one figure")
     func fourSurfacesAgreeOnOneDay() throws {
-        let entries = straddlingWeek()
-        let engine = try #require(snapshot(entries: entries, policies: policies(rateCents: 1_000)))
+        let records = straddlingWeek()
+        let engine = try #require(snapshot(records: records, policies: policies(rateCents: 1_000)))
         let friday = day(2026, 10, 2)
 
         // 1. The calendar tile.
@@ -107,15 +108,19 @@ struct CalendarSnapshotParityTests {
 
         // 2. The sheet that tile opens.
         let sheet = DayDetailFacts(
-            allEntries: entries,
+            shiftRecords: records,
             date: friday,
             policies: policies(rateCents: 1_000),
             payrollTimeZone: PaydayTestZone.payroll
         )
 
         // 3. The rows the sheet lists.
-        let rows = sheet.shifts.map { group in
-            sheet.rowFacts(for: group, shiftCount: sheet.shifts.count, note: nil).amount.cents
+        let rows = sheet.shiftRecords.map { record in
+            sheet.rowFacts(
+                shiftID: record.id, day: record.workDate,
+                period: record.shiftPeriod,
+                shiftCount: sheet.shiftRecords.count, note: record.note
+            ).amount.cents
         }
 
         // 4. The chart point for the same day, from the shared component.
@@ -151,8 +156,8 @@ struct CalendarSnapshotParityTests {
 
     @Test("MEASURED: the straddling week's overtime lands on the right DAY, not spread and not lost")
     func overtimeLandsOnTheDayThatEarnedIt() throws {
-        let entries = straddlingWeek()
-        let engine = try #require(snapshot(entries: entries, policies: policies(rateCents: 1_000)))
+        let records = straddlingWeek()
+        let engine = try #require(snapshot(records: records, policies: policies(rateCents: 1_000)))
         let september = CalendarMonthFacts(
             snapshot: engine, displayedMonth: day(2026, 9, 1), calendar: calendarInPayrollZone()
         )
@@ -186,8 +191,8 @@ struct CalendarSnapshotParityTests {
 
     @Test("every month equals the sum of its own days, month by month")
     func eachMonthEqualsItsDays() throws {
-        let entries = straddlingWeek()
-        let engine = try #require(snapshot(entries: entries, policies: policies(rateCents: 1_000)))
+        let records = straddlingWeek()
+        let engine = try #require(snapshot(records: records, policies: policies(rateCents: 1_000)))
         for (year, month) in [(2026, 9), (2026, 10), (2026, 11)] {
             let facts = CalendarMonthFacts(
                 snapshot: engine,
@@ -202,8 +207,8 @@ struct CalendarSnapshotParityTests {
 
     @Test("the grid's week start moves the layout and nothing else")
     func gridWeekdayIsLayoutOnly() throws {
-        let entries = straddlingWeek()
-        let engine = try #require(snapshot(entries: entries, policies: policies(rateCents: 1_000)))
+        let records = straddlingWeek()
+        let engine = try #require(snapshot(records: records, policies: policies(rateCents: 1_000)))
         // Two grids over the same month and the same snapshot, differing only
         // in the Settings "First day" control. This is the control that used
         // to reach a money path and put Dashboard's overtime in a different
@@ -222,8 +227,8 @@ struct CalendarSnapshotParityTests {
 
     @Test("the month's hours come off the engine's own minute count")
     func hoursAreTheEnginesMinutes() throws {
-        let entries = straddlingWeek()
-        let engine = try #require(snapshot(entries: entries, policies: policies(rateCents: 1_000)))
+        let records = straddlingWeek()
+        let engine = try #require(snapshot(records: records, policies: policies(rateCents: 1_000)))
         let october = CalendarMonthFacts(
             snapshot: engine, displayedMonth: day(2026, 10, 1), calendar: calendarInPayrollZone()
         )
@@ -238,14 +243,14 @@ struct CalendarSnapshotParityTests {
         // price one of them and not the other. This is the audit's headline
         // defect in its original shape: the unpriced shift silently
         // contributed zero wages under an unchanged "Total".
-        let entries = [
-            TipEntry(date: day(2026, 10, 5), amountCents: 1_000, kind: .credit, hoursWorked: 5,
-                     shiftPeriod: .dinner, shiftID: id(1)),
-            TipEntry(date: day(2026, 10, 6), amountCents: 2_000, kind: .credit,
-                     shiftPeriod: .dinner, shiftID: id(2))
+        let records = [
+            ShiftRecord(id: id(1), workDate: day(2026, 10, 5), shiftPeriod: .dinner,
+                        creditTipsCents: 1_000, hoursWorked: 5),
+            ShiftRecord(id: id(2), workDate: day(2026, 10, 6), shiftPeriod: .dinner,
+                        creditTipsCents: 2_000)
         ]
         let facts = CalendarMonthFacts(
-            snapshot: snapshot(entries: entries, policies: policies(rateCents: 1_000)),
+            snapshot: snapshot(records: records, policies: policies(rateCents: 1_000)),
             displayedMonth: day(2026, 10, 1),
             calendar: calendarInPayrollZone()
         )
@@ -261,10 +266,10 @@ struct CalendarSnapshotParityTests {
 
     @Test("an estimated rate carries its caption onto the month")
     func estimatedMonthCarriesItsCaption() throws {
-        let entries = straddlingWeek()
+        let records = straddlingWeek()
         let facts = CalendarMonthFacts(
             snapshot: snapshot(
-                entries: entries,
+                records: records,
                 policies: policies(rateCents: 1_000, provenance: .assumedFromLegacySetting)
             ),
             displayedMonth: day(2026, 10, 1),
@@ -277,26 +282,26 @@ struct CalendarSnapshotParityTests {
 
     @Test("a day sheet lists exactly the shifts the engine selected for that day")
     func sheetRowsAreTheDayResultsOwnShifts() throws {
-        let entries = straddlingWeek()
-        let engine = try #require(snapshot(entries: entries, policies: policies(rateCents: 1_000)))
+        let records = straddlingWeek()
+        let engine = try #require(snapshot(records: records, policies: policies(rateCents: 1_000)))
         let friday = day(2026, 10, 2)
         let sheet = DayDetailFacts(
-            allEntries: entries,
+            shiftRecords: records,
             date: friday,
             policies: policies(rateCents: 1_000),
             payrollTimeZone: PaydayTestZone.payroll
         )
         let engineIDs = engine.day(CivilDay(friday, in: PaydayTestZone.payroll)).shiftIDs
-        #expect(sheet.shifts.map(\.shiftID) == engineIDs)
+        #expect(sheet.shiftRecords.map(\.id) == engineIDs)
         #expect(engineIDs == [id(5)])
         // And a day nobody worked lists nothing rather than zeroes.
         let quiet = DayDetailFacts(
-            allEntries: entries,
+            shiftRecords: records,
             date: day(2026, 10, 20),
             policies: policies(rateCents: 1_000),
             payrollTimeZone: PaydayTestZone.payroll
         )
-        #expect(quiet.shifts.isEmpty)
+        #expect(quiet.shiftRecords.isEmpty)
         #expect(quiet.isUnbacked == false)
     }
 
@@ -308,11 +313,11 @@ struct CalendarSnapshotParityTests {
         // same for the headline and the tiles or the screen disagrees with
         // itself, which is why it lives in the stamp.
         let future = Calendar.current.date(byAdding: .year, value: 1, to: Date())!
-        let entries = [
-            TipEntry(date: future, amountCents: 4_200, kind: .credit, hoursWorked: 6,
-                     shiftPeriod: .dinner, shiftID: id(9))
+        let records = [
+            ShiftRecord(id: id(9), workDate: future, shiftPeriod: .dinner,
+                        creditTipsCents: 4_200, hoursWorked: 6)
         ]
-        let engine = try #require(snapshot(entries: entries, policies: policies(rateCents: 1_000)))
+        let engine = try #require(snapshot(records: records, policies: policies(rateCents: 1_000)))
         let facts = CalendarMonthFacts(
             snapshot: engine,
             displayedMonth: future,
@@ -327,11 +332,11 @@ struct CalendarSnapshotParityTests {
     @Test("a worked day worth nothing is not announced as no shifts")
     func aZeroDayIsStillAWorkedDay() throws {
         let worked = day(2026, 10, 7)
-        let entries = [
-            TipEntry(date: worked, amountCents: 0, kind: .credit, shiftPeriod: .dinner, shiftID: id(1))
+        let records = [
+            ShiftRecord(id: id(1), workDate: worked, shiftPeriod: .dinner)
         ]
         let facts = CalendarMonthFacts(
-            snapshot: snapshot(entries: entries, policies: policies(rateCents: nil)),
+            snapshot: snapshot(records: records, policies: policies(rateCents: nil)),
             displayedMonth: day(2026, 10, 1),
             calendar: calendarInPayrollZone()
         )
@@ -360,13 +365,13 @@ struct CalendarSnapshotParityTests {
         // the "Tipped out" row from the drawer changed nothing and the
         // mutation passed. A reconciliation over a figure with nothing to
         // subtract cannot detect a missing subtraction.
-        let entries = straddlingWeek().enumerated().map { index, entry -> TipEntry in
-            entry.tipOutCents = 1_500          // $15 off every shift
-            if index == 0 { entry.amountCents += 2_000 }   // and one uneven day
-            return entry
+        let records = straddlingWeek().enumerated().map { index, record -> ShiftRecord in
+            record.tipOutCents = 1_500          // $15 off every shift
+            if index == 0 { record.creditTipsCents += 2_000 }   // and one uneven day
+            return record
         }
         let engine = try #require(snapshot(
-            entries: entries, policies: policies(rateCents: 1_000)))
+            records: records, policies: policies(rateCents: 1_000)))
         let month = CalendarMonthFacts(
             snapshot: engine,
             displayedMonth: day(2026, 10, 1),
@@ -422,10 +427,10 @@ struct CalendarSnapshotParityTests {
     func theMonthCaptionNamesTheUnpricedShift() throws {
         // Four priced days and one with NO hours, so the month is `.partial`
         // for exactly one reason and exactly one day.
-        var entries = straddlingWeek()
-        entries[3].hoursWorked = nil          // Thu 2026-10-01
+        var records = straddlingWeek()
+        records[3].hoursWorked = nil          // Thu 2026-10-01
         let engine = try #require(snapshot(
-            entries: entries, policies: policies(rateCents: 1_000)))
+            records: records, policies: policies(rateCents: 1_000)))
         let month = CalendarMonthFacts(
             snapshot: engine,
             displayedMonth: day(2026, 10, 1),
@@ -443,7 +448,7 @@ struct CalendarSnapshotParityTests {
     @Test("a complete month has no wages caption")
     func aCompleteMonthHasNoWagesCaption() throws {
         let engine = try #require(snapshot(
-            entries: straddlingWeek(), policies: policies(rateCents: 1_000)))
+            records: straddlingWeek(), policies: policies(rateCents: 1_000)))
         let month = CalendarMonthFacts(
             snapshot: engine,
             displayedMonth: day(2026, 10, 1),
@@ -459,6 +464,7 @@ struct CalendarSnapshotParityTests {
 /// card's one secondary money line is a windowed month-over-month
 /// comparison, never a restated amount.
 @Suite("Calendar honesty: full grid, future days, month delta")
+@MainActor
 struct CalendarHonestyTests {
 
     // MARK: grid shape
@@ -551,21 +557,21 @@ struct CalendarHonestyTests {
     /// Aug 10: $100 tips + 5h wages. Aug 25: $500 + 5h — AFTER the window.
     /// Sep 5: $312.34 + 5h. Every shift is alone in its workweek, so wages
     /// are 5h × $10 straight time on each.
-    private func windowedMonthEntries() -> [TipEntry] {
+    private func windowedMonthRecords() -> [ShiftRecord] {
         [
-            TipEntry(date: day(2026, 8, 10), amountCents: 10_000, kind: .credit,
-                     hoursWorked: 5, shiftPeriod: .dinner, shiftID: id(1)),
-            TipEntry(date: day(2026, 8, 25), amountCents: 50_000, kind: .credit,
-                     hoursWorked: 5, shiftPeriod: .dinner, shiftID: id(2)),
-            TipEntry(date: day(2026, 9, 5), amountCents: 31_234, kind: .credit,
-                     hoursWorked: 5, shiftPeriod: .dinner, shiftID: id(3)),
+            ShiftRecord(id: id(1), workDate: day(2026, 8, 10), shiftPeriod: .dinner,
+                        creditTipsCents: 10_000, hoursWorked: 5),
+            ShiftRecord(id: id(2), workDate: day(2026, 8, 25), shiftPeriod: .dinner,
+                        creditTipsCents: 50_000, hoursWorked: 5),
+            ShiftRecord(id: id(3), workDate: day(2026, 9, 5), shiftPeriod: .dinner,
+                        creditTipsCents: 31_234, hoursWorked: 5),
         ]
     }
 
     @Test("an in-progress month compares against the same window one month back")
     func inProgressDeltaUsesTheWindow() throws {
         let engine = try #require(snapshot(
-            entries: windowedMonthEntries(), policies: policies(rateCents: 1_000)))
+            records: windowedMonthRecords(), policies: policies(rateCents: 1_000)))
         let facts = CalendarMonthFacts(
             snapshot: engine,
             displayedMonth: day(2026, 9, 1),
@@ -582,13 +588,13 @@ struct CalendarHonestyTests {
 
     @Test("a completed month names the bare prior month")
     func completedDeltaNamesTheMonth() throws {
-        let entries = [
-            TipEntry(date: day(2026, 7, 15), amountCents: 20_000, kind: .credit,
-                     hoursWorked: 5, shiftPeriod: .dinner, shiftID: id(1)),
-            TipEntry(date: day(2026, 8, 10), amountCents: 10_000, kind: .credit,
-                     hoursWorked: 5, shiftPeriod: .dinner, shiftID: id(2)),
+        let records = [
+            ShiftRecord(id: id(1), workDate: day(2026, 7, 15), shiftPeriod: .dinner,
+                        creditTipsCents: 20_000, hoursWorked: 5),
+            ShiftRecord(id: id(2), workDate: day(2026, 8, 10), shiftPeriod: .dinner,
+                        creditTipsCents: 10_000, hoursWorked: 5),
         ]
-        let engine = try #require(snapshot(entries: entries, policies: policies(rateCents: 1_000)))
+        let engine = try #require(snapshot(records: records, policies: policies(rateCents: 1_000)))
         let facts = CalendarMonthFacts(
             snapshot: engine,
             displayedMonth: day(2026, 8, 1),
@@ -602,11 +608,11 @@ struct CalendarHonestyTests {
 
     @Test("a first month has no comparison to make")
     func emptyPriorWindowSuppressesTheDelta() throws {
-        let entries = [
-            TipEntry(date: day(2026, 9, 5), amountCents: 10_000, kind: .credit,
-                     hoursWorked: 5, shiftPeriod: .dinner, shiftID: id(1)),
+        let records = [
+            ShiftRecord(id: id(1), workDate: day(2026, 9, 5), shiftPeriod: .dinner,
+                        creditTipsCents: 10_000, hoursWorked: 5),
         ]
-        let engine = try #require(snapshot(entries: entries, policies: policies(rateCents: 1_000)))
+        let engine = try #require(snapshot(records: records, policies: policies(rateCents: 1_000)))
         let facts = CalendarMonthFacts(
             snapshot: engine,
             displayedMonth: day(2026, 9, 1),
@@ -618,9 +624,9 @@ struct CalendarHonestyTests {
 
     @Test("a partial month never enters a delta against a total")
     func partialMonthSuppressesTheDelta() throws {
-        var entries = windowedMonthEntries()
-        entries[2].hoursWorked = nil        // Sep 5 is unpriced → the month is partial
-        let engine = try #require(snapshot(entries: entries, policies: policies(rateCents: 1_000)))
+        var records = windowedMonthRecords()
+        records[2].hoursWorked = nil        // Sep 5 is unpriced → the month is partial
+        let engine = try #require(snapshot(records: records, policies: policies(rateCents: 1_000)))
         let facts = CalendarMonthFacts(
             snapshot: engine,
             displayedMonth: day(2026, 9, 1),

@@ -128,47 +128,6 @@ struct ShiftRecordTests {
         #expect(record.nonWageEarningsCents == 8_200)
     }
 
-    @Test("the N4 numbers match TipBreakdown.total, the legacy read path")
-    func n4MatchesTheLegacyReadPath() throws {
-        // The "before" side: the same shift in the legacy two-row shape.
-        let shiftID = UUID()
-        let cash = TipEntry(
-            date: day(2026, 7, 1),
-            amountCents: 5_000,
-            kind: .cash,
-            shiftID: shiftID
-        )
-        let credit = TipEntry(
-            date: day(2026, 7, 1),
-            amountCents: 2_000,
-            kind: .credit,
-            tipOutCents: 1_000,
-            shiftID: shiftID,
-            receiptMetrics: n4Metrics()
-        )
-        let before = TipBreakdown.total(of: [cash, credit])
-
-        #expect(before.cashCents == 5_000)
-        #expect(before.creditCents == 0)
-        #expect(before.gratuityFeesCents == 4_200)
-        #expect(before.netTotalCents == 8_200)
-
-        // The "after" side: one record, written through the one earnings
-        // writer, from the same legacy inputs.
-        let record = ShiftRecord(workDate: day(2026, 7, 1), tipOutCents: 1_000)
-        record.applyEarnings(
-            cashCents: 5_000,
-            creditCents: 2_000,
-            metrics: n4Metrics(),
-            metricsOwner: .credit
-        )
-
-        #expect(record.cashTipsCents == before.cashCents)
-        #expect(record.creditTipsCents == before.creditCents)
-        #expect(record.receiptMetrics?.employeeGratuityFeesCents == before.gratuityFeesCents)
-        #expect(record.nonWageEarningsCents == before.netTotalCents)
-    }
-
     @Test("applyEarnings with no metrics clears the payload and keeps the amounts")
     func applyEarningsWithNoMetricsClearsThePayload() {
         let record = ShiftRecord(workDate: day(2026, 7, 1))

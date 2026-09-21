@@ -150,6 +150,7 @@ struct PaydaySyncStateForgetTests {
 }
 
 @Suite("CSV export keeps untrusted text inert (finding 6)")
+@MainActor
 struct CSVFormulaNeutralizationTests {
 
     /// The note column, straight out of a real export. Index 13 — see
@@ -160,8 +161,8 @@ struct CSVFormulaNeutralizationTests {
             payrollTimeZone: PaydayTestZone.payroll,
             schedule: PaySchedule(frequency: .biweekly, anchorPeriodEnd: Date(timeIntervalSince1970: 1_779_000_000))
         )
-        let entry = TipEntry(date: day, amountCents: 5_000, kind: .cash, note: note)
-        let csv = CSVExporter.export(entries: [entry], paycheckRecords: [], calculator: calculator)
+        let record = ShiftRecord(workDate: day, cashTipsCents: 5_000, note: note)
+        let csv = CSVExporter.export(records: [record], paycheckRecords: [], calculator: calculator)
         let fields = csv.split(separator: "\n")[1]
             .split(separator: ",", omittingEmptySubsequences: false)
             .map(String.init)

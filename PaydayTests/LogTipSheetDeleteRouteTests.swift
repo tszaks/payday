@@ -3,19 +3,20 @@ import SwiftData
 import Testing
 @testable import Payday
 
-/// The sheet-level half of gate 2's delete witness, and it covers a failure
-/// the command-level witness structurally cannot.
+/// The sheet-level half of the delete witness, and it covers a failure the
+/// command-level witness structurally cannot.
 ///
 /// When `.editShift` was added, `LogTipSheet.delete()` consumed `target`
 /// through `if case .edit(let entry) = target`, which does not oblige the
 /// compiler and does not match a record. The sheet dismissed having deleted
-/// nothing. `FlipGate2WitnessTests.deleteRemovesAndEnqueues` passed the whole
-/// time, correctly: `ShiftCommands.delete` was never wrong, it was never
-/// CALLED. The command being right and the call site reaching it are two
-/// different facts.
+/// nothing. `ShiftCommands.delete` was never wrong, it was never CALLED.
+/// The command being right and the call site reaching it are two different
+/// facts.
 ///
 /// So the routing is asserted as a value. `.none` for an editing target is
 /// itself the bug, and that is the assertion — not "the command works".
+/// Since the flip, `.editShift` is the only editing target, and `.none`
+/// remains correct only for `.new`.
 @Suite("LogTipSheet delete route")
 @MainActor
 struct LogTipSheetDeleteRouteTests {
@@ -52,19 +53,8 @@ struct LogTipSheetDeleteRouteTests {
                 "`.none` here is the silent no-op: the sheet closes and nothing is deleted")
     }
 
-    @Test("a legacy-backed sheet still routes to the legacy path")
-    func legacyTargetRoutesToTheEntry() throws {
-        let context = try context()
-        let entry = TipEntry(date: Self.day, amountCents: 4_200, kind: .cash, shiftID: UUID())
-        context.insert(entry)
-        try context.save()
-
-        let sheet = LogTipSheet(target: .edit(entry))
-        #expect(sheet.deleteRoute == .legacy(entry))
-    }
-
     /// The only target for which `.none` is correct: there is nothing to
-    /// delete yet. Asserted so the enum's third case is pinned as "new only"
+    /// delete yet. Asserted so the enum's case is pinned as "new only"
     /// rather than as a catch-all that a future case could fall into.
     @Test("a new sheet has nothing to delete, and that is the only correct none")
     func newTargetRoutesToNone() {
@@ -80,12 +70,10 @@ struct LogTipSheetDeleteRouteTests {
     func noEditingTargetRoutesToNone() throws {
         let context = try context()
         let record = ShiftRecord(workDate: Self.day, cashTipsCents: 1, recordedAt: Self.day)
-        let entry = TipEntry(date: Self.day, amountCents: 1, kind: .cash, shiftID: UUID())
         context.insert(record)
-        context.insert(entry)
         try context.save()
 
-        let editingTargets: [TipEntrySheetTarget] = [.editShift(record), .edit(entry)]
+        let editingTargets: [TipEntrySheetTarget] = [.editShift(record)]
         for target in editingTargets {
             let route = LogTipSheet(target: target).deleteRoute
             #expect(route != .none, "\(target.id) routes to none, so its delete does nothing")

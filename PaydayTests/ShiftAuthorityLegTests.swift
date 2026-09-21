@@ -12,19 +12,17 @@ import Testing
 /// `public.shift_migration_state` and hands the result to the predicate — so
 /// from here an account can actually become authoritative.
 ///
-/// ## The liveness requirement, and why it is not optional
+/// ## The deferral is gone with the sheet it protected
 ///
-/// `ShiftReadAuthority.resolve` returns `.deferPromotion` while a legacy-edit
-/// sheet is open, and **nothing inside the deferral re-arms it.** A caller
-/// that treated that outcome as a no-op would strand the account on the legacy
-/// representation for the rest of the session: a guard against a few-seconds
-/// straddle turned into an indefinite one. So the leg maps
-/// `.deferPromotion` onto `requiresFollowUpSync`, which is what makes the
-/// deferral a DELAY rather than a cancellation.
+/// `ShiftReadAuthority.resolve` used to return `.deferPromotion` while a
+/// legacy-edit sheet was open. There is no `.edit(TipEntry)` target any more,
+/// so the straddle it guarded is unrepresentable and the outcome is gone with
+/// it: promotion is now unconditional once the server says the conversion is
+/// complete.
 ///
 /// The decode half is tested here rather than the network half: the fetch is
 /// three chained Supabase builder calls with no branching, while the mapping
-/// from stored columns to the predicate's four inputs is where a wrong answer
+/// from stored columns to the predicate's inputs is where a wrong answer
 /// would be silent. A `rollback_at` that failed to parse would read as "no
 /// rollback" and promote an account the server had disowned.
 @Suite("Shift authority sync leg", .serialized)
@@ -43,7 +41,6 @@ struct ShiftAuthorityLegTests {
                 $0.shiftsAreAuthoritativeAt = "2026-09-18T00:00:00.000Z"
             }
         }
-        LegacyEditSheetPresence.resetForTesting()
         return id
     }
 
@@ -134,51 +131,11 @@ struct ShiftAuthorityLegTests {
         #expect(!ShiftReadAuthority.isAuthoritative(ShiftReadAuthority.State.probe()))
     }
 
-    // MARK: - Liveness
+    // MARK: - Promotion and steady state
 
-    /// **The requirement the design doc records for this slice.** A deferred
-    /// promotion is re-attempted and COMPLETES once the sheet closes.
-    ///
-    /// Written as the sequence the leg actually performs — resolve, observe
-    /// the outcome, and on the next pass resolve again — so it fails if
-    /// someone makes the deferral terminal.
-    @Test("a deferred promotion completes on the next pass once the sheet closes")
-    func deferredPromotionIsReattempted() {
-        let id = account(authoritative: false)
-        let ready = ShiftReadAuthority.State.probe(
-            migratedAt: Date(timeIntervalSince1970: 1_750_000_000),
-            remainingGroupCount: 0
-        )
-
-        // Pass 1, with a legacy-edit sheet open.
-        LegacyEditSheetPresence.begin()
-        let first = PaydaySyncState.applyShiftAuthority(ready, for: id)
-        #expect(first == .deferPromotion)
-        #expect(!PaydaySyncState.shiftsAreAuthoritative(for: id))
-
-        // The outcome the leg turns into `requiresFollowUpSync`. If this ever
-        // stops being `.deferPromotion`, the follow-up is never requested and
-        // the account is stranded for the session.
-        #expect(first == .deferPromotion,
-                "the leg maps exactly this outcome onto requiresFollowUpSync")
-
-        // The sheet closes.
-        LegacyEditSheetPresence.end()
-
-        // Pass 2, which the follow-up sync performs.
-        let second = PaydaySyncState.applyShiftAuthority(ready, for: id)
-        #expect(second == .promote)
-        #expect(PaydaySyncState.shiftsAreAuthoritative(for: id),
-                "a deferral must be a delay, not a cancellation")
-    }
-
-    /// And the case that would make the follow-up pointless: a promotion that
-    /// is NOT deferred needs no second pass, so the leg must not ask for one.
-    ///
-    /// Stated because the cheap fix for the liveness bug is "always request a
-    /// follow-up", which would make every sync request another sync forever.
-    @Test("an undeferred promotion needs no follow-up pass")
-    func undeferredPromotionNeedsNoFollowUp() {
+    /// A ready row on a non-authoritative account promotes on the pass.
+    @Test("a completed conversion promotes on the pass it is read")
+    func readyRowPromotes() {
         let id = account(authoritative: false)
         let ready = ShiftReadAuthority.State.probe(
             migratedAt: Date(timeIntervalSince1970: 1_750_000_000),
@@ -186,15 +143,14 @@ struct ShiftAuthorityLegTests {
         )
         let outcome = PaydaySyncState.applyShiftAuthority(ready, for: id)
         #expect(outcome == .promote)
-        #expect(outcome != .deferPromotion, "so requiresFollowUpSync stays false for this pass")
         #expect(PaydaySyncState.shiftsAreAuthoritative(for: id))
     }
 
-    /// A steady state must not request a follow-up either: an already
-    /// authoritative account whose server state is unchanged resolves
-    /// `.unchanged`, so repeated syncs do not chase each other.
-    @Test("a steady authoritative account resolves unchanged and asks for nothing")
-    func steadyStateAsksForNothing() {
+    /// A steady state resolves unchanged: an already authoritative account
+    /// whose server state is unchanged stays authoritative, so repeated syncs
+    /// do not chase each other.
+    @Test("a steady authoritative account resolves unchanged")
+    func steadyStateIsUnchanged() {
         let id = account(authoritative: true)
         let ready = ShiftReadAuthority.State.probe(
             migratedAt: Date(timeIntervalSince1970: 1_750_000_000),
@@ -202,7 +158,6 @@ struct ShiftAuthorityLegTests {
         )
         let outcome = PaydaySyncState.applyShiftAuthority(ready, for: id)
         #expect(outcome == .unchanged)
-        #expect(outcome != .deferPromotion)
         #expect(PaydaySyncState.shiftsAreAuthoritative(for: id))
     }
 
@@ -230,8 +185,7 @@ struct ShiftAuthorityLegTests {
         #expect(PaydaySyncState.shiftsAreAuthoritative(for: id))
         let outcome = ShiftReadAuthority.resolve(
             ShiftReadAuthority.State.probe(),
-            currentlyAuthoritative: true,
-            legacyEditSheetPresented: false
+            currentlyAuthoritative: true
         )
         #expect(outcome == .demote,
                 "an empty state demotes, so a failed read must never be turned into one")
@@ -253,7 +207,7 @@ struct ShiftAuthorityLegTests {
         let outcome = PaydaySyncState.applyShiftAuthority(try row.authorityState(), for: id)
         #expect(outcome == .demote)
         #expect(!PaydaySyncState.shiftsAreAuthoritative(for: id),
-                "a withdrawal on a real row must take effect, sheet or no sheet")
+                "a withdrawal on a real row must take effect")
     }
 
     // MARK: - A present-but-unparseable timestamp must not read as absent
@@ -294,8 +248,8 @@ struct ShiftAuthorityLegTests {
         let id = account(authoritative: true)
         let row = try decode(#"{"user_id":"00000000-0000-0000-0000-0000000000a1","migrated_at":"not-a-timestamp","rollback_at":null,"conservation_failed_at":null,"remaining_group_count":0}"#)
 
-        let deferred = await leg(userID: id, row: row)
-        #expect(!deferred)
+        let result = await PaydaySyncService.applyShiftAuthorityLeg(userID: id) { row }
+        #expect(result.remainingGroupCount == nil)
         #expect(PaydaySyncState.shiftsAreAuthoritative(for: id),
                 "an unreadable field is a failure to read, never a withdrawal")
     }
@@ -315,7 +269,7 @@ struct ShiftAuthorityLegTests {
     /// report through the initializer with the count already in it. A test
     /// that SUPPLIES the value it checks cannot discover that nothing
     /// produces it. This one runs the real leg and reads what comes out.
-    @Test("the leg carries the server's remaining count out, not only the deferral")
+    @Test("the leg carries the server's remaining count out")
     func legReportsRemainingCount() async throws {
         let id = UUID()
         let row = try decode(#"{"user_id":"00000000-0000-0000-0000-0000000000a1","migrated_at":"2026-09-18T00:00:00Z","rollback_at":null,"conservation_failed_at":null,"remaining_group_count":7}"#)
@@ -344,43 +298,18 @@ struct ShiftAuthorityLegTests {
 
     // MARK: - The leg itself, driven
 
-    /// A supplied conversion row, so the REAL leg runs with no session.
-    private func leg(
-        userID: UUID,
-        row: RemoteShiftMigrationState?
-    ) async -> Bool {
-        await PaydaySyncService.applyShiftAuthorityLeg(userID: userID) { row }.deferred
-    }
-
-    /// A leg whose fetch THROWS, which is a different failure from a row
-    /// that is absent and must behave the same way.
-    private func throwingLeg(userID: UUID) async -> Bool {
-        struct ReadFailed: Error {}
-        return await PaydaySyncService.applyShiftAuthorityLeg(userID: userID) {
-            throw ReadFailed()
-        }.deferred
-    }
-
     /// **The round trip, through the leg rather than through a grep.**
     ///
-    /// Defer while a legacy-edit sheet is open, close it, and the NEXT pass
-    /// promotes. Asserting that `.deferPromotion` came back would pass over a
-    /// caller that drops it; this drives the code that maps it.
-    @Test("the leg defers while a sheet is open and promotes on the next pass")
-    func legDefersThenPromotes() async throws {
+    /// A ready row promotes on the pass it is read, and reports the
+    /// conversion is finished.
+    @Test("the leg promotes on a ready row")
+    func legPromotesOnReadyRow() async throws {
         let id = account(authoritative: false)
         let ready = try decode(Self.readyJSON)
 
-        LegacyEditSheetPresence.begin()
-        let deferred = await leg(userID: id, row: ready)
-        #expect(deferred, "the leg must report the deferral so a follow-up is requested")
-        #expect(!PaydaySyncState.shiftsAreAuthoritative(for: id))
-
-        LegacyEditSheetPresence.end()
-        let second = await leg(userID: id, row: ready)
-        #expect(!second, "a completed promotion needs no follow-up")
-        #expect(PaydaySyncState.shiftsAreAuthoritative(for: id),
-                "a deferral must be a delay, not a cancellation")
+        let result = await PaydaySyncService.applyShiftAuthorityLeg(userID: id) { ready }
+        #expect(result.remainingGroupCount == 0)
+        #expect(PaydaySyncState.shiftsAreAuthoritative(for: id))
     }
 
     /// **An ABSENT row must not demote a converted account.** The P0.
@@ -389,8 +318,8 @@ struct ShiftAuthorityLegTests {
         let id = account(authoritative: true)
         #expect(PaydaySyncState.shiftsAreAuthoritative(for: id))
 
-        let deferred = await leg(userID: id, row: nil)
-        #expect(!deferred)
+        let result = await PaydaySyncService.applyShiftAuthorityLeg(userID: id) { nil }
+        #expect(result.remainingGroupCount == nil)
         #expect(PaydaySyncState.shiftsAreAuthoritative(for: id),
                 "an absent row is a failure to ask, never a withdrawal")
     }
@@ -399,8 +328,11 @@ struct ShiftAuthorityLegTests {
     @Test("the leg leaves an authoritative account alone when the read throws")
     func legThrownReadDoesNotDemote() async {
         let id = account(authoritative: true)
-        let deferred = await throwingLeg(userID: id)
-        #expect(!deferred)
+        struct ReadFailed: Error {}
+        let result = await PaydaySyncService.applyShiftAuthorityLeg(userID: id) {
+            throw ReadFailed()
+        }
+        #expect(result.remainingGroupCount == nil)
         #expect(PaydaySyncState.shiftsAreAuthoritative(for: id),
                 "a thrown read must not flip the representation either")
     }
@@ -413,26 +345,12 @@ struct ShiftAuthorityLegTests {
         let id = account(authoritative: true)
         let rolledBack = try decode(Self.rolledBackJSON)
 
-        let deferred = await leg(userID: id, row: rolledBack)
-        #expect(!deferred)
+        let result = await PaydaySyncService.applyShiftAuthorityLeg(userID: id) { rolledBack }
+        #expect(result.remainingGroupCount == 0)
         #expect(!PaydaySyncState.shiftsAreAuthoritative(for: id),
                 "a withdrawal signalled by a column must take effect")
     }
 
-    /// A withdrawal demotes even with a sheet open, through the leg. The
-    /// asymmetry, end to end.
-    @Test("the leg demotes on a withdrawal even while a legacy-edit sheet is open")
-    func legDemotesThroughAnOpenSheet() async throws {
-        let id = account(authoritative: true)
-        let rolledBack = try decode(Self.rolledBackJSON)
-
-        LegacyEditSheetPresence.begin()
-        let deferred = await leg(userID: id, row: rolledBack)
-        LegacyEditSheetPresence.end()
-
-        #expect(!deferred)
-        #expect(!PaydaySyncState.shiftsAreAuthoritative(for: id))
-    }
     /// **A guarantee that dropped from two to one, so it gets a name.**
     ///
     /// A partially converted account used to be held back from the records

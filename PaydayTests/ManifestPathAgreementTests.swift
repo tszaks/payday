@@ -3,20 +3,18 @@ import Testing
 @testable import Payday
 @testable import PaydayCore
 
-/// The proof the canonicalization was for: one shift fingerprints the same
-/// whichever adapter read it.
+/// The canonicalization the whole file exists to pin: a shift's explicit-zero
+/// tip-out and its never-entered tip-out must fingerprint identically.
 ///
 /// Before `tipOutCents` was canonicalized to `?? 0`, a shift with an explicit
-/// zero tip-out digested differently through `ShiftInputAdapter` (which
-/// preserves `0` off `ShiftRecord.tipOutCents`) than through
-/// `LegacySnapshotBridge` (which yields `nil`, because `TipBreakdown` had
-/// already summed both cases to 0 and the bridge cannot recover which it
-/// had). Money was identical either way, so the digest was reporting a change
-/// that could not affect any answer.
+/// zero digested differently than one carrying `nil`. Money was identical
+/// either way, so the digest was reporting a change that could not affect any
+/// answer — a differing digest for the same account is the one observable
+/// that could contradict "the store is a no-op for the same data."
 ///
-/// That mattered because the bridge-to-store swap is supposed to be a no-op
-/// for a real account. A differing digest is the one observable that could
-/// have contradicted it.
+/// The bridge path this was originally measured against is gone with the
+/// flip; `ShiftInputAdapter` is now the single boundary, so the assertion
+/// runs on it alone.
 @Suite("Manifest path agreement")
 @MainActor
 struct ManifestPathAgreementTests {
@@ -33,83 +31,47 @@ struct ManifestPathAgreementTests {
         )]
     }
 
-    private static func manifest(_ input: ShiftInput) throws -> InputManifest {
-        try InputManifest(
+    private static func manifest(tipOut: Int?) throws -> (input: ShiftInput, manifest: InputManifest) {
+        // A FIXED id: the digest covers `s.id.uuidString`, so two records that
+        // differ only in tipOut must share one, or the digests disagree on the
+        // id and the assertion measures a UUID instead of the collapse.
+        let record = ShiftRecord(
+            id: PolicyMigration.deterministicID("pathagree/shift"),
+            workDate: Self.today, shiftPeriod: .dinner,
+            cashTipsCents: 5_600, creditTipsCents: 9_900,
+            tipOutCents: tipOut, hoursWorked: 5.5, recordedAt: Self.today
+        )
+        let adapted = ShiftInputAdapter.adapt([record], calendars: Self.calendars())
+        let input = try #require(adapted.inputs.first)
+        let manifest = try InputManifest(
             shifts: [input], paychecks: [], schedule: nil,
             rates: [], calendars: [], asOf: input.workDay
         )
+        return (input, manifest)
     }
 
-    /// The case that used to diverge: an EXPLICIT zero tip-out.
-    @Test("an explicit-zero tip-out fingerprints identically through both adapters")
-    func explicitZeroAgreesAcrossPaths() throws {
-        let record = ShiftRecord(
-            workDate: Self.today, shiftPeriod: .dinner,
-            cashTipsCents: 5_600, creditTipsCents: 9_900,
-            tipOutCents: 0, hoursWorked: 5.5, recordedAt: Self.today
-        )
+    /// The case that used to diverge: an EXPLICIT zero tip-out must digest
+    /// the same as a never-entered one.
+    @Test("explicit-zero and never-entered tip-outs fingerprint identically")
+    func explicitZeroAgreesWithNeverEntered() throws {
+        let zero = try Self.manifest(tipOut: 0)
+        let never = try Self.manifest(tipOut: nil)
 
-        let adapted = ShiftInputAdapter.adapt([record], calendars: Self.calendars())
-        let viaAdapter = try #require(adapted.inputs.first)
-        let bridgedRaw = LegacySnapshotBridge.shiftInput(
-            for: (day: record.workDate, shiftID: record.id,
-                  items: ShiftProjection.rows(for: record)),
-            payrollTimeZone: Self.zone
-        )
-        let viaBridge = try #require(bridgedRaw)
+        // The INPUTS still differ, deliberately: the adapter is faithful to
+        // the stored field.
+        #expect(zero.input.tipOutCents == 0)
+        #expect(never.input.tipOutCents == nil)
 
-        // The VALUES still differ, deliberately: each side is faithful to the
-        // input it has.
-        #expect(viaAdapter.tipOutCents == 0)
-        #expect(viaBridge.tipOutCents == nil)
-
-        // The DIGESTS now agree, which is the whole point.
-        let a = try Self.manifest(viaAdapter)
-        let b = try Self.manifest(viaBridge)
-        #expect(a.digest == b.digest)
-        #expect(a.shiftsDigest == b.shiftsDigest)
-    }
-
-    /// And the never-entered case, which my first attempted fix would have
-    /// broken while fixing the one above. Both must hold at once.
-    @Test("a never-entered tip-out also fingerprints identically through both adapters")
-    func neverEnteredAgreesAcrossPaths() throws {
-        let record = ShiftRecord(
-            workDate: Self.today, shiftPeriod: .dinner,
-            cashTipsCents: 5_600, creditTipsCents: 9_900,
-            tipOutCents: nil, hoursWorked: 5.5, recordedAt: Self.today
-        )
-
-        let adapted = ShiftInputAdapter.adapt([record], calendars: Self.calendars())
-        let viaAdapter = try #require(adapted.inputs.first)
-        let bridgedRaw = LegacySnapshotBridge.shiftInput(
-            for: (day: record.workDate, shiftID: record.id,
-                  items: ShiftProjection.rows(for: record)),
-            payrollTimeZone: Self.zone
-        )
-        let viaBridge = try #require(bridgedRaw)
-
-        #expect(viaAdapter.tipOutCents == nil)
-        #expect(viaBridge.tipOutCents == nil)
-
-        let a = try Self.manifest(viaAdapter)
-        let b = try Self.manifest(viaBridge)
-        #expect(a.digest == b.digest)
+        // The DIGESTS agree, which is the whole point.
+        #expect(zero.manifest.digest == never.manifest.digest)
+        #expect(zero.manifest.shiftsDigest == never.manifest.shiftsDigest)
     }
 
     /// A real tip-out must still change the fingerprint, so the collapse is
     /// scoped to nil-versus-zero and has not blunted the detector.
     @Test("a real tip-out still changes the fingerprint")
     func realTipOutStillMovesTheDigest() throws {
-        func manifest(tipOut: Int?) throws -> InputManifest {
-            let record = ShiftRecord(
-                workDate: Self.today, cashTipsCents: 5_600, creditTipsCents: 9_900,
-                tipOutCents: tipOut, hoursWorked: 5.5, recordedAt: Self.today
-            )
-            let adapted = ShiftInputAdapter.adapt([record], calendars: Self.calendars())
-            return try Self.manifest(try #require(adapted.inputs.first))
-        }
-        #expect(try manifest(tipOut: 1_000).digest != (try manifest(tipOut: 0)).digest)
-        #expect(try manifest(tipOut: 1_000).digest != (try manifest(tipOut: nil)).digest)
+        #expect(try Self.manifest(tipOut: 1_000).manifest.digest != Self.manifest(tipOut: 0).manifest.digest)
+        #expect(try Self.manifest(tipOut: 1_000).manifest.digest != Self.manifest(tipOut: nil).manifest.digest)
     }
 }

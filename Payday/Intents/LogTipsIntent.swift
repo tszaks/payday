@@ -121,27 +121,16 @@ struct LogTipsIntent: AppIntent {
         let context = SharedModelContainer.shared.mainContext
         let today = Calendar.current.startOfDay(for: .now)
 
-        // The writer switch, the same predicate every sheet uses. Siri is
-        // the surface where writing the wrong representation hurts most: the
-        // user says "log my tips", hears a confirmation, and — on an
-        // authoritative account, where nothing reads `TipEntry` any more —
-        // sees nothing until the server folds the row and a later pull
-        // brings it back. Not lost, but invisible for a round-trip, which on
-        // the surface with the least recourse reads as the app ignoring
-        // them. Same family as the silent no-op delete.
-        let completedIntoExistingShift: Bool
-        if PaydaySyncState.shiftsAreAuthoritativeForCurrentAccount {
-            completedIntoExistingShift = try logToRecords(in: context, today: today, cents: cents, tipOutCents: tipOutCents)
-        } else {
-            completedIntoExistingShift = try logToLegacyEntries(in: context, today: today, cents: cents, tipOutCents: tipOutCents)
-        }
+        // Siri is the surface where a write hurt most mid-transition: the
+        // user says "log my tips", hears a confirmation, and sees nothing
+        // until the server folds the row. Writes are records-only now.
+        let completedIntoExistingShift = try logToRecords(in: context, today: today, cents: cents, tipOutCents: tipOutCents)
 
-        let allEntries = try context.fetch(FetchDescriptor<TipEntry>())
         let shiftRecords = try context.fetch(FetchDescriptor<ShiftRecord>())
         let paycheckRecords = try context.fetch(FetchDescriptor<PaycheckRecord>())
         let preferencesStore = UserPreferencesStore()
-        SmartNudgeScheduler.reschedule(preferencesStore: preferencesStore, allEntries: allEntries, shiftRecords: shiftRecords)
-        PaydayPushScheduler.reschedule(preferencesStore: preferencesStore, schedule: PayScheduleStore().schedule, allEntries: allEntries, shiftRecords: shiftRecords, paycheckRecords: paycheckRecords)
+        SmartNudgeScheduler.reschedule(preferencesStore: preferencesStore, shiftRecords: shiftRecords)
+        PaydayPushScheduler.reschedule(preferencesStore: preferencesStore, schedule: PayScheduleStore().schedule, shiftRecords: shiftRecords, paycheckRecords: paycheckRecords)
         PaydayWidgetRefresh.request()
 
         let kindText = kind.tipKind.displayName.lowercased()
@@ -196,28 +185,4 @@ struct LogTipsIntent: AppIntent {
         return false
     }
 
-    /// The legacy representation, unchanged from what shipped, for accounts
-    /// the server has not converted yet.
-    @MainActor
-    private func logToLegacyEntries(in context: ModelContext, today: Date, cents: Int, tipOutCents: Int?) throws -> Bool {
-        let todaysEntries = try context.fetch(FetchDescriptor<TipEntry>(predicate: #Predicate { $0.date == today }))
-        let existingToday = todaysEntries.map { (shiftID: $0.shiftID, kind: $0.kind, recordedAt: $0.recordedAt) }
-        let completingShiftID = Self.targetShiftID(existingToday: existingToday, kind: kind.tipKind)
-        let shiftID = completingShiftID ?? UUID()
-
-        let entry = TipEntry(date: today, amountCents: cents, kind: kind.tipKind, recordedAt: .now, shiftID: shiftID)
-        context.insert(entry)
-
-        if let tipOutCents {
-            // Resolve what the shift already has first — write only ever
-            // overrides tipOutCents here, never silently drops hours/sales/
-            // period/clock times a completed-into shift already carried.
-            let shiftRows = completingShiftID != nil ? todaysEntries.filter { $0.shiftID == shiftID } + [entry] : [entry]
-            let resolved = ShiftDetails.resolve(from: shiftRows)
-            ShiftDetails.write(hoursWorked: resolved.hoursWorked, tipOutCents: tipOutCents, salesCents: resolved.salesCents, shiftPeriod: resolved.shiftPeriod, clockIn: resolved.clockIn, clockOut: resolved.clockOut, serverCount: resolved.serverCount, receiptMetrics: resolved.receiptMetrics, into: shiftRows)
-        }
-
-        try context.save()
-        return completingShiftID != nil
-    }
 }

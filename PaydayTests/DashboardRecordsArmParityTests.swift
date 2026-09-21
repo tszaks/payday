@@ -141,8 +141,7 @@ struct DashboardRecordsArmParityTests {
             records: records, policies: comp, payrollTimeZone: Self.zone
         ).snapshot)
         let history = try #require(HistoryEarnings.build(
-            entries: [], records: records, policies: comp,
-            payrollTimeZone: Self.zone, representation: .records
+            records: records, policies: comp, payrollTimeZone: Self.zone
         ).snapshot)
 
         let fromDashboard = dashboard.range(range).knownComponents.earnedIncomeCents
@@ -271,7 +270,6 @@ struct DashboardRecordsArmParityTests {
         )
         return DashboardFacts(
             snapshot: dataset.snapshot,
-            allShifts: dataset.shiftDays,
             allShiftRecords: dataset.shiftRecordDays,
             allTipRecords: dataset.tipRecords,
             schedule: schedule,

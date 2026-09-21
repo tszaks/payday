@@ -25,10 +25,6 @@ struct DeleteAccountSheet: View {
     @Environment(MoveLedgerStore.self) private var moveLedgerStore
     @Environment(PolicyStore.self) private var policyStore
     @Environment(PaydayCloudState.self) private var cloudState
-    @Query private var allEntries: [TipEntry]
-    /// The other representation. `shiftCount` picks one -- see the note
-    /// there on why this screen in particular cannot be allowed to read the
-    /// legacy side alone.
     @Query private var shiftRecords: [ShiftRecord]
     @Query private var paycheckRecords: [PaycheckRecord]
 
@@ -38,26 +34,11 @@ struct DeleteAccountSheet: View {
 
     private static let requiredPhrase = "DELETE"
 
-    /// The count of LOGICAL shifts about to be destroyed, from whichever
-    /// representation is authoritative.
-    ///
-    /// Switched rather than legacy-only, and not a sum of the two, for two
-    /// separate reasons. Legacy-only would UNDER-report on a converted
-    /// account: the user types DELETE having been shown fewer shifts than
-    /// deletion actually destroys, which makes this a consent defect on an
-    /// irreversible action rather than a display bug. A sum would OVER-report,
-    /// because on a converted account the `ShiftRecord`s are derived from the
-    /// `TipEntry` rows still sitting beside them, so both representations
-    /// describe the same nights and adding them double-counts every one.
-    ///
-    /// Deletion does wipe both; the honest number is how many shifts the
-    /// person loses, which is the authoritative representation's count.
-    private var shiftCount: Int {
-        if PaydaySyncState.shiftsAreAuthoritativeForCurrentAccount {
-            return shiftRecords.count
-        }
-        return ShiftDays.groupedByShift(allEntries, shiftID: \.shiftID, date: \.date, period: \.shiftPeriod).count
-    }
+    /// The count of shifts about to be destroyed. `ShiftRecord` is the only
+    /// stored shape since the flip; the number the person sees is the number
+    /// of records deletion actually takes, which on an irreversible action
+    /// is a consent requirement rather than a display nicety.
+    private var shiftCount: Int { shiftRecords.count }
 
     private var canDelete: Bool {
         typed.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() == Self.requiredPhrase && !isDeleting
@@ -94,7 +75,6 @@ struct DeleteAccountSheet: View {
                     ShareLink(
                         item: CSVExport {
                             CSVExporter.export(
-                                entries: allEntries,
                                 records: shiftRecords,
                                 paycheckRecords: paycheckRecords,
                                 calculator: PayPeriodCalculator(payrollTimeZone: policyStore.payrollTimeZone, schedule: scheduleStore.schedule ?? .fallback)
