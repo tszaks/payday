@@ -105,10 +105,34 @@ $$;
 
 revoke all on function private.stamp_authority_for_new_account() from public, anon, authenticated;
 
-drop trigger if exists users_stamp_shift_authority on auth.users;
-create trigger users_stamp_shift_authority
-  after insert on auth.users
-  for each row execute function private.stamp_authority_for_new_account();
+-- The trigger is created ONLY where the executing role could also drop it.
+-- Measured on hosted Supabase (see the runbook): `postgres` holds TRIGGER on
+-- `auth.users` but not ownership, so CREATE succeeds and DROP fails -- an
+-- installable, unremovable trigger inside the live signup transaction. On the
+-- local cluster `postgres` owns `auth.users`, so the trigger exists there and
+-- the tests still exercise it. This guard is what makes the file safe under a
+-- bulk `db push`: where it cannot be rolled back, it does not exist.
+do $$
+declare
+  can_drop boolean;
+begin
+  select (select rolsuper from pg_roles where rolname = current_user)
+      or pg_has_role(current_user, c.relowner, 'member')
+    into can_drop
+    from pg_class c
+    join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'auth' and c.relname = 'users';
+
+  if coalesce(can_drop, false) then
+    drop trigger if exists users_stamp_shift_authority on auth.users;
+    execute 'create trigger users_stamp_shift_authority
+               after insert on auth.users
+               for each row execute function private.stamp_authority_for_new_account()';
+  else
+    raise notice 'users_stamp_shift_authority not created: % cannot drop triggers on auth.users', current_user;
+  end if;
+end;
+$$;
 
 -- ---------------------------------------------------------------- backfill
 -- Existing accounts that have never held a legacy row. Same fact, same
