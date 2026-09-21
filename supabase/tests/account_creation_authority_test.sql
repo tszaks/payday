@@ -168,15 +168,15 @@ where (select trigger_installed from ctx);
 
 insert into results
 select 'the stamped row satisfies all four authority conditions',
-       coalesce(bool_and(
+       coalesce((select bool_and(
          migrated_at is not null
          and rollback_at is null
          and conservation_failed_at is null
          and remaining_group_count = 0
-       ), false)
-from public.shift_migration_ledger
-where user_id = 'aaaaaaaa-1111-1111-1111-111111111111'
-  and (select trigger_installed from ctx);
+       )
+       from public.shift_migration_ledger
+       where user_id = 'aaaaaaaa-1111-1111-1111-111111111111'), false)
+where (select trigger_installed from ctx);
 
 -- NULL, never 0. A zero here asserts a conservation measurement that never
 -- ran, and it sticks: the account is authoritative from this moment, so the
@@ -186,15 +186,15 @@ where user_id = 'aaaaaaaa-1111-1111-1111-111111111111'
 -- conservation holding, having measured nothing.
 insert into results
 select 'the conservation counters say NOT MEASURED, not zero',
-       coalesce(bool_and(
+       coalesce((select bool_and(
          source_non_wage_cents is null
          and shift_non_wage_cents is null
          and source_row_count is null
          and last_run_at is null
-       ), false)
-from public.shift_migration_ledger
-where user_id = 'aaaaaaaa-1111-1111-1111-111111111111'
-  and (select trigger_installed from ctx);
+       )
+       from public.shift_migration_ledger
+       where user_id = 'aaaaaaaa-1111-1111-1111-111111111111'), false)
+where (select trigger_installed from ctx);
 
 -- ------------------------------------------------------------- idempotence
 -- The one-shot may have raced the trigger. Its row is the better one: it
@@ -207,20 +207,20 @@ update public.shift_migration_ledger
 
 insert into results
 select 'a real measurement is never clobbered by the creation stamp',
-       coalesce(bool_and(source_non_wage_cents = 4242), false)
-from public.shift_migration_ledger
-where user_id = 'aaaaaaaa-2222-2222-2222-222222222222'
-  and (select trigger_installed from ctx);
+       coalesce((select bool_and(source_non_wage_cents = 4242)
+       from public.shift_migration_ledger
+       where user_id = 'aaaaaaaa-2222-2222-2222-222222222222'), false)
+where (select trigger_installed from ctx);
 
 -- ------------------------------------------------------------- the cascade
 delete from auth.users where id = 'aaaaaaaa-1111-1111-1111-111111111111';
 
 insert into results
 select 'deleting the account removes its state row',
-       count(*) = 0
-from public.shift_migration_ledger
-where user_id = 'aaaaaaaa-1111-1111-1111-111111111111'
-  and (select trigger_installed from ctx);
+       (select count(*) = 0
+        from public.shift_migration_ledger
+        where user_id = 'aaaaaaaa-1111-1111-1111-111111111111')
+where (select trigger_installed from ctx);
 
 -- ------------------------------------------------- signup survives a raise
 -- THE ASSERTION THE TRIGGER HALF OF THIS SUITE EXISTS FOR. A trigger on
@@ -252,17 +252,17 @@ values ('aaaaaaaa-3333-3333-3333-333333333333', 'guarded@test.invalid');
 
 insert into results
 select 'a raising-but-guarded trigger body does not block signup',
-       count(*) = 1
-from auth.users
-where id = 'aaaaaaaa-3333-3333-3333-333333333333'
-  and (select trigger_installed from ctx);
+       (select count(*) = 1
+        from auth.users
+        where id = 'aaaaaaaa-3333-3333-3333-333333333333')
+where (select trigger_installed from ctx);
 
 insert into results
 select 'and it degrades to exactly today''s behaviour: no row, flip on first sync',
-       count(*) = 0
-from public.shift_migration_ledger
-where user_id = 'aaaaaaaa-3333-3333-3333-333333333333'
-  and (select trigger_installed from ctx);
+       (select count(*) = 0
+        from public.shift_migration_ledger
+        where user_id = 'aaaaaaaa-3333-3333-3333-333333333333')
+where (select trigger_installed from ctx);
 
 -- THE CONTROL. Without this, the assertion above passes just as happily when
 -- the trigger never fires, which is the difference between a test and a
@@ -297,10 +297,10 @@ $$;
 
 insert into results
 select 'CONTROL: an unguarded raise DOES block signup, so the test above means something',
-       count(*) = 0
-from auth.users
-where id = 'aaaaaaaa-4444-4444-4444-444444444444'
-  and (select trigger_installed from ctx);
+       (select count(*) = 0
+        from auth.users
+        where id = 'aaaaaaaa-4444-4444-4444-444444444444')
+where (select trigger_installed from ctx);
 
 -- ------------------------------------------------------------------ verdict
 do $$
