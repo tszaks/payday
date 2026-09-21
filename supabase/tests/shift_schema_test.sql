@@ -431,7 +431,7 @@ select pg_temp.expect('allFiveNewTablesCascadeFromAuthUsers',
     where con.contype = 'f' and con.confdeltype = 'c'
       and con.confrelid = 'auth.users'::regclass
       and (n.nspname || '.' || c.relname) in (
-        'public.shifts', 'public.shift_legacy_conflicts', 'public.shift_migration_state',
+        'public.shifts', 'public.shift_legacy_conflicts', 'public.shift_migration_ledger',
         'private.shift_fold_backlog', 'private.shift_fold_failures')) = 5,
   (select coalesce(string_agg(n.nspname || '.' || c.relname, ' ' order by c.relname), 'none')
     from pg_constraint con
@@ -439,7 +439,7 @@ select pg_temp.expect('allFiveNewTablesCascadeFromAuthUsers',
     join pg_namespace n on n.oid = c.relnamespace
     where con.contype = 'f' and con.confdeltype = 'c' and con.confrelid = 'auth.users'::regclass
       and (n.nspname || '.' || c.relname) in (
-        'public.shifts', 'public.shift_legacy_conflicts', 'public.shift_migration_state',
+        'public.shifts', 'public.shift_legacy_conflicts', 'public.shift_migration_ledger',
         'private.shift_fold_backlog', 'private.shift_fold_failures')));
 
 insert into public.shifts (id, user_id, work_date, cash_tips_cents, source, client_updated_at)
@@ -447,8 +447,16 @@ values ('00000000-0000-4000-8000-000000000401', '33333333-3333-4333-8333-3333333
         '2026-07-01', 4200, 'migration', now());
 insert into public.shift_legacy_conflicts (user_id, shift_id, shift_cents_before, legacy_cents_after)
 values ('33333333-3333-4333-8333-333333333333', '00000000-0000-4000-8000-000000000401', 5000, 7000);
-insert into public.shift_migration_state (user_id, migrated_at, remaining_group_count, last_run_at)
-values ('33333333-3333-4333-8333-333333333333', now(), 3, now());
+-- `on conflict do update` rather than a bare insert: account creation now
+-- stamps a state row (20260920030000), so this user already has one by the
+-- time the cascade fixture runs. The test is about the FOREIGN KEY cascade,
+-- not about who wrote the row, so it sets the values it needs either way.
+insert into public.shift_migration_ledger (user_id, migrated_at, remaining_group_count, last_run_at)
+values ('33333333-3333-4333-8333-333333333333', now(), 3, now())
+on conflict (user_id) do update
+  set migrated_at = excluded.migrated_at,
+      remaining_group_count = excluded.remaining_group_count,
+      last_run_at = excluded.last_run_at;
 insert into private.shift_fold_backlog (user_id, group_key)
 values ('33333333-3333-4333-8333-333333333333', public.payday_legacy_shift_id('2026-07-01'));
 insert into private.shift_fold_failures (user_id, group_keys, sqlstate, message)
@@ -458,7 +466,7 @@ values ('33333333-3333-4333-8333-333333333333',
 select pg_temp.expect('allFiveNewTablesHoldRowsBeforeTheDeletion',
   (select count(*) from public.shifts where user_id = '33333333-3333-4333-8333-333333333333')
   + (select count(*) from public.shift_legacy_conflicts where user_id = '33333333-3333-4333-8333-333333333333')
-  + (select count(*) from public.shift_migration_state where user_id = '33333333-3333-4333-8333-333333333333')
+  + (select count(*) from public.shift_migration_ledger where user_id = '33333333-3333-4333-8333-333333333333')
   + (select count(*) from private.shift_fold_backlog where user_id = '33333333-3333-4333-8333-333333333333')
   + (select count(*) from private.shift_fold_failures where user_id = '33333333-3333-4333-8333-333333333333') = 5);
 
@@ -482,12 +490,12 @@ $$;
 select pg_temp.expect('delete_my_account_leaves_zero_rows_in_all_five_new_tables',
   (select count(*) from public.shifts where user_id = '33333333-3333-4333-8333-333333333333') = 0
   and (select count(*) from public.shift_legacy_conflicts where user_id = '33333333-3333-4333-8333-333333333333') = 0
-  and (select count(*) from public.shift_migration_state where user_id = '33333333-3333-4333-8333-333333333333') = 0
+  and (select count(*) from public.shift_migration_ledger where user_id = '33333333-3333-4333-8333-333333333333') = 0
   and (select count(*) from private.shift_fold_backlog where user_id = '33333333-3333-4333-8333-333333333333') = 0
   and (select count(*) from private.shift_fold_failures where user_id = '33333333-3333-4333-8333-333333333333') = 0,
   'shifts=' || (select count(*) from public.shifts where user_id = '33333333-3333-4333-8333-333333333333')::text
   || ' conflicts=' || (select count(*) from public.shift_legacy_conflicts where user_id = '33333333-3333-4333-8333-333333333333')::text
-  || ' state=' || (select count(*) from public.shift_migration_state where user_id = '33333333-3333-4333-8333-333333333333')::text
+  || ' state=' || (select count(*) from public.shift_migration_ledger where user_id = '33333333-3333-4333-8333-333333333333')::text
   || ' backlog=' || (select count(*) from private.shift_fold_backlog where user_id = '33333333-3333-4333-8333-333333333333')::text
   || ' failures=' || (select count(*) from private.shift_fold_failures where user_id = '33333333-3333-4333-8333-333333333333')::text);
 
