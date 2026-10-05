@@ -211,6 +211,12 @@ struct PeriodsView: View {
                 .padding(.top, PaydaySpacing.p8)
             }
             .navigationTitle("Periods")
+            // Must sit inside the NavigationStack. Attached to the stack
+            // itself, the destination was never registered, so every row's
+            // NavigationLink(value:) silently did nothing.
+            .navigationDestination(for: PayPeriod.self) { period in
+                PeriodDetailView(period: period)
+            }
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     // The CSV itself is only built and written to disk when
@@ -267,9 +273,6 @@ struct PeriodsView: View {
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { refreshCurrentDay() }
-        }
-        .navigationDestination(for: PayPeriod.self) { period in
-            PeriodDetailView(period: period)
         }
     }
 
