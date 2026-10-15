@@ -802,6 +802,7 @@ struct DashboardView: View {
             }
         }
         .undoDeleteToast(undoState, context: modelContext)
+        .environment(\.undoDeleteToastState, undoState)
         .onAppear { shiftSession.sync() }
         .onChange(of: scenePhase) { _, newPhase in
             guard newPhase == .active else { return }

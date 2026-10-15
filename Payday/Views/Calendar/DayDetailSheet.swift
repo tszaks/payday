@@ -206,6 +206,7 @@ struct DayDetailSheet: View {
             }
         }
         .undoDeleteToast(undoState, context: modelContext)
+        .environment(\.undoDeleteToastState, undoState)
         .presentationDetents([.medium, .large])
         .presentationBackground(PaydayColor.background)
     }

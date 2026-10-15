@@ -175,6 +175,10 @@ struct LogTipSheet: View {
     // Shared
     @State private var date: Date
     @State private var note: String
+    /// The presenting screen's Undo toast. Delete Shift acts at once and the
+    /// toast, on the screen under this sheet, offers Undo.
+    @Environment(\.undoDeleteToastState) private var undoToast
+    /// Only used when there is no toast to offer Undo: see `DeleteAffordance`.
     @State private var showDeleteConfirmation = false
     @State private var revealResult: RevealResult?
     /// The shift's own figure as the ledger valued it, which is what the
@@ -537,7 +541,12 @@ struct LogTipSheet: View {
                                 noteCard
 
                                 if isEditing {
-                                    Button(role: .destructive) { showDeleteConfirmation = true } label: {
+                                    Button(role: .destructive) {
+                                        switch DeleteAffordance.resolve(toast: undoToast) {
+                                        case .actNowWithUndo: delete()
+                                        case .confirmFirst: showDeleteConfirmation = true
+                                        }
+                                    } label: {
                                         Text("Delete Shift")
                                             .frame(maxWidth: .infinity)
                                     }
@@ -1834,7 +1843,17 @@ struct LogTipSheet: View {
                 // row, saves, and only then writes the deletion queue and the
                 // tombstone (#51). Not wrapped in `commit`, which would nest
                 // one transaction inside another.
-                _ = try ShiftCommands.delete(record, in: modelContext)
+                //
+                // Through the presenting screen's toast state when there is
+                // one, so Undo is offered; the toast state calls the same
+                // command and swallows the same refusal, so a refusal is
+                // detected here first to keep the alert path.
+                if let undoToast {
+                    guard ShiftCommands.mayMutate(record) else { throw ShiftCommands.Failure.conversionPending }
+                    guard undoToast.deleteReportingSuccess(record, in: modelContext) else { throw ShiftCommands.Failure.saveFailed }
+                } else {
+                    _ = try ShiftCommands.delete(record, in: modelContext)
+                }
             } catch {
                 // Rolled back, or refused by `mayMutate`: the shift is still
                 // there, so do NOT dismiss on a deletion that did not happen.

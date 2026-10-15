@@ -226,7 +226,7 @@ struct PeriodDetailView: View {
         let facts = PeriodDetailFacts(
             snapshot: build.snapshot,
             shiftRecordDays: build.shiftRecordDays,
-            paycheckRecords: paycheckRecords,
+            paycheckRecords: paycheckRecords.hidingPendingRemoval(),
             period: period,
             schedule: scheduleStore.schedule,
             payrollTimeZone: policyStore.payrollTimeZone
@@ -281,6 +281,7 @@ struct PeriodDetailView: View {
             .paydayAppearance()
         }
         .undoDeleteToast(undoState, context: modelContext)
+        .environment(\.undoDeleteToastState, undoState)
         .task(id: SnapshotBuildKey(
             writes: writes,
             policies: policyStore.policies,

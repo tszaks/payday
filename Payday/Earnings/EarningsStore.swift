@@ -110,6 +110,7 @@ final class EarningsStore {
         case calendarDayChanged
         case sceneActive
         case syncCompleted
+        case paycheckVisibilityChanged
         case manual
     }
 
@@ -131,6 +132,11 @@ final class EarningsStore {
     /// other; without this the store would value every shift three times
     /// for one edit.
     static let debounceNanoseconds: UInt64 = 50_000_000
+
+    /// Posted by `DeferredPaycheckRemoval` (app only; this file also builds
+    /// into the widget, which has no removal). Declared here so the trigger
+    /// list needs nothing from that type.
+    nonisolated static let paycheckVisibilityDidChange = Notification.Name("com.szakacsmedia.payday.paycheckVisibilityDidChange")
 
     private(set) var state: State = .loading
 
@@ -240,6 +246,8 @@ final class EarningsStore {
         (PaydaySettingsSyncClock.didChange, .settingsClockDidChange),
         (PolicyStore.didChange, .policiesDidChange),
         (.NSCalendarDayChanged, .calendarDayChanged),
+        // A paycheck hidden while its Undo window is open, or shown again.
+        (paycheckVisibilityDidChange, .paycheckVisibilityChanged),
     ]
 
     private func startObserving() {
@@ -441,6 +449,10 @@ final class ModelContextEarningsInputSource: EarningsInputSource {
     private let schedule: () -> PaySchedule?
     private let now: () -> Date
     private let storeOpened: Bool
+    /// Paychecks waiting out an Undo window are not inputs. The app passes
+    /// `DeferredPaycheckRemoval.shared`; the widget has none, so the default
+    /// is empty.
+    private let hiddenPaycheckIDs: @MainActor () -> Set<UUID>
 
     /// The app's spelling: the shared container, the live `PolicyStore` and
     /// the live `PayScheduleStore`.
@@ -456,8 +468,10 @@ final class ModelContextEarningsInputSource: EarningsInputSource {
         policyStore: PolicyStore,
         scheduleStore: PayScheduleStore,
         now: @escaping () -> Date = { Date() },
-        storeOpened: Bool = !SharedModelContainer.openingFailed
+        storeOpened: Bool = !SharedModelContainer.openingFailed,
+        hiddenPaycheckIDs: @MainActor @escaping () -> Set<UUID> = { [] }
     ) {
+        self.hiddenPaycheckIDs = hiddenPaycheckIDs
         self.makeContext = { ModelContext(container) }
         self.policies = { policyStore.policies }
         self.schedule = { scheduleStore.schedule }
@@ -472,8 +486,10 @@ final class ModelContextEarningsInputSource: EarningsInputSource {
         policies: @escaping () -> CompensationPolicies,
         schedule: @escaping () -> PaySchedule?,
         now: @escaping () -> Date = { Date() },
-        storeOpened: Bool = true
+        storeOpened: Bool = true,
+        hiddenPaycheckIDs: @MainActor @escaping () -> Set<UUID> = { [] }
     ) {
+        self.hiddenPaycheckIDs = hiddenPaycheckIDs
         self.makeContext = { context }
         self.policies = policies
         self.schedule = schedule
@@ -504,7 +520,9 @@ final class ModelContextEarningsInputSource: EarningsInputSource {
 
         let context = makeContext()
         let shifts = try context.fetch(FetchDescriptor<ShiftRecord>())
+        let hidden = hiddenPaycheckIDs()
         let paychecks = try context.fetch(FetchDescriptor<PaycheckRecord>())
+            .filter { !hidden.contains($0.id) }
         let legacyCount = try context.fetchCount(FetchDescriptor<TipEntry>())
 
         let adapted = ShiftInputAdapter.adapt(shifts, calendars: policies.calendars)

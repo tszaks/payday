@@ -21,9 +21,9 @@ final class TabRouter {
 }
 
 struct MainTabView: View {
-    #if DEBUG || targetEnvironment(simulator)
     @Environment(\.modelContext) private var modelContext
-    #endif
+    /// The Undo toast for deletes made in the shell-level log sheet below.
+    @State private var undoState = UndoDeleteToastState()
     @Environment(\.scenePhase) private var scenePhase
     @State private var tabRouter = TabRouter()
     @State private var previousTab: AppTab = .dashboard
@@ -63,6 +63,8 @@ struct MainTabView: View {
             }
         }
         .environment(tabRouter)
+        .undoDeleteToast(undoState, context: modelContext)
+        .environment(\.undoDeleteToastState, undoState)
         .onChange(of: tabRouter.selected) { oldTab, newTab in
             handleTabSelection(from: oldTab, to: newTab)
         }
