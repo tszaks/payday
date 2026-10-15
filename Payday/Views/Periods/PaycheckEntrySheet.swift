@@ -65,7 +65,10 @@ struct PaycheckEntrySheet: View {
 
     @State private var amountCents: Int
     @State private var note: String
-    @State private var showDeleteConfirmation = false
+    /// The presenting screen's Undo toast. Remove Paycheck acts at once (the
+    /// paycheck is hidden) and the toast offers Undo; the real delete runs
+    /// only when the window closes. See `DeferredPaycheckRemoval`.
+    @Environment(\.undoDeleteToastState) private var undoToast
     /// A save that did not happen must not look like one that did. `commit`
     /// rolls back, so the figures on screen are still the unsaved truth and
     /// the sheet stays open.
@@ -216,7 +219,7 @@ struct PaycheckEntrySheet: View {
                         .padding(.horizontal)
 
                         if existing != nil {
-                            Button(role: .destructive) { showDeleteConfirmation = true } label: {
+                            Button(role: .destructive) { delete() } label: {
                                 Text("Remove Paycheck")
                                     .frame(maxWidth: .infinity)
                             }
@@ -224,9 +227,6 @@ struct PaycheckEntrySheet: View {
                             .tint(PaydayColor.error)
                             .padding(.horizontal)
                             .padding(.top, 4)
-                            .confirmationDialog("Remove this paycheck?", isPresented: $showDeleteConfirmation, titleVisibility: .visible) {
-                                Button("Remove Paycheck", role: .destructive) { delete() }
-                            }
                         }
 
                         Spacer()
@@ -784,25 +784,24 @@ struct PaycheckEntrySheet: View {
     }
 
     private func delete() {
-        if let existing {
-            do {
-                // The row first; the queue only once it is really gone. The
-                // comment that used to sit here claimed "queued and deleted in
-                // the same transaction, so a crash between them cannot leave
-                // the server holding a paycheck the device believes is gone",
-                // which is the same false claim that was on the tip and shift
-                // paths: the queue is App Group `UserDefaults` and
-                // `rollback()` has no reach into it, so a failed save left the
-                // paycheck on the device with its deletion queued for the
-                // server. See `design-lint.sh` rule 20.
-                try ShiftCommands.commit(in: modelContext) {
-                    modelContext.delete(existing)
-                }
-                PaydaySyncState.recordPaycheckDeletion(existing.id)
-            } catch {
-                saveFailed = true
-                return
-            }
+        guard let existing else {
+            dismiss()
+            return
+        }
+        if let undoToast {
+            // Hide now, delete when the Undo window closes. Nothing can fail
+            // here, so the sheet always dismisses.
+            undoToast.removePaycheck(existing, in: modelContext)
+            dismiss()
+            return
+        }
+        // No toast above this sheet to offer Undo. Delete outright, with the
+        // row first and the queue only once it is really gone.
+        do {
+            try DeferredPaycheckRemoval.commitDelete(id: existing.id, in: modelContext)
+        } catch {
+            saveFailed = true
+            return
         }
         dismiss()
     }

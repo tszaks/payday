@@ -14,7 +14,31 @@ final class UndoDeleteToastState {
     /// The one pending deletion the toast can undo.
     private(set) var deletedShift: ShiftCommands.DeletedShift?
 
-    var hasPendingUndo: Bool { deletedShift != nil }
+    /// Remove Paycheck is deferred rather than undone: see
+    /// `DeferredPaycheckRemoval`. The toast shows it through this same
+    /// state, so there is one toast and one Undo button.
+    let paycheckRemoval: DeferredPaycheckRemoval
+
+    init(paycheckRemoval: DeferredPaycheckRemoval = .shared) {
+        self.paycheckRemoval = paycheckRemoval
+    }
+
+    var hasPendingUndo: Bool { deletedShift != nil || paycheckRemoval.hasPending }
+
+    /// What the toast says. A paycheck wins if both somehow exist, because
+    /// it is the newer action (`removePaycheck` clears the shift first).
+    var message: String { paycheckRemoval.hasPending ? "Paycheck removed" : "Shift deleted" }
+
+    /// Hides the paycheck now and deletes it for real when the Undo window
+    /// closes without Undo. Never throws: nothing is deleted yet.
+    func removePaycheck(_ record: PaycheckRecord, in context: ModelContext) {
+        // The toast holds one action. The shift (if any) stays deleted, as
+        // it would when its own window closed.
+        dismissTask?.cancel()
+        deletedShift = nil
+        paycheckRemoval.remove(record, in: context)
+        PaydayHaptics.medium()
+    }
 
     // MARK: - The shift representation
 
@@ -36,11 +60,21 @@ final class UndoDeleteToastState {
     /// a refold. On refusal nothing is deleted and no toast appears, so the
     /// row simply stays -- which is the truth.
     func delete(_ record: ShiftRecord, in context: ModelContext) {
+        _ = deleteReportingSuccess(record, in: context)
+    }
+
+    /// `delete`, saying whether the shift is really gone. The edit sheet
+    /// needs this: it must not dismiss on a delete that did not happen.
+    @discardableResult
+    func deleteReportingSuccess(_ record: ShiftRecord, in context: ModelContext) -> Bool {
+        // One toast, one pending action: close a waiting paycheck removal
+        // (commit it) before this delete takes the toast.
+        paycheckRemoval.flush()
         let captured: ShiftCommands.DeletedShift
         do {
             captured = try ShiftCommands.delete(record, in: context)
         } catch {
-            return
+            return false
         }
 
         dismissTask?.cancel()
@@ -51,6 +85,7 @@ final class UndoDeleteToastState {
             guard !Task.isCancelled else { return }
             self?.deletedShift = nil
         }
+        return true
     }
 
     /// Restores through the same boundary, and un-queues the server deletion
@@ -65,6 +100,10 @@ final class UndoDeleteToastState {
     /// the deletion still queued and the toast still up, and Undo can simply
     /// be tapped again.
     func undo(in context: ModelContext) {
+        if paycheckRemoval.undo() {
+            PaydayHaptics.success()
+            return
+        }
         if let captured = deletedShift {
             do {
                 _ = try ShiftCommands.restore(captured, in: context)
@@ -96,7 +135,7 @@ private struct UndoDeleteToastModifier: ViewModifier {
                     .padding(.bottom, PaydaySpacing.md)
                     .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
                     .onAppear {
-                        UIAccessibility.post(notification: .announcement, argument: "Shift deleted")
+                        UIAccessibility.post(notification: .announcement, argument: state.message)
                     }
             }
         }
@@ -105,7 +144,7 @@ private struct UndoDeleteToastModifier: ViewModifier {
 
     private var toast: some View {
         HStack {
-            Text("Shift deleted")
+            Text(state.message)
                 .font(PaydayFont.subheadline)
                 .foregroundStyle(PaydayColor.textPrimary)
             Spacer()
@@ -124,5 +163,19 @@ private struct UndoDeleteToastModifier: ViewModifier {
 extension View {
     func undoDeleteToast(_ state: UndoDeleteToastState, context: ModelContext) -> some View {
         modifier(UndoDeleteToastModifier(state: state, context: context))
+    }
+}
+
+private struct UndoDeleteToastStateKey: EnvironmentKey {
+    static let defaultValue: UndoDeleteToastState? = nil
+}
+
+extension EnvironmentValues {
+    /// The presenting screen's toast state. Sheets that delete and then
+    /// dismiss (edit shift, paycheck) hand the toast to the screen below,
+    /// which is the one still on screen once the sheet is gone.
+    var undoDeleteToastState: UndoDeleteToastState? {
+        get { self[UndoDeleteToastStateKey.self] }
+        set { self[UndoDeleteToastStateKey.self] = newValue }
     }
 }

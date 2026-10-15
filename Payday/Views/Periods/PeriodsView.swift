@@ -185,7 +185,7 @@ struct PeriodsView: View {
         let build = snapshotBuild()
         let facts = PeriodsPageFacts(
             snapshot: build.snapshot,
-            paycheckRecords: paycheckRecords,
+            paycheckRecords: paycheckRecords.hidingPendingRemoval(),
             schedule: schedule,
             payrollTimeZone: policyStore.payrollTimeZone,
             now: currentDay
@@ -227,7 +227,7 @@ struct PeriodsView: View {
                         item: CSVExport {
                             CSVExporter.export(
                                 records: shiftRecords,
-                                paycheckRecords: paycheckRecords,
+                                paycheckRecords: paycheckRecords.hidingPendingRemoval(),
                                 calculator: calculator
                             )
                         },
