@@ -42,6 +42,11 @@ final class DeferredPaycheckRemoval {
     /// How long Undo stays available. Matches the shift toast.
     static let window: Duration = .seconds(4)
 
+    /// Posted whenever the hidden set changes (hide, Undo, commit). The
+    /// earnings engine rebuilds on it, so every figure on every screen drops
+    /// or regains the paycheck in the same moment the list does.
+    nonisolated static let visibilityDidChange = EarningsStore.paycheckVisibilityDidChange
+
     private struct Pending {
         let id: UUID
         let token: UUID
@@ -66,6 +71,9 @@ final class DeferredPaycheckRemoval {
     /// paychecks drop this id.
     var hiddenID: UUID? { pending?.id }
 
+    /// Same, as a set, for the engine's input source.
+    var hiddenIDs: Set<UUID> { pending.map { [$0.id] } ?? [] }
+
     func isHidden(_ id: UUID) -> Bool { pending?.id == id }
 
     /// Hides one paycheck and starts the Undo window.
@@ -79,6 +87,7 @@ final class DeferredPaycheckRemoval {
         lastCommitFailed = false
         let token = UUID()
         pending = Pending(id: id, token: token, commit: commit)
+        announce()
         let sleep = self.sleep
         timer = Task { [weak self] in
             try? await sleep(Self.window)
@@ -101,6 +110,7 @@ final class DeferredPaycheckRemoval {
         timer?.cancel()
         timer = nil
         pending = nil
+        announce()
         return true
     }
 
@@ -123,6 +133,12 @@ final class DeferredPaycheckRemoval {
         } catch {
             lastCommitFailed = true
         }
+        // After the commit, so a rebuild reads the final store.
+        announce()
+    }
+
+    private func announce() {
+        NotificationCenter.default.post(name: Self.visibilityDidChange, object: nil)
     }
 
     /// Token of the pending removal, for tests.

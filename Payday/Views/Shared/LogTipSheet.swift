@@ -178,6 +178,8 @@ struct LogTipSheet: View {
     /// The presenting screen's Undo toast. Delete Shift acts at once and the
     /// toast, on the screen under this sheet, offers Undo.
     @Environment(\.undoDeleteToastState) private var undoToast
+    /// Only used when there is no toast to offer Undo: see `DeleteAffordance`.
+    @State private var showDeleteConfirmation = false
     @State private var revealResult: RevealResult?
     /// The shift's own figure as the ledger valued it, which is what the
     /// reveal HEADLINE renders (row [LS-13]).
@@ -539,7 +541,12 @@ struct LogTipSheet: View {
                                 noteCard
 
                                 if isEditing {
-                                    Button(role: .destructive) { delete() } label: {
+                                    Button(role: .destructive) {
+                                        switch DeleteAffordance.resolve(toast: undoToast) {
+                                        case .actNowWithUndo: delete()
+                                        case .confirmFirst: showDeleteConfirmation = true
+                                        }
+                                    } label: {
                                         Text("Delete Shift")
                                             .frame(maxWidth: .infinity)
                                     }
@@ -547,6 +554,9 @@ struct LogTipSheet: View {
                                     .tint(PaydayColor.error)
                                     .padding(.horizontal)
                                     .padding(.top, 4)
+                                    .confirmationDialog("Delete this shift?", isPresented: $showDeleteConfirmation, titleVisibility: .visible) {
+                                        Button("Delete Shift", role: .destructive) { delete() }
+                                    }
                                 }
                             }
                             .padding(.top, 20)

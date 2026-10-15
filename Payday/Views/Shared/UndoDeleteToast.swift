@@ -179,3 +179,19 @@ extension EnvironmentValues {
         set { self[UndoDeleteToastStateKey.self] = newValue }
     }
 }
+
+/// How a delete button behaves, decided in one place.
+///
+/// Tyler's rule is act now plus Undo. That is only honest when there is a
+/// toast to offer the Undo. A sheet with no toast above it must not delete
+/// at once and quietly lose the Undo, so it asks first (the previous
+/// behaviour). No current presenter takes that path; this keeps it safe if
+/// a new one forgets to set the environment value.
+enum DeleteAffordance: Equatable {
+    case actNowWithUndo
+    case confirmFirst
+
+    static func resolve(toast: UndoDeleteToastState?) -> DeleteAffordance {
+        toast == nil ? .confirmFirst : .actNowWithUndo
+    }
+}

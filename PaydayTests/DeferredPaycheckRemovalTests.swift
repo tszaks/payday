@@ -206,4 +206,30 @@ struct DeferredPaycheckRemovalTests {
         #expect(state.message == "Shift deleted")
         #expect(state.hasPendingUndo)
     }
+
+    /// A sheet with no toast above it must ask first, never delete at once
+    /// and silently lose the Undo.
+    @Test("no toast means confirm first; a toast means act now")
+    func affordanceFollowsTheToast() {
+        #expect(DeleteAffordance.resolve(toast: nil) == .confirmFirst)
+        #expect(DeleteAffordance.resolve(toast: UndoDeleteToastState(paycheckRemoval: removal())) == .actNowWithUndo)
+    }
+
+    @Test("every hide, Undo and commit announces a visibility change")
+    func visibilityChangesAreAnnounced() throws {
+        let removal = removal()
+        var posts = 0
+        let observer = NotificationCenter.default.addObserver(
+            forName: EarningsStore.paycheckVisibilityDidChange, object: nil, queue: nil
+        ) { _ in posts += 1 }
+        defer { NotificationCenter.default.removeObserver(observer) }
+
+        removal.remove(id: UUID()) {}
+        #expect(posts == 1)
+        removal.undo()
+        #expect(posts == 2)
+        removal.remove(id: UUID()) {}
+        removal.expire(token: try #require(removal.pendingToken))
+        #expect(posts == 4)
+    }
 }

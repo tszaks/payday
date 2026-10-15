@@ -730,6 +730,51 @@ struct ModelContextEarningsInputSourceTests {
         #expect(snapshot.completeness.state == .complete)
     }
 
+    /// A paycheck waiting out its Undo window must leave the engine inputs,
+    /// or a figure disagrees with the list that already hides it.
+    @Test("removing a paycheck changes the figures at once, Undo restores them, expiry keeps them")
+    func hiddenPaycheckLeavesTheEngine() throws {
+        let container = try container()
+        let context = ModelContext(container)
+        context.insert(ShiftRecord(
+            id: shiftID(1), workDate: instant(2026, 9, 28), shiftPeriod: .lunch,
+            creditTipsCents: 5_000, hoursWorked: 4.25
+        ))
+        let check = PaycheckRecord(
+            periodStart: instant(2026, 9, 21), periodEnd: instant(2026, 10, 4),
+            paidTipsCents: 10_000
+        )
+        context.insert(check)
+        try context.save()
+
+        let removal = DeferredPaycheckRemoval(sleep: { _ in try await Task.sleep(for: .seconds(3_600)) })
+        let source = ModelContextEarningsInputSource(
+            context: context,
+            policies: { CompensationPolicies(rates: [ratePolicy], calendars: [calendarPolicy]) },
+            schedule: { PaySchedule(frequency: .biweekly, anchorPeriodEnd: instant(2026, 10, 4),
+                                    payDelayDays: 5, firstWeekday: 2) },
+            now: { instant(2026, 10, 2) },
+            hiddenPaycheckIDs: { removal.hiddenIDs }
+        )
+        func recordedCheck() throws -> Bool {
+            let inputs = try source.fetchInputs().inputs
+            let snapshot = try EarningsSnapshot.build(inputs, generation: 1)
+            return !inputs.paychecks.isEmpty && snapshot.paycheck(periodEnd: day(2026, 10, 4)) != nil
+        }
+
+        #expect(try recordedCheck())
+
+        removal.remove(check, in: context)
+        #expect(try !recordedCheck(), "hidden: the engine no longer sees the check")
+
+        #expect(removal.undo())
+        #expect(try recordedCheck(), "Undo: the check is back in the figures")
+
+        removal.remove(check, in: context)
+        removal.expire(token: try #require(removal.pendingToken))
+        #expect(try !recordedCheck(), "expiry: the check is deleted and stays out")
+    }
+
     @Test("a closed store is a refusal, not an empty snapshot")
     func closedStoreRefuses() async throws {
         let container = try container()

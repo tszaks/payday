@@ -69,6 +69,8 @@ struct PaycheckEntrySheet: View {
     /// paycheck is hidden) and the toast offers Undo; the real delete runs
     /// only when the window closes. See `DeferredPaycheckRemoval`.
     @Environment(\.undoDeleteToastState) private var undoToast
+    /// Only used when there is no toast to offer Undo: see `DeleteAffordance`.
+    @State private var showDeleteConfirmation = false
     /// A save that did not happen must not look like one that did. `commit`
     /// rolls back, so the figures on screen are still the unsaved truth and
     /// the sheet stays open.
@@ -219,7 +221,12 @@ struct PaycheckEntrySheet: View {
                         .padding(.horizontal)
 
                         if existing != nil {
-                            Button(role: .destructive) { delete() } label: {
+                            Button(role: .destructive) {
+                                switch DeleteAffordance.resolve(toast: undoToast) {
+                                case .actNowWithUndo: delete()
+                                case .confirmFirst: showDeleteConfirmation = true
+                                }
+                            } label: {
                                 Text("Remove Paycheck")
                                     .frame(maxWidth: .infinity)
                             }
@@ -227,6 +234,9 @@ struct PaycheckEntrySheet: View {
                             .tint(PaydayColor.error)
                             .padding(.horizontal)
                             .padding(.top, 4)
+                            .confirmationDialog("Remove this paycheck?", isPresented: $showDeleteConfirmation, titleVisibility: .visible) {
+                                Button("Remove Paycheck", role: .destructive) { delete() }
+                            }
                         }
 
                         Spacer()

@@ -45,7 +45,12 @@ struct PaydayApp: App {
             source: ModelContextEarningsInputSource(
                 container: SharedModelContainer.shared,
                 policyStore: policyStore,
-                scheduleStore: scheduleStore
+                scheduleStore: scheduleStore,
+                // WIRED, not defaulted (see the note below on what a
+                // defaulted parameter costs): a paycheck waiting out its
+                // Undo window must leave the engine inputs too, or a figure
+                // disagrees with the list that already hides it.
+                hiddenPaycheckIDs: { DeferredPaycheckRemoval.shared.hiddenIDs }
             ),
             // S7's fact, finally wired. `EarningsStore.init` documents that
             // "S7 passes its single shiftsAreAuthoritative in here", and S7
