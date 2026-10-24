@@ -1,0 +1,56 @@
+name: Bug report
+description: Something in Payday does not work as it should
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. If a number in the app looks wrong (a total, a pace line, a paycheck prediction), please say so in the title. Accuracy bugs are the highest priority. Do not post private pay data you want to keep private: round or change the amounts.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did you do, what did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open ...
+        2. Tap ...
+        3. ...
+    validations:
+      required: true
+  - type: input
+    id: ios
+    attributes:
+      label: iOS version
+      placeholder: "26.0"
+    validations:
+      required: true
+  - type: input
+    id: payday-version
+    attributes:
+      label: Payday version
+      placeholder: "1.0.3"
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Where did it happen
+      options:
+        - App
+        - Widget or Control Center
+        - Live Activity
+        - Siri or Shortcuts
+        - Sync
+        - Agent API or MCP
+        - Not sure
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: Screenshots (hide anything private) or notes.

@@ -1,8 +1,19 @@
-# Payday
+<h1 align="center">Payday</h1>
 
-Payday is an iOS tip and shift tracker for hourly and tipped work. Log a shift in under ten seconds, see whether tonight was a good night, and know what your check should say before it lands.
+<p align="center">An iOS tip and shift tracker for hourly and tipped work.</p>
 
-[usepayday.app](https://usepayday.app) · [App Store](https://apps.apple.com/us/app/payday-server-tip-tracker/id6790869268)
+Log a shift in under ten seconds, see whether tonight was a good night, and know what your check should say before it lands.
+
+<p align="center">
+  <a href="https://usepayday.app">usepayday.app</a> ·
+  <a href="https://apps.apple.com/us/app/payday-server-tip-tracker/id6790869268">App Store</a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/tszaks/payday/actions/workflows/ci.yml"><img src="https://github.com/tszaks/payday/actions/workflows/ci.yml/badge.svg?branch=production" alt="CI"></a>
+  <img src="https://img.shields.io/badge/iOS-26%2B-blue" alt="iOS 26 or later">
+  <img src="https://img.shields.io/badge/license-all%20rights%20reserved-lightgrey" alt="All rights reserved">
+</p>
 
 ## What it does
 
@@ -14,6 +25,14 @@ Payday is an iOS tip and shift tracker for hourly and tipped work. Log a shift i
 - **Exports clean records** for taxes or your own bookkeeping.
 
 The stats are computed on the device. Sign in with Apple, and your shifts sync through Supabase so they survive a new phone.
+
+## Tech stack
+
+- **App:** Swift 6 and SwiftUI for iOS 26, with WidgetKit, ActivityKit (Live Activity) and App Intents.
+- **Earnings engine:** `PaydayCore`, a local Swift package with no UI code.
+- **Backend:** Supabase (Postgres migrations, row-level security, and the `payday-api` edge function written for Deno).
+- **Crash reporting:** Sentry, in Release builds only. See [docs/SENTRY.md](docs/SENTRY.md).
+- **Project generation:** XcodeGen from `project.yml`.
 
 ## How the repo is laid out
 
@@ -28,7 +47,7 @@ The stats are computed on the device. Sign in with Apple, and your shifts sync t
 | `docs/` | Product, design, engineering, and release documents. Start at [docs/README.md](docs/README.md) |
 | `marketing/` | App Store screenshots and their source |
 
-## Building
+## Building for development
 
 Requirements: Xcode 26 or newer, iOS 26 SDK, and [XcodeGen](https://github.com/yonaskolb/XcodeGen). The Xcode project is generated from `project.yml` and is not committed.
 
@@ -54,6 +73,12 @@ xcodebuild test -project Payday.xcodeproj -scheme Payday \
   -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
 ```
 
+The edge function tests run with Deno:
+
+```sh
+cd supabase/functions/payday-api && deno test
+```
+
 CI runs five independent jobs on every pull request and every push to `production`: PaydayCore tests, app and widget tests, edge function tests, the design lint, and a full Supabase migration reset. [docs/CI.md](docs/CI.md) describes each one and how to run it locally.
 
 ## Agent API
@@ -63,6 +88,14 @@ Payday exposes the same data through a versioned REST API and a remote MCP endpo
 ## Branches
 
 `production` is the default branch and what ships. Work lands through pull requests with CI green.
+
+## Security
+
+Report problems privately. See [SECURITY.md](SECURITY.md).
+
+## License
+
+All rights reserved. The source is visible for reference; it is not licensed for reuse.
 
 ---
 
