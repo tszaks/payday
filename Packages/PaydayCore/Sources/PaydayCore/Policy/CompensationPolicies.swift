@@ -190,6 +190,91 @@ public struct CompensationPolicies: Hashable, Codable, Sendable {
         CompensationPolicies(version: version, rates: rates.filter { $0.id != id }, calendars: calendars, jobs: jobs)
     }
 
+    // MARK: Editing jobs
+
+    /// Returns a copy with a job added. The first extra job also creates the
+    /// primary entry (`primaryName`, `primaryID`), because "one job" is
+    /// stored as no list at all. A blank name, or one that matches an
+    /// existing job (trimmed, case-insensitive), changes nothing.
+    public func addingJob(
+        id: UUID,
+        name: String,
+        schedule: PayScheduleInput?,
+        primaryName: String,
+        primaryID: UUID
+    ) -> CompensationPolicies {
+        guard let name = ShiftRole.normalized(name) else { return self }
+        var updated = jobs
+        if updated.isEmpty {
+            guard ShiftRole.key(primaryName) != ShiftRole.key(name) else { return self }
+            updated.append(JobPolicy(id: primaryID, name: primaryName, schedule: nil, isPrimary: true))
+        }
+        guard !updated.contains(where: { ShiftRole.key($0.name) == ShiftRole.key(name) }) else { return self }
+        updated.append(JobPolicy(id: id, name: name, schedule: schedule, isPrimary: false))
+        return replacing(jobs: updated)
+    }
+
+    /// Returns a copy with one job renamed, and every policy tagged with the
+    /// old name retagged. A blank name or one another job has changes nothing.
+    public func renamingJob(id: UUID, to newName: String) -> CompensationPolicies {
+        guard let newName = ShiftRole.normalized(newName),
+              let job = jobs.first(where: { $0.id == id }),
+              !jobs.contains(where: { $0.id != id && ShiftRole.key($0.name) == ShiftRole.key(newName) })
+        else { return self }
+        let oldKey = ShiftRole.key(job.name)
+        let updatedJobs = jobs.map { $0.id == id ? JobPolicy(id: $0.id, name: newName, schedule: $0.schedule, isPrimary: $0.isPrimary) : $0 }
+        return retagging(rates: rates, calendars: calendars, jobs: updatedJobs) { tag in
+            ShiftRole.key(tag) == oldKey ? newName : tag
+        }
+    }
+
+    /// Returns a copy where `jobID` is the primary. A nil job tag always
+    /// means "the primary", so policies with no job move to the old primary's
+    /// name and the new primary's own policies lose their tag.
+    public func makingPrimary(jobID: UUID) -> CompensationPolicies {
+        guard let newPrimary = jobs.first(where: { $0.id == jobID }), !newPrimary.isPrimary,
+              let oldPrimary = primaryJob else { return self }
+        let newKey = ShiftRole.key(newPrimary.name)
+        let updatedJobs = jobs.map { JobPolicy(id: $0.id, name: $0.name, schedule: $0.schedule, isPrimary: $0.id == jobID) }
+        return retagging(rates: rates, calendars: calendars, jobs: updatedJobs) { tag in
+            if tag == nil { return oldPrimary.name }
+            return ShiftRole.key(tag) == newKey ? nil : tag
+        }
+    }
+
+    /// Returns a copy without one non-primary job (and without its
+    /// policies). When only the primary would remain, the list goes away, so
+    /// the stored JSON is the one-job shape again.
+    public func removingJob(id: UUID) -> CompensationPolicies {
+        guard let job = jobs.first(where: { $0.id == id }), !job.isPrimary else { return self }
+        let key = ShiftRole.key(job.name)
+        let remaining = jobs.filter { $0.id != id }
+        return CompensationPolicies(
+            version: version,
+            rates: rates.filter { ShiftRole.key($0.jobName) != key },
+            calendars: calendars.filter { ShiftRole.key($0.jobName) != key },
+            jobs: remaining.count > 1 ? remaining : []
+        )
+    }
+
+    private func replacing(jobs updated: [JobPolicy]) -> CompensationPolicies {
+        CompensationPolicies(version: version, rates: rates, calendars: calendars, jobs: updated)
+    }
+
+    private func retagging(
+        rates: [PayRatePolicy],
+        calendars: [PayrollCalendarPolicy],
+        jobs: [JobPolicy],
+        _ tag: (String?) -> String?
+    ) -> CompensationPolicies {
+        CompensationPolicies(
+            version: version,
+            rates: rates.map { var rate = $0; rate.jobName = ShiftRole.normalized(tag($0.jobName)); return rate },
+            calendars: calendars.map { var calendar = $0; calendar.jobName = ShiftRole.normalized(tag($0.jobName)); return calendar },
+            jobs: jobs
+        )
+    }
+
     // MARK: Normal order
 
     static func rateOrder(_ lhs: PayRatePolicy, _ rhs: PayRatePolicy) -> Bool {

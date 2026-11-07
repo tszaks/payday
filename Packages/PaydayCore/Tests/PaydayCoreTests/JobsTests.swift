@@ -104,6 +104,51 @@ struct JobsTests {
         #expect(JobPolicy(id: Self.uuid(22), name: String(repeating: "x", count: 60), schedule: nil,
                           isPrimary: false).name.count == 40)
     }
+    @Test("Adding the first extra job names the primary and puts it first")
+    func addingFirstJob() {
+        let policies = CompensationPolicies(rates: [Self.primaryRate])
+            .addingJob(id: Self.uuid(30), name: " Cafe ", schedule: nil, primaryName: "Main job", primaryID: Self.uuid(31))
+        #expect(policies.jobNames == ["Main job", "Cafe"])
+        #expect(policies.primaryJob?.id == Self.uuid(31))
+        let again = policies.addingJob(id: Self.uuid(32), name: "Deli", schedule: nil, primaryName: "Ignored", primaryID: Self.uuid(33))
+        #expect(again.jobNames == ["Main job", "Cafe", "Deli"])
+        #expect(policies.addingJob(id: Self.uuid(34), name: "cafe", schedule: nil, primaryName: "x", primaryID: Self.uuid(35)) == policies)
+        #expect(policies.addingJob(id: Self.uuid(34), name: "  ", schedule: nil, primaryName: "x", primaryID: Self.uuid(35)) == policies)
+    }
+
+    @Test("Renaming a job renames its policies too")
+    func renaming() {
+        let policies = CompensationPolicies(
+            rates: [Self.primaryRate, Self.cafeRate], calendars: [Self.cafeCalendar], jobs: [Self.bistro, Self.cafe])
+        let renamed = policies.renamingJob(id: Self.cafe.id, to: "Coffee")
+        #expect(renamed.jobNames == ["Bistro", "Coffee"])
+        #expect(renamed.rates.compactMap(\.jobName) == ["Coffee"])
+        #expect(renamed.calendars.compactMap(\.jobName) == ["Coffee"])
+        #expect(policies.renamingJob(id: Self.cafe.id, to: "bistro") == policies)
+    }
+
+    @Test("Making a job primary swaps the nil tag on its policies")
+    func makingPrimary() {
+        let policies = CompensationPolicies(
+            rates: [Self.primaryRate, Self.cafeRate], jobs: [Self.bistro, Self.cafe])
+        let swapped = policies.makingPrimary(jobID: Self.cafe.id)
+        #expect(swapped.jobNames == ["Cafe", "Bistro"])
+        #expect(swapped.primaryJob?.id == Self.cafe.id)
+        #expect(swapped.rates.first { $0.id == Self.cafeRate.id }?.jobName == nil)
+        #expect(swapped.rates.first { $0.id == Self.primaryRate.id }?.jobName == "Bistro")
+    }
+
+    @Test("Removing the last extra job returns to the no-jobs shape")
+    func removing() throws {
+        let deli = JobPolicy(id: Self.uuid(12), name: "Deli", schedule: nil, isPrimary: false)
+        let policies = CompensationPolicies(rates: [Self.primaryRate], jobs: [Self.bistro, Self.cafe, deli])
+        let two = policies.removingJob(id: deli.id)
+        #expect(two.jobNames == ["Bistro", "Cafe"])
+        let one = two.removingJob(id: Self.cafe.id)
+        #expect(one.jobs == [])
+        #expect(try Self.encode(one) == Self.encode(CompensationPolicies(rates: [Self.primaryRate])))
+        #expect(two.removingJob(id: Self.bistro.id) == two)
+    }
 }
 
 /// The pre-jobs wire shape, restated by hand so the byte-identity test does
