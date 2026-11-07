@@ -96,8 +96,100 @@ enum DashboardEarnings {
         paychecks: [PaycheckRecord] = [],
         cardTipsPaidAtClose: Bool = false
     ) -> Dataset {
+        let snapshot = snapshot(records: records, policies: policies, payrollTimeZone: payrollTimeZone)
+        // E2b: with two or more jobs this is the primary job's dataset.
+        // The snapshot stays whole (the engine partitions by job itself);
+        // the rows, the pace history and the after-tax model are the
+        // primary's. With one job nothing is filtered.
+        return slice(
+            snapshot: snapshot,
+            records: records,
+            paychecks: paychecks,
+            cardTipsPaidAtClose: cardTipsPaidAtClose,
+            job: JobScope.picked(nil, jobCount: policies.jobs.count)
+        )
+    }
+
+    /// One dataset per job (E3), primary first, all sharing ONE snapshot
+    /// built over every job's records: the engine partitions by job itself
+    /// and the adapter reads each shift in its own job's payroll zone, so a
+    /// second snapshot would only be a second dataset to disagree with.
+    /// Each slice carries that job's rows, pace history and after-tax model
+    /// (its own stubs only). Fewer than two jobs: exactly `[build(...)]`.
+    @MainActor
+    static func buildPerJob(
+        records: [ShiftRecord],
+        policies: CompensationPolicies,
+        payrollTimeZone: TimeZone,
+        paychecks: [PaycheckRecord] = [],
+        cardTipsPaidAtClose: Bool = false
+    ) -> [Dataset] {
+        guard policies.jobs.count >= 2 else {
+            return [build(
+                records: records,
+                policies: policies,
+                payrollTimeZone: payrollTimeZone,
+                paychecks: paychecks,
+                cardTipsPaidAtClose: cardTipsPaidAtClose
+            )]
+        }
+        let snapshot = snapshot(records: records, policies: policies, payrollTimeZone: payrollTimeZone)
+        let ordered = policies.jobs.filter(\.isPrimary) + policies.jobs.filter { !$0.isPrimary }
+        return ordered.map { job in
+            slice(
+                snapshot: snapshot,
+                records: records,
+                paychecks: paychecks,
+                cardTipsPaidAtClose: cardTipsPaidAtClose,
+                job: .job(job.tag)
+            )
+        }
+    }
+
+    /// One `DashboardFacts` per dataset, in order. The primary (and a
+    /// one-job account) is built on the screen's own schedule and zone,
+    /// exactly as before; any other job on its own grid and payroll zone
+    /// (`PolicyStore.calculator(forJob:)`), never the primary's.
+    @MainActor
+    static func facts(
+        for datasets: [Dataset],
+        policies: CompensationPolicies,
+        primarySchedule: PaySchedule?,
+        primaryZone: TimeZone,
+        now: Date,
+        forcedPaydayPhase: PaydayMoment.Phase?,
+        dismissedClosedEnd: Date?,
+        dismissedCheckEnd: Date?
+    ) -> [DashboardFacts] {
+        datasets.map { dataset in
+            let jobCalendar = dataset.job.tag.map {
+                PolicyStore.calculator(forJob: $0, policies: policies, primarySchedule: primarySchedule)
+            }
+            return DashboardFacts(
+                snapshot: dataset.snapshot,
+                allShiftRecords: dataset.shiftRecordDays,
+                allTipRecords: dataset.tipRecords,
+                withholdingModel: dataset.withholdingModel,
+                cardTipsPaidAtClose: dataset.cardTipsPaidAtClose,
+                schedule: jobCalendar?.schedule ?? primarySchedule,
+                now: now,
+                forcedPaydayPhase: forcedPaydayPhase,
+                dismissedClosedEnd: dismissedClosedEnd,
+                dismissedCheckEnd: dismissedCheckEnd,
+                payrollTimeZone: jobCalendar?.payrollTimeZone ?? primaryZone,
+                job: dataset.job
+            )
+        }
+    }
+
+    @MainActor
+    private static func snapshot(
+        records: [ShiftRecord],
+        policies: CompensationPolicies,
+        payrollTimeZone: TimeZone
+    ) -> EarningsSnapshot? {
         let adapted = ShiftInputAdapter.adapt(records, calendars: policies.calendars)
-        let snapshot = try? EarningsSnapshot.build(EarningsInputs(
+        return try? EarningsSnapshot.build(EarningsInputs(
             shifts: adapted.inputs,
             rates: policies.rates,
             calendars: policies.calendars,
@@ -106,11 +198,16 @@ enum DashboardEarnings {
             asOf: CivilDay(.distantFuture, in: payrollTimeZone),
             unreadableReceiptShiftIDs: adapted.unreadableReceiptShiftIDs
         ))
-        // E2b: with two or more jobs the Dashboard is the primary job's.
-        // The snapshot stays whole (the engine partitions by job itself);
-        // the rows, the pace history and the after-tax model are the
-        // primary's. With one job nothing is filtered.
-        let job = JobScope.picked(nil, jobCount: policies.jobs.count)
+    }
+
+    @MainActor
+    private static func slice(
+        snapshot: EarningsSnapshot?,
+        records: [ShiftRecord],
+        paychecks: [PaycheckRecord],
+        cardTipsPaidAtClose: Bool,
+        job: JobScope
+    ) -> Dataset {
         let jobRecords = records.filter { job.includes($0.jobName) }
         return Dataset(
             snapshot: snapshot,

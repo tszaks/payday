@@ -179,6 +179,8 @@ struct DashboardFacts: SnapshotFacts {
     let heroCheckNet: EarningsFigure
 
     let stamp: SnapshotStamp?
+    /// The job this card shows (E3); `.all` for a one-job account.
+    let job: JobScope
 
     // MARK: Construction
 
@@ -242,6 +244,7 @@ struct DashboardFacts: SnapshotFacts {
 
         self.snapshot = snapshot
         stamp = snapshot?.stamp
+        self.job = job
         calculator = PayPeriodCalculator(payrollTimeZone: payrollTimeZone, schedule: schedule ?? .fallback)
         let period = calculator.period(containing: now)
         daysRemaining = calculator.daysRemaining(from: now)
@@ -607,6 +610,15 @@ private struct DashboardSelection: Hashable {
     let forcedPhase: String?
     let dismissedClosedEndRaw: Double
     let dismissedCheckEndRaw: Double
+    /// Each job's name and pay schedule (E3): a job's card is built on its
+    /// own grid, which the snapshot digest does not cover. Empty or one
+    /// entry for a one-job account.
+    var jobs: [JobPolicy] = []
+    /// Each card's own civil day (E3), in the same order as the cards: a
+    /// job in another payroll zone crosses midnight before or after the
+    /// primary, and its card must not keep yesterday's facts until the
+    /// primary's day moves. Empty for a one-job account.
+    var jobDays: [Date] = []
 }
 
 /// One render's worth of work, kept so a `@State` change (opening the drawer,
@@ -634,10 +646,13 @@ private struct DashboardRenderCache {
     /// The grouping AND the snapshot built from it, together, because they
     /// have to be the same pair every render: caching only the snapshot is
     /// what let the view group a second time with a different calendar.
-    let dataset: DashboardEarnings.Dataset
+    /// One dataset per job, primary first, all over the SAME snapshot (E3).
+    /// Exactly one with one job.
+    let datasets: [DashboardEarnings.Dataset]
     let digest: String?
     let selection: DashboardSelection
-    let facts: DashboardFacts
+    /// One facts per dataset, in the same order.
+    let facts: [DashboardFacts]
 }
 
 struct DashboardView: View {
@@ -665,6 +680,9 @@ struct DashboardView: View {
     private var shiftSession = ShiftSessionState.shared
     /// Whether the cash/credit breakdown drawer tucked under the hero is open.
     @State private var breakdownExpanded = false
+    /// The same for every other job's card (E3), by job key. The primary's
+    /// card keeps `breakdownExpanded`, so one job is unchanged.
+    @State private var expandedJobCards: Set<String> = []
     @State private var renderCache: DashboardRenderCache?
     /// Bumped by `LegacySnapshotRevision` — `EarningsStore`'s own rebuild
     /// triggers — so the cached snapshot is rebuilt when, and only when, an
@@ -729,7 +747,9 @@ struct DashboardView: View {
             firstWeekday: scheduleStore.schedule?.firstWeekday,
             forcedPhase: forcedPaydayPhase?.rawValue,
             dismissedClosedEndRaw: dismissedClosedEndRaw,
-            dismissedCheckEndRaw: dismissedCheckEndRaw
+            dismissedCheckEndRaw: dismissedCheckEndRaw,
+            jobs: policyStore.policies.jobs,
+            jobDays: Self.jobDays(policyStore.policies.jobs, now: now, zoneForJob: policyStore.payrollTimeZone(forJob:))
         )
         // ONE grouping and ONE snapshot built from it, over the WHOLE history
         // rather than this period's slice, so a workweek that straddles the
@@ -745,10 +765,10 @@ struct DashboardView: View {
         // store's snapshot is empty and a screen on it would show a person
         // with years of shifts a blank page. The swap is inside
         // `DashboardEarnings.build`.
-        let dataset = renderCache?.revision == snapshotRevision
-            && renderCache?.dataset.cardTipsPaidAtClose == preferencesStore.isCardTipsPaidAtClose
-            ? renderCache!.dataset
-            : DashboardEarnings.build(
+        let datasets = renderCache?.revision == snapshotRevision
+            && renderCache?.datasets.first?.cardTipsPaidAtClose == preferencesStore.isCardTipsPaidAtClose
+            ? renderCache!.datasets
+            : DashboardEarnings.buildPerJob(
                 records: shiftRecords,
                 policies: policyStore.policies,
                 payrollTimeZone: payrollTimeZone,
@@ -759,29 +779,32 @@ struct DashboardView: View {
                 paychecks: paycheckRecords.hidingPendingRemoval(),
                 cardTipsPaidAtClose: preferencesStore.isCardTipsPaidAtClose
             )
-        let snapshot = dataset.snapshot
+        // One snapshot for every card: `buildPerJob` hands each job's
+        // dataset the same one.
+        let snapshot = datasets.first?.snapshot
         // Rule 3: the facts are keyed on the dataset's own digest, the
         // complete computed key, plus this screen's presentational selection.
         // A saved stub moves the withholding model without moving the shift
         // digest, so the model is part of the key too.
-        let facts = renderCache?.digest == snapshot?.stamp.digest && renderCache?.selection == selection
-            && renderCache?.dataset.withholdingModel == dataset.withholdingModel
-            && renderCache?.dataset.cardTipsPaidAtClose == dataset.cardTipsPaidAtClose
+        let allFacts: [DashboardFacts] = renderCache?.digest == snapshot?.stamp.digest && renderCache?.selection == selection
+            && renderCache?.datasets.map(\.withholdingModel) == datasets.map(\.withholdingModel)
+            && renderCache?.datasets.map(\.cardTipsPaidAtClose) == datasets.map(\.cardTipsPaidAtClose)
+            && renderCache?.datasets.map(\.job) == datasets.map(\.job)
             ? renderCache!.facts
-            : DashboardFacts(
-                snapshot: snapshot,
-                allShiftRecords: dataset.shiftRecordDays,
-                allTipRecords: dataset.tipRecords,
-                withholdingModel: dataset.withholdingModel,
-                cardTipsPaidAtClose: dataset.cardTipsPaidAtClose,
-                schedule: scheduleStore.schedule,
+            : DashboardEarnings.facts(
+                for: datasets,
+                policies: policyStore.policies,
+                primarySchedule: scheduleStore.schedule,
+                primaryZone: payrollTimeZone,
                 now: now,
                 forcedPaydayPhase: forcedPaydayPhase,
                 dismissedClosedEnd: dismissedClosedEnd,
-                dismissedCheckEnd: dismissedCheckEnd,
-                payrollTimeZone: payrollTimeZone,
-                job: dataset.job
+                dismissedCheckEnd: dismissedCheckEnd
             )
+        // The primary's card: the QA hooks and the one shift band read it.
+        let facts = allFacts[0]
+        // A caption names each card only when there is more than one.
+        let jobNames = allFacts.count >= 2 ? Self.jobNames(policyStore.policies.jobs) : []
         NavigationStack {
             // A ScrollView, deliberately NOT a List: the hero's drawer changes
             // height when it opens, and a List (UIKit-backed) animates the row
@@ -802,17 +825,14 @@ struct DashboardView: View {
                             .padding(.top, PaydaySpacing.p8)
                     }
 
-                    heroWithDrawer(facts)
-                        .padding(.horizontal, PaydaySpacing.p16)
-                        .padding(.top, 8)
-
-                    tonightLineRow(facts)
-
-                    if !facts.hasShiftsThisPeriod {
-                        emptyState(facts)
-                    } else {
-                        shiftsSection(facts)
-                            .padding(.horizontal, PaydaySpacing.p16)
+                    // One block per job, primary first (E3). One job: one
+                    // block with no caption, exactly the column it was.
+                    ForEach(allFacts.indices, id: \.self) { index in
+                        jobBlock(
+                            allFacts[index],
+                            caption: index < jobNames.count ? jobNames[index] : nil,
+                            isPrimary: index == 0
+                        )
                     }
                 }
             }
@@ -874,13 +894,73 @@ struct DashboardView: View {
         .task(id: DashboardCacheIdentity(revision: snapshotRevision, selection: selection)) {
             renderCache = DashboardRenderCache(
                 revision: snapshotRevision,
-                dataset: dataset,
+                datasets: datasets,
                 digest: snapshot?.stamp.digest,
                 selection: selection,
-                facts: facts
+                facts: allFacts
             )
         }
         .legacySnapshotRevision($snapshotRevision)
+    }
+
+    // MARK: Job block
+
+    /// Where a card's "See all" lands (E3): the primary's card (and a
+    /// one-job account) on the primary's current period as before; another
+    /// job's card on THAT job's current period, on its own calendar.
+    static func seeAllLanding(for job: JobScope) -> PeriodLanding {
+        if let tag = job.tag { return .jobCurrentDetail(job: tag) }
+        return .currentDetail
+    }
+
+    /// Primary first, the same order `DashboardEarnings.buildPerJob` uses.
+    private static func jobNames(_ jobs: [JobPolicy]) -> [String] {
+        (jobs.filter(\.isPrimary) + jobs.filter { !$0.isPrimary }).map(\.name)
+    }
+
+    /// The card's payday written on ITS payroll calendar, not the device's
+    /// (E3): a job paid on New York's calendar shows Friday's payday as
+    /// Friday on a phone in Los Angeles, where that midnight is still
+    /// Thursday evening. The primary's card gains the same rule.
+    static func paydayLabel(_ payDate: Date, in zone: TimeZone, locale: Locale = .autoupdatingCurrent) -> String {
+        payDate.formatted(Date.FormatStyle(locale: locale, timeZone: zone).weekday(.abbreviated).month(.abbreviated).day())
+    }
+
+    /// Each card's civil day in its own payroll zone, primary first; empty
+    /// with one job so the one-job cache key is exactly what it was.
+    static func jobDays(_ jobs: [JobPolicy], now: Date, zoneForJob: (String?) -> TimeZone) -> [Date] {
+        guard jobs.count >= 2 else { return [] }
+        return (jobs.filter(\.isPrimary) + jobs.filter { !$0.isPrimary }).map { job in
+            PayrollCalendar.gridCalendar(in: zoneForJob(job.tag)).startOfDay(for: now)
+        }
+    }
+
+    /// One job's hero, tonight line and shifts. Only the primary's card
+    /// carries the shift band: there is one live shift and one log button,
+    /// and the log sheet asks which job.
+    @ViewBuilder
+    private func jobBlock(_ facts: DashboardFacts, caption: String?, isPrimary: Bool) -> some View {
+        heroWithDrawer(facts, caption: caption, isExpanded: expandedBinding(for: facts.job, isPrimary: isPrimary), showsShiftBand: isPrimary)
+            .padding(.horizontal, PaydaySpacing.p16)
+            .padding(.top, 8)
+
+        tonightLineRow(facts)
+
+        if !facts.hasShiftsThisPeriod {
+            emptyState(facts)
+        } else {
+            shiftsSection(facts)
+                .padding(.horizontal, PaydaySpacing.p16)
+        }
+    }
+
+    private func expandedBinding(for job: JobScope, isPrimary: Bool) -> Binding<Bool> {
+        guard !isPrimary else { return $breakdownExpanded }
+        let key = ShiftRole.key(job.tag) ?? ""
+        return Binding(
+            get: { expandedJobCards.contains(key) },
+            set: { if $0 { expandedJobCards.insert(key) } else { expandedJobCards.remove(key) } }
+        )
     }
 
     // MARK: Tonight line
@@ -918,37 +998,39 @@ struct DashboardView: View {
     /// now come out of `BreakdownRow.ledgerRows(_:)` over the hero's one
     /// `EarningsResult`, and the tip-out is the ledger's own
     /// `tipOutCents`, READ rather than reconstructed.
-    private func heroWithDrawer(_ facts: DashboardFacts) -> some View {
+    private func heroWithDrawer(_ facts: DashboardFacts, caption: String?, isExpanded: Binding<Bool>, showsShiftBand: Bool) -> some View {
         HeroBreakdownDrawer(
             rows: facts.heroBreakdownRows,
             total: facts.heroBreakdownTotal,
             hasBreakdown: facts.heroHasBreakdown,
-            isExpanded: $breakdownExpanded
+            isExpanded: isExpanded
         ) {
-            heroCard(facts)
+            heroCard(facts, caption: caption, isExpanded: isExpanded, showsShiftBand: showsShiftBand)
         }
     }
 
     /// Shared by the hero's tap gesture (inside HeroBreakdownDrawer) and its
     /// VoiceOver accessibility action (heroSummary below) so both paths
     /// toggle identically.
-    private func toggleBreakdown() {
-        HeroBreakdownToggle.fire($breakdownExpanded, reduceMotion: reduceMotion)
+    private func toggleBreakdown(_ isExpanded: Binding<Bool>) {
+        HeroBreakdownToggle.fire(isExpanded, reduceMotion: reduceMotion)
     }
 
     // MARK: Hero card
 
-    private func heroCard(_ facts: DashboardFacts) -> some View {
+    private func heroCard(_ facts: DashboardFacts, caption: String?, isExpanded: Binding<Bool>, showsShiftBand: Bool) -> some View {
         VStack(spacing: PaydaySpacing.p20) {
-            heroSummary(facts)
+            heroSummary(facts, caption: caption, isExpanded: isExpanded)
 
             if facts.isPaydayMoment {
                 Divider()
                 paydayMomentSection(facts)
             }
 
-            Divider()
-            shiftBand
+            if showsShiftBand {
+                Divider()
+                shiftBand
+            }
         }
         .paydayCard(padding: PaydaySpacing.p24)
     }
@@ -1023,10 +1105,17 @@ struct DashboardView: View {
     /// VoiceOver to activate otherwise. The payday moment section stays
     /// outside this combined region so its own Dismiss button and TipKit
     /// popover keep their individual accessibility.
-    private func heroSummary(_ facts: DashboardFacts) -> some View {
+    private func heroSummary(_ facts: DashboardFacts, caption: String?, isExpanded: Binding<Bool>) -> some View {
         let hasBreakdown = facts.heroHasBreakdown
         return VStack(spacing: PaydaySpacing.p20) {
             VStack(spacing: 6) {
+                // Which job this card is, only with two or more (E3).
+                if let caption {
+                    Text(caption)
+                        .font(PaydayFont.caption)
+                        .foregroundStyle(PaydayColor.textSecondary)
+                        .lineLimit(1)
+                }
                 Text(facts.heroLabel)
                     .font(PaydayFont.subheadline)
                     .foregroundStyle(PaydayColor.textSecondary)
@@ -1097,10 +1186,10 @@ struct DashboardView: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(hasBreakdown ? .isButton : [])
-        .accessibilityHint(hasBreakdown ? (breakdownExpanded ? "Hide breakdown" : "Show breakdown") : "")
+        .accessibilityHint(hasBreakdown ? (isExpanded.wrappedValue ? "Hide breakdown" : "Show breakdown") : "")
         .accessibilityAction {
             guard hasBreakdown else { return }
-            toggleBreakdown()
+            toggleBreakdown(isExpanded)
         }
     }
 
@@ -1133,7 +1222,7 @@ struct DashboardView: View {
             // remains, labeling where the bar ends.
             HStack {
                 Spacer()
-                Text("Payday · \(facts.heroPayDate.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day()))")
+                Text("Payday · \(Self.paydayLabel(facts.heroPayDate, in: facts.calculator.payrollTimeZone))")
                     .font(PaydayFont.caption2)
                     .foregroundStyle(PaydayColor.textSecondary)
             }
@@ -1291,7 +1380,7 @@ struct DashboardView: View {
                     // person staring at the periods LIST — the shifts they
                     // were looking at live inside the CURRENT period's
                     // detail, so land there directly.
-                    tabRouter.pendingPeriodLanding = .currentDetail
+                    tabRouter.pendingPeriodLanding = Self.seeAllLanding(for: facts.job)
                     tabRouter.selected = .periods
                 } label: {
                     Text("See all")

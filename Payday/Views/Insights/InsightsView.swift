@@ -64,9 +64,18 @@ struct InsightsView: View {
     /// The Insights role filter. Nil is "All". Only offered when two or more
     /// roles have shifts (`InsightsEarnings.roleOptions`).
     @State private var selectedRole: String?
+    /// The Insights job filter (E3). Nil is "All". Only offered with two or
+    /// more jobs (`InsightsEarnings.jobOptions`).
+    @State private var selectedJobID: UUID?
 
     var body: some View {
-        let payrollTimeZone = policyStore.payrollTimeZone
+        let jobOptions = InsightsEarnings.jobOptions(policyStore.policies.jobs)
+        // A job that has left the list reads as All.
+        let pickedJob = jobOptions.first { $0.id == selectedJobID }
+        let job: JobScope = pickedJob.map { .job($0.tag) } ?? .all
+        // A picked job's page is in that job's payroll zone; All and one
+        // job read the primary's, as before.
+        let payrollTimeZone = pickedJob.map { policyStore.payrollTimeZone(forJob: $0.tag) } ?? policyStore.payrollTimeZone
         let payrollCalendar = PayrollCalendar.gridCalendar(in: payrollTimeZone)
         let currentDay = payrollCalendar.startOfDay(for: dayTick)
         // The half of the render cache the snapshot's digest cannot cover,
@@ -92,24 +101,27 @@ struct InsightsView: View {
         // The representation switch, inside `InsightsEarnings.build` exactly
         // as this comment promised before the switch existed, and on the
         // same predicate every other switched screen uses.
-        let roleOptions = InsightsEarnings.roleOptions(records: shiftRecords)
+        let roleOptions = InsightsEarnings.roleOptions(records: shiftRecords, job: job)
         // A role that has left the list (its last shift deleted or renamed)
         // reads as All rather than an empty page.
         let role = selectedRole.flatMap { selected in
             roleOptions.first { ShiftRoleList.matches($0, selected) }
         }
         let dataset = renderCache?.revision == snapshotRevision && renderCache?.role == role
+            && renderCache?.job == job
             ? renderCache!.dataset
             : InsightsEarnings.build(
                 records: shiftRecords,
                 policies: policyStore.policies,
                 payrollTimeZone: payrollTimeZone,
-                role: role
+                role: role,
+                job: job
             )
         // Rule 3: the facts are keyed on the dataset's own digest, the
         // complete computed key, plus this screen's presentational selection.
         let pageFacts = renderCache?.digest == dataset.snapshot?.stamp.digest
             && renderCache?.selection == selection
+            && renderCache?.job == job
             ? renderCache!.facts
             : InsightsPageFacts(
                 dataset: dataset,
@@ -121,13 +133,14 @@ struct InsightsView: View {
         NavigationStack {
             Group {
                 if let facts = pageFacts.facts {
-                    resultList(facts, pageFacts: pageFacts, roleOptions: roleOptions)
+                    resultList(facts, pageFacts: pageFacts, roleOptions: roleOptions, jobOptions: jobOptions)
                 } else {
                     ScrollView {
                         VStack(spacing: PaydaySpacing.p16) {
                             // Kept above the empty state too, so a role with
                             // too few shifts for insights can be switched
                             // back to All.
+                            jobPicker(jobOptions)
                             rolePicker(roleOptions)
                             emptyState(unlocks: pageFacts.unlocks, shiftCount: pageFacts.shiftCount)
                                 .frame(maxWidth: .infinity)
@@ -152,10 +165,11 @@ struct InsightsView: View {
                 }
             }
         }
-        .task(id: InsightsCacheIdentity(revision: snapshotRevision, selection: selection, role: role)) {
+        .task(id: InsightsCacheIdentity(revision: snapshotRevision, selection: selection, role: role, job: job)) {
             renderCache = InsightsRenderCache(
                 revision: snapshotRevision,
                 role: role,
+                job: job,
                 dataset: dataset,
                 digest: dataset.snapshot?.stamp.digest,
                 selection: selection,
@@ -187,7 +201,23 @@ struct InsightsView: View {
         }
     }
 
-    private func resultList(_ facts: InsightsFacts, pageFacts: InsightsPageFacts, roleOptions: [String]) -> some View {
+    /// "All · <job> · <job>", primary first, the Periods picker's look.
+    /// Nothing at all with one job, so a one-job account sees today's page.
+    @ViewBuilder
+    private func jobPicker(_ jobOptions: [JobPolicy]) -> some View {
+        if !jobOptions.isEmpty {
+            Picker("Job", selection: $selectedJobID) {
+                Text("All").tag(UUID?.none)
+                ForEach(jobOptions) { job in
+                    Text(job.name).tag(UUID?.some(job.id))
+                }
+            }
+            .pickerStyle(.segmented)
+            .accessibilityLabel("Show insights for job")
+        }
+    }
+
+    private func resultList(_ facts: InsightsFacts, pageFacts: InsightsPageFacts, roleOptions: [String], jobOptions: [JobPolicy]) -> some View {
         let moves = pageFacts.moves
         let followUps = pageFacts.followUps
         let chartFacts = pageFacts.chartFacts
@@ -222,6 +252,7 @@ struct InsightsView: View {
                 // each name theirs in their own caption, because a wage is
                 // not a tip and folding one in would make "tipped 16.7% of
                 // sales" false. See `InsightsEarnings`' header.
+                jobPicker(jobOptions)
                 rolePicker(roleOptions)
 
                 if let note = pageFacts.basis.note {
@@ -776,6 +807,7 @@ private struct InsightsCacheIdentity: Hashable {
     let revision: Int
     let selection: InsightsSelection
     let role: String?
+    let job: JobScope
 }
 
 /// One render's worth of work, kept so a `@State` change (presenting the
@@ -795,6 +827,8 @@ private struct InsightsRenderCache {
     let revision: Int
     /// The role filter the dataset was built for; nil is All.
     let role: String?
+    /// The job filter the dataset was built for; `.all` is All.
+    let job: JobScope
     /// The grouping AND the snapshot built from it, together, because they
     /// have to be the same pair every render: the grouping's `shiftID`s are
     /// what index the snapshot, and what the pricing map is checked against.

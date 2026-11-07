@@ -246,17 +246,25 @@ struct PeriodsView: View {
                     // the share sheet actually asks for the file's data
                     // (inside CSVExport's FileRepresentation closure) —
                     // never on a plain render of this toolbar item.
-                    ShareLink(
-                        item: CSVExport {
-                            CSVExporter.export(
-                                records: shiftRecords,
-                                paycheckRecords: paycheckRecords.hidingPendingRemoval(),
-                                calculator: calculator
-                            )
-                        },
-                        preview: SharePreview("Payday-Export.csv")
-                    ) {
-                        Image(systemName: "square.and.arrow.up")
+                    // One job: the plain share, exactly as before. Two or
+                    // more (E3): a menu, "All jobs" first, then each job.
+                    if jobs.count >= 2 {
+                        Menu {
+                            csvShareLink("All jobs", job: .all)
+                            ForEach(jobs) { job in
+                                csvShareLink(job.name, job: .job(job.tag))
+                            }
+                        } label: {
+                            Image(systemName: "square.and.arrow.up")
+                        }
+                        .accessibilityLabel("Export")
+                    } else {
+                        ShareLink(
+                            item: csvExport(job: .all),
+                            preview: SharePreview("Payday-Export.csv")
+                        ) {
+                            Image(systemName: "square.and.arrow.up")
+                        }
                     }
                 }
             }
@@ -322,6 +330,25 @@ struct PeriodsView: View {
         )
     }
 
+    /// The file is built only when the share sheet asks for it. Every row
+    /// is priced on its own job's grid; `job` drops the other jobs' rows.
+    private func csvExport(job: JobScope) -> CSVExport {
+        CSVExport {
+            CSVExporter.export(
+                records: shiftRecords,
+                paycheckRecords: paycheckRecords.hidingPendingRemoval(),
+                calculatorForJob: { policyStore.calculator(forJob: $0, primarySchedule: scheduleStore.schedule) },
+                job: job
+            )
+        }
+    }
+
+    private func csvShareLink(_ title: String, job: JobScope) -> some View {
+        ShareLink(item: csvExport(job: job), preview: SharePreview("Payday-Export.csv")) {
+            Text(title)
+        }
+    }
+
     private var calculator: PayPeriodCalculator {
         policyStore.calculator(forJob: nil, primarySchedule: scheduleStore.schedule)
     }
@@ -376,7 +403,21 @@ struct PeriodsView: View {
             // job the picker last showed; with one job this is
             // `currentPeriod` exactly.
             pickedJobID = nil
-            path.append(jobs.count >= 2 ? calculator.period(containing: currentDay) : currentPeriod)
+            // The current INSTANT, not the device calendar's start of day
+            // (`currentDay`): a payroll zone ahead of the device can already
+            // be in the next period while the device's midnight still falls
+            // in the last one, and the Dashboard card was built on `.now`.
+            path.append(jobs.count >= 2 ? calculator.period(containing: .now) : currentPeriod)
+            tabRouter.pendingPeriodLanding = nil
+        case .jobCurrentDetail(let jobTag):
+            // A second job's "See all" (E3): switch the picker to that job
+            // and open ITS current period on its own calendar. A job that
+            // has left the list reads as the primary.
+            guard path.isEmpty else { return }
+            let landingJob = jobs.first { ShiftRole.key($0.tag) == ShiftRole.key(jobTag) }
+            pickedJobID = landingJob?.id
+            let scope = JobScope.picked(landingJob?.tag, jobCount: jobs.count)
+            path.append(jobs.count >= 2 ? calculator(for: scope).period(containing: .now) : currentPeriod)
             tabRouter.pendingPeriodLanding = nil
         case .paycheckScan(let start, let end, let jobTag):
             // The push carries its job (E2b): switch the picker to it and
@@ -384,7 +425,7 @@ struct PeriodsView: View {
             let landingJob = jobs.first { ShiftRole.key($0.tag) == ShiftRole.key(jobTag) }
             pickedJobID = landingJob?.id
             let scope = JobScope.picked(landingJob?.tag, jobCount: jobs.count)
-            let jobCurrent = calculator(for: scope).period(containing: currentDay)
+            let jobCurrent = calculator(for: scope).period(containing: .now)
             let calendar = Calendar.current
             let resolved = calculator(for: scope).period(containing: start)
             let matches = calendar.isDate(resolved.start, inSameDayAs: start) && calendar.isDate(resolved.end, inSameDayAs: end)
