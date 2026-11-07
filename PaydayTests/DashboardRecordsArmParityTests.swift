@@ -361,6 +361,25 @@ struct DashboardRecordsArmParityTests {
         #expect(MetricID.expectedPaycheckNet.allowedLabels.contains(threeRows[1].label))
     }
 
+    /// **"A wage-only period still shows its check."** The ledger has no
+    /// tip rows for it, so `BreakdownRow.hasBreakdown` says there is nothing
+    /// to itemize; but the check rows live in the drawer now, so the drawer
+    /// must open for them or the figure the face used to state becomes
+    /// unreachable (Codex and Devin on PR #166).
+    @Test("the drawer opens for a wage-only current period because its check rows exist")
+    func wageOnlyPeriodKeepsItsCheckReachable() throws {
+        let now = Self.at(2026, 10, 7, hour: 12)
+        let wageOnly = [
+            ShiftRecord(workDate: Self.at(2026, 10, 5), shiftPeriod: .dinner,
+                        cashTipsCents: 0, creditTipsCents: 0,
+                        hoursWorked: 8, recordedAt: Self.at(2026, 10, 5)),
+        ]
+        let facts = facts(wageOnly, now: now, schedule: Self.schedule())
+        #expect(!facts.heroCheckGross.isUnavailable, "a priced shift backs a check figure")
+        #expect(facts.heroCheckRows.map(\.label) == ["On your check, before tax"])
+        #expect(facts.heroHasBreakdown, "the check rows are in the drawer, so the drawer must open")
+    }
+
     /// **"The check is the tips line plus gratuity plus wages, and the gap
     /// from the hero is exactly the cash."** The legacy arm gates this
     /// (`DashboardPaydayCardTests.checkReconcilesAgainstTheHero`); the
