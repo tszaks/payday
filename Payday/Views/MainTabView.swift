@@ -81,7 +81,10 @@ struct MainTabView: View {
         }
         // The payday pushes' tap target: inside the announced period's
         // detail, with its stub sheet open and the scanner started.
-        .onChange(of: deepLink.pendingPeriodLanding) { _, landing in
+        // `initial: true` because a tap that cold-starts the app can set the
+        // landing before this view exists; a change-only observer would
+        // never see it and the tap would land on the Dashboard.
+        .onChange(of: deepLink.pendingPeriodLanding, initial: true) { _, landing in
             guard let landing else { return }
             tabRouter.pendingPeriodLanding = landing
             tabRouter.selected = .periods
