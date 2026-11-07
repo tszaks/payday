@@ -816,6 +816,8 @@ into a defaulted non-optional.
 
 **2026-11-07: E1 shipped as a name tag** ([#160](https://github.com/tszaks/payday/pull/160)): `job_name` on shifts and paychecks (nil = the primary job), the job list inside `compensation_policies`, Settings > Jobs, and a Job row on the log and paycheck sheets with two or more jobs. There is no Job table, and no Make Primary: the first job holds every untagged shift, and moving that needs a stable job id and one atomic server rewrite (E2). Periods still follow the one schedule in Settings (not per job) until E2.
 
+**2026-11-07: E2a, the engine per job** (PR_LINK): each job is priced by its own rates and calendars and runs its own weekly and daily overtime (two employers' hours never make one workweek); snapshot reads take an optional job scope and a paycheck reconciles against its own job's shifts; engine 3; the server keeps the job list when an older build writes settings without it. Screens still show all jobs.
+
 Design committed ahead of code per Tyler's standing instruction: scope this
 honestly and stop for a check-in before writing any Phase 4 code, since one
 piece of it is a real architectural decision, not just a schema add.
