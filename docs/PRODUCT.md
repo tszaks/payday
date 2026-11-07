@@ -818,6 +818,8 @@ into a defaulted non-optional.
 
 **2026-11-07: E2a, the engine per job** ([#162](https://github.com/tszaks/payday/pull/162)): each job is priced by its own rates and calendars and runs its own weekly and daily overtime (two employers' hours never make one workweek); snapshot reads take an optional job scope and a paycheck reconciles against its own job's shifts; engine 3; the server keeps the job list when an older build writes settings without it. Screens still show all jobs.
 
+**2026-11-07: E2b, periods per job** ([#163](https://github.com/tszaks/payday/pull/163)): each job keeps its own pay periods, payday reminder, wage, workweek and payroll zone; Periods has a job picker with two or more jobs; the Dashboard, widget and Siri show the primary job until E3 adds a card per job. Make Primary is still not offered.
+
 Design committed ahead of code per Tyler's standing instruction: scope this
 honestly and stop for a check-in before writing any Phase 4 code, since one
 piece of it is a real architectural decision, not just a schema add.
