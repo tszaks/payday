@@ -785,28 +785,16 @@ struct DashboardView: View {
             && renderCache?.datasets.map(\.cardTipsPaidAtClose) == datasets.map(\.cardTipsPaidAtClose)
             && renderCache?.datasets.map(\.job) == datasets.map(\.job)
             ? renderCache!.facts
-            : datasets.map { dataset in
-                // The primary (and a one-job account) on the screen's own
-                // schedule and zone, exactly as before; any other job on
-                // its own grid and payroll zone, never the primary's.
-                let jobCalendar = dataset.job.tag.map {
-                    policyStore.calculator(forJob: $0, primarySchedule: scheduleStore.schedule)
-                }
-                return DashboardFacts(
-                    snapshot: dataset.snapshot,
-                    allShiftRecords: dataset.shiftRecordDays,
-                    allTipRecords: dataset.tipRecords,
-                    withholdingModel: dataset.withholdingModel,
-                    cardTipsPaidAtClose: dataset.cardTipsPaidAtClose,
-                    schedule: jobCalendar?.schedule ?? scheduleStore.schedule,
-                    now: now,
-                    forcedPaydayPhase: forcedPaydayPhase,
-                    dismissedClosedEnd: dismissedClosedEnd,
-                    dismissedCheckEnd: dismissedCheckEnd,
-                    payrollTimeZone: jobCalendar?.payrollTimeZone ?? payrollTimeZone,
-                    job: dataset.job
-                )
-            }
+            : DashboardEarnings.facts(
+                for: datasets,
+                policies: policyStore.policies,
+                primarySchedule: scheduleStore.schedule,
+                primaryZone: payrollTimeZone,
+                now: now,
+                forcedPaydayPhase: forcedPaydayPhase,
+                dismissedClosedEnd: dismissedClosedEnd,
+                dismissedCheckEnd: dismissedCheckEnd
+            )
         // The primary's card: the QA hooks and the one shift band read it.
         let facts = allFacts[0]
         // A caption names each card only when there is more than one.

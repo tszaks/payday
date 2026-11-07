@@ -146,6 +146,42 @@ enum DashboardEarnings {
         }
     }
 
+    /// One `DashboardFacts` per dataset, in order. The primary (and a
+    /// one-job account) is built on the screen's own schedule and zone,
+    /// exactly as before; any other job on its own grid and payroll zone
+    /// (`PolicyStore.calculator(forJob:)`), never the primary's.
+    @MainActor
+    static func facts(
+        for datasets: [Dataset],
+        policies: CompensationPolicies,
+        primarySchedule: PaySchedule?,
+        primaryZone: TimeZone,
+        now: Date,
+        forcedPaydayPhase: PaydayMoment.Phase?,
+        dismissedClosedEnd: Date?,
+        dismissedCheckEnd: Date?
+    ) -> [DashboardFacts] {
+        datasets.map { dataset in
+            let jobCalendar = dataset.job.tag.map {
+                PolicyStore.calculator(forJob: $0, policies: policies, primarySchedule: primarySchedule)
+            }
+            return DashboardFacts(
+                snapshot: dataset.snapshot,
+                allShiftRecords: dataset.shiftRecordDays,
+                allTipRecords: dataset.tipRecords,
+                withholdingModel: dataset.withholdingModel,
+                cardTipsPaidAtClose: dataset.cardTipsPaidAtClose,
+                schedule: jobCalendar?.schedule ?? primarySchedule,
+                now: now,
+                forcedPaydayPhase: forcedPaydayPhase,
+                dismissedClosedEnd: dismissedClosedEnd,
+                dismissedCheckEnd: dismissedCheckEnd,
+                payrollTimeZone: jobCalendar?.payrollTimeZone ?? primaryZone,
+                job: dataset.job
+            )
+        }
+    }
+
     @MainActor
     private static func snapshot(
         records: [ShiftRecord],
