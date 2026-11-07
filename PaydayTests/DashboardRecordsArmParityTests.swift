@@ -262,16 +262,18 @@ struct DashboardRecordsArmParityTests {
         _ records: [ShiftRecord],
         now: Date,
         schedule: PaySchedule,
-        forcedPaydayPhase: PaydayMoment.Phase? = nil
+        forcedPaydayPhase: PaydayMoment.Phase? = nil,
+        paychecks: [PaycheckRecord] = []
     ) -> DashboardFacts {
         let comp = Self.policies(rateCents: 1_800)
         let dataset = DashboardEarnings.build(
-            records: records, policies: comp, payrollTimeZone: Self.zone
+            records: records, policies: comp, payrollTimeZone: Self.zone, paychecks: paychecks
         )
         return DashboardFacts(
             snapshot: dataset.snapshot,
             allShiftRecords: dataset.shiftRecordDays,
             allTipRecords: dataset.tipRecords,
+            withholdingModel: dataset.withholdingModel,
             schedule: schedule,
             now: now,
             forcedPaydayPhase: forcedPaydayPhase,
@@ -319,6 +321,34 @@ struct DashboardRecordsArmParityTests {
                 "the drawer's rows must sum to the bottom line above them")
         #expect(c.earnedIncomeCents > 0, "a zero drawer reconciles trivially")
         #expect(c.tipOutCents > 0, "the fixture must exercise a tip-out, or the sign is untested")
+    }
+
+    /// **"Nothing after tax under 2 stubs."** The hero's check line keeps
+    /// its before-tax half whenever the gross is available; the after-tax
+    /// half appears only once the person's own stubs can fit a model.
+    @Test("heroCheckNet is unavailable under 2 qualifying stubs and available with 3")
+    func heroCheckNetNeedsStubs() throws {
+        func stub(_ day: Int, _ gross: Int, _ net: Int?) -> PaycheckRecord {
+            PaycheckRecord(periodStart: Self.at(2026, 8, day, hour: 0), periodEnd: Self.at(2026, 8, day + 1, hour: 0),
+                           paidTipsCents: 0, grossPayCents: gross, netPayCents: net)
+        }
+        let now = Self.at(2026, 10, 7, hour: 12)
+
+        // One full stub plus one with no net: one qualifies, so no model.
+        let thin = facts(Self.records(), now: now, schedule: Self.schedule(),
+                         paychecks: [stub(1, 200_000, 165_000), stub(5, 210_000, nil)])
+        #expect(!thin.heroCheckGross.isUnavailable)
+        #expect(thin.heroCheckNet.isUnavailable)
+        #expect(thin.heroCheckLine?.hasPrefix("Check so far · ") == true)
+        #expect(thin.heroCheckLine?.contains("after tax") == false)
+
+        let three = facts(Self.records(), now: now, schedule: Self.schedule(),
+                          paychecks: [stub(1, 200_000, 165_000), stub(5, 220_000, 179_000), stub(9, 180_000, 151_000)])
+        #expect(!three.heroCheckNet.isUnavailable)
+        #expect(three.heroCheckNet.metric == .expectedPaycheckNet)
+        #expect(three.heroCheckNet.completeness == three.heroCheckGross.completeness)
+        #expect(three.heroCheckNet.caption?.hasPrefix("From 3 stubs") == true)
+        #expect(three.heroCheckLine?.contains("after tax") == true)
     }
 
     /// **"The check is the tips line plus gratuity plus wages, and the gap

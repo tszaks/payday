@@ -16,6 +16,10 @@ The registry table below is copied verbatim from the plan.
 | `observedPaidTips` / `proposedPaidTipsCorrection` | stub field / ±100c inferred correction, separate, never auto-applied | pay date | | "Paid", "Looks like $X (accept?)" |
 | `reconciliationDelta` | observed - expected per component | pay period | never added to income | "checked", red only when < 0 |
 | `hourlyRate` | Σ earnedIncome over covered shifts / Σ hours over covered shifts | | nil without coverage; carries N of M | "Averaging $X/hr · N of M shifts" |
+| `observedGross` | gross figure on the stub, exactly as entered; never inferred | pay date | nil until recorded | "Gross Income" |
+| `observedNet` | net figure on the stub, exactly as entered; never inferred | pay date | nil until recorded | "Net Income" |
+| `observedTaxes` | taxes figure on the stub, exactly as entered; never inferred | pay date | nil until recorded | "Taxes" |
+| `expectedPaycheckNet` | `expectedPaycheckGross` through the `WithholdingModel` fitted on the last 8 stubs with both gross and net (least-squares line at 3+, mean net/gross ratio at 2) | pay period | `.unavailable` when the gross is unavailable or fewer than 2 stubs qualify; carries the gross figure's completeness | "After tax, about"; caption "From N stubs" (+ " · outside the checks it has seen" when extrapolating) |
 
 Every `EarningsResult` carries `metric`, `scope`, `asOf`, `manifest`, `engineVersion`, `completeness`.
 
@@ -57,7 +61,7 @@ Conventions used below. All money is integer cents. "Work date" means the civil 
 ### 1.3 Registry gaps surfaced by the inventory (decisions owed before PR 5)
 
 - Gross before tip-out (Dashboard and Period detail "Earned" lip and row) has no MetricID, and its label "Earned" is the label the registry assigns to earnedIncome. Either add a `grossEarnings` row or rename the subtotal.
-- Observed stub fields other than paid tips (regular wages, overtime wages, gratuity, gross, taxes, net, hourly rate, owed tips) have no registry rows, yet reconciliationDelta needs them as its observed side per component.
+- ~~Observed stub fields other than paid tips have no registry rows.~~ Closed for gross, taxes and net by `observedGross`, `observedTaxes`, `observedNet` (PR "Predicted take-home learned from stubs"). Still open for regular wages, overtime wages, gratuity, hourly rate and owed tips, which reconciliationDelta needs as its observed side per component.
 - reconciliationDelta tolerance (0c, 5c, 100c in three places today) is unspecified.
 - Tips plus gratuity before tip-out (`gross_tip_earnings_cents` on the API) equals nonWageEarnings + tipOut and has no dedicated row.
 

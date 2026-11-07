@@ -4,14 +4,15 @@ import Testing
 
 @Suite("MetricID registry")
 struct MetricIDTests {
-    @Test("The registry has exactly the 13 rows from the plan, by name")
+    @Test("The registry has exactly the 17 rows from the plan, by name")
     func exactCases() {
         let expected: Set<String> = [
             "earnedIncome", "nonWageEarnings", "voluntaryTips", "gratuityFees", "tipOut",
             "regularWages", "overtimeWages", "expectedPaycheckTipsLine", "expectedPaycheckGross",
             "observedPaidTips", "proposedPaidTipsCorrection", "reconciliationDelta", "hourlyRate",
+            "observedGross", "observedNet", "observedTaxes", "expectedPaycheckNet",
         ]
-        #expect(MetricID.allCases.count == 13)
+        #expect(MetricID.allCases.count == 17)
         #expect(Set(MetricID.allCases.map(\.rawValue)) == expected)
     }
 
@@ -40,6 +41,11 @@ struct MetricIDTests {
         #expect(MetricID.proposedPaidTipsCorrection.allowedLabels == ["Looks like $X (accept?)"])
         #expect(MetricID.reconciliationDelta.allowedLabels == ["checked"])
         #expect(MetricID.hourlyRate.allowedLabels == ["Averaging $X/hr · N of M shifts"])
+        // The stub entry sheet's own field names.
+        #expect(MetricID.observedGross.allowedLabels == ["Gross Income"])
+        #expect(MetricID.observedNet.allowedLabels == ["Net Income"])
+        #expect(MetricID.observedTaxes.allowedLabels == ["Taxes"])
+        #expect(MetricID.expectedPaycheckNet.allowedLabels == ["After tax, about"])
     }
 
     @Test("Every registry case has an explicit label assertion above")
@@ -49,6 +55,7 @@ struct MetricIDTests {
             .earnedIncome, .nonWageEarnings, .voluntaryTips, .gratuityFees, .tipOut, .regularWages, .overtimeWages,
             .expectedPaycheckTipsLine, .expectedPaycheckGross, .observedPaidTips, .proposedPaidTipsCorrection,
             .reconciliationDelta, .hourlyRate,
+            .observedGross, .observedNet, .observedTaxes, .expectedPaycheckNet,
         ]
         #expect(pinned == Set(MetricID.allCases))
     }
@@ -58,10 +65,10 @@ struct MetricIDTests {
         for m in [MetricID.earnedIncome, .nonWageEarnings, .voluntaryTips, .gratuityFees, .tipOut, .regularWages, .overtimeWages] {
             #expect(m.basis == .workDate)
         }
-        for m in [MetricID.expectedPaycheckTipsLine, .expectedPaycheckGross, .reconciliationDelta] {
+        for m in [MetricID.expectedPaycheckTipsLine, .expectedPaycheckGross, .reconciliationDelta, .expectedPaycheckNet] {
             #expect(m.basis == .payPeriod)
         }
-        for m in [MetricID.observedPaidTips, .proposedPaidTipsCorrection] {
+        for m in [MetricID.observedPaidTips, .proposedPaidTipsCorrection, .observedGross, .observedNet, .observedTaxes] {
             #expect(m.basis == .payDate)
         }
         #expect(MetricID.hourlyRate.basis == .queryRange)

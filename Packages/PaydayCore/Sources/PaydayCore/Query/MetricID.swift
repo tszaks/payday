@@ -102,6 +102,30 @@ public enum MetricID: String, CaseIterable, Codable, Sendable {
     /// **Labels:** "Averaging $X/hr · N of M shifts".
     case hourlyRate
 
+    /// **Definition:** the gross figure on the real pay stub, exactly as entered. Never inferred.
+    /// **Basis:** pay date.
+    /// **Missing data:** nil until a paycheck with a gross is recorded.
+    /// **Labels:** "Gross Income".
+    case observedGross
+
+    /// **Definition:** the net figure on the real pay stub, exactly as entered. Never inferred.
+    /// **Basis:** pay date.
+    /// **Missing data:** nil until a paycheck with a net is recorded.
+    /// **Labels:** "Net Income".
+    case observedNet
+
+    /// **Definition:** the taxes figure on the real pay stub, exactly as entered. Never inferred.
+    /// **Basis:** pay date.
+    /// **Missing data:** nil until a paycheck with taxes is recorded.
+    /// **Labels:** "Taxes".
+    case observedTaxes
+
+    /// **Definition:** expectedPaycheckGross passed through the WithholdingModel fitted on the person's last 8 stubs that have both gross and net.
+    /// **Basis:** pay period.
+    /// **Missing data:** .unavailable when the gross is unavailable or fewer than 2 stubs qualify; carries the gross figure's Completeness.
+    /// **Labels:** "After tax, about"; caption "From N stubs" (N >= 2), plus " · outside the checks it has seen" when extrapolating.
+    case expectedPaycheckNet
+
     /// One-line definition from the registry table.
     public var definition: String {
         switch self {
@@ -131,6 +155,14 @@ public enum MetricID: String, CaseIterable, Codable, Sendable {
             return "observed - expected, per component, for one pay period"
         case .hourlyRate:
             return "sum earnedIncome over covered shifts x 60 / sum minutes over covered shifts, half-up"
+        case .observedGross:
+            return "gross figure on the real pay stub, exactly as entered"
+        case .observedNet:
+            return "net figure on the real pay stub, exactly as entered"
+        case .observedTaxes:
+            return "taxes figure on the real pay stub, exactly as entered"
+        case .expectedPaycheckNet:
+            return "expectedPaycheckGross through the WithholdingModel fitted on the last 8 stubs with gross and net"
         }
     }
 
@@ -140,9 +172,9 @@ public enum MetricID: String, CaseIterable, Codable, Sendable {
         case .earnedIncome, .nonWageEarnings, .voluntaryTips, .gratuityFees, .tipOut,
              .regularWages, .overtimeWages:
             return .workDate
-        case .expectedPaycheckTipsLine, .expectedPaycheckGross, .reconciliationDelta:
+        case .expectedPaycheckTipsLine, .expectedPaycheckGross, .reconciliationDelta, .expectedPaycheckNet:
             return .payPeriod
-        case .observedPaidTips, .proposedPaidTipsCorrection:
+        case .observedPaidTips, .proposedPaidTipsCorrection, .observedGross, .observedNet, .observedTaxes:
             return .payDate
         case .hourlyRate:
             return .queryRange
@@ -168,6 +200,10 @@ public enum MetricID: String, CaseIterable, Codable, Sendable {
             return "never added to income; absent components produce no delta"
         case .hourlyRate:
             return "nil without coverage; uncovered shifts excluded from both sides; carries N of M"
+        case .observedGross, .observedNet, .observedTaxes:
+            return "nil until a paycheck with this field is recorded"
+        case .expectedPaycheckNet:
+            return ".unavailable when the gross is unavailable or fewer than 2 stubs qualify; carries the gross figure's Completeness"
         }
     }
 
@@ -203,6 +239,14 @@ public enum MetricID: String, CaseIterable, Codable, Sendable {
             return ["checked"]
         case .hourlyRate:
             return ["Averaging $X/hr · N of M shifts"]
+        case .observedGross:
+            return ["Gross Income"]
+        case .observedNet:
+            return ["Net Income"]
+        case .observedTaxes:
+            return ["Taxes"]
+        case .expectedPaycheckNet:
+            return ["After tax, about"]
         }
     }
 }

@@ -244,6 +244,39 @@ public enum PaycheckReconciler {
             )
         }
 
+        /// `MetricID.expectedPaycheckNet`: this period's gross through the
+        /// person's own `WithholdingModel`.
+        ///
+        /// Unavailable when there is no gross or no model (fewer than 2
+        /// qualifying stubs). The completeness is the gross figure's, and its
+        /// caption, when it has one, follows "From N stubs".
+        public func netFigure(model: WithholdingModel?) -> EarningsFigure {
+            let gross = grossFigure
+            guard let model, case .cents(let grossCents) = gross.amount else {
+                return EarningsFigure(
+                    metric: .expectedPaycheckNet,
+                    amount: .unavailable,
+                    label: "After tax, about",
+                    caption: nil,
+                    completeness: .empty
+                )
+            }
+            var caption = "From \(model.stubCount) stubs"
+            if model.isExtrapolating(grossCents: grossCents) {
+                caption += " · outside the checks it has seen"
+            }
+            if let grossCaption = gross.caption {
+                caption += " · \(grossCaption)"
+            }
+            return EarningsFigure(
+                metric: .expectedPaycheckNet,
+                amount: .cents(model.predictNetCents(grossCents: grossCents)),
+                label: "After tax, about",
+                caption: caption,
+                completeness: gross.completeness
+            )
+        }
+
         /// `MetricID.expectedPaycheckTipsLine` as the figure a view renders,
         /// under the registry's only allowed label for it — and the ONLY
         /// figure form of that metric, because no surface renders the

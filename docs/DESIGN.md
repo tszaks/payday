@@ -105,6 +105,12 @@ worth blocking on now; identical values in two files gets 100% of the look for
   true card: `cardBackground` + `paydayPremiumShadow()` (the 3-layer diffusion
   in light, minimal in dark).
 - Hero amount: `PaydayFont.displayXXL` (60pt heavy rounded) + monospacedDigit.
+- Hero carries ONE check line under the pace line, current period only:
+  "Check so far · $G before tax · about $N after tax". Why: the hero says what
+  you kept, but the question people bring is "what lands in my account"; one
+  line answers both halves without a second card. The net is whole dollars
+  (it is a prediction) and drops out under 2 stubs; no line when the gross is
+  unavailable.
 - StatChips and MoneyTiles: drop the calendar and briefcase icons (text-forward:
   the label already says it), solid `fieldBackground` fills, caption labels.
 - "Log Tips" button: green prominent glass, text only, no plus icon.
