@@ -405,6 +405,16 @@ struct PeriodsView: View {
             pickedJobID = nil
             path.append(jobs.count >= 2 ? calculator.period(containing: currentDay) : currentPeriod)
             tabRouter.pendingPeriodLanding = nil
+        case .jobCurrentDetail(let jobTag):
+            // A second job's "See all" (E3): switch the picker to that job
+            // and open ITS current period on its own calendar. A job that
+            // has left the list reads as the primary.
+            guard path.isEmpty else { return }
+            let landingJob = jobs.first { ShiftRole.key($0.tag) == ShiftRole.key(jobTag) }
+            pickedJobID = landingJob?.id
+            let scope = JobScope.picked(landingJob?.tag, jobCount: jobs.count)
+            path.append(jobs.count >= 2 ? calculator(for: scope).period(containing: currentDay) : currentPeriod)
+            tabRouter.pendingPeriodLanding = nil
         case .paycheckScan(let start, let end, let jobTag):
             // The push carries its job (E2b): switch the picker to it and
             // resolve the period on that job's own calendar.

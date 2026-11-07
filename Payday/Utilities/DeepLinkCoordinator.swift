@@ -31,6 +31,10 @@ enum PeriodLanding: Equatable {
     /// -OpenCurrentPeriodDetail QA hook, a payday push queued by an older
     /// build with no period in it).
     case currentDetail
+    /// That JOB's current period's detail (E3): the "See all" on a second
+    /// job's Dashboard card. `job` is the job tag, never nil (the primary's
+    /// card sends `.currentDetail`).
+    case jobCurrentDetail(job: String)
     /// That period's detail with its stub sheet open and the scanner
     /// started. Falls back to the current period when no row matches.
     /// `job` is the period's job tag (E2b), nil for the primary.

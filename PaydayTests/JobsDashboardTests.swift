@@ -146,6 +146,43 @@ struct JobsDashboardCardsTests {
         #expect(after[0].heroCheckLine == today.heroCheckLine)
         #expect(after[0].shiftRecordDays.map(\.id) == today.shiftRecordDays.map(\.id))
     }
+
+    @Test("See all on a second job's card lands on that job's current period; the primary's as before")
+    func seeAllLanding() {
+        #expect(DashboardView.seeAllLanding(for: .all) == .currentDetail)
+        #expect(DashboardView.seeAllLanding(for: .job(nil)) == .currentDetail)
+        #expect(DashboardView.seeAllLanding(for: .job("Cafe")) == .jobCurrentDetail(job: "Cafe"))
+    }
+
+    @Test("a card's payday is written on its own payroll calendar, not the device's")
+    func paydayOnItsOwnCalendar() throws {
+        let newYork = try #require(TimeZone(identifier: "America/New_York"))
+        let losAngeles = try #require(TimeZone(identifier: "America/Los_Angeles"))
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = newYork
+        // Midnight Friday Nov 13 in New York is Thursday evening in Los Angeles.
+        let payday = try #require(calendar.date(from: DateComponents(year: 2026, month: 11, day: 13)))
+        let locale = Locale(identifier: "en_US")
+        #expect(DashboardView.paydayLabel(payday, in: newYork, locale: locale) == "Fri, Nov 13")
+        #expect(DashboardView.paydayLabel(payday, in: losAngeles, locale: locale) == "Thu, Nov 12")
+    }
+
+    @Test("each card's own civil day is in the cache key: a job in Tokyo turns the day before New York does")
+    func ownDayInTheKey() throws {
+        let newYork = try #require(TimeZone(identifier: "America/New_York"))
+        let tokyo = try #require(TimeZone(identifier: "Asia/Tokyo"))
+        // Tuesday Oct 6, 20:00 in New York is already Wednesday Oct 7, 09:00 in Tokyo.
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = newYork
+        let now = try #require(calendar.date(from: DateComponents(year: 2026, month: 10, day: 6, hour: 20)))
+        let zones: (String?) -> TimeZone = { $0 == nil ? newYork : tokyo }
+        let days = DashboardView.jobDays(twoJobs().jobs, now: now, zoneForJob: zones)
+        #expect(days.count == 2)
+        #expect(CivilDay(days[0], in: newYork) == CivilDay(iso: "2026-10-06"))
+        #expect(CivilDay(days[1], in: tokyo) == CivilDay(iso: "2026-10-07"))
+        // One job: the key is exactly what it was.
+        #expect(DashboardView.jobDays(oneJob().jobs, now: now, zoneForJob: zones).isEmpty)
+    }
 }
 
 @Suite("Jobs dashboard: Insights by job")
@@ -189,6 +226,21 @@ struct JobsInsightsScopeTests {
         let dataset = InsightsEarnings.build(
             records: records, policies: twoJobs(), payrollTimeZone: zone, role: "Bar", job: .job("Cafe"))
         #expect(dataset.shiftIDs == [records[3].id])
+    }
+
+    @Test("under a picked job the role switch lists that job's roles only")
+    func rolesFollowTheJob() {
+        var records = week()
+        records[0].roleName = "Floor"
+        records[1].roleName = "Floor"
+        records[2].roleName = "Bar"
+        records[3].roleName = "Host"
+        records[4].roleName = "Host"
+        #expect(Set(InsightsEarnings.roleOptions(records: records)) == ["Floor", "Bar", "Host"])
+        #expect(InsightsEarnings.roleOptions(records: records, job: .job(nil)) == ["Floor", "Bar"])
+        // One role at the Cafe: no role switch there, the page as it is.
+        #expect(InsightsEarnings.roleOptions(records: records, job: .job("Cafe")).isEmpty)
+        #expect(Set(InsightsEarnings.roleOptions(records: records, job: .all)) == ["Floor", "Bar", "Host"])
     }
 
     @Test("the switch is offered only with two or more jobs, primary first")

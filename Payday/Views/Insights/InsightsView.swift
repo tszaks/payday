@@ -101,7 +101,7 @@ struct InsightsView: View {
         // The representation switch, inside `InsightsEarnings.build` exactly
         // as this comment promised before the switch existed, and on the
         // same predicate every other switched screen uses.
-        let roleOptions = InsightsEarnings.roleOptions(records: shiftRecords)
+        let roleOptions = InsightsEarnings.roleOptions(records: shiftRecords, job: job)
         // A role that has left the list (its last shift deleted or renamed)
         // reads as All rather than an empty page.
         let role = selectedRole.flatMap { selected in

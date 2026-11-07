@@ -614,6 +614,11 @@ private struct DashboardSelection: Hashable {
     /// own grid, which the snapshot digest does not cover. Empty or one
     /// entry for a one-job account.
     var jobs: [JobPolicy] = []
+    /// Each card's own civil day (E3), in the same order as the cards: a
+    /// job in another payroll zone crosses midnight before or after the
+    /// primary, and its card must not keep yesterday's facts until the
+    /// primary's day moves. Empty for a one-job account.
+    var jobDays: [Date] = []
 }
 
 /// One render's worth of work, kept so a `@State` change (opening the drawer,
@@ -743,7 +748,8 @@ struct DashboardView: View {
             forcedPhase: forcedPaydayPhase?.rawValue,
             dismissedClosedEndRaw: dismissedClosedEndRaw,
             dismissedCheckEndRaw: dismissedCheckEndRaw,
-            jobs: policyStore.policies.jobs
+            jobs: policyStore.policies.jobs,
+            jobDays: Self.jobDays(policyStore.policies.jobs, now: now, zoneForJob: policyStore.payrollTimeZone(forJob:))
         )
         // ONE grouping and ONE snapshot built from it, over the WHOLE history
         // rather than this period's slice, so a workweek that straddles the
@@ -899,9 +905,34 @@ struct DashboardView: View {
 
     // MARK: Job block
 
+    /// Where a card's "See all" lands (E3): the primary's card (and a
+    /// one-job account) on the primary's current period as before; another
+    /// job's card on THAT job's current period, on its own calendar.
+    static func seeAllLanding(for job: JobScope) -> PeriodLanding {
+        if let tag = job.tag { return .jobCurrentDetail(job: tag) }
+        return .currentDetail
+    }
+
     /// Primary first, the same order `DashboardEarnings.buildPerJob` uses.
     private static func jobNames(_ jobs: [JobPolicy]) -> [String] {
         (jobs.filter(\.isPrimary) + jobs.filter { !$0.isPrimary }).map(\.name)
+    }
+
+    /// The card's payday written on ITS payroll calendar, not the device's
+    /// (E3): a job paid on New York's calendar shows Friday's payday as
+    /// Friday on a phone in Los Angeles, where that midnight is still
+    /// Thursday evening. The primary's card gains the same rule.
+    static func paydayLabel(_ payDate: Date, in zone: TimeZone, locale: Locale = .autoupdatingCurrent) -> String {
+        payDate.formatted(Date.FormatStyle(locale: locale, timeZone: zone).weekday(.abbreviated).month(.abbreviated).day())
+    }
+
+    /// Each card's civil day in its own payroll zone, primary first; empty
+    /// with one job so the one-job cache key is exactly what it was.
+    static func jobDays(_ jobs: [JobPolicy], now: Date, zoneForJob: (String?) -> TimeZone) -> [Date] {
+        guard jobs.count >= 2 else { return [] }
+        return (jobs.filter(\.isPrimary) + jobs.filter { !$0.isPrimary }).map { job in
+            PayrollCalendar.gridCalendar(in: zoneForJob(job.tag)).startOfDay(for: now)
+        }
     }
 
     /// One job's hero, tonight line and shifts. Only the primary's card
@@ -1191,7 +1222,7 @@ struct DashboardView: View {
             // remains, labeling where the bar ends.
             HStack {
                 Spacer()
-                Text("Payday · \(facts.heroPayDate.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day()))")
+                Text("Payday · \(Self.paydayLabel(facts.heroPayDate, in: facts.calculator.payrollTimeZone))")
                     .font(PaydayFont.caption2)
                     .foregroundStyle(PaydayColor.textSecondary)
             }
@@ -1349,7 +1380,7 @@ struct DashboardView: View {
                     // person staring at the periods LIST — the shifts they
                     // were looking at live inside the CURRENT period's
                     // detail, so land there directly.
-                    tabRouter.pendingPeriodLanding = .currentDetail
+                    tabRouter.pendingPeriodLanding = Self.seeAllLanding(for: facts.job)
                     tabRouter.selected = .periods
                 } label: {
                     Text("See all")

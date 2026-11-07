@@ -159,8 +159,10 @@ enum InsightsEarnings {
     /// least two distinct roles have shifts, so an account with one role or
     /// none sees today's page.
     @MainActor
-    static func roleOptions(records: [ShiftRecord]) -> [String] {
-        let roles = ShiftRoleList.byUse(ShiftRoleList.entries(records))
+    static func roleOptions(records: [ShiftRecord], job: JobScope = .all) -> [String] {
+        // Under a picked job (E3) only that job's roles: a role worked at
+        // the other job alone would match nothing here and empty the page.
+        let roles = ShiftRoleList.byUse(ShiftRoleList.entries(records.filter { job.includes($0.jobName) }))
         return roles.count >= 2 ? roles : []
     }
 
