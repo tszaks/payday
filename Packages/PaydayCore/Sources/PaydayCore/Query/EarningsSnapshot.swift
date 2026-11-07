@@ -170,42 +170,43 @@ public struct EarningsSnapshot: Codable, Sendable, Equatable {
     public func valuation(_ id: UUID) -> ShiftValuation? { index.byID[id] }
 
     /// One civil day. Never clamped: see the type note.
-    public func day(_ day: CivilDay) -> EarningsResult {
+    public func day(_ day: CivilDay, job: JobScope = .all) -> EarningsResult {
         result(
             scope: .day(day),
             requested: DayRange(day: day),
             asOf: nil,
+            job: job,
             selected: index.byDay[day.dayNumber] ?? []
         )
     }
 
     /// One calendar month, clamped to `asOf`.
-    public func month(_ month: YearMonth, asOf: CivilDay? = nil) -> EarningsResult {
-        toDate(scope: .month(month), requested: month.range, asOf: asOf)
+    public func month(_ month: YearMonth, asOf: CivilDay? = nil, job: JobScope = .all) -> EarningsResult {
+        toDate(scope: .month(month), requested: month.range, asOf: asOf, job: job)
     }
 
     /// One pay period, clamped to `asOf`. The period arrives as the civil
     /// days a `PayPeriodCalculator` laid out, so changing the pay schedule
     /// changes which shifts this selects — and `stamp.manifest
     /// .scheduleDigest` is how a consumer knows that is what changed.
-    public func payPeriod(_ period: DayRange, asOf: CivilDay? = nil) -> EarningsResult {
-        toDate(scope: .payPeriod(period), requested: period, asOf: asOf)
+    public func payPeriod(_ period: DayRange, asOf: CivilDay? = nil, job: JobScope = .all) -> EarningsResult {
+        toDate(scope: .payPeriod(period), requested: period, asOf: asOf, job: job)
     }
 
     /// January 1 through December 31 of `year`, clamped to `asOf`. A pay
     /// period that crosses the year boundary therefore contributes only its
     /// in-year days.
-    public func yearToDate(year: Int, asOf: CivilDay? = nil) -> EarningsResult {
+    public func yearToDate(year: Int, asOf: CivilDay? = nil, job: JobScope = .all) -> EarningsResult {
         let range = DayRange(
             start: CivilDay(year: year, month: 1, day: 1),
             end: CivilDay(year: year, month: 12, day: 31)
         )
-        return toDate(scope: .yearToDate(year: year), requested: range, asOf: asOf)
+        return toDate(scope: .yearToDate(year: year), requested: range, asOf: asOf, job: job)
     }
 
     /// An arbitrary span, clamped to `asOf`.
-    public func range(_ range: DayRange, asOf: CivilDay? = nil) -> EarningsResult {
-        toDate(scope: .range(range), requested: range, asOf: asOf)
+    public func range(_ range: DayRange, asOf: CivilDay? = nil, job: JobScope = .all) -> EarningsResult {
+        toDate(scope: .range(range), requested: range, asOf: asOf, job: job)
     }
 
     /// One result per day of `range` after the `asOf` clamp, in order,
@@ -214,8 +215,8 @@ public struct EarningsSnapshot: Codable, Sendable, Equatable {
     /// Clamped like `range(_:asOf:)` on purpose: this is the series a chart
     /// draws under a headline, and `Σ days(in: r) == range(r)` has to hold
     /// for the chart and its total to agree (Definition of Done #5).
-    public func days(in range: DayRange, asOf: CivilDay? = nil) -> [EarningsResult] {
-        clamp(range, asOf: asOf).days.map { day(unclamped: $0) }
+    public func days(in range: DayRange, asOf: CivilDay? = nil, job: JobScope = .all) -> [EarningsResult] {
+        clamp(range, asOf: asOf).days.map { day(unclamped: $0, job: job) }
     }
 
     /// The recorded paycheck whose period ends on `periodEnd`, paired with
@@ -238,7 +239,8 @@ public struct EarningsSnapshot: Codable, Sendable, Equatable {
             paycheck: paycheck,
             expected: settled(
                 scope: .paycheck(periodEnd: periodEnd),
-                requested: paycheck.period
+                requested: paycheck.period,
+                job: .job(paycheck.jobName)
             )
         )
     }
@@ -251,7 +253,8 @@ public struct EarningsSnapshot: Codable, Sendable, Equatable {
                 paycheck: paycheck,
                 expected: settled(
                     scope: .paycheck(periodEnd: paycheck.periodEnd),
-                    requested: paycheck.period
+                    requested: paycheck.period,
+                    job: .job(paycheck.jobName)
                 )
             )
         }
@@ -266,6 +269,11 @@ public struct EarningsSnapshot: Codable, Sendable, Equatable {
         let lower = lowerBound(dayNumber: range.start.dayNumber)
         let upper = lowerBound(dayNumber: range.end.dayNumber + 1)
         return shifts[lower..<upper]
+    }
+
+    /// `valuations(in:)` narrowed to one job's shifts.
+    public func valuations(in range: DayRange, job: JobScope) -> [ShiftValuation] {
+        valuations(in: range).filter { job.includes($0.jobName) }
     }
 
     /// First index whose work day is >= `dayNumber`.
@@ -295,13 +303,14 @@ public struct EarningsSnapshot: Codable, Sendable, Equatable {
     /// cutoff". A scope that must not be clamped calls `settled` instead —
     /// the two are separate functions precisely so that omitting an
     /// argument cannot silently narrow a span (PR 4 review, P1).
-    private func toDate(scope: EarningsScope, requested: DayRange, asOf: CivilDay?) -> EarningsResult {
+    private func toDate(scope: EarningsScope, requested: DayRange, asOf: CivilDay?, job: JobScope) -> EarningsResult {
         let cutoff = asOf ?? stamp.asOf
         let clamped = clamp(requested, asOf: asOf)
         return result(
             scope: scope,
             requested: clamped,
             asOf: cutoff,
+            job: job,
             selected: valuations(in: clamped)
         )
     }
@@ -311,11 +320,12 @@ public struct EarningsSnapshot: Codable, Sendable, Equatable {
     /// paycheck scope: a stub in hand covers a period that already closed
     /// from the payer's side, so comparing it against a period-to-date
     /// figure would report a shortfall equal to the period's remaining days.
-    private func settled(scope: EarningsScope, requested: DayRange) -> EarningsResult {
+    private func settled(scope: EarningsScope, requested: DayRange, job: JobScope) -> EarningsResult {
         result(
             scope: scope,
             requested: requested,
             asOf: nil,
+            job: job,
             selected: valuations(in: requested)
         )
     }
@@ -323,11 +333,12 @@ public struct EarningsSnapshot: Codable, Sendable, Equatable {
     /// One day's result with no clamp, for `days(in:)` (whose range was
     /// already clamped once — clamping each day again would be the same
     /// answer at 31x the cost).
-    private func day(unclamped day: CivilDay) -> EarningsResult {
+    private func day(unclamped day: CivilDay, job: JobScope) -> EarningsResult {
         result(
             scope: .day(day),
             requested: DayRange(day: day),
             asOf: nil,
+            job: job,
             selected: index.byDay[day.dayNumber] ?? []
         )
     }
@@ -349,8 +360,12 @@ public struct EarningsSnapshot: Codable, Sendable, Equatable {
         scope: EarningsScope,
         requested: DayRange?,
         asOf: CivilDay?,
-        selected: some Collection<ShiftValuation>
+        job: JobScope = .all,
+        selected all: some Collection<ShiftValuation>
     ) -> EarningsResult {
+        // The job scope narrows the selection before anything is summed, so
+        // `shiftIDs`, minutes and completeness all describe the same shifts.
+        let selected = job == .all ? Array(all) : all.filter { job.includes($0.jobName) }
         var known = EarningsComponents.zero
         var covered = EarningsComponents.zero
         var minutes = 0
@@ -381,7 +396,7 @@ public struct EarningsSnapshot: Codable, Sendable, Equatable {
             regularMinutes: regularMinutes,
             overtimeMinutes: overtimeMinutes,
             completeness: Completeness(
-                valuations: Array(selected),
+                valuations: selected,
                 wageFeatureEnabled: wageFeatureEnabled
             ),
             shiftIDs: ids,

@@ -49,6 +49,10 @@ public struct ShiftInput: Hashable, Codable, Sendable, Identifiable {
     /// The person's role on this shift (bar, floor). Nil means no role. It
     /// picks the rate policy (`PayRatePolicy.roleName`); it is not money.
     public var roleName: String?
+    /// The job this shift was worked at (Pillar 9). Nil means the primary
+    /// job. The ledger prices and runs overtime per job, so two employers'
+    /// hours never add up to one workweek.
+    public var jobName: String?
 
     public init(
         id: UUID,
@@ -61,7 +65,8 @@ public struct ShiftInput: Hashable, Codable, Sendable, Identifiable {
         tipOutCents: Int? = nil,
         tipShareInCents: Int? = nil,
         minutesWorked: Int? = nil,
-        roleName: String? = nil
+        roleName: String? = nil,
+        jobName: String? = nil
     ) {
         self.id = id
         self.workDay = workDay
@@ -74,6 +79,7 @@ public struct ShiftInput: Hashable, Codable, Sendable, Identifiable {
         self.tipShareInCents = tipShareInCents
         self.minutesWorked = minutesWorked
         self.roleName = ShiftRole.normalized(roleName)
+        self.jobName = ShiftRole.normalized(jobName)
     }
 
     /// The non-wage components this shift contributes, before any valuation.

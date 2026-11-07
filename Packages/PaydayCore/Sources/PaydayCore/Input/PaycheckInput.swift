@@ -16,6 +16,9 @@ public struct PaycheckInput: Hashable, Codable, Sendable, Identifiable {
     public var overtimeWagesCents: Int?
     public var gratuityCents: Int?
     public var taxesCents: Int?
+    /// The job this paycheck is from (Pillar 9). Nil means the primary job.
+    /// `EarningsSnapshot` reconciles it against that job's shifts only.
+    public var jobName: String?
 
     public init(
         id: UUID,
@@ -27,7 +30,8 @@ public struct PaycheckInput: Hashable, Codable, Sendable, Identifiable {
         regularWagesCents: Int? = nil,
         overtimeWagesCents: Int? = nil,
         gratuityCents: Int? = nil,
-        taxesCents: Int? = nil
+        taxesCents: Int? = nil,
+        jobName: String? = nil
     ) {
         self.id = id
         self.periodStart = periodStart
@@ -39,6 +43,7 @@ public struct PaycheckInput: Hashable, Codable, Sendable, Identifiable {
         self.overtimeWagesCents = overtimeWagesCents
         self.gratuityCents = gratuityCents
         self.taxesCents = taxesCents
+        self.jobName = ShiftRole.normalized(jobName)
     }
 
     public var period: DayRange { DayRange(start: periodStart, end: periodEnd) }
