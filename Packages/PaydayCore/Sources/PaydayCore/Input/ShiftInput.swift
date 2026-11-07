@@ -40,6 +40,9 @@ public struct ShiftInput: Hashable, Codable, Sendable, Identifiable {
     public var gratuityFeesCents: Int
     /// Nil means "not entered", which the ledger treats as 0 cents.
     public var tipOutCents: Int?
+    /// A tip share or pool payout received from co-workers. Nil means "not
+    /// entered", which the ledger treats as 0 cents.
+    public var tipShareInCents: Int?
     /// Nil means hours were never logged: the shift contributes no wage and
     /// counts as `missingHours` in `Completeness`.
     public var minutesWorked: Int?
@@ -53,6 +56,7 @@ public struct ShiftInput: Hashable, Codable, Sendable, Identifiable {
         voluntaryCreditCents: Int = 0,
         gratuityFeesCents: Int = 0,
         tipOutCents: Int? = nil,
+        tipShareInCents: Int? = nil,
         minutesWorked: Int? = nil
     ) {
         self.id = id
@@ -63,6 +67,7 @@ public struct ShiftInput: Hashable, Codable, Sendable, Identifiable {
         self.voluntaryCreditCents = voluntaryCreditCents
         self.gratuityFeesCents = gratuityFeesCents
         self.tipOutCents = tipOutCents
+        self.tipShareInCents = tipShareInCents
         self.minutesWorked = minutesWorked
     }
 
@@ -72,7 +77,8 @@ public struct ShiftInput: Hashable, Codable, Sendable, Identifiable {
             voluntaryCashCents: voluntaryCashCents,
             voluntaryCreditCents: voluntaryCreditCents,
             gratuityFeesCents: gratuityFeesCents,
-            tipOutCents: tipOutCents ?? 0
+            tipOutCents: tipOutCents ?? 0,
+            tipShareInCents: tipShareInCents ?? 0
         )
     }
 }

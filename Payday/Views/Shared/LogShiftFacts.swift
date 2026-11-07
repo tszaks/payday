@@ -134,8 +134,12 @@ struct LogShiftFacts: Equatable, SnapshotFacts {
             calendar: calendar,
             now: now
         )
+        // A tip share received counts here too: it is earned money the
+        // engine valued, and never a tip the guest left, so a share-only
+        // night must not read "in tips".
         self.includesNonTipIncome = (valuation?.wage.isValued ?? false)
             || (valuation?.components.gratuityFeesCents ?? 0) > 0
+            || (valuation?.components.tipShareInCents ?? 0) > 0
 
         // The rate line stays hidden for a figure the engine could not
         // produce: an "$X/hr" over an unavailable total would be a currency

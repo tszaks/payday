@@ -69,6 +69,7 @@ enum ShiftInputAdapter {
                 // nil and 0 stay different facts all the way in: the ledger
                 // treats nil as 0 cents, and nothing else re-derives it.
                 tipOutCents: record.tipOutCents,
+                tipShareInCents: record.tipShareInCents,
                 minutesWorked: record.hoursWorked.map(WorkedMinutes.minutes(fromHours:))
             ))
         }

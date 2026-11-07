@@ -129,6 +129,17 @@ struct PayrollSettingsSection: View {
                     .foregroundStyle(PaydayColor.textSecondary)
             }
 
+            // Where card tips are paid decides what the expected check is:
+            // on the paycheck it carries a tips line; paid at close it is
+            // gratuity + wages and there is no tips line to audit.
+            Picker("Card tips are paid", selection: Bindable(preferencesStore).isCardTipsPaidAtClose) {
+                Text("On my paycheck").tag(false)
+                Text("At the end of my shift").tag(true)
+            }
+            Text("Choose 'at the end of my shift' if you cash out card tips nightly or they go to a pay card.")
+                .font(PaydayFont.footnote)
+                .foregroundStyle(PaydayColor.textSecondary)
+
             HStack {
                 Text("Payroll time zone")
                     .foregroundStyle(PaydayColor.textPrimary)

@@ -59,6 +59,7 @@ enum ShiftCommands {
         let clockIn: Date?
         let clockOut: Date?
         let serverCount: Int?
+        var tipShareInCents: Int? = nil
         let receiptMetrics: ShiftReceiptMetrics?
         let note: String?
         let recordedAt: Date?
@@ -132,9 +133,12 @@ enum ShiftCommands {
         cashTipsCents: Int,
         creditTipsCents: Int,
         hoursWorked: Double?,
-        receiptMetrics: ShiftReceiptMetrics?
+        receiptMetrics: ShiftReceiptMetrics?,
+        tipShareInCents: Int? = nil
     ) -> Bool {
         if cashTipsCents != 0 || creditTipsCents != 0 { return true }
+        // A bartender paid only from the pool has no tips of their own.
+        if let tipShareInCents, tipShareInCents > 0 { return true }
         if let hoursWorked, hoursWorked > 0 { return true }
         if let gratuity = receiptMetrics?.employeeGratuityFeesCents, gratuity != 0 { return true }
         return false
@@ -178,6 +182,7 @@ enum ShiftCommands {
         clockIn: Date? = nil,
         clockOut: Date? = nil,
         serverCount: Int? = nil,
+        tipShareInCents: Int? = nil,
         receiptMetrics: ShiftReceiptMetrics? = nil,
         note: String? = nil,
         recordedAt: Date = .now
@@ -186,7 +191,8 @@ enum ShiftCommands {
             cashTipsCents: cashTipsCents,
             creditTipsCents: creditTipsCents,
             hoursWorked: hoursWorked,
-            receiptMetrics: receiptMetrics
+            receiptMetrics: receiptMetrics,
+            tipShareInCents: tipShareInCents
         ) else { throw Failure.nothingToSave }
 
         // Clamped to today. A caller may pass an unclamped date, but a shift
@@ -206,6 +212,7 @@ enum ShiftCommands {
                 clockIn: clockIn,
                 clockOut: clockOut,
                 serverCount: serverCount,
+                tipShareInCents: tipShareInCents,
                 receiptMetrics: receiptMetrics,
                 note: note,
                 recordedAt: recordedAt,
@@ -257,6 +264,7 @@ enum ShiftCommands {
             clockIn: record.clockIn,
             clockOut: record.clockOut,
             serverCount: record.serverCount,
+            tipShareInCents: record.tipShareInCents,
             receiptMetrics: record.receiptMetrics,
             note: record.note,
             recordedAt: record.recordedAt,
@@ -315,6 +323,7 @@ enum ShiftCommands {
                 clockIn: deleted.clockIn,
                 clockOut: deleted.clockOut,
                 serverCount: deleted.serverCount,
+                tipShareInCents: deleted.tipShareInCents,
                 receiptMetrics: deleted.receiptMetrics,
                 note: deleted.note,
                 recordedAt: deleted.recordedAt,

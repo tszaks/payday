@@ -44,7 +44,7 @@ struct CSVExporterTests {
         // The six engine columns are APPENDED, not inserted, so an existing
         // spreadsheet formula keyed on column position keeps working. See the
         // comment on CSVExporter.header.
-        #expect(CSVExporter.header == "Date,Shift,Cash,Credit,Gratuity-Fees,Tip-Out,Net,Hours,Start,End,Sales,Servers,Double,Note,Period,Paycheck,Hours-Clock,Non-Wage-Earnings,Regular-Wages,Overtime-Wages,Earned-Income,Completeness")
+        #expect(CSVExporter.header == "Date,Shift,Cash,Credit,Gratuity-Fees,Tip-Out,Net,Hours,Start,End,Sales,Servers,Double,Note,Period,Paycheck,Hours-Clock,Non-Wage-Earnings,Regular-Wages,Overtime-Wages,Earned-Income,Completeness,Tip-Share-In")
     }
 
     /// The first sixteen columns keep both their names and their positions,
@@ -435,5 +435,23 @@ struct CSVExporterE1Tests {
         // The hours still export, because those are a logged fact and not an
         // engine result.
         #expect(CSVExporterTests.cell(csv, column: "Hours") == "6.0000")
+    }
+}
+
+extension CSVExporterTests {
+    // MARK: - Tip share received (PR A)
+
+    @Test("tip share received exports in its own appended column; empty when not entered")
+    func tipShareInColumn() {
+        let records = [
+            ShiftRecord(workDate: date(2026, 7, 8), tipOutCents: 4_000, tipShareInCents: 18_000),
+            ShiftRecord(workDate: date(2026, 7, 9), cashTipsCents: 1_000),
+        ]
+        let csv = CSVExporter.export(records: records, paycheckRecords: [], calculator: calculator)
+        #expect(Self.cell(csv, row: 1, column: "Tip-Share-In") == "180.00")
+        // Net is nonWageEarnings, which counts the share: 18000 - 4000.
+        #expect(Self.cell(csv, row: 1, column: "Net") == "140.00")
+        #expect(Self.cell(csv, row: 2, column: "Tip-Share-In") == "")
+        #expect(CSVExporter.header.hasSuffix(",Tip-Share-In"))
     }
 }

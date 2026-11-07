@@ -1,0 +1,116 @@
+{
+  "id": "B1",
+  "description": "A bartender in a pooled house, synthetic round numbers. Mon 2026-10-05: no card tips, a $180.00 tip share received, $40.00 tipped out, 6h at 500c. Tue 2026-10-06: $20.00 cash, $60.00 card, $10.00 tipped out, no share, 5h. The share is earned money (nonWageEarnings, earnedIncome) but never a tip the guest left (voluntaryTips). On the paycheck it rides with the card tips; with card tips paid at close the expected check is gratuity + wages only.",
+  "kind": "paycheck",
+  "policies": {
+    "rate": [
+      {
+        "effectiveFrom": "2025-12-29",
+        "hourlyRateCents": 500,
+        "provenance": "confirmed"
+      }
+    ],
+    "calendar": [
+      {
+        "effectiveFrom": "2025-12-29",
+        "workweekStartWeekday": 2,
+        "overtimeThresholdMinutes": 2400,
+        "overtimeMultiplierHundredths": 150,
+        "payrollTimeZone": "America/New_York"
+      }
+    ]
+  },
+  "schedule": {
+    "frequency": "biweekly",
+    "anchorPeriodEnd": "2026-10-18",
+    "firstWeekday": 2
+  },
+  "shifts": [
+    {
+      "id": "00000000-0000-0000-0000-0000000000b1",
+      "workDay": "2026-10-05",
+      "period": "dinner",
+      "minutesWorked": 360,
+      "voluntaryCashCents": 0,
+      "voluntaryCreditCents": 0,
+      "gratuityFeesCents": 0,
+      "tipOutCents": 4000,
+      "tipShareInCents": 18000
+    },
+    {
+      "id": "00000000-0000-0000-0000-0000000000b2",
+      "workDay": "2026-10-06",
+      "period": "dinner",
+      "minutesWorked": 300,
+      "voluntaryCashCents": 2000,
+      "voluntaryCreditCents": 6000,
+      "gratuityFeesCents": 0,
+      "tipOutCents": 1000,
+      "tipShareInCents": null
+    }
+  ],
+  "legacyEntries": [],
+  "paychecks": [],
+  "asOf": "2026-10-18",
+  "expected": {
+    "perShift": [
+      {
+        "id": "00000000-0000-0000-0000-0000000000b1",
+        "minutesWorked": 360,
+        "regularMinutes": 360,
+        "overtimeMinutes": 0,
+        "cashCents": 0,
+        "creditCents": 0,
+        "tipOutCents": 4000,
+        "tipShareInCents": 18000,
+        "regularWagesCents": 3000,
+        "overtimeWagesCents": 0,
+        "voluntaryTipsCents": 0,
+        "nonWageEarningsCents": 14000,
+        "earnedIncomeCents": 17000
+      },
+      {
+        "id": "00000000-0000-0000-0000-0000000000b2",
+        "minutesWorked": 300,
+        "regularMinutes": 300,
+        "overtimeMinutes": 0,
+        "cashCents": 2000,
+        "creditCents": 6000,
+        "tipOutCents": 1000,
+        "tipShareInCents": 0,
+        "regularWagesCents": 2500,
+        "overtimeWagesCents": 0,
+        "voluntaryTipsCents": 8000,
+        "nonWageEarningsCents": 7000,
+        "earnedIncomeCents": 9500
+      }
+    ],
+    "payPeriod": {
+      "start": "2026-10-05",
+      "end": "2026-10-18",
+      "voluntaryTipsCents": 8000,
+      "tipShareInCents": 18000,
+      "tipOutCents": 5000,
+      "wagesCents": 5500,
+      "nonWageEarningsCents": 21000,
+      "earnedIncomeCents": 26500,
+      "cardTipsOnCheck": {
+        "expectedPaycheckTipsLineCents": 19000,
+        "auditableTipsLineCents": 19000,
+        "expectedPaycheckGrossCents": 24500,
+        "tipsAlreadyPaidCents": 2000
+      },
+      "cardTipsPaidAtClose": {
+        "expectedPaycheckTipsLineCents": 0,
+        "auditableTipsLineCents": null,
+        "expectedPaycheckGrossCents": 5500,
+        "tipsAlreadyPaidCents": 21000
+      }
+    },
+    "wrongAnswers": {
+      "shareCountedAsCardTipsVoluntaryTipsCents": 26000,
+      "atCloseStillExpectsTipsLineGrossCents": 24500
+    }
+  },
+  "notes": "ARITHMETIC. Wages: 500c x 360 min / 60 = 3000; 500c x 300 / 60 = 2500 (both under the 40h threshold, so no overtime). Shift 1 non-wage = 0 + 0 + 0 + 18000 - 4000 = 14000; shift 2 = 2000 + 6000 + 0 + 0 - 1000 = 7000. Period: voluntary tips 8000 (cash + card only), share 18000, tip-out 5000, non-wage 21000, wages 5500, earned 26500. Paid on the check: tips line = max(0, (card 6000 + share 18000) - tip-out 5000) = 19000, gross = 19000 + gratuity 0 + wages 5500 = 24500, cash already paid = 2000. Paid at close: tips line 0, nothing to audit, gross = 0 + 5500 = 5500, tips already paid = 2000 + 6000 + 18000 - 5000 = 21000. WRONG ANSWERS: faking the share as card tips puts it in voluntaryTips (26000) and so in tip percent; ignoring the setting keeps a 24500 expected gross on a check that will only carry 5500."
+}

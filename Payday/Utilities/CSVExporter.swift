@@ -20,7 +20,7 @@ enum CSVExporter {
     /// loses to not breaking a file that is already on someone's computer.
     /// Fixture E1 requires cells to be located by HEADER NAME and never by
     /// index, which is the same rule from the reader's side.
-    static let header = "Date,Shift,Cash,Credit,Gratuity-Fees,Tip-Out,Net,Hours,Start,End,Sales,Servers,Double,Note,Period,Paycheck,Hours-Clock,Non-Wage-Earnings,Regular-Wages,Overtime-Wages,Earned-Income,Completeness"
+    static let header = "Date,Shift,Cash,Credit,Gratuity-Fees,Tip-Out,Net,Hours,Start,End,Sales,Servers,Double,Note,Period,Paycheck,Hours-Clock,Non-Wage-Earnings,Regular-Wages,Overtime-Wages,Earned-Income,Completeness,Tip-Share-In"
 
     /// `valuations` carries the engine's answer for each shift, keyed by shift
     /// id. When a shift has none the five engine columns are EMPTY rather than
@@ -86,6 +86,7 @@ enum CSVExporter {
         /// engine because PR 8 deletes it.
         let nonWageEarningsCents: Int
         let tipOutCents: Int?
+        let tipShareInCents: Int?
         let hoursWorked: Double?
         let clockIn: Date?
         let clockOut: Date?
@@ -126,6 +127,7 @@ enum CSVExporter {
             gratuityFeesCents = record.receiptMetrics?.employeeGratuityFeesCents ?? 0
             nonWageEarningsCents = record.nonWageEarningsCents
             tipOutCents = record.tipOutCents
+            tipShareInCents = record.tipShareInCents
             hoursWorked = record.hoursWorked
             clockIn = record.clockIn
             clockOut = record.clockOut
@@ -153,6 +155,7 @@ enum CSVExporter {
         // that many chained `.map(...) ?? ""` expressions in one array
         // literal was slow enough to trip the type checker's time budget.
         let tipOutField: String = shiftDetails.tipOutCents.map(dollars) ?? ""
+        let tipShareInField: String = shiftDetails.tipShareInCents.map(dollars) ?? ""
         // THE ENGINE'S FORMATTER, not a local one. The previous line here was
         // `shiftDetails.hoursWorked.map(trimmedHours)`, and `trimmedHours`
         // rounded to the quarter hour: a 6h23m shift exported as "6.5". That
@@ -193,7 +196,9 @@ enum CSVExporter {
             valuation.map { dollars($0.components.regularWagesCents) } ?? "",
             valuation.map { dollars($0.components.overtimeWagesCents) } ?? "",
             valuation.map { dollars($0.components.earnedIncomeCents) } ?? "",
-            valuation.map(completeness) ?? ""
+            valuation.map(completeness) ?? "",
+            // Appended, per the header's rule. Empty when not entered.
+            tipShareInField
         ]
         return fields.joined(separator: ",")
     }

@@ -239,6 +239,10 @@ struct LogTipSheet: View {
     // allowed to happen.
     @State private var hoursWorked: Double?
     @State private var tipOutCents: Int = 0
+    /// A tip share or pool payout RECEIVED from co-workers. Shift-level like
+    /// tip-out, and the mirror of it: money in instead of out. 0 means "not
+    /// entered" and saves as nil.
+    @State private var tipShareInCents: Int = 0
     @State private var salesCents: Int = 0
     @State private var shiftPeriod: ShiftPeriod?
     /// Automatic period inference follows the start time until the person
@@ -304,6 +308,7 @@ struct LogTipSheet: View {
             _note = State(initialValue: record.note ?? "")
             _hoursWorked = State(initialValue: record.hoursWorked)
             _tipOutCents = State(initialValue: record.tipOutCents ?? 0)
+            _tipShareInCents = State(initialValue: record.tipShareInCents ?? 0)
             _salesCents = State(initialValue: record.salesCents ?? 0)
             _shiftPeriod = State(initialValue: record.shiftPeriod)
             _hasManuallySelectedShiftPeriod = State(initialValue: record.shiftPeriod != nil)
@@ -334,7 +339,8 @@ struct LogTipSheet: View {
     }
 
     private var canSave: Bool {
-        cashCents > 0 || creditCents > 0
+        // A bartender paid only from the pool has no tips of their own.
+        cashCents > 0 || creditCents > 0 || tipShareInCents > 0
     }
 
     /// The draft as the `ShiftInput` the save would persist, so the header
@@ -355,6 +361,7 @@ struct LogTipSheet: View {
             clockIn: clockIn,
             clockOut: clockOut,
             serverCount: serverCount,
+            tipShareInCents: tipShareInCents,
             receiptMetrics: receiptMetrics,
             normalizeEarnings: editingRecord != nil,
             policies: policyStore.policies
@@ -858,7 +865,8 @@ struct LogTipSheet: View {
         switch field {
         case .cash: return .credit
         case .credit: return .tipOut
-        case .tipOut:
+        case .tipOut: return .tipShareIn
+        case .tipShareIn:
             if receiptMetrics?.gratuityFeesCents != nil { return .gratuityFees }
             return receiptMetrics?.totalAmountCents == nil ? .sales : .receiptTotal
         case .gratuityFees: return receiptMetrics?.totalAmountCents == nil ? .sales : .receiptTotal
@@ -1004,6 +1012,21 @@ struct LogTipSheet: View {
                 }
                 .padding(.vertical, 14)
                 .id(CurrencyRowField.tipOut)
+                Divider()
+                // The mirror of Tip-out, at the same weight: money a pool or
+                // tip share paid IN. Earned, but never a tip the guest left,
+                // so tip percent ignores it.
+                HStack {
+                    Text("Tip share received")
+                    Spacer()
+                    CompactCurrencyField(cents: $tipShareInCents, field: .tipShareIn, focusedField: $focusedCurrencyField)
+                }
+                .padding(.vertical, 14)
+                .id(CurrencyRowField.tipShareIn)
+                // On the row rather than in the sheet's long onChange chain,
+                // which is already at the type checker's limit. Same effect:
+                // an edit live-saves.
+                .onChange(of: tipShareInCents) { _, _ in liveSaveEdit() }
                 Divider()
                 if receiptMetrics?.gratuityFeesCents != nil {
                     HStack {
@@ -1665,6 +1688,7 @@ struct LogTipSheet: View {
                 clockIn: clockIn,
                 clockOut: clockOut,
                 serverCount: serverCount,
+                tipShareInCents: tipShareInCents > 0 ? tipShareInCents : nil,
                 receiptMetrics: receiptMetrics,
                 note: trimmedNote,
                 recordedAt: recordedAt
@@ -1785,6 +1809,7 @@ struct LogTipSheet: View {
                     edited.note = trimmedNote
                     edited.hoursWorked = hoursWorked
                     edited.tipOutCents = tipOutCents > 0 ? tipOutCents : nil
+                    edited.tipShareInCents = tipShareInCents > 0 ? tipShareInCents : nil
                     edited.salesCents = salesCents > 0 ? salesCents : nil
                     edited.shiftPeriod = shiftPeriod
                     edited.clockIn = clockIn

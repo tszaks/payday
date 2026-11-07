@@ -112,6 +112,20 @@ struct PaycheckEntryFacts: SnapshotFacts, Equatable {
     /// printing an en dash beside every field.
     var hasExpectation: Bool { !isUnbacked }
 
+    /// Whether the stub as entered is worth saving. With card tips on the
+    /// paycheck the tips line is the one figure this sheet exists to record,
+    /// so it must be present. Paid at close the stub prints no tips line at
+    /// all, and a zero there is the normal stub rather than an empty one: any
+    /// other figure (wages, gratuity, gross, taxes, net) is enough. Found by
+    /// review on PR A: with Save keyed to the tips field alone, a person paid
+    /// at close could never record a check, so the after-tax model never
+    /// learned from them.
+    var canSave: Bool {
+        expectation.cardTipsOnCheck
+            ? observation.paidTipsCents != nil
+            : observation.hasAnyField
+    }
+
     // MARK: - The cache (adapter contract, rule 3)
 
     /// `cached` when it was computed from the same dataset and the same stub,

@@ -156,9 +156,16 @@ struct DashboardFacts: SnapshotFacts {
     /// reporting on. `.unavailable` when no card is showing, which is also
     /// every case in which nothing renders it.
     let predictedPaycheck: EarningsFigure
-    /// `MetricID.voluntaryTips`, cash component, same period and same query
-    /// as `predictedPaycheck` — the gap between "You kept" and the check.
+    /// What was paid before payday, same period and same query as
+    /// `predictedPaycheck` — the gap between "You kept" and the check. On the
+    /// check: `MetricID.voluntaryTips`, cash component. Paid at close:
+    /// cash + card + tip share − tip-out (`PaycheckReconciler
+    /// .tipsAlreadyPaidCents`), because only gratuity and wages remain on
+    /// the check.
     let paydayCash: EarningsFigure
+    /// Settings → Payroll, "Card tips are paid: At the end of my shift".
+    /// Picks the payday card's captions.
+    let cardTipsPaidAtClose: Bool
     /// `MetricID.expectedPaycheckNet` for the same period and query as
     /// `predictedPaycheck`. `.unavailable` under 2 qualifying stubs.
     let predictedPaycheckNet: EarningsFigure
@@ -212,6 +219,9 @@ struct DashboardFacts: SnapshotFacts {
         /// for the reason `allTipRecords` is not: a caller that forgets it
         /// silently drops every after-tax figure.
         withholdingModel: WithholdingModel?,
+        /// From `DashboardEarnings.Dataset.cardTipsPaidAtClose`. Defaulted
+        /// to today's behaviour (on the check) so existing call sites hold.
+        cardTipsPaidAtClose: Bool = false,
         schedule: PaySchedule?,
         now: Date,
         forcedPaydayPhase: PaydayMoment.Phase?,
@@ -415,7 +425,9 @@ struct DashboardFacts: SnapshotFacts {
         // rendered. The card deliberately does not repeat the pay date,
         // because the progress bar a few lines above already labels where the
         // period ends ([DB-22]), and `heroPayDate` is what draws that.
-        let paydayExpectation = PaycheckReconciler.Expectation(result: paydayResult?.1, stamp: snapshot?.stamp)
+        self.cardTipsPaidAtClose = cardTipsPaidAtClose
+        let paydayExpectation = PaycheckReconciler.Expectation(
+            result: paydayResult?.1, stamp: snapshot?.stamp, cardTipsOnCheck: !cardTipsPaidAtClose)
         predictedPaycheck = paydayExpectation.grossFigure
         predictedPaycheckNet = paydayExpectation.netFigure(model: withholdingModel)
 
@@ -423,7 +435,8 @@ struct DashboardFacts: SnapshotFacts {
         // line, so its before- and after-tax figures cannot disagree with
         // each other or with the hero. Current period only.
         let heroExpectation = heroIsCurrent
-            ? PaycheckReconciler.Expectation(result: heroResult, stamp: snapshot?.stamp)
+            ? PaycheckReconciler.Expectation(
+                result: heroResult, stamp: snapshot?.stamp, cardTipsOnCheck: !cardTipsPaidAtClose)
             : .unbacked
         heroCheckGross = heroExpectation.grossFigure
         heroCheckNet = heroExpectation.netFigure(model: withholdingModel)
@@ -434,10 +447,14 @@ struct DashboardFacts: SnapshotFacts {
         // they made (Tyler, on his own real period: "if i kept 3100 why
         // would my check be 2600?? cash?"). Same query as the check above,
         // so the two cannot be a cent apart.
+        //
+        // Paid at close, the gap is every tip already handed over: cash, card
+        // and any tip share, net of tip-out. Gratuity stays on the check, so
+        // the figure is the engine's `tipsAlreadyPaidCents`, labelled as tips.
         paydayCash = EarningsFigure(
-            metric: .voluntaryTips,
-            amount: paydayResult.map { .cents($0.1.knownComponents.voluntaryCashCents) } ?? .unavailable,
-            label: "Cash tips",
+            metric: cardTipsPaidAtClose ? .nonWageEarnings : .voluntaryTips,
+            amount: paydayExpectation.tipsAlreadyPaidCents.map { .cents($0) } ?? .unavailable,
+            label: cardTipsPaidAtClose ? "Tips" : "Cash tips",
             caption: nil,
             completeness: paydayResult?.1.completeness ?? .empty
         )
@@ -486,7 +503,7 @@ struct DashboardFacts: SnapshotFacts {
                 shiftID: latest.shiftID
             )
             let components = valuation.components
-            tonightRevealText = "\(RevealCopy.headline(cents: revealCents, includesNonTipIncome: components.wagesCents > 0 || components.gratuityFeesCents > 0)) \(RevealCopy.comparison(for: result.comparison, period: latest.shiftPeriod))"
+            tonightRevealText = "\(RevealCopy.headline(cents: revealCents, includesNonTipIncome: components.wagesCents > 0 || components.gratuityFeesCents > 0 || components.tipShareInCents > 0)) \(RevealCopy.comparison(for: result.comparison, period: latest.shiftPeriod))"
         }
         tonightLine = TonightLine.compose(
             tonightRevealText: tonightRevealText,
@@ -725,6 +742,7 @@ struct DashboardView: View {
         // with years of shifts a blank page. The swap is inside
         // `DashboardEarnings.build`.
         let dataset = renderCache?.revision == snapshotRevision
+            && renderCache?.dataset.cardTipsPaidAtClose == preferencesStore.isCardTipsPaidAtClose
             ? renderCache!.dataset
             : DashboardEarnings.build(
                 records: shiftRecords,
@@ -734,7 +752,8 @@ struct DashboardView: View {
                 // the raw query still holds it. Periods and period detail
                 // drop it the same way; the after-tax model must too, or a
                 // removed stub keeps training a figure the person can see.
-                paychecks: paycheckRecords.hidingPendingRemoval()
+                paychecks: paycheckRecords.hidingPendingRemoval(),
+                cardTipsPaidAtClose: preferencesStore.isCardTipsPaidAtClose
             )
         let snapshot = dataset.snapshot
         // Rule 3: the facts are keyed on the dataset's own digest, the
@@ -743,12 +762,14 @@ struct DashboardView: View {
         // digest, so the model is part of the key too.
         let facts = renderCache?.digest == snapshot?.stamp.digest && renderCache?.selection == selection
             && renderCache?.dataset.withholdingModel == dataset.withholdingModel
+            && renderCache?.dataset.cardTipsPaidAtClose == dataset.cardTipsPaidAtClose
             ? renderCache!.facts
             : DashboardFacts(
                 snapshot: snapshot,
                 allShiftRecords: dataset.shiftRecordDays,
                 allTipRecords: dataset.tipRecords,
                 withholdingModel: dataset.withholdingModel,
+                cardTipsPaidAtClose: dataset.cardTipsPaidAtClose,
                 schedule: scheduleStore.schedule,
                 now: now,
                 forcedPaydayPhase: forcedPaydayPhase,
@@ -1161,7 +1182,9 @@ struct DashboardView: View {
                 // a card ends up with two totals nobody can reconcile. The
                 // payday date is NOT repeated here — the progress bar above
                 // already labels where the period ends.
-                Text("Card tips + gratuity + wages − tip-out · before tax")
+                Text(facts.cardTipsPaidAtClose
+                     ? "Gratuity + wages · before tax"
+                     : "Card tips + gratuity + wages − tip-out · before tax")
                     .font(PaydayFont.caption2)
                     .foregroundStyle(PaydayColor.textSecondary)
                     .multilineTextAlignment(.center)
@@ -1174,7 +1197,9 @@ struct DashboardView: View {
                 // Not a repeat under rule 11: it does arithmetic for the reader
                 // rather than restating something already on screen.
                 if let cash = facts.paydayCash.text, (facts.paydayCash.cents ?? 0) > 0 {
-                    Text("Cash already paid · \(cash)")
+                    Text(facts.cardTipsPaidAtClose
+                         ? "Tips already paid · \(cash)"
+                         : "Cash already paid · \(cash)")
                         .font(PaydayFont.caption2)
                         .foregroundStyle(PaydayColor.textSecondary)
                         .multilineTextAlignment(.center)

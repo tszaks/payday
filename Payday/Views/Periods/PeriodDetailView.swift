@@ -113,6 +113,7 @@ struct PeriodDetailFacts: SnapshotFacts {
         period: PayPeriod,
         schedule: PaySchedule?,
         payrollTimeZone: TimeZone,
+        cardTipsPaidAtClose: Bool = false,
         calendar: Calendar = .current
     ) {
         let calculator = PayPeriodCalculator(
@@ -164,7 +165,8 @@ struct PeriodDetailFacts: SnapshotFacts {
         // The `?? 0` is never rendered as money: with no dataset
         // `noPaycheckCaption` below names the pay date and no dollar figure,
         // and `checked` refuses.
-        expectation = PaycheckReconciler.Expectation(result: periodResult, stamp: snapshot?.stamp)
+        expectation = PaycheckReconciler.Expectation(
+            result: periodResult, stamp: snapshot?.stamp, cardTipsOnCheck: !cardTipsPaidAtClose)
         expectedCheckCents = expectation.grossCents ?? 0
 
         // Every bar is `snapshot.day(thatDay)` and `whole` is the same
@@ -180,7 +182,8 @@ struct PeriodDetailFacts: SnapshotFacts {
 
         let resolvedPaycheck = HistoryEarnings.paycheck(for: period, in: paycheckRecords)
         paycheck = resolvedPaycheck
-        checked = PeriodCheckComparison(result: periodResult, paycheck: resolvedPaycheck)
+        checked = PeriodCheckComparison(
+            result: periodResult, paycheck: resolvedPaycheck, cardTipsOnCheck: !cardTipsPaidAtClose)
         // Rule 4 again: with no dataset there is no expectation to state, so
         // the caption names the pay date and no dollar figure at all.
         //
@@ -208,6 +211,7 @@ struct PeriodDetailView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(PayScheduleStore.self) private var scheduleStore
     @Environment(PolicyStore.self) private var policyStore
+    @Environment(UserPreferencesStore.self) private var preferencesStore
     /// The other representation. `snapshotBuild()` picks one; never both.
     @Query private var shiftRecords: [ShiftRecord]
     @Query private var paycheckRecords: [PaycheckRecord]
@@ -233,7 +237,8 @@ struct PeriodDetailView: View {
             paycheckRecords: paycheckRecords.hidingPendingRemoval(),
             period: period,
             schedule: scheduleStore.schedule,
-            payrollTimeZone: policyStore.payrollTimeZone
+            payrollTimeZone: policyStore.payrollTimeZone,
+            cardTipsPaidAtClose: preferencesStore.isCardTipsPaidAtClose
         )
         // A ScrollView, deliberately NOT a List — same fix as the Dashboard
         // (2026-07-19): a List animates row resize on UIKit's own clock,

@@ -84,6 +84,10 @@ enum PaydayAccountEraser {
         preferencesStore.isFaceIDLockEnabled = false
         preferencesStore.isSmartNudgeEnabled = true
         preferencesStore.isPaydayReminderEnabled = true
+        // Where card tips are paid is the deleted account's payroll fact.
+        // Left behind, the next account on this phone would inherit it, and
+        // settings sync would upload it as that account's own choice.
+        preferencesStore.isCardTipsPaidAtClose = false
         preferencesStore.appearance = .system
 
         // Identity-bound shared state. Left behind, the stale registration

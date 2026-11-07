@@ -84,7 +84,8 @@ struct ShiftWriteWireTests {
         let expected: Set<String> = [
             "id", "work_date", "shift_period", "cash_tips_cents", "credit_tips_cents",
             "tip_out_cents", "sales_cents", "hours_worked", "clock_in", "clock_out",
-            "server_count", "receipt_metrics", "note", "recorded_at", "client_updated_at"
+            "server_count", "tip_share_in_cents", "receipt_metrics", "note", "recorded_at",
+            "client_updated_at"
         ]
         #expect(keys == expected, "unexpected: \(keys.symmetricDifference(expected).sorted())")
     }
@@ -493,4 +494,54 @@ private final class StubbingURLProtocol: URLProtocol, @unchecked Sendable {
     }
 
     override func stopLoading() {}
+}
+
+extension ShiftWriteWireTests {
+    // MARK: - Tip share received (PR A)
+
+    /// Always sent, null included, because `write_shifts` keeps the stored
+    /// share only when the key is ABSENT (what an older build sends). A
+    /// current build that omitted the key could never clear the field.
+    @Test("the tip share is encoded as an explicit null when not entered")
+    func tipShareInIsAnExplicitNull() throws {
+        let data = try JSONEncoder().encode(Self.shift())
+        let object = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(object.keys.contains("tip_share_in_cents"))
+        #expect(object["tip_share_in_cents"] is NSNull)
+    }
+
+    @Test("a tip share round-trips through the wire shape and back onto a record")
+    func tipShareInRoundTrips() throws {
+        var shift = Self.shift()
+        shift.tipShareInCents = 18_000
+        let data = try JSONEncoder().encode(shift)
+        let object = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(object["tip_share_in_cents"] as? Int == 18_000)
+        // The server's row carries user_id; the upload does not.
+        var row = object
+        row["user_id"] = Self.userID.uuidString
+        let decoded = try JSONDecoder().decode(
+            RemoteShift.self, from: JSONSerialization.data(withJSONObject: row))
+        #expect(decoded.tipShareInCents == 18_000)
+    }
+
+    @Test("a shift with no share fingerprints as it did before the field existed")
+    func noShareKeepsTheFingerprint() throws {
+        let value = Self.shift().businessValue
+        let data = try JSONEncoder().encode(value)
+        let object = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(!object.keys.contains("tipShareInCents"))
+        var shared = Self.shift()
+        shared.tipShareInCents = 500
+        #expect(try shared.contentFingerprint != Self.shift().contentFingerprint)
+    }
+
+    @MainActor
+    @Test("a record carries its tip share into the upload")
+    func recordCarriesTipShareIn() {
+        let record = ShiftRecord(workDate: .now, tipOutCents: 4_000, tipShareInCents: 18_000)
+        let remote = RemoteShift(record: record, userID: Self.userID)
+        #expect(remote.tipShareInCents == 18_000)
+        #expect(record.nonWageEarningsCents == 14_000)
+    }
 }

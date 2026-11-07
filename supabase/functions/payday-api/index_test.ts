@@ -428,3 +428,58 @@ Deno.test("a day outside the range contributes nothing", async () => {
   assertEquals(out.days_in_range, 0);
   assertEquals(out.earned_income_cents, 0);
 });
+
+Deno.test("a received tip share is reported and already inside the stored net", () => {
+  // A bartender with no card tips: $180 share in, $40 tipped out.
+  const shift = testing.shiftResponse({
+    id: "44444444-4444-4444-8444-444444444444",
+    work_date: "2026-09-05",
+    cash_tips_cents: 0,
+    credit_tips_cents: 0,
+    gratuity_fees_cents: 0,
+    tip_out_cents: 4000,
+    tip_share_in_cents: 18000,
+    // The generated column: cash + credit + gratuity + tip_share_in - tip_out.
+    non_wage_earnings_cents: 14000,
+    legacy_entry_ids: [],
+    source: "device",
+  });
+  assertEquals(shift.tip_share_in_cents, 18000);
+  assertEquals(shift.net_tip_earnings_cents, 14000);
+  assertEquals(shift.gross_tip_earnings_cents, 18000);
+});
+
+Deno.test("a shift with no tip share reports null, not zero", () => {
+  const shift = testing.shiftResponse({
+    id: "55555555-5555-4555-8555-555555555555",
+    work_date: "2026-09-05",
+    non_wage_earnings_cents: 0,
+  });
+  assertEquals(shift.tip_share_in_cents, null);
+});
+
+Deno.test("snapshot sums carry a received tip share into earned income", () => {
+  const days = [{
+    day: "2026-09-05",
+    minutes: 0,
+    totalShifts: 1,
+    knownComponents: {
+      voluntaryCashCents: 0, voluntaryCreditCents: 0, gratuityFeesCents: 0,
+      tipOutCents: 4000, tipShareInCents: 18000,
+      regularWagesCents: 1000, overtimeWagesCents: 0,
+    },
+  }];
+  const t = sumSnapshotDays(days, null, null);
+  assertEquals(t.tipShareIn, 18000);
+  assertEquals(earnedIncomeCents(t), 15000);
+  // A document written before the component existed sums it as zero.
+  assertEquals(sumSnapshotDays([day("2026-09-01", { cash: 100 })], null, null).tipShareIn, 0);
+});
+
+Deno.test("settings accept card_tips_paid_at_close as a boolean only", () => {
+  assertEquals(
+    testing.settingsPayload({ card_tips_paid_at_close: true }),
+    { card_tips_paid_at_close: true },
+  );
+  assertThrows(() => testing.settingsPayload({ card_tips_paid_at_close: "yes" }));
+});

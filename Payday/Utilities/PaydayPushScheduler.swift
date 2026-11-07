@@ -299,7 +299,11 @@ enum PaydayPushScheduler {
         guard result.knownComponents.voluntaryCreditCents > 0 else { return nil }
         // Gate 2: `.partial` has no room for its caption here.
         if case .partial = result.completeness.state { return nil }
-        return PaycheckReconciler.Expectation(result: result, stamp: nil).grossFigure
+        // The same payout setting every on-screen check uses.
+        return PaycheckReconciler.Expectation(
+            result: result, stamp: nil,
+            cardTipsOnCheck: !UserPreferencesStore.storedCardTipsPaidAtClose()
+        ).grossFigure
     }
 
     /// Read-only status check — never prompts. Notification permission is

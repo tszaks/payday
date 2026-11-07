@@ -253,7 +253,7 @@ struct PaycheckEntrySheet: View {
                     ToolbarItem(placement: .confirmationAction) {
                         Button("Save") { save() }
                             .buttonStyle(.glassProminent)
-                            .disabled(amountCents == 0)
+                            .disabled(!facts.canSave)
                     }
                     // Manual tips entry owns its own focus state. This Next
                     // chain covers only the six stub-detail fields below it.
@@ -271,7 +271,7 @@ struct PaycheckEntrySheet: View {
                             }
                             Button("Save") { save() }
                                 .buttonStyle(.glassProminent)
-                                .disabled(amountCents == 0)
+                                .disabled(!facts.canSave)
                         }
                     }
                 }

@@ -371,6 +371,35 @@ struct LogShiftFactsTests {
         #expect(facts.includesNonTipIncome == false)
     }
 
+    /// PR A review fix. A bartender paid only from the pool has no tips of
+    /// their own; the share is earned money the engine valued, so the reveal
+    /// must not call it "in tips".
+    @Test("a share-only draft counts as non-tip income, so the reveal does not say 'in tips'")
+    func shareOnlyDraftIsEarnedNotTips() throws {
+        let draft = ShiftDraftPreview.draftInput(
+            date: Draft.date,
+            cashCents: 0,
+            creditCents: 0,
+            recordedAt: Draft.recordedAt,
+            shiftID: logShiftID(99),
+            hoursWorked: nil,
+            tipOutCents: 4_000,
+            salesCents: 0,
+            shiftPeriod: .dinner,
+            clockIn: nil,
+            clockOut: nil,
+            serverCount: nil,
+            tipShareInCents: 18_000,
+            receiptMetrics: nil,
+            normalizeEarnings: false,
+            policies: sundayStartPolicies()
+        )
+        let facts = draftFacts(draft: draft, hoursWorked: nil)
+        // $180.00 share − $40.00 tip-out, no wage priced.
+        #expect(facts.total.cents == 14_000)
+        #expect(facts.includesNonTipIncome == true)
+    }
+
     @Test("a complete draft with a tip-out reads 'You kept', with the wages in the caption")
     func completeDraftWithTipOut() throws {
         let facts = draftFacts()

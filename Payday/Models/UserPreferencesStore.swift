@@ -9,6 +9,9 @@ final class UserPreferencesStore {
     private static let faceIDLockKey = "com.szakacsmedia.payday.faceIDLock"
     private static let smartNudgeKey = "com.szakacsmedia.payday.smartNudge"
     private static let paydayReminderKey = "com.szakacsmedia.payday.paydayReminder"
+    /// In the app-group suite, like the wage, because it changes what the
+    /// expected paycheck is and every surface that shows one reads it.
+    static let cardTipsPaidAtCloseKey = "com.szakacsmedia.payday.cardTipsPaidAtClose"
     private static let baseHourlyWageCentsKey = AppGroup.baseHourlyWageCentsKey
     /// Set once migration to the app-group suite has run, so a wage the user
     /// later clears (removeObject on the suite key) is never mistaken for
@@ -85,6 +88,25 @@ final class UserPreferencesStore {
         }
     }
 
+    /// Where card tips are paid (Settings → Payroll). False, the default, is
+    /// "On my paycheck": the expected check carries a tips line. True is "At
+    /// the end of my shift": card tips are cashed out nightly or go to a pay
+    /// card, so the check is gratuity + wages and there is no tips line to
+    /// audit.
+    var isCardTipsPaidAtClose: Bool {
+        didSet {
+            guard oldValue != isCardTipsPaidAtClose else { return }
+            wageDefaults.set(isCardTipsPaidAtClose, forKey: Self.cardTipsPaidAtCloseKey)
+            PaydaySettingsSyncClock.touch()
+        }
+    }
+
+    /// The stored choice, for a reader with no store instance (the payday
+    /// notification). Same suite the property writes.
+    static func storedCardTipsPaidAtClose(_ defaults: UserDefaults = AppGroup.defaults) -> Bool {
+        defaults.bool(forKey: cardTipsPaidAtCloseKey)
+    }
+
     init(defaults: UserDefaults = .standard, wageDefaults: UserDefaults = AppGroup.defaults) {
         self.defaults = defaults
         self.wageDefaults = wageDefaults
@@ -95,6 +117,7 @@ final class UserPreferencesStore {
         self.isFaceIDLockEnabled = defaults.bool(forKey: Self.faceIDLockKey)
         self.isSmartNudgeEnabled = defaults.object(forKey: Self.smartNudgeKey) == nil ? true : defaults.bool(forKey: Self.smartNudgeKey)
         self.isPaydayReminderEnabled = defaults.object(forKey: Self.paydayReminderKey) == nil ? true : defaults.bool(forKey: Self.paydayReminderKey)
+        self.isCardTipsPaidAtClose = wageDefaults.bool(forKey: Self.cardTipsPaidAtCloseKey)
         Self.migrateBaseHourlyWageCentsIfNeeded(from: defaults, to: wageDefaults)
         self.baseHourlyWageCents = wageDefaults.object(forKey: Self.baseHourlyWageCentsKey) == nil ? nil : wageDefaults.integer(forKey: Self.baseHourlyWageCentsKey)
 

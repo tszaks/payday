@@ -127,6 +127,7 @@ enum StatsRecordAdapter {
                 clockIn: ownsShiftLevelValues ? record.clockIn : nil,
                 clockOut: ownsShiftLevelValues ? record.clockOut : nil,
                 serverCount: ownsShiftLevelValues ? record.serverCount : nil,
+                tipShareInCents: ownsShiftLevelValues ? record.tipShareInCents : nil,
                 receiptMetrics: ownsShiftLevelValues ? metrics : nil,
                 note: ownsShiftLevelValues ? record.note : nil
             ))

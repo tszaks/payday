@@ -49,6 +49,11 @@ struct TipRecord: Sendable, Hashable {
     /// TipEntry stays faithful once that analysis exists.
     let serverCount: Int?
 
+    /// A tip share received from co-workers, shift-level like tip-out. Part
+    /// of `netCents` (earned money) and never of `voluntaryTipCents`, so tip
+    /// percent stays on tips the guest left.
+    let tipShareInCents: Int?
+
     /// Rich printout facts captured by the receipt scanner. Like every other
     /// shift-level value, this lives on one canonical record and is resolved
     /// once before analysis.
@@ -76,11 +81,12 @@ struct TipRecord: Sendable, Hashable {
         EarningsComponents(
             voluntaryCashCents: voluntaryTipCents,
             gratuityFeesCents: receiptMetrics?.employeeGratuityFeesCents ?? 0,
-            tipOutCents: tipOutCents ?? 0
+            tipOutCents: tipOutCents ?? 0,
+            tipShareInCents: tipShareInCents ?? 0
         ).nonWageEarningsCents
     }
 
-    init(date: Date, amountCents: Int, kind: TipKind, isDouble: Bool, recordedAt: Date? = nil, hoursWorked: Double? = nil, tipOutCents: Int? = nil, salesCents: Int? = nil, shiftPeriod: ShiftPeriod? = nil, shiftID: UUID? = nil, clockIn: Date? = nil, clockOut: Date? = nil, serverCount: Int? = nil, receiptMetrics: ShiftReceiptMetrics? = nil, note: String? = nil) {
+    init(date: Date, amountCents: Int, kind: TipKind, isDouble: Bool, recordedAt: Date? = nil, hoursWorked: Double? = nil, tipOutCents: Int? = nil, salesCents: Int? = nil, shiftPeriod: ShiftPeriod? = nil, shiftID: UUID? = nil, clockIn: Date? = nil, clockOut: Date? = nil, serverCount: Int? = nil, tipShareInCents: Int? = nil, receiptMetrics: ShiftReceiptMetrics? = nil, note: String? = nil) {
         self.date = date
         self.amountCents = amountCents
         self.kind = kind
@@ -94,6 +100,7 @@ struct TipRecord: Sendable, Hashable {
         self.clockIn = clockIn
         self.clockOut = clockOut
         self.serverCount = serverCount
+        self.tipShareInCents = tipShareInCents
         self.receiptMetrics = receiptMetrics
         self.note = note
     }
@@ -105,7 +112,7 @@ extension TipRecord {
     /// `LegacyShiftRow` requirement, so a `ProjectedShiftRow` built from a
     /// `ShiftRecord` produces an identical `TipRecord`.
     init(entry: some LegacyShiftRow) {
-        self.init(date: entry.date, amountCents: entry.amountCents, kind: entry.kind, isDouble: entry.isDouble, recordedAt: entry.recordedAt, hoursWorked: entry.hoursWorked, tipOutCents: entry.tipOutCents, salesCents: entry.salesCents, shiftPeriod: entry.shiftPeriod, shiftID: entry.shiftID, clockIn: entry.clockIn, clockOut: entry.clockOut, serverCount: entry.serverCount, receiptMetrics: entry.receiptMetrics, note: entry.note)
+        self.init(date: entry.date, amountCents: entry.amountCents, kind: entry.kind, isDouble: entry.isDouble, recordedAt: entry.recordedAt, hoursWorked: entry.hoursWorked, tipOutCents: entry.tipOutCents, salesCents: entry.salesCents, shiftPeriod: entry.shiftPeriod, shiftID: entry.shiftID, clockIn: entry.clockIn, clockOut: entry.clockOut, serverCount: entry.serverCount, tipShareInCents: entry.tipShareInCents, receiptMetrics: entry.receiptMetrics, note: entry.note)
     }
 }
 
@@ -164,6 +171,9 @@ private struct ShiftFacts {
     /// How many servers were on the floor — resolved the same
     /// credit-preferred way, no analytics reads it yet (see TipRecord).
     let serverCount: Int?
+    /// A tip share received, resolved the same credit-preferred way. In
+    /// `netCents`, never in `grossCents`, so tip percent ignores it.
+    let tipShareInCents: Int?
     let receiptMetrics: ShiftReceiptMetrics?
 
     /// Toast mandatory gratuity/fees paid to the employee, separate from
@@ -187,7 +197,8 @@ private struct ShiftFacts {
         EarningsComponents(
             voluntaryCashCents: grossCents,
             gratuityFeesCents: gratuityFeesCents,
-            tipOutCents: tipOutCents ?? 0
+            tipOutCents: tipOutCents ?? 0,
+            tipShareInCents: tipShareInCents ?? 0
         ).nonWageEarningsCents
     }
 }
@@ -301,6 +312,7 @@ struct StatsEngine {
                     clockIn: credit?.clockIn ?? cash?.clockIn,
                     clockOut: credit?.clockOut ?? cash?.clockOut,
                     serverCount: credit?.serverCount ?? cash?.serverCount,
+                    tipShareInCents: credit?.tipShareInCents ?? cash?.tipShareInCents,
                     receiptMetrics: credit?.receiptMetrics ?? cash?.receiptMetrics
                 )
             }

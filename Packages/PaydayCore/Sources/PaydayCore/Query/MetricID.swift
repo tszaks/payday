@@ -10,7 +10,7 @@ import Foundation
 /// The registry is a contract: adding a case means adding a row to
 /// `docs/METRICS.md` and a presentation rule in `CompletenessCopy`.
 public enum MetricID: String, CaseIterable, Codable, Sendable {
-    /// **Definition:** cash + credit + gratuityFees - tipOut + regularWages + overtimeWages.
+    /// **Definition:** cash + credit + gratuityFees + tipShareIn - tipOut + regularWages + overtimeWages.
     /// **Basis:** work date.
     /// **Missing data:** wages are absent where the ledger says `.unavailable`;
     /// the result carries `Completeness` and the presentation rules for
@@ -19,7 +19,7 @@ public enum MetricID: String, CaseIterable, Codable, Sendable {
     /// "You kept" (when tipOut > 0).
     case earnedIncome
 
-    /// **Definition:** cash + credit + gratuityFees - tipOut (earned income without wages).
+    /// **Definition:** cash + credit + gratuityFees + tipShareIn - tipOut (earned income without wages).
     /// **Basis:** work date.
     /// **Missing data:** none; every shift has tips.
     /// **Labels:** "Tips" when gratuity == 0, otherwise "Tips & gratuity".
@@ -46,6 +46,12 @@ public enum MetricID: String, CaseIterable, Codable, Sendable {
     /// **Labels:** today's drawer row "Tipped out".
     case tipOut
 
+    /// **Definition:** cents received from co-workers as a tip share or pool payout; added once per shift. Never part of voluntaryTips.
+    /// **Basis:** work date.
+    /// **Missing data:** none (nil tip share counts as 0).
+    /// **Labels:** the drawer row "Tip share received".
+    case tipShareIn
+
     /// **Definition:** hourlyRateCents × regular minutes under the workweek threshold, cumulative half-up rounding per week.
     /// **Basis:** work date.
     /// **Missing data:** `.unavailable` when hours or rate are missing; rolls into `Completeness`.
@@ -64,15 +70,17 @@ public enum MetricID: String, CaseIterable, Codable, Sendable {
     /// moved to the row's caption and out of the label.
     case overtimeWages
 
-    /// **Definition:** max(0, (credit > 0 ? credit : cash + credit) - tipOut); the stub never
+    /// **Definition:** 0 when card tips are paid at close; otherwise
+    /// max(0, (credit + tipShareIn > 0 ? credit + tipShareIn : cash + credit) - tipOut); the stub never
     /// prints a negative tips line (today's `PredictedPaycheck.tipsLineCents`). Cash never runs
-    /// through payroll, so cash only enters the line when no credit was logged at all.
+    /// through payroll, so cash only enters the line when no credit or tip share was logged at all.
     /// **Basis:** pay period.
     /// **Missing data:** none.
     /// **Labels:** "Your check's tips line".
     case expectedPaycheckTipsLine
 
-    /// **Definition:** expectedPaycheckTipsLine + gratuityFees + regularWages + overtimeWages.
+    /// **Definition:** expectedPaycheckTipsLine + gratuityFees + regularWages + overtimeWages
+    /// (gratuityFees + wages when card tips are paid at close).
     /// **Basis:** pay period.
     /// **Missing data:** wages `.unavailable` are absent and the result carries `Completeness`.
     /// **Labels:** "Expected".
@@ -130,23 +138,25 @@ public enum MetricID: String, CaseIterable, Codable, Sendable {
     public var definition: String {
         switch self {
         case .earnedIncome:
-            return "cash + credit + gratuityFees - tipOut + regularWages + overtimeWages"
+            return "cash + credit + gratuityFees + tipShareIn - tipOut + regularWages + overtimeWages"
         case .nonWageEarnings:
-            return "cash + credit + gratuityFees - tipOut (earned income without wages)"
+            return "cash + credit + gratuityFees + tipShareIn - tipOut (earned income without wages)"
         case .voluntaryTips:
             return "cash + credit"
         case .gratuityFees:
             return "service charges and auto-gratuity, separate from voluntary tips"
         case .tipOut:
             return "cents paid out to support staff, subtracted once per shift"
+        case .tipShareIn:
+            return "cents received from co-workers as a tip share or pool payout, added once per shift; never part of voluntaryTips"
         case .regularWages:
             return "hourlyRateCents x regular minutes under the workweek threshold, cumulative half-up rounding per week"
         case .overtimeWages:
             return "hourlyRateCents x multiplier x minutes past the workweek threshold, cumulative half-up rounding per week"
         case .expectedPaycheckTipsLine:
-            return "max(0, (credit > 0 ? credit : cash + credit) - tipOut); the stub never prints a negative tips line (today's PredictedPaycheck.tipsLineCents)"
+            return "0 when card tips are paid at close; otherwise max(0, (credit + tipShareIn > 0 ? credit + tipShareIn : cash + credit) - tipOut); the stub never prints a negative tips line (today's PredictedPaycheck.tipsLineCents)"
         case .expectedPaycheckGross:
-            return "expectedPaycheckTipsLine + gratuityFees + regularWages + overtimeWages"
+            return "expectedPaycheckTipsLine + gratuityFees + regularWages + overtimeWages (gratuityFees + wages when card tips are paid at close)"
         case .observedPaidTips:
             return "paid-tips figure on the real pay stub, exactly as entered"
         case .proposedPaidTipsCorrection:
@@ -169,7 +179,7 @@ public enum MetricID: String, CaseIterable, Codable, Sendable {
     /// Which date buckets the metric.
     public var basis: MetricBasis {
         switch self {
-        case .earnedIncome, .nonWageEarnings, .voluntaryTips, .gratuityFees, .tipOut,
+        case .earnedIncome, .nonWageEarnings, .voluntaryTips, .gratuityFees, .tipOut, .tipShareIn,
              .regularWages, .overtimeWages:
             return .workDate
         case .expectedPaycheckTipsLine, .expectedPaycheckGross, .reconciliationDelta, .expectedPaycheckNet:
@@ -192,6 +202,8 @@ public enum MetricID: String, CaseIterable, Codable, Sendable {
             return "none"
         case .tipOut:
             return "none (nil tip-out counts as 0)"
+        case .tipShareIn:
+            return "none (nil tip share counts as 0)"
         case .observedPaidTips:
             return "nil until a paycheck is recorded"
         case .proposedPaidTipsCorrection:
@@ -223,6 +235,8 @@ public enum MetricID: String, CaseIterable, Codable, Sendable {
             return ["Gratuity & fees"]
         case .tipOut:
             return ["Tipped out"]
+        case .tipShareIn:
+            return ["Tip share received"]
         case .regularWages:
             return ["Wages"]
         case .overtimeWages:

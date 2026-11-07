@@ -12,6 +12,7 @@ enum CurrencyRowField: Hashable {
     case cash
     case credit
     case tipOut
+    case tipShareIn
     case gratuityFees
     case receiptTotal
     case sales

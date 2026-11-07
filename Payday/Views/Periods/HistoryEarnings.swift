@@ -242,14 +242,15 @@ struct PeriodCheckComparison: Equatable {
     /// `.loading` before its first build and `.unavailable` on a failed
     /// fetch: the green verdict would have rendered on the first frame of
     /// every cold launch.
-    init?(result: EarningsResult?, paycheck: PaycheckRecord?) {
+    init?(result: EarningsResult?, paycheck: PaycheckRecord?, cardTipsOnCheck: Bool = true) {
         guard let result, let paycheck else { return nil }
         // ONE expectation, built by the reconciler from this period's own
         // result. The sheet this period opens holds the same value, so the
         // expected side a person sees on the period and the expected side
         // the sheet audits against are one answer and not two that agree
         // (`PaycheckEntryFacts.expectedGross` reads the same property).
-        let expectation = PaycheckReconciler.Expectation(result: result, stamp: nil)
+        let expectation = PaycheckReconciler.Expectation(
+            result: result, stamp: nil, cardTipsOnCheck: cardTipsOnCheck)
         let components = result.knownComponents
         guard let expectedTipsAndGratuity = expectation.tipsAndGratuityCents else { return nil }
         expectedTipsAndGratuityCents = expectedTipsAndGratuity

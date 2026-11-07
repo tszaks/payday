@@ -848,6 +848,7 @@ function settingsPayload(bodyValue: unknown): JsonObject {
     "first_weekday",
     "smart_nudge_enabled",
     "payday_reminder_enabled",
+    "card_tips_paid_at_close",
     "move_ledger",
   ]);
   const result: JsonObject = {};
@@ -900,6 +901,12 @@ function settingsPayload(bodyValue: unknown): JsonObject {
     result.payday_reminder_enabled = optionalBoolean(
       body.payday_reminder_enabled,
       "payday_reminder_enabled",
+    );
+  }
+  if ("card_tips_paid_at_close" in body) {
+    result.card_tips_paid_at_close = optionalBoolean(
+      body.card_tips_paid_at_close,
+      "card_tips_paid_at_close",
     );
   }
   if ("move_ledger" in body) {
@@ -1352,6 +1359,9 @@ function shiftResponse(row: JsonObject): JsonObject {
     gratuity_cents: money(row, "gratuity_fees_cents"),
     gross_tip_earnings_cents: netCents + tipOutCents,
     tip_out_cents: tipOutCents,
+    // Read-only here: agent writes still land on the legacy rows, which do
+    // not carry a received tip share. Already inside the stored net.
+    tip_share_in_cents: row.tip_share_in_cents ?? null,
     net_tip_earnings_cents: netCents,
     sales_cents: row.sales_cents ?? null,
     hours_worked: row.hours_worked ?? null,
@@ -1443,7 +1453,8 @@ export function sumSnapshotDays(
   end: string | null,
 ) {
   const t = {
-    cash: 0, credit: 0, gratuity: 0, tipOut: 0, regular: 0, overtime: 0,
+    cash: 0, credit: 0, gratuity: 0, tipOut: 0, tipShareIn: 0, regular: 0,
+    overtime: 0,
     minutes: 0, shiftCount: 0, inRange: 0,
   };
   if (!Array.isArray(days)) return t;
@@ -1456,6 +1467,8 @@ export function sumSnapshotDays(
     t.credit += num(k.voluntaryCreditCents);
     t.gratuity += num(k.gratuityFeesCents);
     t.tipOut += num(k.tipOutCents);
+    // Absent from documents written before the component existed: 0.
+    t.tipShareIn += num(k.tipShareInCents);
     t.regular += num(k.regularWagesCents);
     t.overtime += num(k.overtimeWagesCents);
     t.minutes += num(d.minutes);
@@ -1477,9 +1490,10 @@ export function sumSnapshotDays(
  */
 export function earnedIncomeCents(
   t: { cash: number; credit: number; gratuity: number; tipOut: number;
-       regular: number; overtime: number },
+       tipShareIn?: number; regular: number; overtime: number },
 ): number {
-  return t.cash + t.credit + t.gratuity - t.tipOut + t.regular + t.overtime;
+  return t.cash + t.credit + t.gratuity + (t.tipShareIn ?? 0) - t.tipOut +
+    t.regular + t.overtime;
 }
 
 // Exported ONLY so a test can reach it. It had none: the Swift half of this
@@ -1528,6 +1542,7 @@ export async function engineEarnings(
     voluntary_credit_tips_cents: t.credit,
     gratuity_fees_cents: t.gratuity,
     tip_out_cents: t.tipOut,
+    tip_share_in_cents: t.tipShareIn,
     regular_wages_cents: t.regular,
     overtime_wages_cents: t.overtime,
     // The figure the Dashboard shows. Wage-INCLUSIVE, which is the whole
@@ -2402,6 +2417,7 @@ const settingsWritableProperties = {
   first_weekday: { type: ["integer", "null"], minimum: 1, maximum: 7 },
   smart_nudge_enabled: { type: "boolean" },
   payday_reminder_enabled: { type: "boolean" },
+  card_tips_paid_at_close: { type: "boolean" },
   move_ledger: { type: "object", additionalProperties: { type: "string" } },
 };
 
@@ -3241,6 +3257,7 @@ export const testing = {
   encodeAuditCursor,
   encodeShiftCursor,
   shiftResponse,
+  settingsPayload,
   moveLedger,
   publicPath,
   receiptMetrics,

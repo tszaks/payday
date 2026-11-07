@@ -77,6 +77,8 @@ struct FixtureMoneyGateTests {
         var credit: Int?
         var gratuityFees: Int?
         var tipOut: Int?
+        var tipShareIn: Int?
+        var voluntaryTips: Int?
         var regularWages: Int?
         var overtimeWages: Int?
         var nonWageEarnings: Int?
@@ -85,7 +87,7 @@ struct FixtureMoneyGateTests {
         /// Every money value this object actually declared, so a test can
         /// refuse to pass on a fixture that declared none.
         var count: Int {
-            [cash, credit, gratuityFees, tipOut,
+            [cash, credit, gratuityFees, tipOut, tipShareIn, voluntaryTips,
              regularWages, overtimeWages, nonWageEarnings, earnedIncome]
                 .compactMap { $0 }.count
         }
@@ -97,6 +99,8 @@ struct FixtureMoneyGateTests {
             gratuityFees = components["gratuityFees"]?.intValue
                 ?? object["gratuityFeesCents"]?.intValue
             tipOut = components["tipOut"]?.intValue ?? object["tipOutCents"]?.intValue
+            tipShareIn = components["tipShareIn"]?.intValue ?? object["tipShareInCents"]?.intValue
+            voluntaryTips = object["voluntaryTipsCents"]?.intValue
             regularWages = components["regularWages"]?.intValue
                 ?? object["regularWagesCents"]?.intValue
             overtimeWages = components["overtimeWages"]?.intValue
@@ -114,6 +118,10 @@ struct FixtureMoneyGateTests {
                 #expect(actual.gratuityFeesCents == gratuityFees, "\(label) gratuityFees")
             }
             if let tipOut { #expect(actual.tipOutCents == tipOut, "\(label) tipOut") }
+            if let tipShareIn { #expect(actual.tipShareInCents == tipShareIn, "\(label) tipShareIn") }
+            if let voluntaryTips {
+                #expect(actual.voluntaryTipsCents == voluntaryTips, "\(label) voluntaryTips")
+            }
             if let regularWages {
                 #expect(actual.regularWagesCents == regularWages, "\(label) regularWages")
             }
@@ -156,9 +164,11 @@ struct FixtureMoneyGateTests {
     ///   its cents is gating that claim.
     /// - C1: the partial-completeness fixture, one shift with null minutes.
     /// - S2: the as-of fixture, including the future shift the query excludes.
+    /// - B1: the bartender fixture, a received tip share kept out of
+    ///   voluntary tips.
     @Test(
         "every per-shift money value these fixtures declare is the real ledger's",
-        arguments: ["W3", "C1", "S2"]
+        arguments: ["W3", "C1", "S2", "B1"]
     )
     func perShiftMoneyIsLedgerTruth(_ id: String) throws {
         let fixture = try FixtureLoader.load(id)
@@ -361,6 +371,40 @@ struct FixtureMoneyGateTests {
            let autoApplied = wrong["reconciledPaidTipsCentsAutoApplied"]?.intValue {
             #expect(autoApplied != observedTips,
                     "P1's wrong answer must differ from the right one, or it proves nothing")
+        }
+    }
+
+    // MARK: - B1, the payout setting
+
+    /// B1's pay period, expected on the check and paid at close, read out of
+    /// the file with the real ledger and reconciler in between.
+    @Test("B1's paycheck expectation follows where card tips are paid", arguments: [true, false])
+    func b1PaycheckFollowsThePayoutSetting(_ cardTipsOnCheck: Bool) throws {
+        let fixture = try FixtureLoader.load("B1")
+        let period = try #require(fixture.expected["payPeriod"]?.objectValue)
+        let declared = try #require(
+            period[cardTipsOnCheck ? "cardTipsOnCheck" : "cardTipsPaidAtClose"]?.objectValue)
+
+        let components = try valuations(fixture).values
+            .map(\.components)
+            .reduce(EarningsComponents.zero, +)
+        Declared(period).check(against: components, "B1/payPeriod")
+        #expect(components.voluntaryTipsCents == period["voluntaryTipsCents"]?.intValue)
+        #expect(components.wagesCents == period["wagesCents"]?.intValue)
+
+        #expect(PaycheckReconciler.tipsLineCents(from: components, cardTipsOnCheck: cardTipsOnCheck)
+                == declared["expectedPaycheckTipsLineCents"]?.intValue)
+        #expect(PaycheckReconciler.grossCents(from: components, cardTipsOnCheck: cardTipsOnCheck)
+                == declared["expectedPaycheckGrossCents"]?.intValue)
+        #expect(PaycheckReconciler.tipsAlreadyPaidCents(from: components, cardTipsOnCheck: cardTipsOnCheck)
+                == declared["tipsAlreadyPaidCents"]?.intValue)
+
+        // And the wrong answers stay wrong.
+        let wrong = try #require(fixture.expected["wrongAnswers"]?.objectValue)
+        #expect(components.voluntaryTipsCents != wrong["shareCountedAsCardTipsVoluntaryTipsCents"]?.intValue)
+        if !cardTipsOnCheck {
+            #expect(PaycheckReconciler.grossCents(from: components, cardTipsOnCheck: false)
+                    != wrong["atCloseStillExpectsTipsLineGrossCents"]?.intValue)
         }
     }
 }
