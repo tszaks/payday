@@ -295,8 +295,14 @@ public enum PaycheckReconciler {
         /// person's own `WithholdingModel`.
         ///
         /// Unavailable when there is no gross or no model (fewer than 2
-        /// qualifying stubs). The completeness is the gross figure's, and its
-        /// caption, when it has one, follows "From N stubs".
+        /// qualifying stubs). The completeness is the gross figure's. The
+        /// caption only warns: "Outside the checks it has seen" when the
+        /// gross is beyond the stubs the model was fitted on, then the gross
+        /// figure's own completeness caption; nil when there is nothing to
+        /// warn about. It used to open with "From N stubs"; Tyler asked for
+        /// the count to go (2026-11-07, on the Breakdown drawer: "Can we
+        /// remove the 'from X paystubs' line??"). The count is how the model
+        /// was fitted, not something the reader can act on.
         public func netFigure(model: WithholdingModel?) -> EarningsFigure {
             let gross = grossFigure
             guard let model, case .cents(let grossCents) = gross.amount else {
@@ -308,13 +314,14 @@ public enum PaycheckReconciler {
                     completeness: .empty
                 )
             }
-            var caption = "From \(model.stubCount) stubs"
+            var warnings: [String] = []
             if model.isExtrapolating(grossCents: grossCents) {
-                caption += " · outside the checks it has seen"
+                warnings.append("Outside the checks it has seen")
             }
             if let grossCaption = gross.caption {
-                caption += " · \(grossCaption)"
+                warnings.append(grossCaption)
             }
+            let caption = warnings.isEmpty ? nil : warnings.joined(separator: " · ")
             return EarningsFigure(
                 metric: .expectedPaycheckNet,
                 amount: .cents(model.predictNetCents(grossCents: grossCents)),

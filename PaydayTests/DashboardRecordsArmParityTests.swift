@@ -352,13 +352,33 @@ struct DashboardRecordsArmParityTests {
         #expect(!three.heroCheckNet.isUnavailable)
         #expect(three.heroCheckNet.metric == .expectedPaycheckNet)
         #expect(three.heroCheckNet.completeness == three.heroCheckGross.completeness)
-        #expect(three.heroCheckNet.caption?.hasPrefix("From 3 stubs") == true)
+        // The fixture's period gross is below the three stubs' range, so the
+        // caption is the extrapolation warning, standing alone: the stub
+        // count left it on 2026-11-07 at Tyler's request.
+        #expect(three.heroCheckNet.caption == "Outside the checks it has seen")
         let threeRows = three.heroCheckRows
         #expect(threeRows.map(\.label) == ["On your check, before tax", "After tax, about"])
         #expect(threeRows.last?.cents == three.heroCheckNet.cents)
         #expect(threeRows.last?.wholeDollars == true, "the net is a prediction: whole dollars")
-        #expect(threeRows.last?.caption?.hasPrefix("From 3 stubs") == true)
+        #expect(threeRows.last?.caption == three.heroCheckNet.caption)
+        #expect(threeRows.last?.caption?.contains("stubs") != true)
         #expect(MetricID.expectedPaycheckNet.allowedLabels.contains(threeRows[1].label))
+    }
+
+    /// **"The after-tax line never names the stub count."** Tyler,
+    /// 2026-11-07, on the drawer's "After tax, about $N / From 7 stubs":
+    /// "Can we remove the 'from X paystubs' line??" The count is how the
+    /// model was fitted, not something to act on. The Payday card line now
+    /// stands without a caption and keeps the figure's warning after it.
+    @Test("paydayNetLine stands without a caption and carries a warning after it")
+    func paydayNetLineWithoutStubCount() {
+        func net(_ caption: String?) -> EarningsFigure {
+            EarningsFigure(metric: .expectedPaycheckNet, amount: .cents(123_456),
+                           label: "After tax, about", caption: caption, completeness: .empty)
+        }
+        #expect(TakeHomeCopy.paydayNetLine(net(nil)) == "About $1,235 after tax")
+        #expect(TakeHomeCopy.paydayNetLine(net("Outside the checks it has seen"))
+                == "About $1,235 after tax · outside the checks it has seen")
     }
 
     /// **"A wage-only period still shows its check."** The ledger has no

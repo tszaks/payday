@@ -701,10 +701,10 @@ struct PaycheckReconcilerNetFigureTests {
         #expect(figure.label == "After tax, about")
         #expect(MetricID.expectedPaycheckNet.allowedLabels.contains(figure.label))
         #expect(figure.completeness == expectation.grossFigure.completeness)
-        let expectedCaption = ["From 7 stubs", expectation.grossFigure.caption]
-            .compactMap { $0 }.joined(separator: " · ")
-        #expect(figure.caption == expectedCaption)
-        #expect(figure.caption?.hasPrefix("From 7 stubs") == true)
+        // The caption is the gross figure's own warning, or nil: the stub
+        // count left it on 2026-11-07 at Tyler's request.
+        #expect(figure.caption == expectation.grossFigure.caption)
+        #expect(figure.caption?.contains("stubs") != true)
     }
 
     @Test("extrapolation suffix when the gross is outside the stubs seen")
@@ -716,6 +716,7 @@ struct PaycheckReconcilerNetFigureTests {
             typicalMissCents: nil
         )
         let figure = try w2Expectation().netFigure(model: farModel)
-        #expect(figure.caption?.hasPrefix("From 3 stubs · outside the checks it has seen") == true)
+        #expect(figure.caption?.hasPrefix("Outside the checks it has seen") == true)
+        #expect(figure.caption?.contains("stubs") != true)
     }
 }
