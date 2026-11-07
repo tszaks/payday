@@ -219,6 +219,11 @@ struct PeriodDetailView: View {
     let period: PayPeriod
     @State private var sheetTarget: TipEntrySheetTarget?
     @State private var showPaycheckSheet = false
+    /// True when a tapped payday push opened the stub sheet, so the sheet
+    /// starts the scanner. Reset when the sheet dismisses.
+    @State private var paycheckSheetStartsScanner = false
+    /// Optional so a detail shown outside MainTabView (previews) still works.
+    @Environment(TabRouter.self) private var tabRouter: TabRouter?
     @State private var undoState = UndoDeleteToastState()
     /// Whether the cash/credit breakdown drawer tucked under the hero is open.
     @State private var breakdownExpanded = false
@@ -278,16 +283,23 @@ struct PeriodDetailView: View {
         .sheet(item: $sheetTarget) { target in
             LogTipSheet(target: target).paydayAppearance()
         }
-        .sheet(isPresented: $showPaycheckSheet) {
+        .sheet(isPresented: $showPaycheckSheet, onDismiss: { paycheckSheetStartsScanner = false }) {
             // The sheet is HANDED this screen's basis rather than rebuilding
             // one: see `PaycheckReconciler.Expectation` for the $310.00 divergence that
             // closes.
             PaycheckEntrySheet(
                 period: period,
                 existing: facts.paycheck,
-                expectation: facts.expectation
+                expectation: facts.expectation,
+                startsScanner: paycheckSheetStartsScanner
             )
             .paydayAppearance()
+        }
+        .onAppear {
+            guard let tabRouter, tabRouter.pendingPaycheckScan else { return }
+            tabRouter.pendingPaycheckScan = false
+            paycheckSheetStartsScanner = true
+            showPaycheckSheet = true
         }
         .undoDeleteToast(undoState, context: modelContext)
         .environment(\.undoDeleteToastState, undoState)

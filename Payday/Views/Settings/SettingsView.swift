@@ -78,10 +78,14 @@ struct SettingsView: View {
                 }
                 .listRowBackground(PaydayColor.fieldBackground)
 
-                Section("Notifications & Security") {
+                Section {
                     Toggle("Require Face ID", isOn: $isFaceIDLockEnabled)
                     Toggle("Shift reminder", isOn: $isSmartNudgeEnabled)
                     Toggle("Payday reminder", isOn: $isPaydayReminderEnabled)
+                } header: {
+                    Text("Notifications & Security")
+                } footer: {
+                    Text("Payday reminder nudges once more two days after payday if no stub is in yet.")
                 }
                 .listRowBackground(PaydayColor.fieldBackground)
 

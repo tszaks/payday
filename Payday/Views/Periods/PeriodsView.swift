@@ -253,7 +253,7 @@ struct PeriodsView: View {
         }
         #endif
         .onAppear { consumePendingCurrentPeriodDetail(facts) }
-        .onChange(of: tabRouter.pendingCurrentPeriodDetail) { _, _ in consumePendingCurrentPeriodDetail(facts) }
+        .onChange(of: tabRouter.pendingPeriodLanding) { _, _ in consumePendingCurrentPeriodDetail(facts) }
         .task(id: SnapshotBuildKey(
             writes: writes,
             policies: policyStore.policies,
@@ -316,10 +316,26 @@ struct PeriodsView: View {
     /// onAppear and onChange call through here rather than picking one.
     /// Only acts when the stack is empty, same guard the -OpenPeriodWithPaycheck
     /// debug hook uses, so it never interrupts navigation already in flight.
+    ///
+    /// A `.paycheckScan` landing (a tapped payday push) pushes the carried
+    /// period, matched on civil days the way the scheduler matches a
+    /// recorded paycheck, or the current period when nothing matches, and
+    /// then asks that detail to open its stub sheet with the scanner.
     private func consumePendingCurrentPeriodDetail(_ facts: PeriodsPageFacts) {
-        guard tabRouter.pendingCurrentPeriodDetail, path.isEmpty, let currentPeriod = facts.rows.first?.period else { return }
-        path.append(currentPeriod)
-        tabRouter.pendingCurrentPeriodDetail = false
+        guard let landing = tabRouter.pendingPeriodLanding, path.isEmpty, let currentPeriod = facts.rows.first?.period else { return }
+        switch landing {
+        case .currentDetail:
+            path.append(currentPeriod)
+            tabRouter.pendingPeriodLanding = nil
+        case .paycheckScan(let start, let end):
+            let calendar = Calendar.current
+            let match = facts.rows.first {
+                calendar.isDate($0.period.start, inSameDayAs: start) && calendar.isDate($0.period.end, inSameDayAs: end)
+            }?.period
+            path.append(match ?? currentPeriod)
+            tabRouter.pendingPeriodLanding = nil
+            tabRouter.pendingPaycheckScan = true
+        }
     }
 }
 
