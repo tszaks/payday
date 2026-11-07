@@ -438,9 +438,9 @@ struct DashboardFacts: SnapshotFacts {
         predictedPaycheck = paydayExpectation.grossFigure
         predictedPaycheckNet = paydayExpectation.netFigure(model: withholdingModel)
 
-        // ONE Expectation over the hero's own result behind the hero's check
-        // line, so its before- and after-tax figures cannot disagree with
-        // each other or with the hero. Current period only.
+        // ONE Expectation over the hero's own result behind the drawer's
+        // check rows, so its before- and after-tax figures cannot disagree
+        // with each other or with the hero. Current period only.
         let heroExpectation = heroIsCurrent
             ? PaycheckReconciler.Expectation(
                 result: heroResult, stamp: snapshot?.stamp, cardTipsOnCheck: !cardTipsPaidAtClose)
@@ -1003,6 +1003,7 @@ struct DashboardView: View {
             rows: facts.heroBreakdownRows,
             total: facts.heroBreakdownTotal,
             hasBreakdown: facts.heroHasBreakdown,
+            footer: facts.heroCheckRows,
             isExpanded: isExpanded
         ) {
             heroCard(facts, caption: caption, isExpanded: isExpanded, showsShiftBand: showsShiftBand)
@@ -1164,17 +1165,11 @@ struct DashboardView: View {
                         .monospacedDigit()
                         .animation(reduceMotion ? nil : PaydayAnimation.premiumSpring, value: paceDeltaCents > 0)
                 }
-                // The check so far, before and after tax, from one
-                // Expectation. Nothing at all when the gross is unavailable;
-                // no after-tax half under 2 stubs.
-                if let checkLine = facts.heroCheckLine {
-                    Text(checkLine)
-                        .font(PaydayFont.caption)
-                        .foregroundStyle(PaydayColor.textSecondary)
-                        .multilineTextAlignment(.center)
-                        .monospacedDigit()
-                        .accessibilityLabel(checkLine)
-                }
+                // No check line here any more. The check so far, before and
+                // after tax, is two rows under the drawer's bottom line
+                // (`DashboardFacts.heroCheckRows`): with it, the face carried
+                // four dollar amounts (Tyler, 2026-11-07: "Too many
+                // conflicting numbers here - gotta keep it clean").
                 // Projection line removed: it overlapped the pace line above
                 // (two framings of the same trajectory). Pace stays — it's
                 // grounded in real logged history on both sides and it's the

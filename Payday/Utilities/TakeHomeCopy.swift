@@ -15,15 +15,30 @@ enum TakeHomeCopy {
         wholeDollars(net).map { "about \($0) after tax" }
     }
 
-    /// Hero: "Check so far · $1,811.34 before tax · about $1,539 after tax".
-    static func heroCheckLine(gross: EarningsFigure, net: EarningsFigure) -> String? {
-        guard let grossText = gross.text else { return nil }
-        var line = "Check so far · \(grossText) before tax"
-        if let after = aboutAfterTax(net) { line += " · \(after)" }
-        return line
+    /// Breakdown drawer, under the hero's bottom line: "On your check,
+    /// before tax  $G" and "After tax, about  $N", the second in whole
+    /// dollars (a prediction) with the net figure's own caption ("From N
+    /// stubs …"). No rows when the gross is unavailable; no after-tax row
+    /// under 2 stubs.
+    ///
+    /// These two figures used to sit on the hero's FACE as one caption line
+    /// ("Check so far · $G before tax · about $N after tax"). With the
+    /// period total and the pace line above it, the card carried four
+    /// dollar amounts that answered four different questions and read as a
+    /// disagreement (Tyler, 2026-11-07: "Too many conflicting numbers here
+    /// - gotta keep it clean"). One number per card; the check goes where
+    /// the other itemized facts already are. Both labels are the
+    /// registry's (`MetricID.allowedLabels`).
+    static func checkRows(gross: EarningsFigure, net: EarningsFigure) -> [BreakdownRow] {
+        guard let grossCents = gross.cents else { return [] }
+        var rows = [BreakdownRow("On your check, before tax", cents: grossCents)]
+        if let netCents = net.cents {
+            rows.append(BreakdownRow(net.label, cents: netCents, caption: net.caption, wholeDollars: true))
+        }
+        return rows
     }
 
-    /// Payday card: "About $1,539 after tax · from 7 stubs", carrying the
+    /// Payday card: "About $1,234 after tax · from 7 stubs", carrying the
     /// figure's whole caption (extrapolation, completeness) after the count.
     static func paydayNetLine(_ net: EarningsFigure) -> String? {
         guard let dollars = wholeDollars(net), let caption = net.caption else { return nil }
@@ -32,6 +47,6 @@ enum TakeHomeCopy {
 }
 
 extension DashboardFacts {
-    var heroCheckLine: String? { TakeHomeCopy.heroCheckLine(gross: heroCheckGross, net: heroCheckNet) }
+    var heroCheckRows: [BreakdownRow] { TakeHomeCopy.checkRows(gross: heroCheckGross, net: heroCheckNet) }
     var paydayNetLine: String? { TakeHomeCopy.paydayNetLine(predictedPaycheckNet) }
 }

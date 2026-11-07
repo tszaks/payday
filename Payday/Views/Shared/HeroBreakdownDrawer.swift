@@ -16,6 +16,10 @@ import SwiftUI
 /// ONE row rather than to the whole drawer. The wage rows use it for their
 /// hours: "Wages · 64h 50m" put a duration and a dollar amount on one line in
 /// the same weight, so the eye had to parse which half was the money.
+///
+/// `wholeDollars` renders the amount without cents. It is for a PREDICTION
+/// (the after-tax row), where "$1,234.49" would claim a precision the model
+/// does not have; every ledger row keeps its cents.
 struct BreakdownRow: Identifiable {
     var id: String { label }
     let label: String
@@ -23,19 +27,22 @@ struct BreakdownRow: Identifiable {
     let caption: String?
     let emphasized: Bool
     let dividerAbove: Bool
+    let wholeDollars: Bool
 
     init(
         _ label: String,
         cents: Int?,
         caption: String? = nil,
         emphasized: Bool = false,
-        dividerAbove: Bool = false
+        dividerAbove: Bool = false,
+        wholeDollars: Bool = false
     ) {
         self.label = label
         self.cents = cents
         self.caption = caption
         self.emphasized = emphasized
         self.dividerAbove = dividerAbove
+        self.wholeDollars = wholeDollars
     }
 }
 
@@ -161,6 +168,12 @@ extension BreakdownRow {
         return cents < 0 ? "−\(Money.string(fromCents: -cents))" : Money.string(fromCents: cents)
     }
 
+    /// The row's amount as it renders, honouring `wholeDollars`.
+    static func amountText(_ row: BreakdownRow) -> String {
+        guard row.wholeDollars, let cents = row.cents, cents >= 0 else { return amountText(row.cents) }
+        return Money.wholeDollarString(fromCents: cents)
+    }
+
     static func hasBreakdown(_ result: EarningsResult) -> Bool {
         let components = result.knownComponents
         return components.voluntaryCashCents > 0
@@ -211,6 +224,10 @@ struct HeroBreakdownDrawer<Card: View>: View {
     let rows: [BreakdownRow]
     let total: BreakdownRow
     let hasBreakdown: Bool
+    /// Rows UNDER the bottom line, after their own rule: facts about the
+    /// same period that are not terms of the ledger above (the Dashboard's
+    /// check so far, before and after tax). Empty for a hero with none.
+    var footer: [BreakdownRow] = []
     @Binding var isExpanded: Bool
     @ViewBuilder let card: () -> Card
 
@@ -283,6 +300,12 @@ struct HeroBreakdownDrawer<Card: View>: View {
                     }
                     Divider()
                     breakdownRow(total)
+                    if !footer.isEmpty {
+                        Divider()
+                        ForEach(footer) { row in
+                            breakdownRow(row)
+                        }
+                    }
                 }
                 .padding(.horizontal, PaydaySpacing.p20)
                 .padding(.bottom, PaydaySpacing.p20)
@@ -322,7 +345,7 @@ struct HeroBreakdownDrawer<Card: View>: View {
                 }
             }
             Spacer(minLength: 0)
-            Text(BreakdownRow.amountText(row.cents))
+            Text(BreakdownRow.amountText(row))
                 .font(row.emphasized ? PaydayFont.subheadline : PaydayFont.footnote)
                 .foregroundStyle(row.emphasized ? PaydayColor.textPrimary : PaydayColor.textSecondary)
                 .monospacedDigit()

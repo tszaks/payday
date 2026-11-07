@@ -361,6 +361,17 @@ struct HeroBreakdownDrawerSnapshotTests {
         #expect(rows.first { $0.label.hasPrefix("Wages") }?.cents == 2759)
     }
 
+    @Test("a whole-dollar row drops its cents; every other row keeps them")
+    func wholeDollarRowRendersWithoutCents() {
+        let predicted = BreakdownRow("After tax, about", cents: 123_456, wholeDollars: true)
+        #expect(BreakdownRow.amountText(predicted) == "$1,235")
+        let exact = BreakdownRow("On your check, before tax", cents: 123_456)
+        #expect(BreakdownRow.amountText(exact) == "$1,234.56")
+        // Unavailable stays the placeholder under either style: never "$0".
+        let missing = BreakdownRow("After tax, about", cents: nil, wholeDollars: true)
+        #expect(BreakdownRow.amountText(missing) == ShiftDayRow.unavailablePlaceholder)
+    }
+
     @Test("the bottom line is You kept when something was tipped out, and its cents are the engine's")
     func totalRowLabelAndCents() throws {
         let snapshot = try dayWithTipOut()
