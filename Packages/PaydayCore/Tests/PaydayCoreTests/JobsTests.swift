@@ -127,17 +127,6 @@ struct JobsTests {
         #expect(policies.renamingJob(id: Self.cafe.id, to: "bistro") == policies)
     }
 
-    @Test("Making a job primary swaps the nil tag on its policies")
-    func makingPrimary() {
-        let policies = CompensationPolicies(
-            rates: [Self.primaryRate, Self.cafeRate], jobs: [Self.bistro, Self.cafe])
-        let swapped = policies.makingPrimary(jobID: Self.cafe.id)
-        #expect(swapped.jobNames == ["Cafe", "Bistro"])
-        #expect(swapped.primaryJob?.id == Self.cafe.id)
-        #expect(swapped.rates.first { $0.id == Self.cafeRate.id }?.jobName == nil)
-        #expect(swapped.rates.first { $0.id == Self.primaryRate.id }?.jobName == "Bistro")
-    }
-
     @Test("A payload with a job list and nothing else is not empty, so sync adopts it")
     func jobsOnlyPayloadIsNotEmpty() {
         #expect(CompensationPolicies().isEmpty)

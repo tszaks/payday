@@ -132,55 +132,6 @@ struct JobCommandsTests {
         #expect(primary.modifiedAt == jobDay(1))
     }
 
-    @Test("make primary swaps the nil tag between the two jobs' records")
-    func makePrimary() throws {
-        store.apply(twoJobs())
-        let cafe = shift(5, job: "Cafe"), bistro = shift(6, job: nil), check = paycheck(job: nil)
-        try JobCommands.makePrimary(jobID: cafeID, policyStore: store,
-                                    shifts: [cafe, bistro], paychecks: [check], in: context)
-        #expect(store.policies.primaryJob?.id == cafeID)
-        #expect(store.policies.jobNames == ["Cafe", "Bistro"])
-        #expect(cafe.jobName == nil)
-        #expect(bistro.jobName == "Bistro")
-        #expect(check.jobName == "Bistro")
-    }
-
-    @Test("make primary is refused, and changes nothing, while a legacy shift is still unconfirmed")
-    func makePrimaryRefusedMidConversion() throws {
-        if let existing = PaydaySyncState.registeredUserID {
-            PaydaySyncState.forget(userID: existing)
-        }
-        let userID = UUID()
-        PaydaySyncState.forget(userID: userID)
-        _ = PaydaySyncState.registerCurrentUser(userID)
-        defer { PaydaySyncState.forget(userID: userID) }
-
-        store.apply(twoJobs())
-        let converting = shift(5, job: nil)
-        converting.legacyEntryIDs = [UUID()]
-        let cafe = shift(6, job: "Cafe")
-
-        // Signed in, has legacy sources, not authoritative: refused, and the
-        // list and every tag are exactly as they were.
-        #expect(throws: JobCommands.ShiftsNotReady.self) {
-            try JobCommands.makePrimary(jobID: cafeID, policyStore: store,
-                                        shifts: [converting, cafe], paychecks: [], in: context)
-        }
-        #expect(store.policies.primaryJob?.id == bistroID)
-        #expect(converting.jobName == nil)
-        #expect(cafe.jobName == "Cafe")
-
-        // Once authoritative the same call goes through and retags both.
-        PaydaySyncState.mutate(userID: userID) {
-            $0.shiftsAreAuthoritativeAt = "2026-09-18T00:00:00.000Z"
-        }
-        try JobCommands.makePrimary(jobID: cafeID, policyStore: store,
-                                    shifts: [converting, cafe], paychecks: [], in: context)
-        #expect(store.policies.primaryJob?.id == cafeID)
-        #expect(converting.jobName == "Bistro")
-        #expect(cafe.jobName == nil)
-    }
-
     @Test("the add sheet refuses a name another job has, or the current job's name on the first add")
     func nameIsTaken() {
         #expect(JobsSettingsView.nameIsTaken("bistro", existing: ["Bistro", "Cafe"], primaryName: nil))

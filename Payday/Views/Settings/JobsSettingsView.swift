@@ -6,10 +6,11 @@ import SwiftUI
 /// paychecks carry it as a tag, nil for the primary. With one job (no list
 /// stored) this screen is the only place jobs appear at all.
 ///
-/// Periods still follow the one schedule in Settings in E1, whichever job
-/// is primary (Make Primary does not swap schedules: that is E2's job,
-/// because paychecks are keyed by period dates). A job's own schedule is
-/// stored now so E2 can use it without asking again.
+/// Periods still follow the one schedule in Settings in E1. The first job
+/// stays the primary: switching the primary would rewrite every untagged
+/// shift and upload settings and shifts as two server writes, which another
+/// device could see half-done, so that waits for stable job ids in E2. A
+/// job's own schedule is stored now so E2 can use it without asking again.
 struct JobsSettingsView: View {
     @Environment(PolicyStore.self) private var policyStore
     @Environment(PayScheduleStore.self) private var scheduleStore
@@ -43,7 +44,7 @@ struct JobsSettingsView: View {
                 }
                 Button("Add job") { isAddingJob = true }
             } footer: {
-                Text("With two or more jobs, the log sheet and the paycheck sheet ask which job. Pay periods follow the one schedule in Settings for now, whichever job is primary.")
+                Text("With two or more jobs, the log sheet and the paycheck sheet ask which job. Pay periods follow the one schedule in Settings for now.")
             }
             .listRowBackground(PaydayColor.fieldBackground)
         }
@@ -62,11 +63,6 @@ struct JobsSettingsView: View {
                 renamingJob = job
             }
             if !job.isPrimary {
-                Button("Make Primary") {
-                    run { try JobCommands.makePrimary(
-                        jobID: job.id, policyStore: policyStore,
-                        shifts: shiftRecords, paychecks: paycheckRecords, in: modelContext) }
-                }
                 Button("Delete Job", role: .destructive) { delete(job) }
             }
         }

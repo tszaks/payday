@@ -230,20 +230,6 @@ public struct CompensationPolicies: Hashable, Codable, Sendable {
         }
     }
 
-    /// Returns a copy where `jobID` is the primary. A nil job tag always
-    /// means "the primary", so policies with no job move to the old primary's
-    /// name and the new primary's own policies lose their tag.
-    public func makingPrimary(jobID: UUID) -> CompensationPolicies {
-        guard let newPrimary = jobs.first(where: { $0.id == jobID }), !newPrimary.isPrimary,
-              let oldPrimary = primaryJob else { return self }
-        let newKey = ShiftRole.key(newPrimary.name)
-        let updatedJobs = jobs.map { JobPolicy(id: $0.id, name: $0.name, schedule: $0.schedule, isPrimary: $0.id == jobID) }
-        return retagging(rates: rates, calendars: calendars, jobs: updatedJobs) { tag in
-            if tag == nil { return oldPrimary.name }
-            return ShiftRole.key(tag) == newKey ? nil : tag
-        }
-    }
-
     /// Returns a copy without one non-primary job (and without its
     /// policies). When only the primary would remain, the list goes away, so
     /// the stored JSON is the one-job shape again.
