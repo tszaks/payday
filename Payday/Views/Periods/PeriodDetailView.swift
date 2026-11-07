@@ -114,6 +114,7 @@ struct PeriodDetailFacts: SnapshotFacts {
         schedule: PaySchedule?,
         payrollTimeZone: TimeZone,
         cardTipsPaidAtClose: Bool = false,
+        job: JobScope = .all,
         calendar: Calendar = .current
     ) {
         let calculator = PayPeriodCalculator(
@@ -126,7 +127,7 @@ struct PeriodDetailFacts: SnapshotFacts {
         self.snapshot = snapshot
         stamp = snapshot?.stamp
 
-        let periodResult = HistoryEarnings.earnings(snapshot, for: period, in: payrollTimeZone)
+        let periodResult = HistoryEarnings.earnings(snapshot, for: period, in: payrollTimeZone, job: job)
         result = periodResult
 
         let selected = Set(periodResult?.shiftIDs ?? [])
@@ -177,10 +178,11 @@ struct PeriodDetailFacts: SnapshotFacts {
         chartFacts = EarningsChartFacts(
             snapshot: snapshot,
             range: range,
-            timeZone: payrollTimeZone
+            timeZone: payrollTimeZone,
+            job: job
         )
 
-        let resolvedPaycheck = HistoryEarnings.paycheck(for: period, in: paycheckRecords)
+        let resolvedPaycheck = HistoryEarnings.paycheck(for: period, in: paycheckRecords, job: job)
         paycheck = resolvedPaycheck
         checked = PeriodCheckComparison(
             result: periodResult, paycheck: resolvedPaycheck, cardTipsOnCheck: !cardTipsPaidAtClose)
@@ -200,7 +202,10 @@ struct PeriodDetailFacts: SnapshotFacts {
         } else {
             // The after-tax half comes from the person's own stubs, through
             // the same expectation; absent under 2 qualifying stubs.
-            let net = expectation.netFigure(model: WithholdingModelAdapter.model(from: paycheckRecords))
+            // Per job (E2b): one employer's withholding never predicts
+            // another's take-home.
+            let net = expectation.netFigure(model: WithholdingModelAdapter.model(
+                from: paycheckRecords.filter { job.includes($0.jobName) }))
             let afterTax = TakeHomeCopy.aboutAfterTax(net).map { " · \($0)" } ?? ""
             noPaycheckCaption = "Expected \(Money.string(fromCents: expectedCheckCents))\(afterTax) · \(payDateText)"
         }
@@ -217,6 +222,9 @@ struct PeriodDetailView: View {
     @Query private var paycheckRecords: [PaycheckRecord]
 
     let period: PayPeriod
+    /// The job this period belongs to (E2b). `.all` with one job, which is
+    /// exactly the screen as it was.
+    var job: JobScope = .all
     @State private var sheetTarget: TipEntrySheetTarget?
     @State private var showPaycheckSheet = false
     /// True when a tapped payday push opened the stub sheet, so the sheet
@@ -241,9 +249,10 @@ struct PeriodDetailView: View {
             shiftRecordDays: build.shiftRecordDays,
             paycheckRecords: paycheckRecords.hidingPendingRemoval(),
             period: period,
-            schedule: scheduleStore.schedule,
-            payrollTimeZone: policyStore.payrollTimeZone,
-            cardTipsPaidAtClose: preferencesStore.isCardTipsPaidAtClose
+            schedule: jobCalculator.schedule,
+            payrollTimeZone: jobCalculator.payrollTimeZone,
+            cardTipsPaidAtClose: preferencesStore.isCardTipsPaidAtClose,
+            job: job
         )
         // A ScrollView, deliberately NOT a List — same fix as the Dashboard
         // (2026-07-19): a List animates row resize on UIKit's own clock,
@@ -291,7 +300,8 @@ struct PeriodDetailView: View {
                 period: period,
                 existing: facts.paycheck,
                 expectation: facts.expectation,
-                startsScanner: paycheckSheetStartsScanner
+                startsScanner: paycheckSheetStartsScanner,
+                job: job
             )
             .paydayAppearance()
         }
@@ -324,6 +334,11 @@ struct PeriodDetailView: View {
             }
         }
         #endif
+    }
+
+    /// This job's pay-period grid; the primary's with one job.
+    private var jobCalculator: PayPeriodCalculator {
+        policyStore.calculator(forJob: job.tag, primarySchedule: scheduleStore.schedule)
     }
 
     private func snapshotBuild() -> HistoryEarnings.Build {

@@ -33,5 +33,6 @@ enum PeriodLanding: Equatable {
     case currentDetail
     /// That period's detail with its stub sheet open and the scanner
     /// started. Falls back to the current period when no row matches.
-    case paycheckScan(periodStart: Date, periodEnd: Date)
+    /// `job` is the period's job tag (E2b), nil for the primary.
+    case paycheckScan(periodStart: Date, periodEnd: Date, job: String? = nil)
 }

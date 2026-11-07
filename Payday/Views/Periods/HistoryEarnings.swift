@@ -1,4 +1,5 @@
 import Foundation
+import PaydayCore
 
 /// How History's two screens get their money, in one place.
 ///
@@ -128,10 +129,11 @@ enum HistoryEarnings {
     static func earnings(
         _ snapshot: EarningsSnapshot?,
         for period: PayPeriod,
-        in payrollTimeZone: TimeZone
+        in payrollTimeZone: TimeZone,
+        job: JobScope = .all
     ) -> EarningsResult? {
         guard let snapshot else { return nil }
-        return snapshot.range(range(of: period, in: payrollTimeZone))
+        return snapshot.range(range(of: period, in: payrollTimeZone), job: job)
     }
 
     /// The `MetricID.hourlyRate` caption: "Averaging $2.83/hr · 4 of 5
@@ -180,9 +182,12 @@ enum HistoryEarnings {
     /// (`periodEnd`, then `periodStart`, then id), so this picks the same row
     /// the engine's `paycheck(periodEnd:)` will pick once the bridge carries
     /// paychecks.
-    static func paycheck(for period: PayPeriod, in records: [PaycheckRecord]) -> PaycheckRecord? {
+    ///
+    /// `job` (E2b): with two or more jobs a period belongs to one job, and so
+    /// does its check; another job's check is never this period's.
+    static func paycheck(for period: PayPeriod, in records: [PaycheckRecord], job: JobScope = .all) -> PaycheckRecord? {
         records
-            .filter { $0.periodEnd >= period.start && $0.periodEnd <= period.end }
+            .filter { job.includes($0.jobName) && $0.periodEnd >= period.start && $0.periodEnd <= period.end }
             .min {
                 ($0.periodEnd, $0.periodStart, $0.id.uuidString)
                     < ($1.periodEnd, $1.periodStart, $1.id.uuidString)

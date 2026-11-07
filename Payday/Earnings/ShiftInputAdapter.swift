@@ -37,8 +37,23 @@ enum ShiftInputAdapter {
     /// the answer. With no policies at all (a first launch before the
     /// migration) it falls back to the device zone, the single moment the
     /// app is allowed to consult it.
-    static func adapt(_ records: [ShiftRecord], calendars: [PayrollCalendarPolicy]) -> Output {
-        let latestZone = calendars.last?.payrollTimeZone ?? .current
+    ///
+    /// Each shift reads its zone from its OWN job's calendars (E2b; the
+    /// `CompensationPolicies.policies(forJob:)` partition), so two jobs in two
+    /// zones each get their own work day. A job with no calendar of its own
+    /// reads the primary's; with one job every calendar is the primary's and
+    /// this is exactly the single-list rule above.
+    static func adapt(_ records: [ShiftRecord], calendars allCalendars: [PayrollCalendarPolicy]) -> Output {
+        let primaryCalendars = allCalendars.filter { $0.jobName == nil }
+        var byJob: [String: [PayrollCalendarPolicy]] = [:]
+        for calendar in allCalendars {
+            guard let key = ShiftRole.key(calendar.jobName) else { continue }
+            byJob[key, default: []].append(calendar)
+        }
+        func calendars(for job: String?) -> [PayrollCalendarPolicy] {
+            if let key = ShiftRole.key(job), let own = byJob[key] { return own }
+            return primaryCalendars.isEmpty ? allCalendars : primaryCalendars
+        }
         var inputs: [ShiftInput] = []
         var unreadable: [UUID] = []
         inputs.reserveCapacity(records.count)
@@ -51,6 +66,8 @@ enum ShiftInputAdapter {
                 unreadable.append(record.id)
             }
 
+            let calendars = calendars(for: record.jobName)
+            let latestZone = calendars.last?.payrollTimeZone ?? .current
             let provisional = CivilDay(record.workDate, in: latestZone)
             let zone = policy(in: calendars, onOrBefore: provisional)?.payrollTimeZone ?? latestZone
             let workDay = zone == latestZone ? provisional : CivilDay(record.workDate, in: zone)

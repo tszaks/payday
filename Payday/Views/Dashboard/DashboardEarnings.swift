@@ -106,12 +106,19 @@ enum DashboardEarnings {
             asOf: CivilDay(.distantFuture, in: payrollTimeZone),
             unreadableReceiptShiftIDs: adapted.unreadableReceiptShiftIDs
         ))
+        // E2b: with two or more jobs the Dashboard is the primary job's.
+        // The snapshot stays whole (the engine partitions by job itself);
+        // the rows, the pace history and the after-tax model are the
+        // primary's. With one job nothing is filtered.
+        let job = JobScope.picked(nil, jobCount: policies.jobs.count)
+        let jobRecords = records.filter { job.includes($0.jobName) }
         return Dataset(
             snapshot: snapshot,
-            shiftRecordDays: records,
-            tipRecords: StatsRecordAdapter.tipRecords(from: records),
-            withholdingModel: WithholdingModelAdapter.model(from: paychecks),
-            cardTipsPaidAtClose: cardTipsPaidAtClose
+            shiftRecordDays: jobRecords,
+            tipRecords: StatsRecordAdapter.tipRecords(from: jobRecords),
+            withholdingModel: WithholdingModelAdapter.model(from: paychecks.filter { job.includes($0.jobName) }),
+            cardTipsPaidAtClose: cardTipsPaidAtClose,
+            job: job
         )
     }
 
@@ -143,5 +150,8 @@ enum DashboardEarnings {
         /// Settings → Payroll, "Card tips are paid". Carried on the dataset
         /// so every expected-check figure built from it uses one answer.
         var cardTipsPaidAtClose: Bool = false
+        /// Which job the Dashboard shows (E2b): `.all` with one job, the
+        /// primary (`.job(nil)`) with two or more.
+        var job: JobScope = .all
     }
 }

@@ -159,3 +159,24 @@ struct PaycheckEntryFacts: SnapshotFacts, Equatable {
         return PaycheckEntryFacts(expectation: expectation, observation: observation)
     }
 }
+
+extension PaycheckEntryFacts {
+    /// The period a check is saved against once its job is picked (E2b).
+    /// The job the screen opened on keeps the screen's period; another job
+    /// re-derives it on that job's own calendar, as the period of that job
+    /// containing the screen period's last day, or today when that day is
+    /// still ahead (the screen's current period): a check recorded today
+    /// lands in the other job's period that holds today, never in a future
+    /// one. With one job the picked job is always the screen's, so the
+    /// period never moves.
+    static func period(
+        forJob picked: String?,
+        screenJob: String?,
+        screenPeriod: PayPeriod,
+        now: Date = .now,
+        calculator: (String?) -> PayPeriodCalculator
+    ) -> PayPeriod {
+        guard ShiftRole.key(picked) != ShiftRole.key(screenJob) else { return screenPeriod }
+        return calculator(picked).period(containing: min(screenPeriod.end, now))
+    }
+}

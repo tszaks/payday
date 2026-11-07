@@ -70,7 +70,8 @@ enum AmbientPeriodFigure {
             from: snapshot,
             schedule: schedule,
             payrollTimeZone: policyStore.payrollTimeZone,
-            now: now
+            now: now,
+            job: .picked(nil, jobCount: policyStore.policies.jobs.count)
         ))
     }
 
@@ -86,7 +87,10 @@ enum AmbientPeriodFigure {
         from snapshot: EarningsSnapshot,
         schedule: PaySchedule,
         payrollTimeZone zone: TimeZone,
-        now: Date
+        now: Date,
+        /// E2b: the primary job (`.job(nil)`) with two or more jobs, the
+        /// Dashboard hero's scope; `.all` with one, unchanged.
+        job: JobScope = .all
     ) -> Answer {
         let calculator = PayPeriodCalculator(payrollTimeZone: zone, schedule: schedule)
         let period = calculator.period(containing: now)
@@ -99,7 +103,8 @@ enum AmbientPeriodFigure {
                 start: CivilDay(period.start, in: zone),
                 end: CivilDay(period.end, in: zone)
             ),
-            asOf: CivilDay(now, in: zone)
+            asOf: CivilDay(now, in: zone),
+            job: job
         ))
 
         return Answer(

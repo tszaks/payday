@@ -199,7 +199,8 @@ struct PaydayWidgetProvider: TimelineProvider {
             from: snapshot,
             schedule: schedule,
             payrollTimeZone: policyStore.payrollTimeZone,
-            now: date
+            now: date,
+            job: .picked(nil, jobCount: policyStore.policies.jobs.count)
         )
         let figure = answer.figure
         let period = answer.period

@@ -20,6 +20,11 @@ public struct CompensationPolicies: Hashable, Codable, Sendable {
     /// job: a job list appears only when a second job is added, so an
     /// account that never adds one keeps today's JSON byte for byte.
     public var jobs: [JobPolicy]
+    /// The job TAG the lookups below answer for (E2b). Nil on every value
+    /// except one returned by `policies(forJob:)`, so an unfiltered value
+    /// always answers for the primary and a job's filtered value answers
+    /// for that job. Never encoded: it describes a view, not stored data.
+    public private(set) var lookupJob: String?
 
     public init(
         version: Int = CompensationPolicies.currentVersion,
@@ -84,12 +89,30 @@ public struct CompensationPolicies: Hashable, Codable, Sendable {
     /// carried through unchanged.
     public func policies(forJob tag: String?) -> CompensationPolicies {
         let key = ShiftRole.key(tag)
-        return CompensationPolicies(
+        var scoped = CompensationPolicies(
             version: version,
             rates: rates.filter { ShiftRole.key($0.jobName) == key },
             calendars: calendars.filter { ShiftRole.key($0.jobName) == key },
             jobs: jobs
         )
+        scoped.lookupJob = ShiftRole.normalized(tag)
+        return scoped
+    }
+
+    /// The rates and calendars the lookups answer from: the primary's
+    /// (nil-tagged) on an unfiltered value, the job's on a value from
+    /// `policies(forJob:)`. Without this, the first job-tagged calendar or
+    /// rate would become the primary's "latest" and move its payroll zone
+    /// and its "your rate" (the way `allRolesRates` already keeps a role's
+    /// rate out of the account's answers).
+    private var lookupRates: [PayRatePolicy] {
+        let key = ShiftRole.key(lookupJob)
+        return rates.filter { ShiftRole.key($0.jobName) == key }
+    }
+
+    private var lookupCalendars: [PayrollCalendarPolicy] {
+        let key = ShiftRole.key(lookupJob)
+        return calendars.filter { ShiftRole.key($0.jobName) == key }
     }
 
     // MARK: Lookups
@@ -109,7 +132,7 @@ public struct CompensationPolicies: Hashable, Codable, Sendable {
     /// the workweek-boundary rule.
     public func calendar(on day: CivilDay) -> PayrollCalendarPolicy? {
         CompensationLedger.policy(
-            in: CompensationLedger.acceptCalendarPolicies(calendars).accepted,
+            in: CompensationLedger.acceptCalendarPolicies(lookupCalendars).accepted,
             onOrBefore: day,
             key: \.effectiveFrom
         )
@@ -118,7 +141,7 @@ public struct CompensationPolicies: Hashable, Codable, Sendable {
     /// The most recent calendar policy, whatever its effective date: the one
     /// a new policy has to start on a boundary of, and the one whose frozen
     /// zone the app reads for "the payroll time zone".
-    public var latestCalendar: PayrollCalendarPolicy? { calendars.last }
+    public var latestCalendar: PayrollCalendarPolicy? { lookupCalendars.last }
 
     /// The most recent rate, whatever its effective date: what Settings shows
     /// as "your rate" and what `baseHourlyWageCents` becomes a view of.
@@ -127,12 +150,12 @@ public struct CompensationPolicies: Hashable, Codable, Sendable {
 
     /// The rates with no role, in effect order: what a shift without a role,
     /// or with a role that has no rate of its own, is paid at.
-    public var allRolesRates: [PayRatePolicy] { rates.filter { $0.roleName == nil } }
+    public var allRolesRates: [PayRatePolicy] { lookupRates.filter { $0.roleName == nil } }
 
     /// One role's rates, in effect order (trimmed, case-insensitive match).
     public func rates(forRole role: String) -> [PayRatePolicy] {
         guard let key = ShiftRole.key(role) else { return [] }
-        return rates.filter { ShiftRole.key($0.roleName) == key }
+        return lookupRates.filter { ShiftRole.key($0.roleName) == key }
     }
 
     /// The roles that have a rate of their own, latest spelling, in the
@@ -140,7 +163,7 @@ public struct CompensationPolicies: Hashable, Codable, Sendable {
     public var roleNames: [String] {
         var seen: Set<String> = []
         var names: [String] = []
-        for rate in rates {
+        for rate in lookupRates {
             guard let name = rate.roleName, let key = ShiftRole.key(name), seen.insert(key).inserted else { continue }
             names.append(name)
         }

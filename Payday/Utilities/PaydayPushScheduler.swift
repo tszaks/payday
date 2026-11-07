@@ -1,4 +1,5 @@
 import Foundation
+import PaydayCore
 import UserNotifications
 
 /// The app's namesake moment, off the lock screen: one local notification on
@@ -109,6 +110,8 @@ enum PaydayPushScheduler {
     private nonisolated static let maxPeriodsBack = 6
     nonisolated static let periodStartKey = "periodStart"
     nonisolated static let periodEndKey = "periodEnd"
+    /// The job tag of the period announced (E2b). Absent for the primary.
+    nonisolated static let jobKey = "job"
     private nonisolated static let fireHour = 9
 
     /// What should be posted, computed purely from a schedule, this app's
@@ -173,6 +176,12 @@ enum PaydayPushScheduler {
     private static func performReschedule(preferencesStore: UserPreferencesStore, schedule: PaySchedule?, shiftRecords: [ShiftRecord], paycheckRecords: [PaycheckRecord]) async {
         let center = UNUserNotificationCenter.current()
         center.removePendingNotificationRequests(withIdentifiers: [notificationIdentifier, stubNudgeIdentifier])
+        // Every job's pair too (E2b): `payday-moment-<jobID>` and
+        // `payday-stub-nudge-<jobID>`, including a removed job's.
+        let stale = await center.pendingNotificationRequests()
+            .map(\.identifier)
+            .filter(isPaydayIdentifier)
+        center.removePendingNotificationRequests(withIdentifiers: stale)
 
         // Read from the store's own suite, the same way the payroll zone
         // already is, so no caller's signature changes and every call site
@@ -180,8 +189,6 @@ enum PaydayPushScheduler {
         // persists before it posts, and every reschedule trigger runs after
         // the edit that caused it, so this is the same value the screens hold.
         let policies = PolicyStore.storedPolicies()
-        let payrollTimeZone = policies.payrollTimeZone ?? .current
-        let calculator = PayPeriodCalculator(payrollTimeZone: payrollTimeZone, schedule: schedule ?? .fallback)
         // `ShiftRecord` is a `@Model` and `ShiftInputAdapter` is therefore
         // `@MainActor`, while `decision` and `spokenFigure` are deliberately
         // `nonisolated` so the suite can exercise the rule without a main
@@ -189,34 +196,85 @@ enum PaydayPushScheduler {
         // that is already on the main actor, and everything below it stays
         // value types.
         let shiftInputs = ShiftInputAdapter.adapt(shiftRecords, calendars: policies.calendars)
-        let nudge = stubNudge(
+        let requests = pendingRequests(
             now: .now,
-            calculator: calculator,
-            shiftInputs: shiftInputs,
-            paycheckRecords: paycheckRecords,
-            isReminderEnabled: preferencesStore.isPaydayReminderEnabled,
-            payrollTimeZone: payrollTimeZone
-        )
-        let decision = decision(
-            now: .now,
-            calculator: calculator,
-            shiftInputs: shiftInputs,
-            paycheckRecords: paycheckRecords,
-            isReminderEnabled: preferencesStore.isPaydayReminderEnabled,
             policies: policies,
-            payrollTimeZone: payrollTimeZone
+            primarySchedule: schedule,
+            shiftInputs: shiftInputs,
+            paycheckRecords: paycheckRecords,
+            isReminderEnabled: preferencesStore.isPaydayReminderEnabled
         )
-        guard decision != nil || nudge != nil else { return }
+        guard !requests.isEmpty else { return }
 
         guard await isCurrentlyAuthorized(center: center) else { return }
-        if let decision {
-            enqueue(identifier: notificationIdentifier, body: decision.body, fireDate: decision.fireDate,
-                    periodStart: decision.periodStart, periodEnd: decision.periodEnd, center: center)
+        for request in requests {
+            enqueue(request, center: center)
         }
-        if let nudge {
-            enqueue(identifier: stubNudgeIdentifier, body: stubNudgeBody, fireDate: nudge.fireDate,
-                    periodStart: nudge.periodStart, periodEnd: nudge.periodEnd, center: center)
+    }
+
+    /// One request to post: what `enqueue` turns into a notification.
+    struct PendingRequest: Equatable {
+        let identifier: String
+        let body: String
+        let fireDate: Date
+        let periodStart: Date
+        let periodEnd: Date
+        /// The period's job tag; nil for the primary.
+        let job: String?
+    }
+
+    /// Whether `identifier` is one of this scheduler's: the primary's pair
+    /// or any job's.
+    nonisolated static func isPaydayIdentifier(_ identifier: String) -> Bool {
+        identifier == notificationIdentifier || identifier == stubNudgeIdentifier
+            || identifier.hasPrefix(notificationIdentifier + "-") || identifier.hasPrefix(stubNudgeIdentifier + "-")
+    }
+
+    /// Every request to post, per job (E2b). With one job this is exactly
+    /// the one pair the scheduler always posted, on the primary's calendar
+    /// over every shift. With two or more, each job gets its own pair on its
+    /// own calendar, over its own shifts and checks: the primary keeps
+    /// `payday-moment` / `payday-stub-nudge`, any other job adds `-<jobID>`.
+    nonisolated static func pendingRequests(
+        now: Date,
+        policies: CompensationPolicies,
+        primarySchedule: PaySchedule?,
+        shiftInputs: ShiftInputAdapter.Output,
+        paycheckRecords: [PaycheckRecord],
+        isReminderEnabled: Bool,
+        calendar: Calendar = .current
+    ) -> [PendingRequest] {
+        struct Lane { let tag: String?; let scope: JobScope; let suffix: String }
+        let lanes: [Lane] = policies.jobs.count < 2
+            ? [Lane(tag: nil, scope: .all, suffix: "")]
+            : policies.jobs.map { job in
+                Lane(tag: job.tag, scope: .job(job.tag), suffix: job.isPrimary ? "" : "-\(job.id.uuidString)")
+            }
+        var requests: [PendingRequest] = []
+        for lane in lanes {
+            let calculator = PolicyStore.calculator(forJob: lane.tag, policies: policies, primarySchedule: primarySchedule)
+            let zone = calculator.payrollTimeZone
+            let checks = paycheckRecords.filter { lane.scope.includes($0.jobName) }
+            if let decision = decision(
+                now: now, calculator: calculator, shiftInputs: shiftInputs, paycheckRecords: checks,
+                isReminderEnabled: isReminderEnabled, policies: policies, payrollTimeZone: zone,
+                job: lane.scope, calendar: calendar
+            ) {
+                requests.append(PendingRequest(
+                    identifier: notificationIdentifier + lane.suffix, body: decision.body, fireDate: decision.fireDate,
+                    periodStart: decision.periodStart, periodEnd: decision.periodEnd, job: lane.tag))
+            }
+            if let nudge = stubNudge(
+                now: now, calculator: calculator, shiftInputs: shiftInputs, paycheckRecords: checks,
+                isReminderEnabled: isReminderEnabled, payrollTimeZone: zone,
+                job: lane.scope, calendar: calendar
+            ) {
+                requests.append(PendingRequest(
+                    identifier: stubNudgeIdentifier + lane.suffix, body: stubNudgeBody, fireDate: nudge.fireDate,
+                    periodStart: nudge.periodStart, periodEnd: nudge.periodEnd, job: lane.tag))
+            }
         }
+        return requests
     }
 
     /// The rule: fire at 9AM on the payday of the EARLIEST period whose
@@ -247,6 +305,7 @@ enum PaydayPushScheduler {
         isReminderEnabled: Bool,
         policies: CompensationPolicies,
         payrollTimeZone: TimeZone,
+        job: JobScope = .all,
         calendar: Calendar = .current
     ) -> Decision? {
         guard isReminderEnabled,
@@ -265,7 +324,8 @@ enum PaydayPushScheduler {
             for: period,
             shiftInputs: shiftInputs,
             policies: policies,
-            payrollTimeZone: payrollTimeZone
+            payrollTimeZone: payrollTimeZone,
+            job: job
         )
         return Decision(fireDate: fireDate, body: body(for: figure), figure: figure,
                         periodStart: period.start, periodEnd: period.end)
@@ -283,6 +343,7 @@ enum PaydayPushScheduler {
         paycheckRecords: [PaycheckRecord],
         isReminderEnabled: Bool,
         payrollTimeZone: TimeZone,
+        job: JobScope = .all,
         calendar: Calendar = .current
     ) -> StubNudge? {
         guard isReminderEnabled,
@@ -291,7 +352,7 @@ enum PaydayPushScheduler {
                   offsetDays: stubNudgeOffsetDays, calendar: calendar,
                   qualifies: { period in
                       let days = CivilDay(period.start, in: payrollTimeZone)...CivilDay(period.end, in: payrollTimeZone)
-                      return shiftInputs.inputs.contains { days.contains($0.workDay) }
+                      return shiftInputs.inputs.contains { job.includes($0.jobName) && days.contains($0.workDay) }
                   }
               ) else { return nil }
         let (period, fireDate) = found
@@ -371,7 +432,8 @@ enum PaydayPushScheduler {
         for period: PayPeriod,
         shiftInputs: ShiftInputAdapter.Output,
         policies: CompensationPolicies,
-        payrollTimeZone: TimeZone
+        payrollTimeZone: TimeZone,
+        job: JobScope
     ) -> EarningsFigure? {
         // The figure a person HEARS has to be the figure the app SHOWS. A
         // push that speaks a number from a different source than Dashboard
@@ -391,7 +453,7 @@ enum PaydayPushScheduler {
         let result = snapshot.range(DayRange(
             start: CivilDay(period.start, in: payrollTimeZone),
             end: CivilDay(period.end, in: payrollTimeZone)
-        ))
+        ), job: job)
         // Gate 3: no credit tips logged at all. See the type header.
         guard result.knownComponents.voluntaryCreditCents > 0 else { return nil }
         // Gate 2: `.partial` has no room for its caption here.
@@ -415,19 +477,28 @@ enum PaydayPushScheduler {
         }
     }
 
-    private static func enqueue(identifier: String, body: String, fireDate: Date, periodStart: Date, periodEnd: Date, center: UNUserNotificationCenter) {
+    private static func enqueue(_ pending: PendingRequest, center: UNUserNotificationCenter) {
         let content = UNMutableNotificationContent()
         content.title = "Payday."
-        content.body = body
+        content.body = pending.body
         content.sound = .default
-        content.userInfo = [
-            periodStartKey: periodStart.timeIntervalSince1970,
-            periodEndKey: periodEnd.timeIntervalSince1970
-        ]
+        content.userInfo = userInfo(for: pending)
+        let identifier = pending.identifier
+        let fireDate = pending.fireDate
 
         let components = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: fireDate)
         let trigger = UNCalendarNotificationTrigger(dateMatching: components, repeats: false)
         let request = UNNotificationRequest(identifier: identifier, content: content, trigger: trigger)
         center.add(request)
+    }
+
+    /// The tap payload: the period, and its job when it is not the primary.
+    nonisolated static func userInfo(for pending: PendingRequest) -> [String: Any] {
+        var info: [String: Any] = [
+            periodStartKey: pending.periodStart.timeIntervalSince1970,
+            periodEndKey: pending.periodEnd.timeIntervalSince1970
+        ]
+        if let job = pending.job { info[jobKey] = job }
+        return info
     }
 }

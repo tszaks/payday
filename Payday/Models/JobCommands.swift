@@ -27,10 +27,19 @@ enum JobCommands {
     }
 
     /// Adds a job. The first extra job also writes the primary entry, named
-    /// `primaryName` (renamable later).
-    static func add(name: String, schedule: PayScheduleInput?, primaryName: String = "Main job", policyStore: PolicyStore) {
-        policyStore.apply(policyStore.policies.addingJob(
-            id: UUID(), name: name, schedule: schedule, primaryName: primaryName, primaryID: UUID()))
+    /// `primaryName` (renamable later). The new job gets a calendar of its
+    /// own through `PolicyStore.seedingJobCalendars` (E2b); no rate is copied.
+    static func add(
+        name: String,
+        schedule: PayScheduleInput?,
+        primaryName: String = "Main job",
+        policyStore: PolicyStore,
+        now: Date = .now
+    ) {
+        let updated = policyStore.policies.addingJob(
+            id: UUID(), name: name, schedule: schedule, primaryName: primaryName, primaryID: UUID())
+        guard updated != policyStore.policies else { return }
+        policyStore.apply(PolicyStore.seedingJobCalendars(updated, today: CivilDay(now, in: policyStore.payrollTimeZone)))
     }
 
     /// Renames a job and the tag on every shift and paycheck it is on.

@@ -244,7 +244,8 @@ struct EarningsChartFacts: SnapshotFacts {
         range: DayRange,
         timeZone: TimeZone,
         asOf: CivilDay? = nil,
-        metric: EarningsChartMetric = .earnedIncome
+        metric: EarningsChartMetric = .earnedIncome,
+        job: JobScope = .all
     ) {
         let cutoff = asOf ?? snapshot?.stamp.asOf
         let charted = cutoff.map { range.clamped(to: $0) } ?? range
@@ -269,7 +270,7 @@ struct EarningsChartFacts: SnapshotFacts {
         // the cutoff applied, and clamping again is either a no-op or, if the
         // two ever disagreed, a silent difference between the whole-range
         // answer and the bars that are supposed to sum to it.
-        whole = snapshot.range(charted, asOf: CivilDay.distantFuture)
+        whole = snapshot.range(charted, asOf: CivilDay.distantFuture, job: job)
 
         points = granularity.buckets(of: charted, timeZone: timeZone).map { bucket in
             EarningsChartPoint(
@@ -281,8 +282,8 @@ struct EarningsChartFacts: SnapshotFacts {
                 // unclamped in the engine; the bucket it was built from was
                 // already clamped above, so nothing slips past the cutoff.
                 result: bucket.count == 1
-                    ? snapshot.day(bucket.start)
-                    : snapshot.range(bucket, asOf: CivilDay.distantFuture),
+                    ? snapshot.day(bucket.start, job: job)
+                    : snapshot.range(bucket, asOf: CivilDay.distantFuture, job: job),
                 metric: metric
             )
         }
