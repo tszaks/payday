@@ -22,6 +22,7 @@ struct ProjectedShiftRow: LegacyShiftRow, Identifiable, Equatable {
     let clockIn: Date?
     let clockOut: Date?
     let serverCount: Int?
+    var tipShareInCents: Int? = nil
     let receiptMetrics: ShiftReceiptMetrics?
     let isDouble: Bool
 }
@@ -114,6 +115,7 @@ enum ShiftProjection {
                 clockIn: carriesDetail ? shift.clockIn : nil,
                 clockOut: carriesDetail ? shift.clockOut : nil,
                 serverCount: carriesDetail ? shift.serverCount : nil,
+                tipShareInCents: carriesDetail ? shift.tipShareInCents : nil,
                 receiptMetrics: carriesDetail ? shift.receiptMetrics : nil,
                 // Never projected as a double. `isDouble` was a property of a
                 // legacy ROW, and a shift carries its own period instead.

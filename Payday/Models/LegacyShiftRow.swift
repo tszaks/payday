@@ -31,6 +31,9 @@ protocol LegacyShiftRow {
     var clockIn: Date? { get }
     var clockOut: Date? { get }
     var serverCount: Int? { get }
+    /// A tip share received from co-workers, shift-level like tip-out. Only
+    /// a projected `ShiftRecord` carries one; a legacy `TipEntry` cannot.
+    var tipShareInCents: Int? { get }
     var receiptMetrics: ShiftReceiptMetrics? { get }
     var isDouble: Bool { get }
 
@@ -51,8 +54,13 @@ extension LegacyShiftRow {
     /// duplicated tip-out.
     var netCents: Int {
         (receiptMetrics?.employeeEarningsCents(fromStoredAmount: amountCents) ?? amountCents)
+            + (tipShareInCents ?? 0)
             - (tipOutCents ?? 0)
     }
 }
 
-extension TipEntry: LegacyShiftRow {}
+extension TipEntry: LegacyShiftRow {
+    /// Legacy rows have no tip share: `public.tip_entries` has no such
+    /// column and the builds that write it cannot send one.
+    var tipShareInCents: Int? { nil }
+}

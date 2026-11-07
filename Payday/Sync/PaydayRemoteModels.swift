@@ -295,6 +295,9 @@ struct RemoteUserSettings: Codable, Sendable {
     let smartNudgeEnabled: Bool
     let paydayReminderEnabled: Bool
     let moveLedger: [String: String]
+    /// Optional on decode so a server row written before the column existed
+    /// still reads; `apply` leaves the local choice alone when it is nil.
+    let cardTipsPaidAtClose: Bool?
     /// Rate and payroll-calendar history (PaydayCore `CompensationPolicies`).
     ///
     /// Optional because null on the server means "the client that last wrote
@@ -318,6 +321,7 @@ struct RemoteUserSettings: Codable, Sendable {
         case smartNudgeEnabled = "smart_nudge_enabled"
         case paydayReminderEnabled = "payday_reminder_enabled"
         case moveLedger = "move_ledger"
+        case cardTipsPaidAtClose = "card_tips_paid_at_close"
         case compensationPolicies = "compensation_policies"
         case clientUpdatedAt = "client_updated_at"
         case serverUpdatedAt = "updated_at"
@@ -342,6 +346,7 @@ struct RemoteUserSettings: Codable, Sendable {
         self.smartNudgeEnabled = preferencesStore.isSmartNudgeEnabled
         self.paydayReminderEnabled = preferencesStore.isPaydayReminderEnabled
         self.moveLedger = moveLedgerStore.firstShownAt.mapValues(PaydayRemoteDate.instant)
+        self.cardTipsPaidAtClose = preferencesStore.isCardTipsPaidAtClose
         // Sent even when empty so a device that has genuinely cleared its
         // policies can say so; only NIL means "I do not know about policies".
         self.compensationPolicies = policyStore.policies
@@ -519,6 +524,9 @@ struct RemoteShift: Codable, Equatable, Sendable {
     let clockIn: String?
     let clockOut: String?
     let serverCount: Int?
+    /// Defaulted so every existing memberwise call site still compiles; nil
+    /// means "not entered", the same as the column.
+    var tipShareInCents: Int? = nil
     let receiptMetrics: ShiftReceiptMetrics?
     let note: String?
     let recordedAt: String?
@@ -548,6 +556,7 @@ struct RemoteShift: Codable, Equatable, Sendable {
         case clockIn = "clock_in"
         case clockOut = "clock_out"
         case serverCount = "server_count"
+        case tipShareInCents = "tip_share_in_cents"
         case receiptMetrics = "receipt_metrics"
         case note
         case recordedAt = "recorded_at"
@@ -579,6 +588,10 @@ struct RemoteShift: Codable, Equatable, Sendable {
         try container.encode(clockIn, forKey: .clockIn)
         try container.encode(clockOut, forKey: .clockOut)
         try container.encode(serverCount, forKey: .serverCount)
+        // Always sent, null included: this build knows the field, so a null
+        // here clears it. `write_shifts` keeps the stored share only when the
+        // key is ABSENT, which is what an older build sends.
+        try container.encode(tipShareInCents, forKey: .tipShareInCents)
         try container.encode(receiptMetrics, forKey: .receiptMetrics)
         try container.encode(note, forKey: .note)
         try container.encode(recordedAt, forKey: .recordedAt)
@@ -800,6 +813,10 @@ struct ShiftBusinessValue: Codable, Equatable, Sendable {
     let clockIn: String?
     let clockOut: String?
     let serverCount: Int?
+    /// Synthesized `Encodable` skips a nil optional, so a shift with no share
+    /// fingerprints exactly as it did before this field existed and nothing
+    /// re-uploads on the first sync after the update.
+    var tipShareInCents: Int? = nil
     let receiptMetrics: ShiftReceiptMetrics?
     let note: String?
     let recordedAt: String?
@@ -828,6 +845,7 @@ extension RemoteShift {
             clockIn: record.clockIn.map(PaydayRemoteDate.instant),
             clockOut: record.clockOut.map(PaydayRemoteDate.instant),
             serverCount: record.serverCount,
+            tipShareInCents: record.tipShareInCents,
             receiptMetrics: record.receiptMetrics,
             note: record.note,
             recordedAt: record.recordedAt.map(PaydayRemoteDate.instant),
@@ -860,6 +878,7 @@ extension RemoteShift {
             clockIn: PaydayRemoteDate.canonicalInstant(clockIn),
             clockOut: PaydayRemoteDate.canonicalInstant(clockOut),
             serverCount: serverCount,
+            tipShareInCents: tipShareInCents,
             receiptMetrics: receiptMetrics,
             note: note,
             recordedAt: PaydayRemoteDate.canonicalInstant(recordedAt)

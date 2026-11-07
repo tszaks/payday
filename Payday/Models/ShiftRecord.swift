@@ -59,6 +59,9 @@ final class ShiftRecord {
     var clockIn: Date?
     var clockOut: Date?
     var serverCount: Int?
+    /// A tip share or pool payout received from co-workers. Optional for the
+    /// same reason as `tipOutCents`: "not entered" is its own fact.
+    var tipShareInCents: Int?
 
     // The persisted receipt payload. Private because `receiptMetrics` is
     // ENCODE-ONLY (see below) and `applyEarnings` is the only writer that may
@@ -106,6 +109,7 @@ final class ShiftRecord {
         clockIn: Date? = nil,
         clockOut: Date? = nil,
         serverCount: Int? = nil,
+        tipShareInCents: Int? = nil,
         receiptMetrics: ShiftReceiptMetrics? = nil,
         note: String? = nil,
         recordedAt: Date? = nil,
@@ -124,6 +128,7 @@ final class ShiftRecord {
         self.clockIn = clockIn
         self.clockOut = clockOut
         self.serverCount = serverCount
+        self.tipShareInCents = tipShareInCents
         self.receiptMetricsJSON = Self.encode(receiptMetrics)
         self.note = note
         self.recordedAt = recordedAt
@@ -341,7 +346,8 @@ final class ShiftRecord {
             voluntaryCashCents: cashTipsCents,
             voluntaryCreditCents: creditTipsCents,
             gratuityFeesCents: receiptMetrics?.employeeGratuityFeesCents ?? 0,
-            tipOutCents: tipOutCents ?? 0
+            tipOutCents: tipOutCents ?? 0,
+            tipShareInCents: tipShareInCents ?? 0
         ).nonWageEarningsCents
     }
 

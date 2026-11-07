@@ -224,6 +224,10 @@ enum DebugSeeder {
             clockIn: inDate,
             clockOut: outDate,
             serverCount: 4 + next(3),
+            // Saturday dinners receive a bar tip share, so the drawer row and
+            // the CSV column have something to show. Keyed on the weekday,
+            // not `next`, so the rest of the seeded data is unchanged.
+            tipShareInCents: period == .dinner && calendar.component(.weekday, from: day) == 7 ? 3_000 : nil,
             recordedAt: recordedAt
         ))
     }
