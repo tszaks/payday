@@ -28,6 +28,9 @@ public struct PayrollCalendarPolicy: Hashable, Codable, Sendable, Identifiable {
     /// Daily overtime minutes never also count toward the weekly threshold,
     /// and every overtime minute uses the one multiplier (no double time).
     public var dailyOvertimeThresholdMinutes: Int?
+    /// The job whose payroll calendar this is (PR E1). Nil means the primary
+    /// job; absent on every policy stored before jobs, and encoded only when set.
+    public var jobName: String?
 
     public init(
         id: UUID,
@@ -36,7 +39,8 @@ public struct PayrollCalendarPolicy: Hashable, Codable, Sendable, Identifiable {
         overtimeThresholdMinutes: Int = 2400,
         overtimeMultiplierHundredths: Int = 150,
         payrollTimeZone: TimeZone,
-        dailyOvertimeThresholdMinutes: Int? = nil
+        dailyOvertimeThresholdMinutes: Int? = nil,
+        jobName: String? = nil
     ) {
         precondition(PayrollCalendarPolicy.weekdayRange.contains(workweekStartWeekday),
                      "workweekStartWeekday must be 1 (Sunday) ... 7 (Saturday), got \(workweekStartWeekday)")
@@ -47,6 +51,7 @@ public struct PayrollCalendarPolicy: Hashable, Codable, Sendable, Identifiable {
         self.overtimeMultiplierHundredths = overtimeMultiplierHundredths
         self.payrollTimeZone = payrollTimeZone
         self.dailyOvertimeThresholdMinutes = dailyOvertimeThresholdMinutes
+        self.jobName = ShiftRole.normalized(jobName)
     }
 
     /// 1 = Sunday ... 7 = Saturday, the `Calendar` convention shared with `CivilDay.weekday`.
@@ -54,7 +59,7 @@ public struct PayrollCalendarPolicy: Hashable, Codable, Sendable, Identifiable {
 
     private enum CodingKeys: String, CodingKey {
         case id, effectiveFrom, workweekStartWeekday, overtimeThresholdMinutes,
-             overtimeMultiplierHundredths, payrollTimeZone, dailyOvertimeThresholdMinutes
+             overtimeMultiplierHundredths, payrollTimeZone, dailyOvertimeThresholdMinutes, jobName
     }
 
     public init(from decoder: Decoder) throws {
@@ -77,6 +82,7 @@ public struct PayrollCalendarPolicy: Hashable, Codable, Sendable, Identifiable {
         payrollTimeZone = zone
         // Absent on every policy stored before daily overtime existed.
         dailyOvertimeThresholdMinutes = try container.decodeIfPresent(Int.self, forKey: .dailyOvertimeThresholdMinutes)
+        jobName = ShiftRole.normalized(try container.decodeIfPresent(String.self, forKey: .jobName))
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -88,5 +94,6 @@ public struct PayrollCalendarPolicy: Hashable, Codable, Sendable, Identifiable {
         try container.encode(overtimeMultiplierHundredths, forKey: .overtimeMultiplierHundredths)
         try container.encode(payrollTimeZone.identifier, forKey: .payrollTimeZone)
         try container.encodeIfPresent(dailyOvertimeThresholdMinutes, forKey: .dailyOvertimeThresholdMinutes)
+        try container.encodeIfPresent(jobName, forKey: .jobName)
     }
 }
