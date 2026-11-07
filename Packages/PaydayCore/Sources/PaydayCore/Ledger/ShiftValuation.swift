@@ -128,6 +128,10 @@ public struct ShiftValuation: Hashable, Codable, Sendable, Identifiable {
     /// Non-wage components plus the valued wage. The one number source for
     /// every day, month, period and range aggregate.
     public var components: EarningsComponents
+    /// Copied from the input: the job the shift was priced under. Nil means
+    /// the primary job (and is absent from the JSON, so a one-job snapshot
+    /// encodes exactly as before jobs existed).
+    public var jobName: String?
 
     public init(
         id: UUID,
@@ -139,7 +143,8 @@ public struct ShiftValuation: Hashable, Codable, Sendable, Identifiable {
         regularMinutes: Int? = nil,
         overtimeMinutes: Int? = nil,
         wage: WageValuation,
-        components: EarningsComponents
+        components: EarningsComponents,
+        jobName: String? = nil
     ) {
         self.id = id
         self.workDay = workDay
@@ -151,5 +156,6 @@ public struct ShiftValuation: Hashable, Codable, Sendable, Identifiable {
         self.overtimeMinutes = overtimeMinutes
         self.wage = wage
         self.components = components
+        self.jobName = ShiftRole.normalized(jobName)
     }
 }

@@ -261,12 +261,91 @@ select pg_temp.expect('upsertPaycheckRecordsSerialisesPerUser',
   '');
 
 -- ===========================================================================
+-- 6. upsert_user_settings keeps the stored job list from an older build (E2a)
+-- ===========================================================================
+
+-- One settings write as the test user. `p_policies` NULL sends no
+-- compensation_policies key at all (the shipped 1.0 key set).
+create function pg_temp.settings_as(p_policies jsonb, p_at text)
+returns void language plpgsql as $$
+begin
+  perform set_config('request.jwt.claim.sub', '88888888-8888-4888-8888-888888888888', true);
+  set local role authenticated;
+  perform public.upsert_user_settings(jsonb_strip_nulls(jsonb_build_object(
+    'first_name', 'Sam',
+    'pay_frequency', 'biweekly',
+    'anchor_period_end', '2026-10-04',
+    'compensation_policies', p_policies,
+    'client_updated_at', p_at)));
+  reset role;
+end;
+$$;
+
+create function pg_temp.policies(p_rate integer, p_jobs jsonb default null)
+returns jsonb language sql as $$
+  select jsonb_strip_nulls(jsonb_build_object(
+    'version', 1,
+    'rates', jsonb_build_array(jsonb_build_object(
+      'id', '0e0e0e0e-0000-4000-8000-000000000001', 'effectiveFrom', '2026-01-01',
+      'hourlyRateCents', p_rate, 'provenance', 'confirmed')),
+    'calendars', '[]'::jsonb,
+    'jobs', p_jobs));
+$$;
+
+create function pg_temp.stored_job_names() returns text language sql as $$
+  select coalesce((select string_agg(j ->> 'name', ',' order by ord)
+    from public.user_settings us,
+         jsonb_array_elements(us.compensation_policies -> 'jobs') with ordinality as t(j, ord)
+    where us.user_id = '88888888-8888-4888-8888-888888888888'), '');
+$$;
+
+create function pg_temp.stored_rate() returns text language sql as $$
+  select compensation_policies -> 'rates' -> 0 ->> 'hourlyRateCents'
+  from public.user_settings where user_id = '88888888-8888-4888-8888-888888888888';
+$$;
+
+select pg_temp.settings_as(pg_temp.policies(1000, $j$[
+  {"id":"0e0e0e0e-0000-4000-8000-000000000010","name":"Main job","isPrimary":true}]$j$::jsonb),
+  '2026-11-01T10:00:00Z');
+select pg_temp.settings_as(pg_temp.policies(1000, $j$[
+  {"id":"0e0e0e0e-0000-4000-8000-000000000010","name":"Main job","isPrimary":true},
+  {"id":"0e0e0e0e-0000-4000-8000-000000000011","name":"Cafe","isPrimary":false}]$j$::jsonb),
+  '2026-11-01T11:00:00Z');
+
+select pg_temp.expect('aNewBuildWithJobsReplacesTheJobList',
+  pg_temp.stored_job_names() = 'Main job,Cafe', pg_temp.stored_job_names());
+
+-- An older build edits the wage: policies with no `jobs` key.
+select pg_temp.settings_as(pg_temp.policies(1100), '2026-11-01T12:00:00Z');
+
+select pg_temp.expect('anOldBuildWithoutTheJobsKeyKeepsTheStoredJobs',
+  pg_temp.stored_job_names() = 'Main job,Cafe', pg_temp.stored_job_names());
+
+select pg_temp.expect('anOldBuildWithoutTheJobsKeyStillUpdatesTheRates',
+  pg_temp.stored_rate() = '1100', coalesce(pg_temp.stored_rate(), 'NULL'));
+
+-- The 1.0 key set: no compensation_policies at all keeps the whole row.
+select pg_temp.settings_as(null, '2026-11-01T13:00:00Z');
+
+select pg_temp.expect('aNullPoliciesPayloadStillKeepsTheStoredRow',
+  pg_temp.stored_job_names() = 'Main job,Cafe' and pg_temp.stored_rate() = '1100',
+  pg_temp.stored_job_names() || ' / ' || coalesce(pg_temp.stored_rate(), 'NULL'));
+
+-- A build that knows jobs and has none sends `jobs: []`.
+select pg_temp.settings_as(pg_temp.policies(1100, '[]'::jsonb), '2026-11-01T14:00:00Z');
+
+select pg_temp.expect('aNewBuildWithAnEmptyJobListClearsTheJobs',
+  (select compensation_policies -> 'jobs' = '[]'::jsonb from public.user_settings
+    where user_id = '88888888-8888-4888-8888-888888888888'),
+  pg_temp.stored_job_names());
+
+-- ===========================================================================
 -- Report
 -- ===========================================================================
 
 select pg_temp.expect('theSuiteRanEveryAssertion',
-  (select count(*) from results) = 20,
-  'ran ' || (select count(*) from results)::text || ' of 20');
+  (select count(*) from results) = 25,
+  'ran ' || (select count(*) from results)::text || ' of 25');
 
 select seq, case when ok then 'PASS' else 'FAIL' end as result, name, detail
 from results order by seq;

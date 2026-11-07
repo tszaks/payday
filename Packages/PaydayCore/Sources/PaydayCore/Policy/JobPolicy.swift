@@ -41,6 +41,13 @@ public struct JobPolicy: Hashable, Codable, Sendable, Identifiable {
         try container.encode(isPrimary, forKey: .isPrimary)
     }
 
+    /// What a shift, paycheck, rate or calendar stores for this job: nil for
+    /// the primary, its name for any other job. The engine partitions by this
+    /// tag and knows no job list, so the primary's NAME is never a tag; a
+    /// record or policy carrying it would price as a job of its own with no
+    /// policies. Every writer goes through this, never through `name`.
+    public var tag: String? { isPrimary ? nil : name }
+
     /// Primary first, then the order given (stable).
     static func ordered(_ jobs: [JobPolicy]) -> [JobPolicy] {
         jobs.filter(\.isPrimary) + jobs.filter { !$0.isPrimary }

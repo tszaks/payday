@@ -127,7 +127,7 @@ struct InputManifestTests {
     /// digest changes, and the format version must be bumped.
     static let canonicalText = """
     paydaycore-manifest-v1
-    engine|2
+    engine|3
     asOf|2026-10-02
     shifts|3
     S|11111111-1111-4111-8111-111111111111|2026-09-28|dinner|1790000000|6000|4000|0|1000|255
@@ -155,7 +155,7 @@ struct InputManifestTests {
     /// was extracted and hashed with `shasum -a 256` independently, and that
     /// external hash agrees with what the encoder produces. A hex pasted from
     /// the code's own output would only prove the code equals itself.
-    static let pinnedDigest = "59d2d2aba8a869cd884001d74c2218396a87a7c5dc8c9914a3d4b5929f0f8a63"
+    static let pinnedDigest = "3f1fcf2eb2efc3bbfcfb90d0b799528a50cdda776aaa77b124f8f4a078f4e36d"
 
     /// The pair that must be read together, so neither half looks like a bug.
     ///
@@ -327,7 +327,7 @@ struct InputManifestTests {
         #expect(m.paycheckCount == 1)
         #expect(m.ratePolicyCount == 2)
         #expect(m.calendarPolicyCount == 2)
-        #expect(m.engineVersion == 2)
+        #expect(m.engineVersion == 3)
         #expect(m.asOf == Self.asOf)
     }
 

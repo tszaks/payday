@@ -63,6 +63,7 @@ enum ShiftDraftPreview {
         serverCount: Int?,
         tipShareInCents: Int = 0,
         roleName: String? = nil,
+        jobName: String? = nil,
         receiptMetrics: ShiftReceiptMetrics?,
         normalizeEarnings: Bool,
         policies: CompensationPolicies
@@ -94,6 +95,10 @@ enum ShiftDraftPreview {
             serverCount: serverCount,
             tipShareInCents: tipShareInCents > 0 ? tipShareInCents : nil,
             roleName: roleName,
+            // The job partitions pricing and overtime (E2a), so the preview
+            // must carry it or it would price a second job's shift as the
+            // primary's and the saved shift would then value differently.
+            jobName: jobName,
             receiptMetrics: receiptMetrics,
             note: note,
             recordedAt: recordedAt
@@ -179,7 +184,15 @@ enum ShiftDraftPreview {
         windowed: Bool = true
     ) -> EarningsSnapshot? {
         guard let draft else { return nil }
-        let window = windowed ? workweek(containing: draft.workDay, policies: policies) : nil
+        // The window is the draft's OWN job's workweek: the ledger buckets
+        // each job by its own calendars (E2a), so a second job with a
+        // different workweek start would otherwise be windowed by the
+        // primary's week and lose the earlier shifts its overtime depends
+        // on. The history itself is still adapted with every calendar,
+        // exactly as the save path does, so preview and saved agree.
+        let window = windowed
+            ? workweek(containing: draft.workDay, policies: policies.policies(forJob: draft.jobName))
+            : nil
         let adapted = ShiftInputAdapter.adapt(records, calendars: policies.calendars)
         let inputs = EarningsInputs(
             // Filtered on the input's OWN `workDay`, which the adapter

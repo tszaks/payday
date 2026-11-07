@@ -156,6 +156,15 @@ struct ShiftInputAdapterTests {
         #expect(ShiftInputAdapter.input(from: none, calendars: calendars).period == nil)
         #expect(ShiftInputAdapter.input(from: lunch, calendars: calendars).period == ShiftPeriodTag.lunch)
     }
+    @Test("the job tag is passed through; untagged stays nil (the primary)")
+    func jobTag() {
+        let primary = ShiftRecord(workDate: instant(2026, 9, 28))
+        let cafe = ShiftRecord(workDate: instant(2026, 9, 28))
+        cafe.jobName = " Cafe "
+        let calendars = [mondayCalendarPolicy()]
+        #expect(ShiftInputAdapter.input(from: primary, calendars: calendars).jobName == nil)
+        #expect(ShiftInputAdapter.input(from: cafe, calendars: calendars).jobName == "Cafe")
+    }
 }
 
 @Suite("PaycheckInputAdapter")
@@ -198,5 +207,13 @@ struct PaycheckInputAdapterTests {
         #expect(input.periodEnd == CivilDay(year: 2026, month: 10, day: 4))
         #expect(input.regularWagesCents == 11_320)
         #expect(input.grossPayCents == 24_766)
+    }
+    @Test("the job tag is passed through; untagged stays nil (the primary)")
+    func jobTag() {
+        let primary = PaycheckRecord(periodStart: instant(2026, 9, 21), periodEnd: instant(2026, 10, 4), paidTipsCents: 0)
+        let cafe = PaycheckRecord(periodStart: instant(2026, 9, 21), periodEnd: instant(2026, 10, 4), paidTipsCents: 0)
+        cafe.jobName = "Cafe"
+        let inputs = PaycheckInputAdapter.inputs(from: [primary, cafe], payrollTimeZone: payroll)
+        #expect(inputs.map(\.jobName) == [nil, "Cafe"])
     }
 }

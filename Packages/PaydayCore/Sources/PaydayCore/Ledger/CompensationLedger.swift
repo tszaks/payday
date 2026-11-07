@@ -117,7 +117,55 @@ public enum CompensationLedger {
     /// `value(_:rates:calendars:)` plus the diagnostics and the accepted
     /// policy list. The debug sheet and the tests use this; screens use
     /// `value`.
+    ///
+    /// Shifts are partitioned by job first (`ShiftInput.jobName`, nil = the
+    /// primary). Each job is priced only by the rates and calendars tagged
+    /// to it (nil-tagged policies are the primary's), and weekly and daily
+    /// overtime are counted inside the job: hours at two employers never
+    /// add up to one workweek. With every shift and policy untagged there is
+    /// one partition and the output is exactly the pre-jobs output.
     public static func evaluate(
+        _ shifts: [ShiftInput],
+        rates: [PayRatePolicy],
+        calendars: [PayrollCalendarPolicy]
+    ) -> Output {
+        // Every job any shift or policy names, so a rejected calendar for a
+        // job with no shifts yet still reports its diagnostic.
+        var keys: [String?] = [nil]
+        var seen: Set<String> = []
+        for key in shifts.map({ ShiftRole.key($0.jobName) })
+            + rates.map({ ShiftRole.key($0.jobName) })
+            + calendars.map({ ShiftRole.key($0.jobName) }) {
+            if let key, seen.insert(key).inserted { keys.append(key) }
+        }
+        guard keys.count > 1 else {
+            return evaluateJob(shifts, rates: rates, calendars: calendars)
+        }
+
+        var valuations: [ShiftValuation] = []
+        var accepted: [PayrollCalendarPolicy] = []
+        var diagnostics: [LedgerDiagnostic] = []
+        for key in keys.sorted(by: { ($0 ?? "") < ($1 ?? "") }) {
+            let output = evaluateJob(
+                shifts.filter { ShiftRole.key($0.jobName) == key },
+                rates: rates.filter { ShiftRole.key($0.jobName) == key },
+                calendars: calendars.filter { ShiftRole.key($0.jobName) == key }
+            )
+            valuations.append(contentsOf: output.valuations)
+            accepted.append(contentsOf: output.acceptedCalendarPolicies)
+            diagnostics.append(contentsOf: output.diagnostics)
+        }
+        valuations.sort(by: canonicalOrder)
+        return Output(
+            valuations: valuations,
+            acceptedCalendarPolicies: accepted,
+            diagnostics: diagnostics,
+            wageFeatureEnabled: !rates.isEmpty
+        )
+    }
+
+    /// One job's shifts under that job's policies: the pre-jobs ledger.
+    private static func evaluateJob(
         _ shifts: [ShiftInput],
         rates: [PayRatePolicy],
         calendars: [PayrollCalendarPolicy]
@@ -188,7 +236,8 @@ public enum CompensationLedger {
                 regularMinutes: nil,
                 overtimeMinutes: nil,
                 wage: .unavailable(.noCalendarPolicy),
-                components: shift.nonWageComponents
+                components: shift.nonWageComponents,
+                jobName: shift.jobName
             ))
         }
 
@@ -246,7 +295,8 @@ public enum CompensationLedger {
                     regularMinutes: nil,
                     overtimeMinutes: nil,
                     wage: .unavailable(.hoursMissing),
-                    components: shift.nonWageComponents
+                    components: shift.nonWageComponents,
+                    jobName: shift.jobName
                 ))
                 continue
             }
@@ -299,7 +349,8 @@ public enum CompensationLedger {
                     regularMinutes: regularMinutes,
                     overtimeMinutes: overtimeMinutes,
                     wage: .unavailable(.rateNotSet),
-                    components: shift.nonWageComponents
+                    components: shift.nonWageComponents,
+                    jobName: shift.jobName
                 ))
                 continue
             }
@@ -347,7 +398,8 @@ public enum CompensationLedger {
                 regularMinutes: regularMinutes,
                 overtimeMinutes: overtimeMinutes,
                 wage: .valued(wage, assumed: ratePolicy.provenance == .assumedFromLegacySetting),
-                components: components
+                components: components,
+                jobName: shift.jobName
             ))
         }
 

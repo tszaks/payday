@@ -40,7 +40,8 @@ struct JobsTests {
 
     @Test("Policy JSON stored before jobs decodes with no jobs and no job names")
     func oldJSONDecodes() throws {
-        let old = try Self.encode(CompensationPolicies(rates: [Self.primaryRate], calendars: [Self.primaryCalendar]))
+        let old = try Self.encode(PreJobsShape(
+            version: 1, rates: [PreJobsRate(Self.primaryRate)], calendars: [PreJobsCalendar(Self.primaryCalendar)]))
         #expect(!old.contains("job"))
         let decoded = try JSONDecoder().decode(CompensationPolicies.self, from: Data(old.utf8))
         #expect(decoded.jobs == [])
@@ -49,13 +50,18 @@ struct JobsTests {
         #expect(decoded.calendars.allSatisfy { $0.jobName == nil })
     }
 
-    @Test("With no jobs the encoded JSON is byte-identical to the pre-jobs shape")
-    func noJobsEncodesUnchanged() throws {
+    /// E2a: `jobs` is always written. The server keeps the stored job list
+    /// only when the key is absent (a build that predates jobs), so an empty
+    /// array is how a build that knows jobs says "there are none".
+    @Test("With no jobs the encoded JSON is the pre-jobs shape plus an empty jobs array")
+    func noJobsEncodesEmptyArray() throws {
         let policies = CompensationPolicies(rates: [Self.primaryRate], calendars: [Self.primaryCalendar])
         let encoded = try Self.encode(policies)
         let pinned = try Self.encode(PreJobsShape(
-            version: 1, rates: [PreJobsRate(Self.primaryRate)], calendars: [PreJobsCalendar(Self.primaryCalendar)]))
+            version: 1, rates: [PreJobsRate(Self.primaryRate)], calendars: [PreJobsCalendar(Self.primaryCalendar)],
+            jobs: []))
         #expect(encoded == pinned)
+        #expect(encoded.contains("\"jobs\":[]"))
     }
 
     @Test("Jobs and job names round-trip")
@@ -83,7 +89,15 @@ struct JobsTests {
         let primary = policies.policies(forJob: nil)
         #expect(primary.rates.map(\.id) == [Self.primaryRate.id])
         #expect(primary.calendars.map(\.id) == [Self.primaryCalendar.id])
-        #expect(policies.policies(forJob: "Bistro") == primary)
+        // The primary's tag is nil (JobPolicy.tag); its NAME is not a tag and
+        // answers with nothing, exactly as the ledger partitions. E2a review
+        // (Devin): the E1 name-equivalence let a policy tagged with the
+        // primary's name look primary here and unpriced in the engine.
+        #expect(Self.bistro.tag == nil)
+        #expect(Self.cafe.tag == "Cafe")
+        #expect(policies.policies(forJob: Self.bistro.tag) == primary)
+        #expect(policies.policies(forJob: "Bistro").rates.isEmpty)
+        #expect(policies.policies(forJob: "Bistro").calendars.isEmpty)
         #expect(policies.policies(forJob: "Nowhere").rates.isEmpty)
     }
 
@@ -152,6 +166,8 @@ private struct PreJobsShape: Encodable {
     var version: Int
     var rates: [PreJobsRate]
     var calendars: [PreJobsCalendar]
+    /// Nil is omitted (a pre-jobs build); `[]` is what E2a always writes.
+    var jobs: [Int]? = nil
 }
 
 private struct PreJobsRate: Encodable {

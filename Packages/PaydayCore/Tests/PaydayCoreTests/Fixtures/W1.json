@@ -47,7 +47,7 @@
   "paychecks": [],
   "asOf": null,
   "expected": {
-    "engineVersion": 2,
+    "engineVersion": 3,
     "workweekStart": "2026-09-28",
     "perShift": [
       {

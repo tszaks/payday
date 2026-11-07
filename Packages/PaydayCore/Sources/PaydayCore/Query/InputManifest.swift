@@ -48,11 +48,13 @@ import Foundation
 /// `S|id|workDay|period|recordedAt|voluntaryCashCents|voluntaryCreditCents|gratuityFeesCents|tipOutCents|minutesWorked`
 /// followed by `|tsi=<tipShareInCents>` only when that is non-zero, then
 /// `|role=<roleName>` only when the shift has a role (the role picks the
-/// rate, so it can move a wage). The role is percent-encoded
+/// rate, so it can move a wage), then `|job=<jobName>` only when the shift
+/// is tagged to a job that is not the primary. The role and job are percent-encoded
 /// (`Canonical.roleField`), so free text can never break the encoding.
 ///
 /// Paychecks, sorted by (`id.uuidString`, whole encoded line):
-/// `P|id|periodStart|periodEnd|paidTipsCents|grossPayCents|netPayCents|regularWagesCents|overtimeWagesCents|gratuityCents|taxesCents`
+/// `P|id|periodStart|periodEnd|paidTipsCents|grossPayCents|netPayCents|regularWagesCents|overtimeWagesCents|gratuityCents|taxesCents`,
+/// then `|job=<jobName>` only when the paycheck is tagged to a job.
 ///
 /// Schedule (one line, or `schedule|-` when nil):
 /// `schedule|frequency|anchorPeriodEnd|payDelayDays|firstWeekday`
@@ -60,9 +62,11 @@ import Foundation
 /// Policies: rate policies sorted by (`effectiveFrom`, `id.uuidString`, whole
 /// encoded line), then calendar policies sorted the same way:
 /// `R|id|effectiveFrom|hourlyRateCents|provenance`, then `|role=<roleName>`
-/// only when the policy is for one role.
+/// only when the policy is for one role, then `|job=<jobName>` only when it
+/// is for one job.
 /// `C|id|effectiveFrom|workweekStartWeekday|overtimeThresholdMinutes|overtimeMultiplierHundredths|payrollTimeZone.identifier`,
-/// then `|daily=<dailyOvertimeThresholdMinutes>` only when daily overtime is on.
+/// then `|daily=<dailyOvertimeThresholdMinutes>` only when daily overtime is on,
+/// then `|job=<jobName>` only when the calendar is for one job.
 ///
 /// The whole encoded line is the final tiebreak in every sort so each key is
 /// a TOTAL order: `sorted` is not documented as stable in Swift, so two
@@ -105,7 +109,13 @@ public struct InputManifest: Hashable, Codable, Sendable {
     /// dataset revision can differ; the server's `upsert_earnings_snapshot`
     /// keeps the higher engine at an equal revision, so an older phone can
     /// no longer overwrite a newer phone's snapshot with weekly-only wages.
-    public static let currentEngineVersion = 2
+    ///
+    /// 3 (2026-11): jobs. Shifts are priced and run overtime per job, so
+    /// two jobs' hours no longer add up to one workweek. A build on engine 2
+    /// ignores `jobName` and would report cross-employer overtime for the
+    /// same dataset revision; the server keeps the higher engine at an equal
+    /// revision.
+    public static let currentEngineVersion = 3
     /// The version prefix of the canonical encoding.
     public static let formatVersion = "paydaycore-manifest-v1"
 
@@ -365,7 +375,10 @@ public struct InputManifest: Hashable, Codable, Sendable {
                     + ((s.tipShareInCents ?? 0) != 0 ? "|tsi=\(s.tipShareInCents ?? 0)" : "")
                     // Appended only for a shift with a role, for the same
                     // reason: every digest of a role-less shift is unchanged.
-                    + (s.roleName.map { "|role=\(roleField($0))" } ?? ""))
+                    + (s.roleName.map { "|role=\(roleField($0))" } ?? "")
+                    // The job partitions overtime and picks the policies,
+                    // so it can move a wage; appended only when set.
+                    + (s.jobName.map { "|job=\(roleField($0))" } ?? ""))
                 }
                 .sorted { $0 < $1 }
                 .map { $0.1 }
@@ -378,7 +391,9 @@ public struct InputManifest: Hashable, Codable, Sendable {
                         "P", p.id.uuidString, p.periodStart.iso, p.periodEnd.iso, String(p.paidTipsCents),
                         field(p.grossPayCents), field(p.netPayCents), field(p.regularWagesCents),
                         field(p.overtimeWagesCents), field(p.gratuityCents), field(p.taxesCents),
-                    ].joined(separator: "|"))
+                    ].joined(separator: "|")
+                        // The job picks which shifts it reconciles against.
+                        + (p.jobName.map { "|job=\(roleField($0))" } ?? ""))
                 }
                 .sorted { $0 < $1 }
                 .map { $0.1 }
@@ -396,7 +411,8 @@ public struct InputManifest: Hashable, Codable, Sendable {
                     (r.effectiveFrom, r.id.uuidString,
                      ["R", r.id.uuidString, r.effectiveFrom.iso, String(r.hourlyRateCents), r.provenance.rawValue]
                          .joined(separator: "|")
-                         + (r.roleName.map { "|role=\(roleField($0))" } ?? ""))
+                         + (r.roleName.map { "|role=\(roleField($0))" } ?? "")
+                         + (r.jobName.map { "|job=\(roleField($0))" } ?? ""))
                 }
                 .sorted { $0 < $1 }
                 .map { $0.2 }
@@ -412,7 +428,8 @@ public struct InputManifest: Hashable, Codable, Sendable {
                     ].joined(separator: "|")
                         // Only when set, so every digest from before daily
                         // overtime existed stays identical.
-                        + (c.dailyOvertimeThresholdMinutes.map { "|daily=\($0)" } ?? ""))
+                        + (c.dailyOvertimeThresholdMinutes.map { "|daily=\($0)" } ?? "")
+                        + (c.jobName.map { "|job=\(roleField($0))" } ?? ""))
                 }
                 .sorted { $0 < $1 }
                 .map { $0.2 }
