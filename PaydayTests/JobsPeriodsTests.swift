@@ -101,6 +101,36 @@ struct JobCalculatorTests {
         let bistro = store.calculator(forJob: nil, primarySchedule: primarySchedule)
         #expect(cafe.period(containing: at(2026, 10, 6)) == bistro.period(containing: at(2026, 10, 6)))
     }
+
+    @Test("a job in another zone inherits the primary's schedule by civil day, not by instant")
+    func inheritedAcrossZones() {
+        let newYork = PaydayTestZone.newYork
+        let honolulu = PaydayTestZone.honolulu
+        // The primary's anchor: Sunday Oct 11 2026 at midnight in New York,
+        // which is still Saturday Oct 10 in Honolulu.
+        let primary = PaySchedule(
+            frequency: .weekly, anchorPeriodEnd: at(2026, 10, 11, hour: 0, in: newYork), payDelayDays: 5, firstWeekday: nil)
+        let policies = CompensationPolicies(
+            rates: [],
+            calendars: [
+                PayrollCalendarPolicy(id: UUID(), effectiveFrom: .distantPast, workweekStartWeekday: 1, payrollTimeZone: newYork),
+                PayrollCalendarPolicy(id: UUID(), effectiveFrom: .distantPast, workweekStartWeekday: 1,
+                                      payrollTimeZone: honolulu, jobName: "Cafe"),
+            ],
+            jobs: [
+                JobPolicy(id: bistroID, name: "Bistro", schedule: nil, isPrimary: true),
+                JobPolicy(id: cafeID, name: "Cafe", schedule: nil, isPrimary: false),
+            ])
+        let bistro = PolicyStore.calculator(forJob: nil, policies: policies, primarySchedule: primary)
+        let cafe = PolicyStore.calculator(forJob: "Cafe", policies: policies, primarySchedule: primary)
+        #expect(cafe.payrollTimeZone == honolulu)
+        let bistroEnd = CivilDay(bistro.period(containing: at(2026, 10, 7, in: newYork)).end, in: newYork)
+        let cafeEnd = CivilDay(cafe.period(containing: at(2026, 10, 7, in: honolulu)).end, in: honolulu)
+        #expect(bistroEnd == CivilDay(iso: "2026-10-11"))
+        #expect(cafeEnd == bistroEnd)
+        // Same zone: the primary's schedule exactly.
+        #expect(PolicyStore.inherited(primary, from: newYork, in: newYork) == primary)
+    }
 }
 
 @Suite("Jobs periods: Periods rows per job")
@@ -242,6 +272,25 @@ struct JobStubSheetPeriodTests {
             forJob: nil, screenJob: "cafe", screenPeriod: moved, calculator: calculator)
             == calculator(nil).period(containing: moved.end))
     }
+
+    @Test("from the current period, another job's period is the one holding today, never a future one")
+    func neverAFuturePeriod() {
+        let store = PolicyStore(defaults: freshDefaults())
+        store.apply(twoJobs())
+        let calculator: (String?) -> PayPeriodCalculator = { store.calculator(forJob: $0, primarySchedule: primarySchedule) }
+        let now = at(2026, 10, 6)
+        // Bistro's current period runs to Oct 11; Cafe's weeks end Oct 7 and Oct 14.
+        let bistroCurrent = calculator(nil).period(containing: now)
+        #expect(bistroCurrent.end == at(2026, 10, 11, hour: 0))
+        let moved = PaycheckEntryFacts.period(
+            forJob: "Cafe", screenJob: nil, screenPeriod: bistroCurrent, now: now, calculator: calculator)
+        #expect(moved == PayPeriod(start: at(2026, 10, 1, hour: 0), end: at(2026, 10, 7, hour: 0)))
+        // A closed period still moves by its own last day.
+        let closed = calculator(nil).period(containing: at(2026, 9, 20))
+        let movedClosed = PaycheckEntryFacts.period(
+            forJob: "Cafe", screenJob: nil, screenPeriod: closed, now: now, calculator: calculator)
+        #expect(movedClosed == calculator("Cafe").period(containing: closed.end))
+    }
 }
 
 @Suite("Jobs periods: the Dashboard is the primary job's")
@@ -374,6 +423,61 @@ struct JobPolicyEditTests {
         #expect(JobCommands.remove(jobID: cafeID, policyStore: store, shifts: [], paychecks: []) == nil)
         #expect(store.policies.rates.map(\.id) == [primaryRate.id])
         #expect(store.policies.calendars.map(\.id) == [primaryCalendar.id])
+    }
+
+    /// What the E1 build stored: the job list, and no calendar of the job's own.
+    private var olderBuildPolicies: CompensationPolicies {
+        CompensationPolicies(
+            rates: [primaryRate], calendars: [primaryCalendar],
+            jobs: [
+                JobPolicy(id: bistroID, name: "Bistro", schedule: nil, isPrimary: true),
+                JobPolicy(id: cafeID, name: "Cafe", schedule: nil, isPrimary: false),
+            ])
+    }
+
+    @Test("a job added on an older build gets the primary's calendar at launch, once; a job with its own is untouched")
+    func seedsAtLaunch() {
+        store.apply(olderBuildPolicies)
+        let outcome = store.runMigrationsIfNeeded(
+            resolvedFirstWeekday: 1, earliestShiftDate: nil, baseHourlyWageCents: nil, now: at(2026, 10, 6))
+        #expect(outcome.seededJobCalendars)
+        #expect(outcome.createdCalendarPolicy == nil)
+        let cafe = store.policies.policies(forJob: "Cafe").calendars
+        #expect(cafe.count == 1)
+        #expect(cafe.first?.jobName == "Cafe")
+        #expect(cafe.first?.effectiveFrom == .distantPast)
+        #expect(cafe.first?.workweekStartWeekday == primaryCalendar.workweekStartWeekday)
+        #expect(cafe.first?.payrollTimeZone == primaryCalendar.payrollTimeZone)
+        #expect(store.policies.policies(forJob: "Cafe").rates.isEmpty)
+        #expect(store.policies.policies(forJob: nil).calendars == [primaryCalendar])
+        #expect(store.adoptedPoliciesAwaitingUpload)
+        // A second launch changes nothing.
+        let again = store.runMigrationsIfNeeded(
+            resolvedFirstWeekday: 1, earliestShiftDate: nil, baseHourlyWageCents: nil, now: at(2026, 10, 7))
+        #expect(!again.changedAnything)
+        // A job with a calendar of its own keeps it.
+        store.apply(twoJobs())
+        let untouched = store.runMigrationsIfNeeded(
+            resolvedFirstWeekday: 1, earliestShiftDate: nil, baseHourlyWageCents: nil, now: at(2026, 10, 7))
+        #expect(!untouched.changedAnything)
+        #expect(store.policies.policies(forJob: "Cafe").calendars.map(\.id) == [cafeCalendar.id])
+    }
+
+    @Test("a server payload from an older build is seeded the same way and flagged for upload")
+    func seedsFromServer() {
+        store.apply(oneJob())
+        store.acknowledgePolicyUpload()
+        store.replaceFromSupabase(olderBuildPolicies, now: at(2026, 10, 6))
+        let cafe = store.policies.policies(forJob: "Cafe").calendars
+        #expect(cafe.count == 1)
+        #expect(cafe.first?.jobName == "Cafe")
+        #expect(store.adoptedPoliciesAwaitingUpload)
+        // The clone's id is the same on every device, so the payload that
+        // carries it settles the flag and changes nothing.
+        let seeded = store.policies
+        store.replaceFromSupabase(seeded, now: at(2026, 10, 7))
+        #expect(store.policies == seeded)
+        #expect(!store.adoptedPoliciesAwaitingUpload)
     }
 
     @Test("a job's schedule edit never touches another job or the primary")

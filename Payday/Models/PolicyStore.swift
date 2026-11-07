@@ -111,9 +111,51 @@ final class PolicyStore {
         let zone = policies.policies(forJob: tag).payrollTimeZone ?? primaryZone
         let job = policies.jobs.first { ShiftRole.key($0.tag) == ShiftRole.key(tag) }
         guard let input = job?.schedule else {
-            return PayPeriodCalculator(payrollTimeZone: zone, schedule: primarySchedule ?? .fallback)
+            return PayPeriodCalculator(
+                payrollTimeZone: zone,
+                schedule: inherited(primarySchedule, from: primaryZone, in: zone) ?? .fallback)
         }
         return PayPeriodCalculator(payrollTimeZone: zone, schedule: PaySchedule(input, in: zone, primary: primarySchedule))
+    }
+
+    /// The primary's schedule as a job in another zone inherits it ("Same
+    /// as primary"): the anchor stays the same CIVIL day. `PayPeriodCalculator`
+    /// reads the anchor as a civil day in ITS zone, so the primary's instant
+    /// read in the job's zone could name the day before (Sunday midnight in
+    /// New York is Saturday evening in Los Angeles) and move every boundary
+    /// and payday by a day. Same zone: the schedule exactly.
+    static func inherited(_ schedule: PaySchedule?, from primaryZone: TimeZone, in zone: TimeZone) -> PaySchedule? {
+        guard var inherited = schedule, zone != primaryZone else { return schedule }
+        inherited.anchorPeriodEnd = CivilDay(inherited.anchorPeriodEnd, in: primaryZone).date(in: zone)
+        return inherited
+    }
+
+    /// Every job without a calendar of its own gets a copy of the primary's
+    /// calendar in effect on `today` (workweek start, payroll zone, overtime
+    /// rules), tagged with the job's name and effective from the distant
+    /// past like the primary's frozen calendar, so its periods and overtime
+    /// work at once and its whole history is priced. The ledger prices a job
+    /// ONLY by its own policies, so a job with no calendar is unpriced
+    /// however its wage is set. Runs when a job is added, at launch
+    /// (`runMigrationsIfNeeded`) and on a server payload
+    /// (`replaceFromSupabase`): a job added on an older build (E1) has no
+    /// calendar. A job that has any calendar of its own is left exactly as
+    /// it is, and the clone's id is deterministic per job so two devices
+    /// seed the same policy. No rate is ever copied: a different employer is
+    /// a different wage, and a job with no rate reads "rate not set" until
+    /// one is entered.
+    static func seedingJobCalendars(_ policies: CompensationPolicies, today: CivilDay) -> CompensationPolicies {
+        guard let primary = policies.calendar(on: today) ?? policies.latestCalendar else { return policies }
+        var updated = policies
+        for job in policies.jobs where !job.isPrimary {
+            guard let tag = job.tag, updated.policies(forJob: tag).calendars.isEmpty else { continue }
+            var clone = primary
+            clone.id = PolicyMigration.deterministicID("payday/jobs/calendar/1/\(job.id.uuidString)")
+            clone.effectiveFrom = .distantPast
+            clone.jobName = tag
+            updated = updated.adding(calendar: clone)
+        }
+        return updated
     }
 
     /// The calendar policy a new one has to start on a boundary of, and the
@@ -403,13 +445,23 @@ final class PolicyStore {
 
     /// A payload the sync decided is newer. Persists without touching the
     /// settings clock; the caller records the remote timestamp instead.
-    func replaceFromSupabase(_ updated: CompensationPolicies) {
+    func replaceFromSupabase(_ updated: CompensationPolicies, now: Date = .now) {
         // The server evidently holds policies, so whatever this device
         // adopted has nothing left to push: drop the pending-upload flag
         // before the early return, so an identical payload settles it too.
         acknowledgePolicyUpload()
-        guard updated != policies else { return }
-        policies = updated
+        // E2b: a payload written by an older build can hold a job with no
+        // calendar of its own. Seed it as launch does; the seeded copy is
+        // not what the server holds, so it must reach the server once (the
+        // same flag the adoptions use), and the clone's deterministic id
+        // makes every device seed the same policy.
+        let seeded = Self.seedingJobCalendars(
+            updated, today: CivilDay(now, in: updated.payrollTimeZone ?? payrollTimeZone))
+        if seeded != updated {
+            defaults.set(true, forKey: Self.awaitingUploadKey)
+        }
+        guard seeded != policies else { return }
+        policies = seeded
         persist()
         Self.postDidChange()
         #if !WIDGET_EXTENSION
@@ -435,8 +487,10 @@ final class PolicyStore {
     struct MigrationOutcome: Equatable {
         var createdCalendarPolicy: PayrollCalendarPolicy?
         var createdRatePolicy: PayRatePolicy?
+        /// E2b: a job added on an older build got its calendar of its own.
+        var seededJobCalendars = false
 
-        var changedAnything: Bool { createdCalendarPolicy != nil || createdRatePolicy != nil }
+        var changedAnything: Bool { createdCalendarPolicy != nil || createdRatePolicy != nil || seededJobCalendars }
     }
 
     /// Creates the first calendar policy and, if a legacy wage is set, the
@@ -462,7 +516,8 @@ final class PolicyStore {
         resolvedFirstWeekday: Int,
         earliestShiftDate: Date?,
         baseHourlyWageCents: Int?,
-        deviceTimeZone: TimeZone = .current
+        deviceTimeZone: TimeZone = .current,
+        now: Date = .now
     ) -> MigrationOutcome {
         var outcome = MigrationOutcome()
         var updated = policies
@@ -508,6 +563,18 @@ final class PolicyStore {
             outcome.createdRatePolicy = policy
         }
         defaults.set(true, forKey: Self.rateMigrationKey)
+
+        // E2b: a job added on an older build has no calendar of its own, and
+        // the ledger prices a job only by its own policies, so its shifts
+        // would stay unpriced however its wage is set. Content-gated like
+        // the rate adoption above: every such job gets the clone
+        // `JobCommands.add` makes, from the distant past so its history is
+        // priced too. A job with a calendar of its own is untouched.
+        let seeded = Self.seedingJobCalendars(updated, today: CivilDay(now, in: payrollZone))
+        if seeded != updated {
+            updated = seeded
+            outcome.seededJobCalendars = true
+        }
 
         guard outcome.changedAnything else { return outcome }
         policies = updated

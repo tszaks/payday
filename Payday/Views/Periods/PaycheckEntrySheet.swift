@@ -821,7 +821,25 @@ struct PaycheckEntrySheet: View {
             .background(PaydayColor.fieldBackground)
             .clipShape(RoundedRectangle(cornerRadius: PaydayRadius.lg))
             .padding(.horizontal)
+            if let caption = movedPeriodCaption {
+                Text(caption)
+                    .font(PaydayFont.footnote)
+                    .foregroundStyle(PaydayColor.textSecondary)
+                    .padding(.horizontal)
+                    .padding(.top, PaydaySpacing.p8)
+            }
         }
+    }
+
+    /// Where the check lands when another job is picked, visible before
+    /// Save (E2b): that job's own period, never a future one.
+    private var movedPeriodCaption: String? {
+        guard !pickedJobIsScreenJob else { return nil }
+        let name = policyStore.policies.jobs.first { ShiftRole.key($0.tag) == ShiftRole.key(jobName) }?.name
+            ?? jobName ?? "the primary job"
+        let moved = savedPeriod
+        let range = "\(moved.start.formatted(.dateTime.month(.abbreviated).day())) – \(moved.end.formatted(.dateTime.month(.abbreviated).day()))"
+        return "Saved to \(name)'s period \(range)."
     }
 
     private func save() {
@@ -848,6 +866,13 @@ struct PaycheckEntrySheet: View {
                     existing.grossPayCents = effectiveGrossPayCents
                     existing.taxesCents = effectiveTaxesCents
                     existing.netPayCents = effectiveNetPayCents
+                    // Picking another job moves the check onto that job's own
+                    // period, exactly as a new check does (E2b); the same
+                    // job keeps the stored period untouched.
+                    if ShiftRole.key(jobName) != ShiftRole.key(existing.jobName) {
+                        existing.periodStart = savedPeriod.start
+                        existing.periodEnd = savedPeriod.end
+                    }
                     existing.jobName = ShiftRole.normalized(jobName)
                     // A corrected stub is an edit to an already-synced record,
                     // which means it only uploads if this clock advances.
