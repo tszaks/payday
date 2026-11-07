@@ -61,7 +61,10 @@ public struct CompensationPolicies: Hashable, Codable, Sendable {
         try container.encode(version, forKey: .version)
         try container.encode(rates, forKey: .rates)
         try container.encode(calendars, forKey: .calendars)
-        if !jobs.isEmpty { try container.encode(jobs, forKey: .jobs) }
+        // Always written, even empty: the server keeps the stored job list
+        // only when the key is ABSENT (a build that predates jobs), so
+        // `[]` is how a build that knows jobs says "there are none".
+        try container.encode(jobs, forKey: .jobs)
     }
 
     // MARK: Jobs

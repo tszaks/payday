@@ -40,7 +40,8 @@ struct JobsTests {
 
     @Test("Policy JSON stored before jobs decodes with no jobs and no job names")
     func oldJSONDecodes() throws {
-        let old = try Self.encode(CompensationPolicies(rates: [Self.primaryRate], calendars: [Self.primaryCalendar]))
+        let old = try Self.encode(PreJobsShape(
+            version: 1, rates: [PreJobsRate(Self.primaryRate)], calendars: [PreJobsCalendar(Self.primaryCalendar)]))
         #expect(!old.contains("job"))
         let decoded = try JSONDecoder().decode(CompensationPolicies.self, from: Data(old.utf8))
         #expect(decoded.jobs == [])
@@ -49,13 +50,18 @@ struct JobsTests {
         #expect(decoded.calendars.allSatisfy { $0.jobName == nil })
     }
 
-    @Test("With no jobs the encoded JSON is byte-identical to the pre-jobs shape")
-    func noJobsEncodesUnchanged() throws {
+    /// E2a: `jobs` is always written. The server keeps the stored job list
+    /// only when the key is absent (a build that predates jobs), so an empty
+    /// array is how a build that knows jobs says "there are none".
+    @Test("With no jobs the encoded JSON is the pre-jobs shape plus an empty jobs array")
+    func noJobsEncodesEmptyArray() throws {
         let policies = CompensationPolicies(rates: [Self.primaryRate], calendars: [Self.primaryCalendar])
         let encoded = try Self.encode(policies)
         let pinned = try Self.encode(PreJobsShape(
-            version: 1, rates: [PreJobsRate(Self.primaryRate)], calendars: [PreJobsCalendar(Self.primaryCalendar)]))
+            version: 1, rates: [PreJobsRate(Self.primaryRate)], calendars: [PreJobsCalendar(Self.primaryCalendar)],
+            jobs: []))
         #expect(encoded == pinned)
+        #expect(encoded.contains("\"jobs\":[]"))
     }
 
     @Test("Jobs and job names round-trip")
@@ -152,6 +158,8 @@ private struct PreJobsShape: Encodable {
     var version: Int
     var rates: [PreJobsRate]
     var calendars: [PreJobsCalendar]
+    /// Nil is omitted (a pre-jobs build); `[]` is what E2a always writes.
+    var jobs: [Int]? = nil
 }
 
 private struct PreJobsRate: Encodable {
