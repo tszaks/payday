@@ -369,7 +369,14 @@ struct PeriodsView: View {
         switch landing {
         case .currentDetail:
             guard path.isEmpty else { return }
-            path.append(currentPeriod)
+            // Every sender of `.currentDetail` is the primary's: the
+            // Dashboard's "See all" (the primary's screen with two or more
+            // jobs, E2b), the QA hook that mirrors it, a push queued by an
+            // older build. So land on the primary's current period whatever
+            // job the picker last showed; with one job this is
+            // `currentPeriod` exactly.
+            pickedJobID = nil
+            path.append(jobs.count >= 2 ? calculator.period(containing: currentDay) : currentPeriod)
             tabRouter.pendingPeriodLanding = nil
         case .paycheckScan(let start, let end, let jobTag):
             // The push carries its job (E2b): switch the picker to it and
