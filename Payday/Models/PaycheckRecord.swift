@@ -53,6 +53,11 @@ final class PaycheckRecord {
     /// Taxes withheld, as printed on the stub.
     var taxesCents: Int?
 
+    /// The job this check is from (PR E1): trimmed, 1-40 characters, nil
+    /// for the primary job, never empty (`ShiftRole.normalized`). A tag
+    /// only; periods follow the primary schedule until E2.
+    var jobName: String?
+
     // MARK: - What used to be computed here, and why nothing is
     //
     // This model carried `reconciledPaidTipsCents`, a computed property that

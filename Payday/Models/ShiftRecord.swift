@@ -67,6 +67,10 @@ final class ShiftRecord {
     /// the hourly rate; it is not money. A new optional attribute, so the
     /// store migrates lightweight and every existing shift reads nil.
     var roleName: String?
+    /// The job this shift was worked at (PR E1), same rules as `roleName`:
+    /// trimmed, 1-40 characters, nil for the primary job, never empty. A tag
+    /// only; it moves no figure in E1.
+    var jobName: String?
 
     // The persisted receipt payload. Private because `receiptMetrics` is
     // ENCODE-ONLY (see below) and `applyEarnings` is the only writer that may
@@ -116,6 +120,7 @@ final class ShiftRecord {
         serverCount: Int? = nil,
         tipShareInCents: Int? = nil,
         roleName: String? = nil,
+        jobName: String? = nil,
         receiptMetrics: ShiftReceiptMetrics? = nil,
         note: String? = nil,
         recordedAt: Date? = nil,
@@ -136,6 +141,7 @@ final class ShiftRecord {
         self.serverCount = serverCount
         self.tipShareInCents = tipShareInCents
         self.roleName = ShiftRole.normalized(roleName)
+        self.jobName = ShiftRole.normalized(jobName)
         self.receiptMetricsJSON = Self.encode(receiptMetrics)
         self.note = note
         self.recordedAt = recordedAt

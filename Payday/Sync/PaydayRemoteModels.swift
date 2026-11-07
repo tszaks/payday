@@ -178,6 +178,10 @@ struct RemotePaycheckRecord: Codable, Equatable, Sendable {
     let clientUpdatedAt: String
     let deletedAt: String?
     let serverUpdatedAt: String?
+    /// The job the check is from, nil for the primary (PR E1). Defaulted so
+    /// existing memberwise call sites compile; decoded with
+    /// `decodeIfPresent`, so a row without the column reads nil.
+    var jobName: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -197,6 +201,33 @@ struct RemotePaycheckRecord: Codable, Equatable, Sendable {
         case clientUpdatedAt = "client_updated_at"
         case deletedAt = "deleted_at"
         case serverUpdatedAt = "updated_at"
+        case jobName = "job_name"
+    }
+
+    /// The synthesized shape (nil optionals omitted), except `job_name`,
+    /// which is always sent: this build knows the field, so a null moves
+    /// the check back to the primary job, and `upsert_paycheck_records`
+    /// keeps the stored job only when an older build omits the key.
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(userID, forKey: .userID)
+        try container.encode(periodStart, forKey: .periodStart)
+        try container.encode(periodEnd, forKey: .periodEnd)
+        try container.encode(paidTipsCents, forKey: .paidTipsCents)
+        try container.encodeIfPresent(note, forKey: .note)
+        try container.encodeIfPresent(hourlyRateCents, forKey: .hourlyRateCents)
+        try container.encodeIfPresent(owedTipsCents, forKey: .owedTipsCents)
+        try container.encodeIfPresent(grossPayCents, forKey: .grossPayCents)
+        try container.encodeIfPresent(netPayCents, forKey: .netPayCents)
+        try container.encodeIfPresent(regularWagesCents, forKey: .regularWagesCents)
+        try container.encodeIfPresent(overtimeWagesCents, forKey: .overtimeWagesCents)
+        try container.encodeIfPresent(gratuityCents, forKey: .gratuityCents)
+        try container.encodeIfPresent(taxesCents, forKey: .taxesCents)
+        try container.encode(clientUpdatedAt, forKey: .clientUpdatedAt)
+        try container.encodeIfPresent(deletedAt, forKey: .deletedAt)
+        try container.encodeIfPresent(serverUpdatedAt, forKey: .serverUpdatedAt)
+        try container.encode(jobName, forKey: .jobName)
     }
 
     @MainActor
@@ -218,6 +249,7 @@ struct RemotePaycheckRecord: Codable, Equatable, Sendable {
         self.clientUpdatedAt = PaydayRemoteDate.instant(record.modifiedAt)
         self.deletedAt = nil
         self.serverUpdatedAt = nil
+        self.jobName = record.jobName
     }
 
     var businessValue: PaycheckBusinessValue {
@@ -239,7 +271,8 @@ struct RemotePaycheckRecord: Codable, Equatable, Sendable {
             regularWagesCents: regularWagesCents,
             overtimeWagesCents: overtimeWagesCents,
             gratuityCents: gratuityCents,
-            taxesCents: taxesCents
+            taxesCents: taxesCents,
+            jobName: jobName
         )
     }
 
@@ -282,6 +315,9 @@ struct PaycheckBusinessValue: Codable, Equatable, Sendable {
     let overtimeWagesCents: Int?
     let gratuityCents: Int?
     let taxesCents: Int?
+    /// Skipped when nil (synthesized `Encodable`), so a check on the primary
+    /// job fingerprints exactly as before and nothing re-uploads.
+    var jobName: String? = nil
 }
 
 struct RemoteUserSettings: Codable, Sendable {
@@ -531,6 +567,9 @@ struct RemoteShift: Codable, Equatable, Sendable {
     /// (synthesized for an optional), so a row from a server or a build
     /// without the column decodes as nil.
     var roleName: String? = nil
+    /// The job the shift was worked at, nil for the primary (PR E1). Same
+    /// decoding rule as the role.
+    var jobName: String? = nil
     let receiptMetrics: ShiftReceiptMetrics?
     let note: String?
     let recordedAt: String?
@@ -562,6 +601,7 @@ struct RemoteShift: Codable, Equatable, Sendable {
         case serverCount = "server_count"
         case tipShareInCents = "tip_share_in_cents"
         case roleName = "role_name"
+        case jobName = "job_name"
         case receiptMetrics = "receipt_metrics"
         case note
         case recordedAt = "recorded_at"
@@ -601,6 +641,8 @@ struct RemoteShift: Codable, Equatable, Sendable {
         // and `write_shifts` keeps the stored role when an older build omits
         // the key.
         try container.encode(roleName, forKey: .roleName)
+        // Same rule again for the job: null means the primary job.
+        try container.encode(jobName, forKey: .jobName)
         try container.encode(receiptMetrics, forKey: .receiptMetrics)
         try container.encode(note, forKey: .note)
         try container.encode(recordedAt, forKey: .recordedAt)
@@ -829,6 +871,8 @@ struct ShiftBusinessValue: Codable, Equatable, Sendable {
     /// Skipped when nil for the same reason, so a shift with no role
     /// fingerprints exactly as before and nothing re-uploads.
     var roleName: String? = nil
+    /// Skipped when nil too: a shift on the primary job fingerprints as before.
+    var jobName: String? = nil
     let receiptMetrics: ShiftReceiptMetrics?
     let note: String?
     let recordedAt: String?
@@ -859,6 +903,7 @@ extension RemoteShift {
             serverCount: record.serverCount,
             tipShareInCents: record.tipShareInCents,
             roleName: record.roleName,
+            jobName: record.jobName,
             receiptMetrics: record.receiptMetrics,
             note: record.note,
             recordedAt: record.recordedAt.map(PaydayRemoteDate.instant),
@@ -893,6 +938,7 @@ extension RemoteShift {
             serverCount: serverCount,
             tipShareInCents: tipShareInCents,
             roleName: roleName,
+            jobName: jobName,
             receiptMetrics: receiptMetrics,
             note: note,
             recordedAt: PaydayRemoteDate.canonicalInstant(recordedAt)
