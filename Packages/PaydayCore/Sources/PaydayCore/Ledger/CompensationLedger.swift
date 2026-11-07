@@ -121,7 +121,7 @@ public enum CompensationLedger {
     ) -> Output {
         var diagnostics: [LedgerDiagnostic] = []
         let acceptedCalendars = acceptCalendarPolicies(calendars, diagnostics: &diagnostics)
-        let sortedRates = rates.sorted(by: ratePolicyOrder)
+        let sortedRates = RateIndex(rates.sorted(by: ratePolicyOrder))
 
         // Canonical order first, so every bucket iterates identically no
         // matter how the caller ordered its input.
@@ -208,7 +208,7 @@ public enum CompensationLedger {
         week weekShifts: [ShiftInput],
         calendar calendarPolicy: PayrollCalendarPolicy,
         workweekStart: CivilDay,
-        rates: [PayRatePolicy],
+        rates: RateIndex,
         diagnostics: inout [LedgerDiagnostic]
     ) -> [ShiftValuation] {
         var result: [ShiftValuation] = []
@@ -223,7 +223,7 @@ public enum CompensationLedger {
         var overtimeCentsAllocated = 0
 
         for shift in weekShifts {
-            let ratePolicy = ratePolicy(in: rates, for: shift)
+            let ratePolicy = rates.policy(for: shift)
 
             guard let rawMinutes = shift.minutesWorked else {
                 // Hours were never logged: no minutes toward the threshold,
@@ -387,13 +387,37 @@ public enum CompensationLedger {
     /// account with no roles picks exactly what it picked before roles
     /// existed.
     static func ratePolicy(in rates: [PayRatePolicy], for shift: ShiftInput) -> PayRatePolicy? {
-        let general = rates.filter { $0.roleName == nil }
-        guard let role = ShiftRole.key(shift.roleName) else {
-            return policy(in: general, onOrBefore: shift.workDay, key: \.effectiveFrom)
+        RateIndex(rates).policy(for: shift)
+    }
+
+    /// The rates split once per run into "All roles" and per-role lists,
+    /// each still in effect order, so picking a shift's rate allocates
+    /// nothing (the Log sheet re-values the whole history per keystroke).
+    struct RateIndex {
+        let general: [PayRatePolicy]
+        let byRole: [String: [PayRatePolicy]]
+
+        init(_ rates: [PayRatePolicy]) {
+            var general: [PayRatePolicy] = []
+            var byRole: [String: [PayRatePolicy]] = [:]
+            for rate in rates {
+                if let key = ShiftRole.key(rate.roleName) {
+                    byRole[key, default: []].append(rate)
+                } else {
+                    general.append(rate)
+                }
+            }
+            self.general = general
+            self.byRole = byRole
         }
-        let forRole = rates.filter { ShiftRole.key($0.roleName) == role }
-        return policy(in: forRole, onOrBefore: shift.workDay, key: \.effectiveFrom)
-            ?? policy(in: general, onOrBefore: shift.workDay, key: \.effectiveFrom)
+
+        func policy(for shift: ShiftInput) -> PayRatePolicy? {
+            if !byRole.isEmpty, let key = ShiftRole.key(shift.roleName), let forRole = byRole[key],
+               let found = CompensationLedger.policy(in: forRole, onOrBefore: shift.workDay, key: \.effectiveFrom) {
+                return found
+            }
+            return CompensationLedger.policy(in: general, onOrBefore: shift.workDay, key: \.effectiveFrom)
+        }
     }
 
     // MARK: Canonical orders
