@@ -126,10 +126,16 @@ enum InsightsEarnings {
         records: [ShiftRecord],
         policies: CompensationPolicies,
         payrollTimeZone: TimeZone,
-        role: String? = nil
+        role: String? = nil,
+        job: JobScope = .all
     ) -> Dataset {
         let adapted = ShiftInputAdapter.adapt(records, calendars: policies.calendars)
-        let reported = role.map { role in records.filter { ShiftRoleList.matches($0.roleName, role) } }
+        // The ledger values EVERY record (overtime is split over the whole
+        // workweek, across roles and jobs); only the role's and the job's
+        // shifts are reported. Neither picked: nil, the page as it was.
+        let reported: [ShiftRecord]? = role == nil && job == .all ? nil : records.filter { record in
+            (role.map { ShiftRoleList.matches(record.roleName, $0) } ?? true) && job.includes(record.jobName)
+        }
         let snapshot = try? EarningsSnapshot.build(EarningsInputs(
             shifts: adapted.inputs,
             rates: policies.rates,
@@ -164,6 +170,13 @@ enum InsightsEarnings {
     /// is: the plan's completion rule 2 is "its parity test passes against the
     /// real adapter, not a helper", and a test that rebuilds this by hand is a
     /// test that can share the view's mistake.
+    /// The job switch's entries (E3), primary first. Empty with fewer than
+    /// two jobs, so the switch is not drawn and the page is unchanged.
+    static func jobOptions(_ jobs: [JobPolicy]) -> [JobPolicy] {
+        guard jobs.count >= 2 else { return [] }
+        return jobs.filter(\.isPrimary) + jobs.filter { !$0.isPrimary }
+    }
+
     struct Dataset {
         /// Nil only when the inputs could not be canonically fingerprinted,
         /// which is a refusal and renders as unavailable, never as `$0.00`.
