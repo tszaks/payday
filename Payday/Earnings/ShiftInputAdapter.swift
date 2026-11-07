@@ -70,7 +70,9 @@ enum ShiftInputAdapter {
                 // treats nil as 0 cents, and nothing else re-derives it.
                 tipOutCents: record.tipOutCents,
                 tipShareInCents: record.tipShareInCents,
-                minutesWorked: record.hoursWorked.map(WorkedMinutes.minutes(fromHours:))
+                minutesWorked: record.hoursWorked.map(WorkedMinutes.minutes(fromHours:)),
+                // Picks the rate policy; nil for a shift with no role.
+                roleName: record.roleName
             ))
         }
 

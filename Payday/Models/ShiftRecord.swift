@@ -62,6 +62,11 @@ final class ShiftRecord {
     /// A tip share or pool payout received from co-workers. Optional for the
     /// same reason as `tipOutCents`: "not entered" is its own fact.
     var tipShareInCents: Int?
+    /// The person's role on this shift (bar, floor), as typed: trimmed,
+    /// 1-40 characters, nil for no role (`ShiftRole.normalized`). It picks
+    /// the hourly rate; it is not money. A new optional attribute, so the
+    /// store migrates lightweight and every existing shift reads nil.
+    var roleName: String?
 
     // The persisted receipt payload. Private because `receiptMetrics` is
     // ENCODE-ONLY (see below) and `applyEarnings` is the only writer that may
@@ -110,6 +115,7 @@ final class ShiftRecord {
         clockOut: Date? = nil,
         serverCount: Int? = nil,
         tipShareInCents: Int? = nil,
+        roleName: String? = nil,
         receiptMetrics: ShiftReceiptMetrics? = nil,
         note: String? = nil,
         recordedAt: Date? = nil,
@@ -129,6 +135,7 @@ final class ShiftRecord {
         self.clockOut = clockOut
         self.serverCount = serverCount
         self.tipShareInCents = tipShareInCents
+        self.roleName = ShiftRole.normalized(roleName)
         self.receiptMetricsJSON = Self.encode(receiptMetrics)
         self.note = note
         self.recordedAt = recordedAt

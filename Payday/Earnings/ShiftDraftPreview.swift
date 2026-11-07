@@ -62,6 +62,7 @@ enum ShiftDraftPreview {
         clockOut: Date?,
         serverCount: Int?,
         tipShareInCents: Int = 0,
+        roleName: String? = nil,
         receiptMetrics: ShiftReceiptMetrics?,
         normalizeEarnings: Bool,
         policies: CompensationPolicies
@@ -92,6 +93,7 @@ enum ShiftDraftPreview {
             clockOut: clockOut,
             serverCount: serverCount,
             tipShareInCents: tipShareInCents > 0 ? tipShareInCents : nil,
+            roleName: roleName,
             receiptMetrics: receiptMetrics,
             note: note,
             recordedAt: recordedAt

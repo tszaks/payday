@@ -60,6 +60,7 @@ enum ShiftCommands {
         let clockOut: Date?
         let serverCount: Int?
         var tipShareInCents: Int? = nil
+        var roleName: String? = nil
         let receiptMetrics: ShiftReceiptMetrics?
         let note: String?
         let recordedAt: Date?
@@ -183,6 +184,7 @@ enum ShiftCommands {
         clockOut: Date? = nil,
         serverCount: Int? = nil,
         tipShareInCents: Int? = nil,
+        roleName: String? = nil,
         receiptMetrics: ShiftReceiptMetrics? = nil,
         note: String? = nil,
         recordedAt: Date = .now
@@ -213,6 +215,7 @@ enum ShiftCommands {
                 clockOut: clockOut,
                 serverCount: serverCount,
                 tipShareInCents: tipShareInCents,
+                roleName: roleName,
                 receiptMetrics: receiptMetrics,
                 note: note,
                 recordedAt: recordedAt,
@@ -265,6 +268,7 @@ enum ShiftCommands {
             clockOut: record.clockOut,
             serverCount: record.serverCount,
             tipShareInCents: record.tipShareInCents,
+            roleName: record.roleName,
             receiptMetrics: record.receiptMetrics,
             note: record.note,
             recordedAt: record.recordedAt,
@@ -324,6 +328,7 @@ enum ShiftCommands {
                 clockOut: deleted.clockOut,
                 serverCount: deleted.serverCount,
                 tipShareInCents: deleted.tipShareInCents,
+                roleName: deleted.roleName,
                 receiptMetrics: deleted.receiptMetrics,
                 note: deleted.note,
                 recordedAt: deleted.recordedAt,
