@@ -122,8 +122,19 @@ struct PaycheckEntrySheet: View {
     /// own presentation to finish.
     private static let scannerPresentationDelay: Duration = .milliseconds(600)
 
-    init(period: PayPeriod, existing: PaycheckRecord?, expectation: PaycheckReconciler.Expectation, startsScanner: Bool = false) {
+    /// The job of the screen that opened the sheet (E2b). `.all` with one
+    /// job.
+    let job: JobScope
+
+    init(
+        period: PayPeriod,
+        existing: PaycheckRecord?,
+        expectation: PaycheckReconciler.Expectation,
+        startsScanner: Bool = false,
+        job: JobScope = .all
+    ) {
         self.startsScanner = startsScanner
+        self.job = job
         self.period = period
         self.existing = existing
         self.expectation = expectation
@@ -137,7 +148,8 @@ struct PaycheckEntrySheet: View {
         // as `facts.proposal` and applied only when tapped.
         _amountCents = State(initialValue: existing?.paidTipsCents ?? 0)
         _note = State(initialValue: existing?.note ?? "")
-        _jobName = State(initialValue: existing?.jobName)
+        // A new check starts on the screen's job (the primary with one job).
+        _jobName = State(initialValue: existing == nil ? job.tag : existing?.jobName)
         _regularWagesCents = State(initialValue: existing?.regularWagesCents ?? 0)
         _overtimeWagesCents = State(initialValue: existing?.overtimeWagesCents ?? 0)
         _gratuityCents = State(initialValue: existing?.gratuityCents ?? 0)
@@ -196,8 +208,28 @@ struct PaycheckEntrySheet: View {
     private var facts: PaycheckEntryFacts {
         PaycheckEntryFacts.reusing(
             factsCache,
-            expectation: expectation,
+            expectation: pickedJobIsScreenJob
+                ? expectation
+                // Another job's period has no expectation on this screen,
+                // so the checks say nothing rather than compare against the
+                // wrong job's shifts.
+                : PaycheckReconciler.Expectation(result: nil, stamp: nil, cardTipsOnCheck: expectation.cardTipsOnCheck),
             observation: observation
+        )
+    }
+
+    private var pickedJobIsScreenJob: Bool {
+        ShiftRole.key(jobName) == ShiftRole.key(job.tag)
+    }
+
+    /// The period the check is saved against: the screen's, or, when another
+    /// job is picked, that job's period on its own calendar.
+    private var savedPeriod: PayPeriod {
+        PaycheckEntryFacts.period(
+            forJob: jobName,
+            screenJob: job.tag,
+            screenPeriod: period,
+            calculator: { policyStore.calculator(forJob: $0, primarySchedule: scheduleStore.schedule) }
         )
     }
 
@@ -766,8 +798,8 @@ struct PaycheckEntrySheet: View {
         }
     }
 
-    /// Which job the check is from, with two or more jobs only. Periods
-    /// still follow the primary schedule in E1; this is a tag.
+    /// Which job the check is from, with two or more jobs only. Picking
+    /// another job moves the check onto that job's own period (E2b).
     @ViewBuilder
     private var jobPicker: some View {
         let jobFacts = LogShiftJobFacts(policies: policyStore.policies, current: jobName)
@@ -823,8 +855,8 @@ struct PaycheckEntrySheet: View {
                     return existing
                 }
                 let created = PaycheckRecord(
-                    periodStart: period.start,
-                    periodEnd: period.end,
+                    periodStart: savedPeriod.start,
+                    periodEnd: savedPeriod.end,
                     paidTipsCents: amountCents,
                     note: note.isEmpty ? nil : note,
                     grossPayCents: effectiveGrossPayCents,

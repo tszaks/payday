@@ -78,6 +78,44 @@ final class PolicyStore {
         policies.latestRate?.hourlyRateCents
     }
 
+    /// One job's rate (E2b): nil tag is the primary, exactly
+    /// `currentHourlyRateCents`.
+    func currentHourlyRateCents(forJob tag: String?) -> Int? {
+        policies.policies(forJob: tag).latestRate?.hourlyRateCents
+    }
+
+    /// One job's frozen payroll zone, falling back to the primary's when the
+    /// job has no calendar of its own yet.
+    func payrollTimeZone(forJob tag: String?) -> TimeZone {
+        policies.policies(forJob: tag).payrollTimeZone ?? payrollTimeZone
+    }
+
+    /// One job's pay-period grid (E2b): its own schedule, else the
+    /// primary's, in its own payroll zone. Nil tag = the primary = today's
+    /// calculator exactly.
+    func calculator(forJob tag: String?, primarySchedule: PaySchedule?) -> PayPeriodCalculator {
+        Self.calculator(forJob: tag, policies: policies, primarySchedule: primarySchedule)
+    }
+
+    /// The same, for a process with no store (the push scheduler reads the
+    /// stored policies). The one place a job's calculator is built.
+    static func calculator(
+        forJob tag: String?,
+        policies: CompensationPolicies,
+        primarySchedule: PaySchedule?
+    ) -> PayPeriodCalculator {
+        let primaryZone = policies.payrollTimeZone ?? .current
+        guard let tag = ShiftRole.normalized(tag) else {
+            return PayPeriodCalculator(payrollTimeZone: primaryZone, schedule: primarySchedule ?? .fallback)
+        }
+        let zone = policies.policies(forJob: tag).payrollTimeZone ?? primaryZone
+        let job = policies.jobs.first { ShiftRole.key($0.tag) == ShiftRole.key(tag) }
+        guard let input = job?.schedule else {
+            return PayPeriodCalculator(payrollTimeZone: zone, schedule: primarySchedule ?? .fallback)
+        }
+        return PayPeriodCalculator(payrollTimeZone: zone, schedule: PaySchedule(input, in: zone, primary: primarySchedule))
+    }
+
     /// The calendar policy a new one has to start on a boundary of, and the
     /// one whose frozen zone is "the payroll time zone".
     ///
@@ -144,19 +182,22 @@ final class PolicyStore {
     /// A nil or zero rate REMOVES every rate policy: nil has always meant
     /// "the wage feature is off", never "$0/hr", and the ledger reports
     /// `.rateNotSet` rather than a fabricated zero.
-    func applyRateEdit(hourlyRateCents: Int?) {
+    func applyRateEdit(hourlyRateCents: Int?, job tag: String? = nil) {
+        let key = ShiftRole.key(tag)
+        let scoped = policies.policies(forJob: tag)
         guard let cents = hourlyRateCents, cents > 0 else {
-            // Only the "All roles" rates. A role's own rate is removed from
-            // its own row in Roles and rates, never as a side effect here.
+            // Only this job's "All roles" rates. A role's own rate is removed
+            // from its own row in Roles and rates, and another job's rates
+            // are never a side effect here.
             apply(CompensationPolicies(
                 version: policies.version,
-                rates: policies.rates.filter { $0.roleName != nil },
+                rates: policies.rates.filter { $0.roleName != nil || ShiftRole.key($0.jobName) != key },
                 calendars: policies.calendars,
                 jobs: policies.jobs
             ))
             return
         }
-        if var latest = policies.latestRate {
+        if var latest = scoped.latestRate {
             latest.hourlyRateCents = cents
             latest.provenance = .confirmed
             applyRate(latest)
@@ -165,7 +206,8 @@ final class PolicyStore {
                 id: UUID(),
                 effectiveFrom: .distantPast,
                 hourlyRateCents: cents,
-                provenance: .confirmed
+                provenance: .confirmed,
+                jobName: ShiftRole.normalized(tag)
             ))
         }
     }
@@ -264,13 +306,15 @@ final class PolicyStore {
     func applyCalendarChange(
         workweekStartWeekday: Int,
         payrollTimeZone: TimeZone,
-        today: CivilDay
+        today: CivilDay,
+        job tag: String? = nil
     ) -> PayrollCalendarPolicy? {
         applyCalendarChange(
             workweekStartWeekday: workweekStartWeekday,
             payrollTimeZone: payrollTimeZone,
-            dailyOvertimeThresholdMinutes: policies.latestCalendar?.dailyOvertimeThresholdMinutes,
-            today: today
+            dailyOvertimeThresholdMinutes: policies.policies(forJob: tag).latestCalendar?.dailyOvertimeThresholdMinutes,
+            today: today,
+            job: tag
         )
     }
 
@@ -298,10 +342,16 @@ final class PolicyStore {
         workweekStartWeekday: Int,
         payrollTimeZone: TimeZone,
         dailyOvertimeThresholdMinutes: Int?,
-        today: CivilDay
+        today: CivilDay,
+        job tag: String? = nil
     ) -> PayrollCalendarPolicy? {
-        let settled = policies.calendars.filter { $0.effectiveFrom <= today }
-        let pending = policies.calendars.filter { $0.effectiveFrom > today }
+        // Only this job's calendars move (E2b); every other job's are kept
+        // exactly as they are.
+        let key = ShiftRole.key(tag)
+        let others = policies.calendars.filter { ShiftRole.key($0.jobName) != key }
+        let own = policies.calendars.filter { ShiftRole.key($0.jobName) == key }
+        let settled = own.filter { $0.effectiveFrom <= today }
+        let pending = own.filter { $0.effectiveFrom > today }
         let inEffect = settled.last
 
         var kept = settled
@@ -309,7 +359,7 @@ final class PolicyStore {
            inEffect.workweekStartWeekday == workweekStartWeekday,
            inEffect.payrollTimeZone == payrollTimeZone,
            inEffect.dailyOvertimeThresholdMinutes == dailyOvertimeThresholdMinutes {
-            apply(CompensationPolicies(version: policies.version, rates: policies.rates, calendars: kept, jobs: policies.jobs))
+            apply(CompensationPolicies(version: policies.version, rates: policies.rates, calendars: others + kept, jobs: policies.jobs))
             return nil
         }
 
@@ -323,21 +373,32 @@ final class PolicyStore {
             id: pending.first?.id ?? UUID()
         )
         policy.dailyOvertimeThresholdMinutes = dailyOvertimeThresholdMinutes
+        policy.jobName = ShiftRole.normalized(tag)
         kept.append(policy)
-        apply(CompensationPolicies(version: policies.version, rates: policies.rates, calendars: kept, jobs: policies.jobs))
+        apply(CompensationPolicies(version: policies.version, rates: policies.rates, calendars: others + kept, jobs: policies.jobs))
         return policy
     }
 
     /// The calendar policy that is not in effect yet, if the user has queued
     /// a change. Settings shows its date ("Takes effect Mon, Oct 5").
-    func pendingCalendarPolicy(today: CivilDay) -> PayrollCalendarPolicy? {
-        policies.calendars.last { $0.effectiveFrom > today }
+    func pendingCalendarPolicy(today: CivilDay, job tag: String? = nil) -> PayrollCalendarPolicy? {
+        policies.policies(forJob: tag).calendars.last { $0.effectiveFrom > today }
     }
 
     /// The calendar policy in effect today, which is what actually values a
     /// shift worked today.
-    func calendarPolicyInEffect(today: CivilDay) -> PayrollCalendarPolicy? {
-        policies.calendar(on: today)
+    func calendarPolicyInEffect(today: CivilDay, job tag: String? = nil) -> PayrollCalendarPolicy? {
+        policies.policies(forJob: tag).calendar(on: today)
+    }
+
+    /// A job's own pay schedule (E2b). Nil means "same as the primary".
+    /// Never touches the primary, whose schedule lives in `PayScheduleStore`.
+    func applyJobSchedule(_ schedule: PayScheduleInput?, jobID: UUID) {
+        guard let job = policies.jobs.first(where: { $0.id == jobID }), !job.isPrimary else { return }
+        let jobs = policies.jobs.map {
+            $0.id == jobID ? JobPolicy(id: $0.id, name: $0.name, schedule: schedule, isPrimary: false) : $0
+        }
+        apply(CompensationPolicies(version: policies.version, rates: policies.rates, calendars: policies.calendars, jobs: jobs))
     }
 
     /// A payload the sync decided is newer. Persists without touching the

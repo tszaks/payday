@@ -227,7 +227,11 @@ struct DashboardFacts: SnapshotFacts {
         forcedPaydayPhase: PaydayMoment.Phase?,
         dismissedClosedEnd: Date?,
         dismissedCheckEnd: Date?,
-        payrollTimeZone: TimeZone
+        payrollTimeZone: TimeZone,
+        /// E2b: the primary job only with two or more jobs (`.job(nil)`),
+        /// so the hero never mixes two paydays; `.all` with one job, which
+        /// is the screen exactly as it was. Other jobs' cards are E3.
+        job: JobScope = .all
     ) {
         // One calendar for this whole screen, in the FROZEN payroll zone.
         // It is the same one `DashboardEarnings.build` grouped `allShifts`
@@ -248,7 +252,7 @@ struct DashboardFacts: SnapshotFacts {
         let currentRange = Self.range(of: period, in: payrollTimeZone)
         // Membership by civil work day, which is the engine's rule.
         let periodRecords = allShiftRecords.filter {
-            currentRange.contains(CivilDay($0.workDate, in: payrollTimeZone))
+            job.includes($0.jobName) && currentRange.contains(CivilDay($0.workDate, in: payrollTimeZone))
         }
         // `@Query` delivers records unordered — insertion order, which
         // presented oldest-first. The list's order is `ShiftDays`'s: newest
@@ -330,12 +334,12 @@ struct DashboardFacts: SnapshotFacts {
         // read 40400 here and 79800 there under the same label, with
         // different digests.
         let toDate = CivilDay(now, in: payrollTimeZone)
-        let currentResult = snapshot?.range(currentRange, asOf: toDate)
+        let currentResult = snapshot?.range(currentRange, asOf: toDate, job: job)
         // The payday card's period is CLOSED, so its query takes no cutoff:
         // `now` is already past the period's end and a clamp would be a
         // no-op that only looks like a scope.
         let paydayResult = moment.flatMap { candidate -> (PaydayMoment.Moment, EarningsResult)? in
-            guard let result = snapshot?.range(Self.range(of: candidate.period, in: payrollTimeZone)),
+            guard let result = snapshot?.range(Self.range(of: candidate.period, in: payrollTimeZone), job: job),
                   result.knownComponents.earnedIncomeCents > 0
             else { return nil }
             return (candidate, result)
@@ -380,7 +384,7 @@ struct DashboardFacts: SnapshotFacts {
         // snapshot: `valuations(in:)` is unclamped, `result.shiftIDs` is what
         // the clamped query actually summed. See `heroDeferredShiftCount`.
         let heroRange = Self.range(of: heroPeriod, in: payrollTimeZone)
-        let heroShiftsInPeriod = snapshot.map { $0.valuations(in: heroRange).count } ?? 0
+        let heroShiftsInPeriod = snapshot.map { $0.valuations(in: heroRange, job: job).count } ?? 0
         let deferredShiftCount = max(0, heroShiftsInPeriod - (heroResult?.shiftIDs.count ?? 0))
         heroDeferredShiftCount = deferredShiftCount
 
@@ -775,7 +779,8 @@ struct DashboardView: View {
                 forcedPaydayPhase: forcedPaydayPhase,
                 dismissedClosedEnd: dismissedClosedEnd,
                 dismissedCheckEnd: dismissedCheckEnd,
-                payrollTimeZone: payrollTimeZone
+                payrollTimeZone: payrollTimeZone,
+                job: dataset.job
             )
         NavigationStack {
             // A ScrollView, deliberately NOT a List: the hero's drawer changes

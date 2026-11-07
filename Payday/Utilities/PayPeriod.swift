@@ -1,4 +1,5 @@
 import Foundation
+import PaydayCore
 
 enum PayFrequency: String, CaseIterable, Identifiable, Hashable, Codable {
     case weekly
@@ -49,6 +50,21 @@ struct PaySchedule: Codable, Equatable {
     /// nil while a period-driven view is briefly still mounted (e.g. DEBUG
     /// clear-all). RootView switches to first-run setup on the next update.
     static let fallback = PaySchedule(frequency: .biweekly, anchorPeriodEnd: .now)
+}
+
+extension PaySchedule {
+    /// A job's own schedule (`JobPolicy.schedule`, E2b) as the grid the app
+    /// lays periods out on. The anchor is a civil day, read back as that
+    /// day's midnight in `zone`, the zone the calculator buckets in. An
+    /// unknown frequency string falls back to the primary's frequency.
+    init(_ input: PayScheduleInput, in zone: TimeZone, primary: PaySchedule?) {
+        self.init(
+            frequency: PayFrequency(rawValue: input.frequency) ?? primary?.frequency ?? .biweekly,
+            anchorPeriodEnd: input.anchorPeriodEnd.date(in: zone),
+            payDelayDays: input.payDelayDays,
+            firstWeekday: input.firstWeekday
+        )
+    }
 }
 
 struct PayPeriod: Hashable {
@@ -263,5 +279,22 @@ struct PayPeriodCalculator {
 
     private func ceilDiv(_ a: Int, _ b: Int) -> Int {
         -floorDiv(-a, b)
+    }
+}
+
+extension JobScope {
+    /// The job tag a screen builds its calendar from: nil (the primary) for
+    /// `.all`, which is what one job always is.
+    var tag: String? {
+        switch self {
+        case .all: return nil
+        case .job(let tag): return tag
+        }
+    }
+
+    /// `.all` with fewer than two jobs, so a one-job account renders exactly
+    /// as it did before jobs; `.job(tag)` otherwise.
+    static func picked(_ tag: String?, jobCount: Int) -> JobScope {
+        jobCount < 2 ? .all : .job(tag)
     }
 }

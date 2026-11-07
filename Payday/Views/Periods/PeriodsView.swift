@@ -72,12 +72,15 @@ struct PeriodsPageFacts: SnapshotFacts {
     ///     path from here.
     ///   - payrollTimeZone: the FROZEN payroll zone, for reading a period's
     ///     boundary midnights back as civil days.
+    ///   - job: which job's periods (E2b). The caller passes that job's own
+    ///     schedule and zone; `.all` (one job) is the screen as it was.
     init(
         snapshot: EarningsSnapshot?,
         paycheckRecords: [PaycheckRecord],
         schedule: PaySchedule?,
         payrollTimeZone: TimeZone,
         cardTipsPaidAtClose: Bool = false,
+        job: JobScope = .all,
         now: Date = .now,
         calendar: Calendar = .current
     ) {
@@ -95,8 +98,8 @@ struct PeriodsPageFacts: SnapshotFacts {
         // How far back to walk. The snapshot holds its shifts in canonical
         // work-day order, so the earliest one is `shifts.first` — no scan of
         // the entries and no second date rule.
-        let earliestShiftDate = snapshot?.shifts.first?.workDay.date(in: payrollTimeZone)
-        let earliestPaycheckDate = paycheckRecords.lazy.map(\.periodStart).min()
+        let earliestShiftDate = snapshot?.shifts.first { job.includes($0.jobName) }?.workDay.date(in: payrollTimeZone)
+        let earliestPaycheckDate = paycheckRecords.lazy.filter { job.includes($0.jobName) }.map(\.periodStart).min()
         let earliestRelevantDate = [earliestShiftDate, earliestPaycheckDate].compactMap { $0 }.min()
         if let earliestRelevantDate {
             while periods.count < 24, cursor.start > earliestRelevantDate {
@@ -107,8 +110,8 @@ struct PeriodsPageFacts: SnapshotFacts {
         }
 
         rows = periods.enumerated().map { index, period in
-            let result = HistoryEarnings.earnings(snapshot, for: period, in: payrollTimeZone)
-            let paycheck = HistoryEarnings.paycheck(for: period, in: paycheckRecords)
+            let result = HistoryEarnings.earnings(snapshot, for: period, in: payrollTimeZone, job: job)
+            let paycheck = HistoryEarnings.paycheck(for: period, in: paycheckRecords, job: job)
             return Row(
                 period: period,
                 payDate: periodCalculator.payDate(for: period),
@@ -123,7 +126,7 @@ struct PeriodsPageFacts: SnapshotFacts {
 
         let currentYear = calendar.component(.year, from: now)
         year = currentYear
-        let yearResult = snapshot?.yearToDate(year: currentYear)
+        let yearResult = snapshot?.yearToDate(year: currentYear, job: job)
         yearToDate = yearResult.map(EarningsFigure.earnedIncome) ?? .unavailable()
         hasYearToDate = (yearResult?.completeness.totalShifts ?? 0) > 0
         yearToDateShiftCountText = CompletenessCopy.shiftCount(yearResult?.completeness.totalShifts ?? 0)
@@ -182,21 +185,37 @@ struct PeriodsView: View {
     /// else: no figure, no label and no cache key is derived from it.
     @State private var writes = 0
     @State private var currentDay = Calendar.current.startOfDay(for: .now)
+    /// The job the picker shows (E2b); nil = the primary.
+    @State private var pickedJobID: UUID?
+
+    private var jobs: [JobPolicy] { policyStore.policies.jobs }
+
+    /// The picked job's scope: `.all` with one job, so nothing changes.
+    private var jobScope: JobScope {
+        let job = jobs.first { $0.id == pickedJobID }
+        return .picked(job?.tag, jobCount: jobs.count)
+    }
 
     var body: some View {
-        let schedule = scheduleStore.schedule
         let build = snapshotBuild()
+        let scope = jobScope
+        let jobCalendar = calculator(for: scope)
         let facts = PeriodsPageFacts(
             snapshot: build.snapshot,
             paycheckRecords: paycheckRecords.hidingPendingRemoval(),
-            schedule: schedule,
-            payrollTimeZone: policyStore.payrollTimeZone,
+            schedule: jobCalendar.schedule,
+            payrollTimeZone: jobCalendar.payrollTimeZone,
             cardTipsPaidAtClose: preferencesStore.isCardTipsPaidAtClose,
+            job: scope,
             now: currentDay
         )
         NavigationStack(path: $path) {
             ScrollView {
                 LazyVStack(spacing: 0) {
+                    if jobs.count >= 2 {
+                        jobPicker
+                            .padding(.bottom, PaydaySpacing.p8)
+                    }
                     if facts.hasYearToDate {
                         yearToDateCard(facts)
                         Divider()
@@ -219,7 +238,7 @@ struct PeriodsView: View {
             // itself, the destination was never registered, so every row's
             // NavigationLink(value:) silently did nothing.
             .navigationDestination(for: PayPeriod.self) { period in
-                PeriodDetailView(period: period)
+                PeriodDetailView(period: period, job: jobScope)
             }
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
@@ -304,7 +323,25 @@ struct PeriodsView: View {
     }
 
     private var calculator: PayPeriodCalculator {
-        PayPeriodCalculator(payrollTimeZone: policyStore.payrollTimeZone, schedule: scheduleStore.schedule ?? .fallback)
+        policyStore.calculator(forJob: nil, primarySchedule: scheduleStore.schedule)
+    }
+
+    private func calculator(for scope: JobScope) -> PayPeriodCalculator {
+        policyStore.calculator(forJob: scope.tag, primarySchedule: scheduleStore.schedule)
+    }
+
+    /// Primary first, text only, in the system's monochrome segmented style.
+    private var jobPicker: some View {
+        Picker("Job", selection: Binding(
+            get: { pickedJobID ?? jobs.first?.id },
+            set: { pickedJobID = $0 }
+        )) {
+            ForEach(jobs) { job in
+                Text(job.name).tag(UUID?.some(job.id))
+            }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
     }
 
     private func refreshCurrentDay() {
@@ -334,11 +371,17 @@ struct PeriodsView: View {
             guard path.isEmpty else { return }
             path.append(currentPeriod)
             tabRouter.pendingPeriodLanding = nil
-        case .paycheckScan(let start, let end):
+        case .paycheckScan(let start, let end, let jobTag):
+            // The push carries its job (E2b): switch the picker to it and
+            // resolve the period on that job's own calendar.
+            let landingJob = jobs.first { ShiftRole.key($0.tag) == ShiftRole.key(jobTag) }
+            pickedJobID = landingJob?.id
+            let scope = JobScope.picked(landingJob?.tag, jobCount: jobs.count)
+            let jobCurrent = calculator(for: scope).period(containing: currentDay)
             let calendar = Calendar.current
-            let resolved = calculator.period(containing: start)
+            let resolved = calculator(for: scope).period(containing: start)
             let matches = calendar.isDate(resolved.start, inSameDayAs: start) && calendar.isDate(resolved.end, inSameDayAs: end)
-            path = NavigationPath([matches ? resolved : currentPeriod])
+            path = NavigationPath([matches ? resolved : (jobs.count >= 2 ? jobCurrent : currentPeriod)])
             tabRouter.pendingPeriodLanding = nil
             tabRouter.pendingPaycheckScan = true
         }

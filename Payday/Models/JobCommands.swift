@@ -28,9 +28,33 @@ enum JobCommands {
 
     /// Adds a job. The first extra job also writes the primary entry, named
     /// `primaryName` (renamable later).
-    static func add(name: String, schedule: PayScheduleInput?, primaryName: String = "Main job", policyStore: PolicyStore) {
-        policyStore.apply(policyStore.policies.addingJob(
-            id: UUID(), name: name, schedule: schedule, primaryName: primaryName, primaryID: UUID()))
+    ///
+    /// The new job also gets a copy of the primary's calendar in effect
+    /// today (workweek start, payroll zone, overtime rules), tagged with its
+    /// name and effective from the distant past like the primary's frozen
+    /// calendar, so its periods and overtime work at once. No rate is
+    /// copied: a different employer is a different wage, and a job with no
+    /// rate reads "rate not set" until one is entered (E2b).
+    static func add(
+        name: String,
+        schedule: PayScheduleInput?,
+        primaryName: String = "Main job",
+        policyStore: PolicyStore,
+        now: Date = .now
+    ) {
+        var updated = policyStore.policies.addingJob(
+            id: UUID(), name: name, schedule: schedule, primaryName: primaryName, primaryID: UUID())
+        guard updated != policyStore.policies,
+              let tag = ShiftRole.normalized(name) else { return }
+        let today = CivilDay(now, in: policyStore.payrollTimeZone)
+        if let primary = policyStore.policies.calendar(on: today) ?? policyStore.policies.latestCalendar {
+            var clone = primary
+            clone.id = UUID()
+            clone.effectiveFrom = .distantPast
+            clone.jobName = tag
+            updated = updated.adding(calendar: clone)
+        }
+        policyStore.apply(updated)
     }
 
     /// Renames a job and the tag on every shift and paycheck it is on.

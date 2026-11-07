@@ -33,15 +33,15 @@ final class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
     /// Requests queued by older builds carry no period, so they land in the
     /// current period's detail as they always did.
     static func periodLanding(identifier: String, userInfo: [AnyHashable: Any]) -> PeriodLanding? {
-        guard identifier == PaydayPushScheduler.notificationIdentifier
-            || identifier == PaydayPushScheduler.stubNudgeIdentifier else { return nil }
+        guard PaydayPushScheduler.isPaydayIdentifier(identifier) else { return nil }
         guard let start = userInfo[PaydayPushScheduler.periodStartKey] as? TimeInterval,
               let end = userInfo[PaydayPushScheduler.periodEndKey] as? TimeInterval else {
             return .currentDetail
         }
         return .paycheckScan(
             periodStart: Date(timeIntervalSince1970: start),
-            periodEnd: Date(timeIntervalSince1970: end)
+            periodEnd: Date(timeIntervalSince1970: end),
+            job: userInfo[PaydayPushScheduler.jobKey] as? String
         )
     }
 }

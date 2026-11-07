@@ -6,11 +6,11 @@ import SwiftUI
 /// paychecks carry it as a tag, nil for the primary. With one job (no list
 /// stored) this screen is the only place jobs appear at all.
 ///
-/// Periods still follow the one schedule in Settings in E1. The first job
-/// stays the primary: switching the primary would rewrite every untagged
+/// Each job keeps its own pay periods, payday reminder, wage and workweek
+/// (E2b): tapping a job other than the primary opens its detail. The first
+/// job stays the primary: switching the primary would rewrite every untagged
 /// shift and upload settings and shifts as two server writes, which another
-/// device could see half-done, so that waits for stable job ids in E2. A
-/// job's own schedule is stored now so E2 can use it without asking again.
+/// device could see half-done, so Make Primary is not offered.
 struct JobsSettingsView: View {
     @Environment(PolicyStore.self) private var policyStore
     @Environment(PayScheduleStore.self) private var scheduleStore
@@ -21,6 +21,8 @@ struct JobsSettingsView: View {
 
     @State private var isAddingJob = false
     @State private var actionJob: JobPolicy?
+    /// The job whose wage and schedule screen is open.
+    @State private var detailJob: JobPolicy?
     @State private var renamingJob: JobPolicy?
     @State private var renameText = ""
     @State private var refusal: String?
@@ -44,7 +46,7 @@ struct JobsSettingsView: View {
                 }
                 Button("Add job") { isAddingJob = true }
             } footer: {
-                Text("With two or more jobs, the log sheet and the paycheck sheet ask which job. Pay periods follow the one schedule in Settings for now.")
+                Text("With two or more jobs, the log sheet and the paycheck sheet ask which job. Each job keeps its own pay periods and payday reminder.")
             }
             .listRowBackground(PaydayColor.fieldBackground)
         }
@@ -58,6 +60,9 @@ struct JobsSettingsView: View {
             titleVisibility: .visible,
             presenting: actionJob
         ) { job in
+            if !job.isPrimary {
+                Button("Wage and Schedule") { detailJob = job }
+            }
             Button("Rename") {
                 renameText = job.name
                 renamingJob = job
@@ -93,6 +98,9 @@ struct JobsSettingsView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text("Nothing was changed. Try again.")
+        }
+        .navigationDestination(item: $detailJob) { job in
+            JobDetailView(jobID: job.id)
         }
         .sheet(isPresented: $isAddingJob) {
             AddJobSheet(asksForPrimaryName: jobs.isEmpty, takenNames: jobs.map(\.name), primarySchedule: scheduleStore.schedule) { name, primaryName, schedule in
@@ -225,7 +233,7 @@ private struct AddJobSheet: View {
                         DatePicker("Last day of a pay period", selection: $anchorPeriodEnd, displayedComponents: .date)
                     }
                 } footer: {
-                    Text("Pay periods follow the one schedule in Settings for now. This job's schedule is kept for when each job has its own.")
+                    Text("This job's pay periods and payday reminder follow this schedule.")
                 }
                 .listRowBackground(PaydayColor.fieldBackground)
             }
@@ -254,5 +262,165 @@ private struct AddJobSheet: View {
                 }
             }
         }
+    }
+}
+
+/// One job's own pay facts (E2b): hourly wage, workweek start, daily
+/// overtime and pay schedule. The same controls as Settings > Payroll, but
+/// every write goes through a `PolicyStore` helper that takes this job's tag
+/// and never touches the primary's policies. A new job starts on a copy of
+/// the primary's calendar and with no wage ("Not set"): a different employer
+/// is a different wage.
+struct JobDetailView: View {
+    @Environment(PolicyStore.self) private var policyStore
+    @Environment(PayScheduleStore.self) private var scheduleStore
+
+    let jobID: UUID
+
+    @State private var wageDigitsText = ""
+    @FocusState private var isWageFieldFocused: Bool
+    @State private var workweekStartWeekday = 1
+    @State private var hasLoaded = false
+
+    private let weekdaySymbols = Calendar.current.weekdaySymbols
+
+    private var job: JobPolicy? { policyStore.policies.jobs.first { $0.id == jobID } }
+    private var tag: String? { job?.tag }
+    private var jobPolicies: CompensationPolicies { policyStore.policies.policies(forJob: tag) }
+    private var zone: TimeZone { policyStore.payrollTimeZone(forJob: tag) }
+    private var today: CivilDay { CivilDay(.now, in: zone) }
+    private var rateCents: Int? { policyStore.currentHourlyRateCents(forJob: tag) }
+
+    var body: some View {
+        Form {
+            Section {
+                HStack {
+                    Text("Hourly wage")
+                        .foregroundStyle(PaydayColor.textPrimary)
+                    Spacer()
+                    ZStack(alignment: .trailing) {
+                        Text(PayrollSettingsSection.rateDisplay(rateCents))
+                            .foregroundStyle(rateCents == nil ? PaydayColor.textSecondary : PaydayColor.textPrimary)
+                            .monospacedDigit()
+                            .accessibilityHidden(true)
+                        TextField("", text: $wageDigitsText)
+                            .keyboardType(.numberPad)
+                            .multilineTextAlignment(.trailing)
+                            .focused($isWageFieldFocused)
+                            .opacity(0.01)
+                            .frame(maxWidth: 90)
+                            .accessibilityLabel("Hourly wage")
+                            .accessibilityValue(PayrollSettingsSection.rateDisplay(rateCents))
+                    }
+                }
+                .contentShape(Rectangle())
+                .onTapGesture { isWageFieldFocused = true }
+
+                Picker("Workweek starts", selection: $workweekStartWeekday) {
+                    ForEach(1...7, id: \.self) { day in
+                        Text(weekdaySymbols[day - 1]).tag(day)
+                    }
+                }
+
+                Toggle("Daily overtime after 8 hours", isOn: dailyOvertimeBinding)
+
+                if let pending = policyStore.pendingCalendarPolicy(today: today, job: tag) {
+                    Text("Takes effect \(PayrollSettingsSection.longDate(pending.effectiveFrom, in: pending.payrollTimeZone))")
+                        .font(PaydayFont.footnote)
+                        .foregroundStyle(PaydayColor.textSecondary)
+                }
+            } footer: {
+                Text("This job's shifts are paid at this wage. With no wage set, their wages read as not set.")
+            }
+            .listRowBackground(PaydayColor.fieldBackground)
+
+            Section {
+                Picker("Pay schedule", selection: frequencyBinding) {
+                    Text("Same as primary").tag(PayFrequency?.none)
+                    ForEach(PayFrequency.allCases) { frequency in
+                        Text(frequency.displayName).tag(PayFrequency?.some(frequency))
+                    }
+                }
+                if job?.schedule != nil {
+                    DatePicker("Last day of a pay period", selection: anchorBinding, displayedComponents: .date)
+                }
+            } footer: {
+                Text("This job's pay periods and payday reminder follow this schedule.")
+            }
+            .listRowBackground(PaydayColor.fieldBackground)
+        }
+        .scrollContentBackground(.hidden)
+        .background(PaydayColor.background)
+        .navigationTitle(job?.name ?? "Job")
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear(perform: load)
+        .onChange(of: wageDigitsText) { _, newValue in
+            let filtered = String(newValue.filter(\.isNumber).prefix(PayrollSettingsSection.maxWageDigits))
+            if filtered != newValue { wageDigitsText = filtered }
+            let cents = PayrollSettingsSection.rateCents(fromDigits: filtered)
+            // Opening the screen writes the field; that is not an edit.
+            guard hasLoaded, tag != nil, cents != rateCents else { return }
+            policyStore.applyRateEdit(hourlyRateCents: cents, job: tag)
+        }
+        .onChange(of: workweekStartWeekday) { oldValue, newValue in
+            guard hasLoaded, oldValue != newValue, tag != nil else { return }
+            policyStore.applyCalendarChange(
+                workweekStartWeekday: newValue, payrollTimeZone: zone, today: today, job: tag)
+        }
+    }
+
+    private var dailyOvertimeBinding: Binding<Bool> {
+        Binding(
+            get: { jobPolicies.latestCalendar?.dailyOvertimeThresholdMinutes != nil },
+            set: { isOn in
+                guard tag != nil else { return }
+                policyStore.applyCalendarChange(
+                    workweekStartWeekday: workweekStartWeekday,
+                    payrollTimeZone: zone,
+                    dailyOvertimeThresholdMinutes: isOn ? PayrollSettingsSection.dailyOvertimeThresholdMinutes : nil,
+                    today: today,
+                    job: tag
+                )
+            }
+        )
+    }
+
+    private var frequencyBinding: Binding<PayFrequency?> {
+        Binding(
+            get: { job?.schedule.flatMap { PayFrequency(rawValue: $0.frequency) } },
+            set: { frequency in
+                guard let frequency else {
+                    policyStore.applyJobSchedule(nil, jobID: jobID)
+                    return
+                }
+                let primary = scheduleStore.schedule
+                let anchor = job?.schedule?.anchorPeriodEnd.date(in: .current)
+                    ?? Calendar.current.startOfDay(for: .now)
+                let schedule = PaySchedule(
+                    frequency: frequency, anchorPeriodEnd: anchor,
+                    payDelayDays: job?.schedule?.payDelayDays ?? primary?.payDelayDays,
+                    firstWeekday: primary?.firstWeekday)
+                policyStore.applyJobSchedule(JobsSettingsView.scheduleInput(schedule), jobID: jobID)
+            }
+        )
+    }
+
+    private var anchorBinding: Binding<Date> {
+        Binding(
+            get: { job?.schedule?.anchorPeriodEnd.date(in: .current) ?? .now },
+            set: { date in
+                guard var input = job?.schedule else { return }
+                input.anchorPeriodEnd = CivilDay(Calendar.current.startOfDay(for: date), in: .current)
+                policyStore.applyJobSchedule(input, jobID: jobID)
+            }
+        )
+    }
+
+    private func load() {
+        wageDigitsText = rateCents.map(String.init) ?? ""
+        workweekStartWeekday = jobPolicies.latestCalendar?.workweekStartWeekday
+            ?? policyStore.policies.latestCalendar?.workweekStartWeekday
+            ?? Calendar.current.firstWeekday
+        DispatchQueue.main.async { hasLoaded = true }
     }
 }
