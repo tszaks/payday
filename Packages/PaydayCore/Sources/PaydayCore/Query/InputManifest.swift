@@ -98,7 +98,14 @@ import Foundation
 /// section is followed directly by the next header). All hex is lowercase.
 public struct InputManifest: Hashable, Codable, Sendable {
     /// Bump when the arithmetic changes in a way that should invalidate stored results.
-    public static let currentEngineVersion = 1
+    ///
+    /// 2 (2026-11): tip share received, a rate per role, and the optional
+    /// daily overtime rule. A build on engine 1 ignores all three when it
+    /// decodes the synced policies and shifts, so its answer for the same
+    /// dataset revision can differ; the server's `upsert_earnings_snapshot`
+    /// keeps the higher engine at an equal revision, so an older phone can
+    /// no longer overwrite a newer phone's snapshot with weekly-only wages.
+    public static let currentEngineVersion = 2
     /// The version prefix of the canonical encoding.
     public static let formatVersion = "paydaycore-manifest-v1"
 
