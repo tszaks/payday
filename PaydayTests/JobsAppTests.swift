@@ -145,6 +145,51 @@ struct JobCommandsTests {
         #expect(check.jobName == "Bistro")
     }
 
+    @Test("make primary is refused, and changes nothing, while a legacy shift is still unconfirmed")
+    func makePrimaryRefusedMidConversion() throws {
+        if let existing = PaydaySyncState.registeredUserID {
+            PaydaySyncState.forget(userID: existing)
+        }
+        let userID = UUID()
+        PaydaySyncState.forget(userID: userID)
+        _ = PaydaySyncState.registerCurrentUser(userID)
+        defer { PaydaySyncState.forget(userID: userID) }
+
+        store.apply(twoJobs())
+        let converting = shift(5, job: nil)
+        converting.legacyEntryIDs = [UUID()]
+        let cafe = shift(6, job: "Cafe")
+
+        // Signed in, has legacy sources, not authoritative: refused, and the
+        // list and every tag are exactly as they were.
+        #expect(throws: JobCommands.ShiftsNotReady.self) {
+            try JobCommands.makePrimary(jobID: cafeID, policyStore: store,
+                                        shifts: [converting, cafe], paychecks: [], in: context)
+        }
+        #expect(store.policies.primaryJob?.id == bistroID)
+        #expect(converting.jobName == nil)
+        #expect(cafe.jobName == "Cafe")
+
+        // Once authoritative the same call goes through and retags both.
+        PaydaySyncState.mutate(userID: userID) {
+            $0.shiftsAreAuthoritativeAt = "2026-09-18T00:00:00.000Z"
+        }
+        try JobCommands.makePrimary(jobID: cafeID, policyStore: store,
+                                    shifts: [converting, cafe], paychecks: [], in: context)
+        #expect(store.policies.primaryJob?.id == cafeID)
+        #expect(converting.jobName == "Bistro")
+        #expect(cafe.jobName == nil)
+    }
+
+    @Test("the add sheet refuses a name another job has, or the current job's name on the first add")
+    func nameIsTaken() {
+        #expect(JobsSettingsView.nameIsTaken("bistro", existing: ["Bistro", "Cafe"], primaryName: nil))
+        #expect(JobsSettingsView.nameIsTaken(" Cafe ", existing: [], primaryName: "cafe"))
+        #expect(JobsSettingsView.nameIsTaken("Main job", existing: [], primaryName: "Main job"))
+        #expect(!JobsSettingsView.nameIsTaken("Diner", existing: ["Bistro"], primaryName: "Main job"))
+        #expect(!JobsSettingsView.nameIsTaken("   ", existing: ["Bistro"], primaryName: "Main job"))
+    }
+
     @Test("delete is refused while a shift or paycheck carries the name, and says how many")
     func deleteRefused() {
         store.apply(twoJobs())
@@ -209,6 +254,25 @@ struct JobsWireTests {
         #expect(lines[0] == CSVExporter.header + ",Role,Job")
         #expect(lines[1].hasSuffix(",Bar,Cafe"))
         #expect(lines[2].hasSuffix(",,"))
+    }
+
+    @Test("the Paycheck cell is the check for the shift's own job, not the first check in the period")
+    @MainActor
+    func csvPaycheckPerJob() {
+        let period = Self.calculator.period(containing: jobDay(8))
+        let bistroCheck = PaycheckRecord(periodStart: period.start, periodEnd: period.end, paidTipsCents: 10_000)
+        let cafeCheck = PaycheckRecord(periodStart: period.start, periodEnd: period.end, paidTipsCents: 20_000)
+        cafeCheck.jobName = "Cafe"
+        let records = [
+            ShiftRecord(workDate: jobDay(8), cashTipsCents: 5_000, jobName: "Cafe"),
+            ShiftRecord(workDate: jobDay(9), cashTipsCents: 5_000),
+        ]
+        for checks in [[bistroCheck, cafeCheck], [cafeCheck, bistroCheck]] {
+            let lines = CSVExporter.export(records: records, paycheckRecords: checks, calculator: Self.calculator)
+                .split(separator: "\n").map(String.init)
+            #expect(lines[1].contains("200.00") && !lines[1].contains("100.00"))
+            #expect(lines[2].contains("100.00") && !lines[2].contains("200.00"))
+        }
     }
 
     @MainActor

@@ -6,7 +6,9 @@ import SwiftUI
 /// paychecks carry it as a tag, nil for the primary. With one job (no list
 /// stored) this screen is the only place jobs appear at all.
 ///
-/// Periods still follow the primary schedule in E1. A job's own schedule is
+/// Periods still follow the one schedule in Settings in E1, whichever job
+/// is primary (Make Primary does not swap schedules: that is E2's job,
+/// because paychecks are keyed by period dates). A job's own schedule is
 /// stored now so E2 can use it without asking again.
 struct JobsSettingsView: View {
     @Environment(PolicyStore.self) private var policyStore
@@ -41,7 +43,7 @@ struct JobsSettingsView: View {
                 }
                 Button("Add job") { isAddingJob = true }
             } footer: {
-                Text("With two or more jobs, the log sheet and the paycheck sheet ask which job. Pay periods follow your primary job for now.")
+                Text("With two or more jobs, the log sheet and the paycheck sheet ask which job. Pay periods follow the one schedule in Settings for now, whichever job is primary.")
             }
             .listRowBackground(PaydayColor.fieldBackground)
         }
@@ -97,7 +99,7 @@ struct JobsSettingsView: View {
             Text("Nothing was changed. Try again.")
         }
         .sheet(isPresented: $isAddingJob) {
-            AddJobSheet(asksForPrimaryName: jobs.isEmpty, primarySchedule: scheduleStore.schedule) { name, primaryName, schedule in
+            AddJobSheet(asksForPrimaryName: jobs.isEmpty, takenNames: jobs.map(\.name), primarySchedule: scheduleStore.schedule) { name, primaryName, schedule in
                 JobCommands.add(
                     name: name,
                     schedule: schedule.map { scheduleInput($0) },
@@ -150,6 +152,16 @@ struct JobsSettingsView: View {
         return "\(job) is on \(parts.joined(separator: " and ")). Move them to another job first."
     }
 
+    /// Whether `name` collides with a job that exists (trimmed,
+    /// case-insensitive), or with `primaryName`, the name the current job
+    /// gets when this add creates the list (nil once a list exists). The add
+    /// sheet refuses such a name up front, because `addingJob` would change
+    /// nothing and a sheet that closes on nothing looks like a lost job.
+    static func nameIsTaken(_ name: String, existing: [String], primaryName: String?) -> Bool {
+        guard let key = ShiftRole.key(name) else { return false }
+        return existing.contains { ShiftRole.key($0) == key } || ShiftRole.key(primaryName) == key
+    }
+
     /// The Settings > Payroll row's trailing text: "1 job" until a second
     /// job is added.
     static func countLabel(_ policies: CompensationPolicies) -> String {
@@ -165,6 +177,8 @@ private struct AddJobSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     let asksForPrimaryName: Bool
+    /// Names already in the list, so a duplicate is refused before Save.
+    let takenNames: [String]
     let primarySchedule: PaySchedule?
     let onSave: (_ name: String, _ primaryName: String, _ schedule: PaySchedule?) -> Void
 
@@ -173,6 +187,12 @@ private struct AddJobSheet: View {
     /// Nil = same schedule as the primary job.
     @State private var frequency: PayFrequency?
     @State private var anchorPeriodEnd = Date.now
+
+    private var nameIsTaken: Bool {
+        JobsSettingsView.nameIsTaken(
+            name, existing: takenNames,
+            primaryName: asksForPrimaryName ? (ShiftRole.normalized(primaryName) ?? "Main job") : nil)
+    }
 
     var body: some View {
         NavigationStack {
@@ -185,7 +205,9 @@ private struct AddJobSheet: View {
                             .textInputAutocapitalization(.words)
                     }
                 } footer: {
-                    if asksForPrimaryName {
+                    if nameIsTaken {
+                        Text("A job with this name already exists.")
+                    } else if asksForPrimaryName {
                         Text("Your current job stays the primary job. Every shift you have logged stays on it.")
                     }
                 }
@@ -202,7 +224,7 @@ private struct AddJobSheet: View {
                         DatePicker("Last day of a pay period", selection: $anchorPeriodEnd, displayedComponents: .date)
                     }
                 } footer: {
-                    Text("Pay periods follow your primary job for now. This job's schedule is kept for when they don't.")
+                    Text("Pay periods follow the one schedule in Settings for now. This job's schedule is kept for when each job has its own.")
                 }
                 .listRowBackground(PaydayColor.fieldBackground)
             }
@@ -227,7 +249,7 @@ private struct AddJobSheet: View {
                         onSave(name, primaryName, schedule)
                         dismiss()
                     }
-                    .disabled(ShiftRole.normalized(name) == nil)
+                    .disabled(ShiftRole.normalized(name) == nil || nameIsTaken)
                 }
             }
         }

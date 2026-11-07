@@ -54,8 +54,17 @@ enum JobCommands {
         policyStore.apply(updated)
     }
 
+    /// Thrown by `makePrimary` when a shift cannot be retagged right now (an
+    /// unconfirmed legacy fold result, `ShiftCommands.mayMutate`). Nothing is
+    /// changed, so "try again" is the honest message. A nil-tagged shift left
+    /// behind would silently belong to the NEW primary, which is why this
+    /// refuses instead of skipping. Rename never hits it: a tagged shift is
+    /// one this build wrote, so it is mutable.
+    struct ShiftsNotReady: Error, Equatable {}
+
     /// Makes a job the primary. A nil tag always means the primary, so the
     /// old primary's records take its name and the new primary's lose theirs.
+    /// Refuses with `ShiftsNotReady` while any shift may not be mutated.
     static func makePrimary(
         jobID: UUID,
         policyStore: PolicyStore,
@@ -66,6 +75,7 @@ enum JobCommands {
         let policies = policyStore.policies
         guard let new = policies.jobs.first(where: { $0.id == jobID }), !new.isPrimary,
               let old = policies.primaryJob else { return }
+        guard shifts.allSatisfy(ShiftCommands.mayMutate) else { throw ShiftsNotReady() }
         try retag(shifts: shifts, paychecks: paychecks, in: context) { tag in
             if tag == nil { return old.name }
             return ShiftRoleList.matches(tag, new.name) ? nil : tag
@@ -92,7 +102,8 @@ enum JobCommands {
     /// Rewrites the job tag on every record `map` changes, touching each so
     /// it uploads, in one atomic save. A shift that may not be mutated right
     /// now (an unconfirmed fold result, `ShiftCommands.mayMutate`) is left
-    /// alone: it is a legacy night, and legacy rows carry no job.
+    /// alone: it is a legacy night with no tag, so only `makePrimary` could
+    /// have wanted to change it, and that refuses first (`ShiftsNotReady`).
     static func retag(
         shifts: [ShiftRecord],
         paychecks: [PaycheckRecord],
