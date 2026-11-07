@@ -1,3 +1,4 @@
+import PaydayCore
 import SwiftUI
 import SwiftData
 import PhotosUI
@@ -36,6 +37,7 @@ struct PaycheckEntrySheet: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(PayScheduleStore.self) private var scheduleStore
     @Environment(UserPreferencesStore.self) private var preferencesStore
+    @Environment(PolicyStore.self) private var policyStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// The other representation. Handed to `PaydayPushScheduler` so the
     /// figure the payday notification SPEAKS comes from the same source the
@@ -65,6 +67,9 @@ struct PaycheckEntrySheet: View {
 
     @State private var amountCents: Int
     @State private var note: String
+    /// The job this check is from (PR E1), nil for the primary job. Shown
+    /// only with two or more jobs; a new check starts on the primary.
+    @State private var jobName: String?
     /// The presenting screen's Undo toast. Remove Paycheck acts at once (the
     /// paycheck is hidden) and the toast offers Undo; the real delete runs
     /// only when the window closes. See `DeferredPaycheckRemoval`.
@@ -132,6 +137,7 @@ struct PaycheckEntrySheet: View {
         // as `facts.proposal` and applied only when tapped.
         _amountCents = State(initialValue: existing?.paidTipsCents ?? 0)
         _note = State(initialValue: existing?.note ?? "")
+        _jobName = State(initialValue: existing?.jobName)
         _regularWagesCents = State(initialValue: existing?.regularWagesCents ?? 0)
         _overtimeWagesCents = State(initialValue: existing?.overtimeWagesCents ?? 0)
         _gratuityCents = State(initialValue: existing?.gratuityCents ?? 0)
@@ -213,6 +219,8 @@ struct PaycheckEntrySheet: View {
                             proposalButton(facts.proposal)
                         }
                         .padding(.top, 8)
+
+                        jobPicker
 
                         paycheckDetailsCard
 
@@ -758,6 +766,32 @@ struct PaycheckEntrySheet: View {
         }
     }
 
+    /// Which job the check is from, with two or more jobs only. Periods
+    /// still follow the primary schedule in E1; this is a tag.
+    @ViewBuilder
+    private var jobPicker: some View {
+        let jobFacts = LogShiftJobFacts(policies: policyStore.policies, current: jobName)
+        if jobFacts.isRowVisible {
+            HStack {
+                Text("Job")
+                    .foregroundStyle(PaydayColor.textPrimary)
+                Spacer()
+                Picker("Job", selection: $jobName) {
+                    ForEach(jobFacts.chips, id: \.self) { chip in
+                        Text(chip.name).tag(chip.tag)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .tint(PaydayColor.textPrimary)
+            }
+            .padding()
+            .background(PaydayColor.fieldBackground)
+            .clipShape(RoundedRectangle(cornerRadius: PaydayRadius.lg))
+            .padding(.horizontal)
+        }
+    }
+
     private func save() {
         let effectiveRegularWagesCents = regularWagesCents > 0 ? regularWagesCents : nil
         let effectiveOvertimeWagesCents = overtimeWagesCents > 0 ? overtimeWagesCents : nil
@@ -782,6 +816,7 @@ struct PaycheckEntrySheet: View {
                     existing.grossPayCents = effectiveGrossPayCents
                     existing.taxesCents = effectiveTaxesCents
                     existing.netPayCents = effectiveNetPayCents
+                    existing.jobName = ShiftRole.normalized(jobName)
                     // A corrected stub is an edit to an already-synced record,
                     // which means it only uploads if this clock advances.
                     existing.touch()
@@ -799,6 +834,7 @@ struct PaycheckEntrySheet: View {
                     gratuityCents: effectiveGratuityCents,
                     taxesCents: effectiveTaxesCents
                 )
+                created.jobName = ShiftRole.normalized(jobName)
                 modelContext.insert(created)
                 return created
             }
