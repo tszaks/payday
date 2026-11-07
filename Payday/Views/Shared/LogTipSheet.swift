@@ -246,6 +246,9 @@ struct LogTipSheet: View {
     /// The person's role on this shift (bar, floor), nil for none. Picks the
     /// hourly rate, so it is part of the draft the header is valued from.
     @State private var roleName: String?
+    /// The job this shift was worked at (PR E1), nil for the primary job.
+    /// A new shift starts on the primary: a setting, not history.
+    @State private var jobName: String?
     /// Whether "Add role" was tapped, which shows the Role row on an account
     /// that has no roles yet (`LogShiftRoleFacts`).
     @State private var tappedAddRole = false
@@ -319,6 +322,7 @@ struct LogTipSheet: View {
             _tipOutCents = State(initialValue: record.tipOutCents ?? 0)
             _tipShareInCents = State(initialValue: record.tipShareInCents ?? 0)
             _roleName = State(initialValue: record.roleName)
+            _jobName = State(initialValue: record.jobName)
             _salesCents = State(initialValue: record.salesCents ?? 0)
             _shiftPeriod = State(initialValue: record.shiftPeriod)
             _hasManuallySelectedShiftPeriod = State(initialValue: record.shiftPeriod != nil)
@@ -501,7 +505,8 @@ struct LogTipSheet: View {
             // pre-populate a field. Only facts prefill: a live session's
             // exact punches (init) and today's date. The role (PR B) is no
             // exception: a wrong role silently moves the wage, and the chips
-            // are one tap, most recent first.
+            // are one tap, most recent first. The job (PR E1) starts on the
+            // primary, which is a setting, not a pattern: its tag is nil.
             break
         case .editShift:
             // Nothing to upgrade: the record already carried every
@@ -980,6 +985,7 @@ struct LogTipSheet: View {
                 }
                 .padding(.vertical, 14)
                 Divider()
+                jobRow
                 roleRow
                 HStack {
                     Text("Started")
@@ -1094,6 +1100,33 @@ struct LogTipSheet: View {
             }
             .padding()
             .tint(PaydayColor.textPrimary)
+        }
+    }
+
+    /// The Job row: one chip per job in Settings, primary first, shown only
+    /// with two or more jobs. One tap switches; the primary is preselected
+    /// on a new shift because it is a setting (seedShiftDetailDefaults'
+    /// law forbids seeding from HISTORY, not from settings).
+    @ViewBuilder
+    private var jobRow: some View {
+        let jobFacts = LogShiftJobFacts(policies: policyStore.policies, current: jobName)
+        if jobFacts.isRowVisible {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Job")
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(jobFacts.chips, id: \.self) { chip in
+                            roleChip(chip.name, isSelected: LogShiftJobFacts.isSelected(chip, current: jobName)) {
+                                jobName = chip.tag
+                            }
+                        }
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 14)
+            .onChange(of: jobName) { _, _ in liveSaveEdit() }
+            Divider()
         }
     }
 
@@ -1806,6 +1839,7 @@ struct LogTipSheet: View {
                 serverCount: serverCount,
                 tipShareInCents: tipShareInCents > 0 ? tipShareInCents : nil,
                 roleName: roleName,
+                jobName: jobName,
                 receiptMetrics: receiptMetrics,
                 note: trimmedNote,
                 recordedAt: recordedAt
@@ -1928,6 +1962,7 @@ struct LogTipSheet: View {
                     edited.tipOutCents = tipOutCents > 0 ? tipOutCents : nil
                     edited.tipShareInCents = tipShareInCents > 0 ? tipShareInCents : nil
                     edited.roleName = ShiftRole.normalized(roleName)
+                    edited.jobName = ShiftRole.normalized(jobName)
                     edited.salesCents = salesCents > 0 ? salesCents : nil
                     edited.shiftPeriod = shiftPeriod
                     edited.clockIn = clockIn

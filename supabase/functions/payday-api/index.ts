@@ -790,6 +790,9 @@ function paycheckPayload(bodyValue: unknown, partial: boolean): JsonObject {
     "overtime_wages_cents",
     "gratuity_cents",
     "taxes_cents",
+    // job_name is deliberately absent: paycheck rows are read with
+    // select("*"), so agents SEE job_name (null = the primary job), but only
+    // the phone sets it (PR E1).
   ]);
   const result: JsonObject = {};
   if (!partial || "period_start" in body) {
@@ -1366,6 +1369,10 @@ function shiftResponse(row: JsonObject): JsonObject {
     // the same reason as the share: agent writes land on the legacy rows,
     // which carry no role. Not money: the wage it picks is the phone's.
     role_name: row.role_name ?? null,
+    // The job the shift was worked at, or null for the primary job (PR E1).
+    // Read-only for the same reason as the role: agent writes land on the
+    // legacy rows, which carry no job. Not money.
+    job_name: row.job_name ?? null,
     net_tip_earnings_cents: netCents,
     sales_cents: row.sales_cents ?? null,
     hours_worked: row.hours_worked ?? null,
@@ -3260,6 +3267,7 @@ export const testing = {
   dateOnly,
   encodeAuditCursor,
   encodeShiftCursor,
+  paycheckPayload,
   shiftResponse,
   settingsPayload,
   moveLedger,

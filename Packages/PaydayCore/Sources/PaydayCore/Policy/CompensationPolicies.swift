@@ -16,22 +16,30 @@ public struct CompensationPolicies: Hashable, Codable, Sendable {
     public var rates: [PayRatePolicy]
     /// Payroll calendar history, normalized to effect order.
     public var calendars: [PayrollCalendarPolicy]
+    /// The person's jobs (PR E1), primary first. Empty for everyone with one
+    /// job: a job list appears only when a second job is added, so an
+    /// account that never adds one keeps today's JSON byte for byte.
+    public var jobs: [JobPolicy]
 
     public init(
         version: Int = CompensationPolicies.currentVersion,
         rates: [PayRatePolicy] = [],
-        calendars: [PayrollCalendarPolicy] = []
+        calendars: [PayrollCalendarPolicy] = [],
+        jobs: [JobPolicy] = []
     ) {
         self.version = version
         self.rates = rates.sorted(by: CompensationPolicies.rateOrder)
         self.calendars = calendars.sorted(by: CompensationPolicies.calendarOrder)
+        self.jobs = JobPolicy.ordered(jobs)
     }
 
     public static let empty = CompensationPolicies()
 
-    public var isEmpty: Bool { rates.isEmpty && calendars.isEmpty }
+    /// Nothing stored at all. Jobs count (PR E1): a payload that carries a
+    /// job list and nothing else is still a state worth adopting from sync.
+    public var isEmpty: Bool { rates.isEmpty && calendars.isEmpty && jobs.isEmpty }
 
-    private enum CodingKeys: String, CodingKey { case version, rates, calendars }
+    private enum CodingKeys: String, CodingKey { case version, rates, calendars, jobs }
 
     /// A payload with no `version` is read as version 1 (the shape shipped
     /// here); missing arrays read as empty, so a partially written row never
@@ -41,7 +49,48 @@ public struct CompensationPolicies: Hashable, Codable, Sendable {
         let version = try container.decodeIfPresent(Int.self, forKey: .version) ?? CompensationPolicies.currentVersion
         let rates = try container.decodeIfPresent([PayRatePolicy].self, forKey: .rates) ?? []
         let calendars = try container.decodeIfPresent([PayrollCalendarPolicy].self, forKey: .calendars) ?? []
-        self.init(version: version, rates: rates, calendars: calendars)
+        // Absent on every payload written before jobs.
+        let jobs = try container.decodeIfPresent([JobPolicy].self, forKey: .jobs) ?? []
+        self.init(version: version, rates: rates, calendars: calendars, jobs: jobs)
+    }
+
+    /// `jobs` is encoded only when there are any, so an account with one job
+    /// writes exactly the JSON it wrote before jobs existed.
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(version, forKey: .version)
+        try container.encode(rates, forKey: .rates)
+        try container.encode(calendars, forKey: .calendars)
+        if !jobs.isEmpty { try container.encode(jobs, forKey: .jobs) }
+    }
+
+    // MARK: Jobs
+
+    /// The primary job, when a job list exists.
+    public var primaryJob: JobPolicy? { jobs.first(where: \.isPrimary) ?? jobs.first }
+
+    /// Job names, primary first, then in the order they were added.
+    public var jobNames: [String] { jobs.map(\.name) }
+
+    /// The policies that belong to one job: rates and calendars whose
+    /// `jobName` matches (trimmed, case-insensitive). Policies with no job
+    /// belong to the primary, so `nil` and the primary's own name both
+    /// answer with them. Jobs are carried through unchanged.
+    public func policies(forJob job: String?) -> CompensationPolicies {
+        let key = ShiftRole.key(job)
+        let primaryKey = ShiftRole.key(primaryJob?.name)
+        let isPrimary = key == nil || key == primaryKey
+        func belongs(_ jobName: String?) -> Bool {
+            let policyKey = ShiftRole.key(jobName)
+            if policyKey == nil { return isPrimary }
+            return policyKey == key || (isPrimary && policyKey == primaryKey)
+        }
+        return CompensationPolicies(
+            version: version,
+            rates: rates.filter { belongs($0.jobName) },
+            calendars: calendars.filter { belongs($0.jobName) },
+            jobs: jobs
+        )
     }
 
     // MARK: Lookups
@@ -117,14 +166,14 @@ public struct CompensationPolicies: Hashable, Codable, Sendable {
     public func adding(rate policy: PayRatePolicy) -> CompensationPolicies {
         var updated = rates.filter { $0.id != policy.id }
         updated.append(policy)
-        return CompensationPolicies(version: version, rates: updated, calendars: calendars)
+        return CompensationPolicies(version: version, rates: updated, calendars: calendars, jobs: jobs)
     }
 
     /// Returns a copy with `policy` added (or replaced, by id), renormalized.
     public func adding(calendar policy: PayrollCalendarPolicy) -> CompensationPolicies {
         var updated = calendars.filter { $0.id != policy.id }
         updated.append(policy)
-        return CompensationPolicies(version: version, rates: rates, calendars: updated)
+        return CompensationPolicies(version: version, rates: rates, calendars: updated, jobs: jobs)
     }
 
     /// Returns a copy with every rate for `role` removed, so its shifts fall
@@ -134,12 +183,84 @@ public struct CompensationPolicies: Hashable, Codable, Sendable {
         return CompensationPolicies(
             version: version,
             rates: rates.filter { ShiftRole.key($0.roleName) != key },
-            calendars: calendars
+            calendars: calendars,
+            jobs: jobs
         )
     }
 
     public func removingRate(id: UUID) -> CompensationPolicies {
-        CompensationPolicies(version: version, rates: rates.filter { $0.id != id }, calendars: calendars)
+        CompensationPolicies(version: version, rates: rates.filter { $0.id != id }, calendars: calendars, jobs: jobs)
+    }
+
+    // MARK: Editing jobs
+
+    /// Returns a copy with a job added. The first extra job also creates the
+    /// primary entry (`primaryName`, `primaryID`), because "one job" is
+    /// stored as no list at all. A blank name, or one that matches an
+    /// existing job (trimmed, case-insensitive), changes nothing.
+    public func addingJob(
+        id: UUID,
+        name: String,
+        schedule: PayScheduleInput?,
+        primaryName: String,
+        primaryID: UUID
+    ) -> CompensationPolicies {
+        guard let name = ShiftRole.normalized(name) else { return self }
+        var updated = jobs
+        if updated.isEmpty {
+            guard ShiftRole.key(primaryName) != ShiftRole.key(name) else { return self }
+            updated.append(JobPolicy(id: primaryID, name: primaryName, schedule: nil, isPrimary: true))
+        }
+        guard !updated.contains(where: { ShiftRole.key($0.name) == ShiftRole.key(name) }) else { return self }
+        updated.append(JobPolicy(id: id, name: name, schedule: schedule, isPrimary: false))
+        return replacing(jobs: updated)
+    }
+
+    /// Returns a copy with one job renamed, and every policy tagged with the
+    /// old name retagged. A blank name or one another job has changes nothing.
+    public func renamingJob(id: UUID, to newName: String) -> CompensationPolicies {
+        guard let newName = ShiftRole.normalized(newName),
+              let job = jobs.first(where: { $0.id == id }),
+              !jobs.contains(where: { $0.id != id && ShiftRole.key($0.name) == ShiftRole.key(newName) })
+        else { return self }
+        let oldKey = ShiftRole.key(job.name)
+        let updatedJobs = jobs.map { $0.id == id ? JobPolicy(id: $0.id, name: newName, schedule: $0.schedule, isPrimary: $0.isPrimary) : $0 }
+        return retagging(rates: rates, calendars: calendars, jobs: updatedJobs) { tag in
+            ShiftRole.key(tag) == oldKey ? newName : tag
+        }
+    }
+
+    /// Returns a copy without one non-primary job (and without its
+    /// policies). When only the primary would remain, the list goes away, so
+    /// the stored JSON is the one-job shape again.
+    public func removingJob(id: UUID) -> CompensationPolicies {
+        guard let job = jobs.first(where: { $0.id == id }), !job.isPrimary else { return self }
+        let key = ShiftRole.key(job.name)
+        let remaining = jobs.filter { $0.id != id }
+        return CompensationPolicies(
+            version: version,
+            rates: rates.filter { ShiftRole.key($0.jobName) != key },
+            calendars: calendars.filter { ShiftRole.key($0.jobName) != key },
+            jobs: remaining.count > 1 ? remaining : []
+        )
+    }
+
+    private func replacing(jobs updated: [JobPolicy]) -> CompensationPolicies {
+        CompensationPolicies(version: version, rates: rates, calendars: calendars, jobs: updated)
+    }
+
+    private func retagging(
+        rates: [PayRatePolicy],
+        calendars: [PayrollCalendarPolicy],
+        jobs: [JobPolicy],
+        _ tag: (String?) -> String?
+    ) -> CompensationPolicies {
+        CompensationPolicies(
+            version: version,
+            rates: rates.map { var rate = $0; rate.jobName = ShiftRole.normalized(tag($0.jobName)); return rate },
+            calendars: calendars.map { var calendar = $0; calendar.jobName = ShiftRole.normalized(tag($0.jobName)); return calendar },
+            jobs: jobs
+        )
     }
 
     // MARK: Normal order

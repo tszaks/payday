@@ -227,6 +227,20 @@ struct PayrollSettingsSection: View {
                 .font(PaydayFont.footnote)
                 .foregroundStyle(PaydayColor.textSecondary)
 
+            // Jobs (PR E1). Reads "1 job" until a second job is added, and
+            // with one job nothing else in the app changes.
+            NavigationLink {
+                JobsSettingsView()
+            } label: {
+                HStack {
+                    Text("Jobs")
+                        .foregroundStyle(PaydayColor.textPrimary)
+                    Spacer()
+                    Text(JobsSettingsView.countLabel(policyStore.policies))
+                        .foregroundStyle(PaydayColor.textSecondary)
+                }
+            }
+
             HStack {
                 Text("Payroll time zone")
                     .foregroundStyle(PaydayColor.textPrimary)

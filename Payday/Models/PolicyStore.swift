@@ -151,7 +151,8 @@ final class PolicyStore {
             apply(CompensationPolicies(
                 version: policies.version,
                 rates: policies.rates.filter { $0.roleName != nil },
-                calendars: policies.calendars
+                calendars: policies.calendars,
+                jobs: policies.jobs
             ))
             return
         }
@@ -308,7 +309,7 @@ final class PolicyStore {
            inEffect.workweekStartWeekday == workweekStartWeekday,
            inEffect.payrollTimeZone == payrollTimeZone,
            inEffect.dailyOvertimeThresholdMinutes == dailyOvertimeThresholdMinutes {
-            apply(CompensationPolicies(version: policies.version, rates: policies.rates, calendars: kept))
+            apply(CompensationPolicies(version: policies.version, rates: policies.rates, calendars: kept, jobs: policies.jobs))
             return nil
         }
 
@@ -323,7 +324,7 @@ final class PolicyStore {
         )
         policy.dailyOvertimeThresholdMinutes = dailyOvertimeThresholdMinutes
         kept.append(policy)
-        apply(CompensationPolicies(version: policies.version, rates: policies.rates, calendars: kept))
+        apply(CompensationPolicies(version: policies.version, rates: policies.rates, calendars: kept, jobs: policies.jobs))
         return policy
     }
 

@@ -25,9 +25,9 @@ struct PaydayRemoteRepository {
     let client: SupabaseClient
     private let batchSize = 500
     private let tipColumns = "id,user_id,shift_id,work_date,amount_cents,kind,note,recorded_at,is_double,hours_worked,tip_out_cents,sales_cents,shift_period,clock_in,clock_out,server_count,receipt_metrics,client_updated_at,deleted_at,updated_at"
-    private let paycheckColumns = "id,user_id,period_start,period_end,paid_tips_cents,note,hourly_rate_cents,owed_tips_cents,gross_pay_cents,net_pay_cents,regular_wages_cents,overtime_wages_cents,gratuity_cents,taxes_cents,client_updated_at,deleted_at,updated_at"
+    private let paycheckColumns = "id,user_id,period_start,period_end,paid_tips_cents,note,hourly_rate_cents,owed_tips_cents,gross_pay_cents,net_pay_cents,regular_wages_cents,overtime_wages_cents,gratuity_cents,taxes_cents,job_name,client_updated_at,deleted_at,updated_at"
     private let settingsColumns = "user_id,first_name,base_hourly_wage_cents,pay_frequency,anchor_period_end,pay_delay_days,first_weekday,smart_nudge_enabled,payday_reminder_enabled,card_tips_paid_at_close,move_ledger,client_updated_at,updated_at"
-    private let shiftColumns = "id,user_id,work_date,shift_period,cash_tips_cents,credit_tips_cents,tip_out_cents,sales_cents,hours_worked,clock_in,clock_out,server_count,tip_share_in_cents,role_name,receipt_metrics,note,recorded_at,client_updated_at,source,legacy_entry_ids,native_modified_at,deleted_at,deleted_reason,gratuity_fees_cents,non_wage_earnings_cents,version,updated_at"
+    private let shiftColumns = "id,user_id,work_date,shift_period,cash_tips_cents,credit_tips_cents,tip_out_cents,sales_cents,hours_worked,clock_in,clock_out,server_count,tip_share_in_cents,role_name,job_name,receipt_metrics,note,recorded_at,client_updated_at,source,legacy_entry_ids,native_modified_at,deleted_at,deleted_reason,gratuity_fees_cents,non_wage_earnings_cents,version,updated_at"
 
     func importTips(_ rows: [RemoteTipEntry]) async throws {
         try await send(rows, function: "import_tip_entries")
@@ -1528,6 +1528,7 @@ final class PaydaySyncService {
             record.serverCount = row.serverCount
             record.tipShareInCents = row.tipShareInCents
             record.roleName = ShiftRole.normalized(row.roleName)
+            record.jobName = ShiftRole.normalized(row.jobName)
             record.receiptMetrics = row.receiptMetrics
             record.note = row.note
             record.recordedAt = row.recordedAt.flatMap(PaydayRemoteDate.parseInstant)
@@ -1609,6 +1610,7 @@ final class PaydaySyncService {
             record.overtimeWagesCents = row.overtimeWagesCents
             record.gratuityCents = row.gratuityCents
             record.taxesCents = row.taxesCents
+            record.jobName = ShiftRole.normalized(row.jobName)
             record.modifiedAt = modifiedAt
             activeIDs.insert(row.id)
         }

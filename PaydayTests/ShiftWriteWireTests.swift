@@ -84,7 +84,7 @@ struct ShiftWriteWireTests {
         let expected: Set<String> = [
             "id", "work_date", "shift_period", "cash_tips_cents", "credit_tips_cents",
             "tip_out_cents", "sales_cents", "hours_worked", "clock_in", "clock_out",
-            "server_count", "tip_share_in_cents", "role_name", "receipt_metrics", "note",
+            "server_count", "tip_share_in_cents", "role_name", "job_name", "receipt_metrics", "note",
             "recorded_at", "client_updated_at"
         ]
         #expect(keys == expected, "unexpected: \(keys.symmetricDifference(expected).sorted())")

@@ -1,4 +1,5 @@
 import Foundation
+import PaydayCore
 
 /// Everything the Log Shift / Edit Shift sheet says about the draft in front
 /// of it, and nothing it computes.
@@ -187,5 +188,41 @@ struct LogShiftRoleFacts: Equatable {
     /// Tapping a chip selects it; tapping the selected chip clears it.
     static func toggled(_ current: String?, tapping chip: String) -> String? {
         ShiftRoleList.matches(current, chip) ? nil : chip
+    }
+}
+
+/// The Job row's facts (PR E1): one chip per job in Settings, primary first.
+/// A job is a setting, not history, so the primary is the preselected job of
+/// a new shift (its tag is nil) and nothing is seeded from earlier shifts.
+struct LogShiftJobFacts: Equatable {
+    struct Chip: Equatable, Hashable {
+        let name: String
+        /// What the shift stores when this chip is chosen: nil for the
+        /// primary job, never an empty string.
+        let tag: String?
+    }
+
+    let chips: [Chip]
+
+    /// Two or more jobs. With zero or one the sheet is the sheet it always
+    /// was (the Pillar 9 invisibility rule).
+    var isRowVisible: Bool { chips.count >= 2 }
+
+    /// `current` is the shift's stored tag. A tag Settings no longer lists
+    /// (renamed or removed on another device) still shows, selected, so
+    /// opening a shift never silently moves it to another job.
+    init(policies: CompensationPolicies, current: String? = nil) {
+        var chips = policies.jobs.map { Chip(name: $0.name, tag: $0.isPrimary ? nil : $0.name) }
+        if let current = ShiftRole.normalized(current),
+           !chips.contains(where: { ShiftRoleList.matches($0.tag, current) }) {
+            chips.append(Chip(name: current, tag: current))
+        }
+        self.chips = policies.jobs.isEmpty ? [] : chips
+    }
+
+    /// Whether `chip` is the shift's job.
+    static func isSelected(_ chip: Chip, current: String?) -> Bool {
+        guard let current = ShiftRole.normalized(current) else { return chip.tag == nil }
+        return ShiftRoleList.matches(chip.tag, current)
     }
 }

@@ -814,6 +814,8 @@ into a defaulted non-optional.
 
 ## Pillar 9: Multiple Jobs — DESIGN ONLY, implementation gated (2026-07-14)
 
+**2026-11-07: E1 shipped as a name tag** ([#160](https://github.com/tszaks/payday/pull/160)): `job_name` on shifts and paychecks (nil = the primary job), the job list inside `compensation_policies`, Settings > Jobs, and a Job row on the log and paycheck sheets with two or more jobs. There is no Job table, and no Make Primary: the first job holds every untagged shift, and moving that needs a stable job id and one atomic server rewrite (E2). Periods still follow the one schedule in Settings (not per job) until E2.
+
 Design committed ahead of code per Tyler's standing instruction: scope this
 honestly and stop for a check-in before writing any Phase 4 code, since one
 piece of it is a real architectural decision, not just a schema add.

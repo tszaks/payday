@@ -23,23 +23,28 @@ public struct PayRatePolicy: Hashable, Codable, Sendable, Identifiable {
     /// effective nil-role policy (`CompensationLedger`). Stored as typed;
     /// matched trimmed and case-insensitively (`ShiftRole.key`).
     public var roleName: String?
+    /// The job this rate pays (PR E1). Nil means the primary job, and every
+    /// policy written before jobs existed is nil. Same name rules as a role.
+    public var jobName: String?
 
     public init(
         id: UUID,
         effectiveFrom: CivilDay,
         hourlyRateCents: Int,
         provenance: RateProvenance,
-        roleName: String? = nil
+        roleName: String? = nil,
+        jobName: String? = nil
     ) {
         self.id = id
         self.effectiveFrom = effectiveFrom
         self.hourlyRateCents = hourlyRateCents
         self.provenance = provenance
         self.roleName = ShiftRole.normalized(roleName)
+        self.jobName = ShiftRole.normalized(jobName)
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, effectiveFrom, hourlyRateCents, provenance, roleName
+        case id, effectiveFrom, hourlyRateCents, provenance, roleName, jobName
     }
 
     /// `roleName` is absent from every policy written before roles existed,
@@ -52,6 +57,8 @@ public struct PayRatePolicy: Hashable, Codable, Sendable, Identifiable {
         hourlyRateCents = try container.decode(Int.self, forKey: .hourlyRateCents)
         provenance = try container.decode(RateProvenance.self, forKey: .provenance)
         roleName = ShiftRole.normalized(try container.decodeIfPresent(String.self, forKey: .roleName))
+        // Same rule as the role: absent before jobs, nil encodes as absent.
+        jobName = ShiftRole.normalized(try container.decodeIfPresent(String.self, forKey: .jobName))
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -61,6 +68,7 @@ public struct PayRatePolicy: Hashable, Codable, Sendable, Identifiable {
         try container.encode(hourlyRateCents, forKey: .hourlyRateCents)
         try container.encode(provenance, forKey: .provenance)
         try container.encodeIfPresent(roleName, forKey: .roleName)
+        try container.encodeIfPresent(jobName, forKey: .jobName)
     }
 }
 

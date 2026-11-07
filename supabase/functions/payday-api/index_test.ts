@@ -470,6 +470,29 @@ Deno.test("a shift row carries its role, and null without one", () => {
   assertEquals(testing.shiftResponse({ ...base, role_name: "Bar" }).net_tip_earnings_cents, 10000);
 });
 
+Deno.test("a shift row carries its job, and null for the primary job", () => {
+  const base = {
+    id: "77777777-7777-4777-8777-777777777777",
+    work_date: "2026-09-05",
+    non_wage_earnings_cents: 10000,
+  };
+  assertEquals(testing.shiftResponse({ ...base, job_name: "Cafe" }).job_name, "Cafe");
+  assertEquals(testing.shiftResponse(base).job_name, null);
+  // A job is not money.
+  assertEquals(testing.shiftResponse({ ...base, job_name: "Cafe" }).net_tip_earnings_cents, 10000);
+});
+
+Deno.test("an agent cannot write a paycheck's job: it is read-only", () => {
+  assertThrows(() =>
+    testing.paycheckPayload({
+      period_start: "2026-09-01",
+      period_end: "2026-09-14",
+      paid_tips_cents: 0,
+      job_name: "Cafe",
+    }, false)
+  );
+});
+
 Deno.test("snapshot sums carry a received tip share into earned income", () => {
   const days = [{
     day: "2026-09-05",

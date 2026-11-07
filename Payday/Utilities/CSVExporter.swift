@@ -1,4 +1,5 @@
 import Foundation
+import PaydayCore
 
 /// Turns logged shifts into a plain CSV, one row per shift (one closeout;
 /// cash and credit merged, same "a shift, not a row" rule as ShiftDayRow) —
@@ -26,6 +27,13 @@ enum CSVExporter {
     /// roles the file is exactly what it was before roles existed, header
     /// included (the invisibility rule, PRODUCT.md Pillar 9).
     static let headerWithRole = header + ",Role"
+
+    /// `Job` is appended after everything else, and only once any shift is
+    /// tagged with a job other than the primary (PR E1). Independent of
+    /// `Role`: a file can carry either, both, or neither.
+    static func header(includesRole: Bool, includesJob: Bool) -> String {
+        (includesRole ? headerWithRole : header) + (includesJob ? ",Job" : "")
+    }
 
     /// `valuations` carries the engine's answer for each shift, keyed by shift
     /// id. When a shift has none the five engine columns are EMPTY rather than
@@ -64,12 +72,13 @@ enum CSVExporter {
     ) -> String {
         let shifts = unsorted.sorted { $0.day < $1.day }
         let includesRole = shifts.contains { $0.roleName != nil }
+        let includesJob = shifts.contains { $0.jobName != nil }
         var dayShiftCounts: [Date: Int] = [:]
         for shift in shifts { dayShiftCounts[shift.day, default: 0] += 1 }
         let rows = shifts.map { shift -> String in
-            row(for: shift, dayHasMultipleShifts: (dayShiftCounts[shift.day] ?? 0) >= 2, paycheckRecords: paycheckRecords, calculator: calculator, calendar: calendar, valuation: valuations[shift.shiftID], includesRole: includesRole)
+            row(for: shift, dayHasMultipleShifts: (dayShiftCounts[shift.day] ?? 0) >= 2, paycheckRecords: paycheckRecords, calculator: calculator, calendar: calendar, valuation: valuations[shift.shiftID], includesRole: includesRole, includesJob: includesJob)
         }
-        return ([includesRole ? headerWithRole : header] + rows).joined(separator: "\n")
+        return ([header(includesRole: includesRole, includesJob: includesJob)] + rows).joined(separator: "\n")
     }
 
     /// One shift's facts as a row needs them, from EITHER representation.
@@ -94,6 +103,7 @@ enum CSVExporter {
         let tipOutCents: Int?
         let tipShareInCents: Int?
         let roleName: String?
+        let jobName: String?
         let hoursWorked: Double?
         let clockIn: Date?
         let clockOut: Date?
@@ -136,6 +146,7 @@ enum CSVExporter {
             tipOutCents = record.tipOutCents
             tipShareInCents = record.tipShareInCents
             roleName = record.roleName
+            jobName = record.jobName
             hoursWorked = record.hoursWorked
             clockIn = record.clockIn
             clockOut = record.clockOut
@@ -146,7 +157,7 @@ enum CSVExporter {
         }
     }
 
-    private static func row(for shift: RowShift, dayHasMultipleShifts: Bool, paycheckRecords: [PaycheckRecord], calculator: PayPeriodCalculator, calendar: Calendar, valuation: ShiftValuation?, includesRole: Bool) -> String {
+    private static func row(for shift: RowShift, dayHasMultipleShifts: Bool, paycheckRecords: [PaycheckRecord], calculator: PayPeriodCalculator, calendar: Calendar, valuation: ShiftValuation?, includesRole: Bool, includesJob: Bool) -> String {
         let day = shift.day
         let shiftDetails = shift
         let cashCents = shift.cashCents
@@ -157,7 +168,15 @@ enum CSVExporter {
         let note = shift.note
 
         let period = calculator.period(containing: day)
-        let paycheck = paycheckRecords.first { $0.periodEnd >= period.start && $0.periodEnd <= period.end }
+        // The check for THIS shift's job (PR E1): same period and the same job
+        // tag, nil meaning the primary on both sides. Two jobs paid in the
+        // same period have two checks, and a Cafe shift must not show the
+        // Bistro check's tips. With one job every tag is nil, so this is the
+        // lookup it always was.
+        let paycheck = paycheckRecords.first {
+            $0.periodEnd >= period.start && $0.periodEnd <= period.end
+                && ShiftRole.key($0.jobName) == ShiftRole.key(shift.jobName)
+        }
 
         // Bound individually rather than inline in the array literal below —
         // that many chained `.map(...) ?? ""` expressions in one array
@@ -211,6 +230,11 @@ enum CSVExporter {
         if includesRole {
             // Appended last, and only when the file has a role at all.
             fields.append(escape(shift.roleName ?? ""))
+        }
+        if includesJob {
+            // After the role, and only when the file has a job at all.
+            // Empty means the primary job.
+            fields.append(escape(shift.jobName ?? ""))
         }
         return fields.joined(separator: ",")
     }
