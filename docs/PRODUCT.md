@@ -217,6 +217,11 @@ One set of App Intents, five surfaces. In priority order:
   upfront. On by default with an off-switch in Settings ("Remind me to
   log") — the opposite default from the Face ID lock, since this is a
   built-in behavior you can turn off, not an opt-in.
+- Payday push: 9 AM on the payday of the earliest period whose check has not
+  landed and whose stub is not recorded. If the stub is still not in two days
+  later, one more numberless nudge ("Snap your stub and Payday checks it.").
+  Tapping either lands in that period's stub sheet with the scanner started.
+  Both sit under the one "Payday reminder" toggle.
 - Smart defaults in LogTipSheet: a server with zero cash history and
   ≥3 credit entries gets the credit field focused first instead of cash
   (and the keyboard's "Next" button now goes whichever direction isn't

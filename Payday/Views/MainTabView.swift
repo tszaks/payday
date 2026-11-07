@@ -13,11 +13,12 @@ enum AppTab: String, CaseIterable, Identifiable {
 final class TabRouter {
     var selected: AppTab = .dashboard
     /// Set alongside `selected = .periods` by anything that wants to land
-    /// inside the CURRENT period's detail, not just the periods list —
-    /// PeriodsView clears it once it's consumed the request. A plain flag
-    /// rather than a full deep-link target because periods is the only
-    /// screen anything currently jumps this deep into.
-    var pendingCurrentPeriodDetail = false
+    /// inside a period's detail, not just the periods list — PeriodsView
+    /// clears it once it's consumed the request.
+    var pendingPeriodLanding: PeriodLanding?
+    /// Set by PeriodsView after it pushes a `.paycheckScan` period; that
+    /// period's detail clears it and opens its stub sheet with the scanner.
+    var pendingPaycheckScan = false
 }
 
 struct MainTabView: View {
@@ -78,14 +79,16 @@ struct MainTabView: View {
             tabRouter.selected = .dashboard
             deepLink.pendingDashboardSelection = false
         }
-        // The payday-moment push's tap target: the same jump Dashboard's
-        // "See all" makes, landing straight inside the current period's
-        // detail where the stub gets verified.
-        .onChange(of: deepLink.pendingCurrentPeriodDetail) { _, shouldOpen in
-            guard shouldOpen else { return }
-            tabRouter.pendingCurrentPeriodDetail = true
+        // The payday pushes' tap target: inside the announced period's
+        // detail, with its stub sheet open and the scanner started.
+        // `initial: true` because a tap that cold-starts the app can set the
+        // landing before this view exists; a change-only observer would
+        // never see it and the tap would land on the Dashboard.
+        .onChange(of: deepLink.pendingPeriodLanding, initial: true) { _, landing in
+            guard let landing else { return }
+            tabRouter.pendingPeriodLanding = landing
             tabRouter.selected = .periods
-            deepLink.pendingCurrentPeriodDetail = false
+            deepLink.pendingPeriodLanding = nil
         }
         // A shift ended from Control Center, Siri, the Live Activity's own
         // End button, or the Home Screen quick action all happen outside
@@ -114,7 +117,13 @@ struct MainTabView: View {
             // period's detail (the same jump Dashboard's "See all" makes)
             // so it can be captured without tapping through the Periods list.
             if args.contains("-OpenCurrentPeriodDetail") {
-                tabRouter.pendingCurrentPeriodDetail = true
+                tabRouter.pendingPeriodLanding = .currentDetail
+                tabRouter.selected = .periods
+            }
+            // QA hook only: the payday push's tap landing. `.now` matches no
+            // row, so it falls back to the current period.
+            if args.contains("-OpenPaycheckScan") {
+                tabRouter.pendingPeriodLanding = .paycheckScan(periodStart: .now, periodEnd: .now)
                 tabRouter.selected = .periods
             }
             // Screenshot/QA hook only: open the edit sheet directly for the

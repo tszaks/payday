@@ -104,7 +104,21 @@ struct PaycheckEntrySheet: View {
     /// hand-written list of the things that can move a number.
     @State private var factsCache: PaycheckEntryFacts?
 
-    init(period: PayPeriod, existing: PaycheckRecord?, expectation: PaycheckReconciler.Expectation) {
+    /// Set when a tapped payday push opened this sheet: once presented, it
+    /// opens the camera straight away when nothing leaves the phone, and
+    /// the scan options otherwise (they carry the disclosure that stub
+    /// photos are sent for scanning, which a tap must not skip; also the
+    /// only path when there is no camera).
+    let startsScanner: Bool
+
+    /// How long to wait before presenting the scanner over this sheet. A
+    /// nested sheet or dialog presented while this sheet is still animating
+    /// in is dropped by UIKit, so the scanner waits for the entry sheet's
+    /// own presentation to finish.
+    private static let scannerPresentationDelay: Duration = .milliseconds(600)
+
+    init(period: PayPeriod, existing: PaycheckRecord?, expectation: PaycheckReconciler.Expectation, startsScanner: Bool = false) {
+        self.startsScanner = startsScanner
         self.period = period
         self.existing = existing
         self.expectation = expectation
@@ -325,6 +339,17 @@ struct PaycheckEntrySheet: View {
         }
         .task(id: facts) {
             factsCache = facts
+        }
+        .task {
+            // Cancelled automatically when the sheet disappears.
+            guard startsScanner else { return }
+            try? await Task.sleep(for: Self.scannerPresentationDelay)
+            guard !Task.isCancelled else { return }
+            if PaydayCameraView.isCameraAvailable, !PaycheckAIParser.isConfigured {
+                photoSource = .camera
+            } else {
+                showScanOptions = true
+            }
         }
         .onDisappear {
             scanResetTask?.cancel()

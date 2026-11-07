@@ -1286,7 +1286,7 @@ struct DashboardView: View {
                     // person staring at the periods LIST — the shifts they
                     // were looking at live inside the CURRENT period's
                     // detail, so land there directly.
-                    tabRouter.pendingCurrentPeriodDetail = true
+                    tabRouter.pendingPeriodLanding = .currentDetail
                     tabRouter.selected = .periods
                 } label: {
                     Text("See all")

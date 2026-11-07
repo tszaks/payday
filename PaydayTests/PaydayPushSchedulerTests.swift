@@ -90,6 +90,19 @@ struct PaydayPushSchedulerTests {
         #expect(decision?.fireDate == date(2026, 7, 24, hour: 9))
     }
 
+    /// The period that closed yesterday is the one whose check lands next.
+    /// Announcing the period containing `now` would replace that pending
+    /// payday with the one a week later.
+    @Test("in the following period, the last period's payday is still the one announced")
+    func announcesLastPeriodWhilePaydayAhead() throws {
+        let decision = try #require(makeDecision(
+            now: date(2026, 7, 20, hour: 20),
+            records: [creditRecord(cents: 15000, on: date(2026, 7, 15))]
+        ))
+        #expect(decision.fireDate == date(2026, 7, 24, hour: 9))
+        #expect(decision.figure?.cents == 15_000)
+    }
+
     @Test("nothing once the fire moment has already passed")
     func nothingAfterPayday() {
         // No payroll lag: payday is the last day of the period itself, at
@@ -276,6 +289,76 @@ struct PaydayPushSchedulerTests {
             isReminderEnabled: false
         )
         #expect(decision == nil)
+    }
+
+    // MARK: The stub nudge, two days after payday
+
+    /// One shift in each of the two periods the cases walk (Jul 13-19 and
+    /// Jul 20-26) unless a case says otherwise.
+    private func makeNudge(
+        now: Date,
+        records: [ShiftRecord]? = nil,
+        paycheckRecords: [PaycheckRecord] = [],
+        isReminderEnabled: Bool = true
+    ) -> PaydayPushScheduler.StubNudge? {
+        let records = records ?? [
+            creditRecord(cents: 15000, on: date(2026, 7, 15)),
+            creditRecord(cents: 15000, on: date(2026, 7, 22))
+        ]
+        let compensation = policies(rateCents: nil)
+        return PaydayPushScheduler.stubNudge(
+            now: now,
+            calculator: weeklyPaidFriday(),
+            shiftInputs: ShiftInputAdapter.adapt(records, calendars: compensation.calendars),
+            paycheckRecords: paycheckRecords,
+            isReminderEnabled: isReminderEnabled,
+            payrollTimeZone: PaydayTestZone.payroll
+        )
+    }
+
+    @Test("no stub nudge for a period with no shift logged")
+    func noStubNudgeWithoutShifts() {
+        // Only Jul 22 is logged: Jul 13-19 has nothing to check a stub
+        // against, so it is skipped and Jul 20-26 is nudged instead.
+        let nudge = makeNudge(
+            now: date(2026, 7, 20, hour: 20),
+            records: [creditRecord(cents: 15000, on: date(2026, 7, 22))]
+        )
+        #expect(nudge?.fireDate == date(2026, 8, 2, hour: 9))
+    }
+
+    @Test("the stub nudge fires at 9AM two days after payday")
+    func stubNudgeFiresTwoDaysAfterPayday() {
+        // Period Jul 13-19, paid Fri Jul 24, nudged Sun Jul 26.
+        #expect(makeNudge(now: date(2026, 7, 20, hour: 20))?.fireDate == date(2026, 7, 26, hour: 9))
+    }
+
+    @Test("no stub nudge once that period's paycheck is recorded")
+    func noStubNudgeWhenRecorded() {
+        let record = PaycheckRecord(periodStart: date(2026, 7, 13), periodEnd: date(2026, 7, 19), paidTipsCents: 15000)
+        // The recorded period is skipped, so the next one is nudged instead.
+        let nudge = makeNudge(now: date(2026, 7, 20, hour: 20), paycheckRecords: [record])
+        #expect(nudge?.fireDate == date(2026, 8, 2, hour: 9))
+    }
+
+    @Test("no stub nudge once its moment has passed")
+    func noStubNudgeAfterItsMoment() {
+        // Sun Jul 26 at 2PM: the Jul 13-19 nudge is behind; the next one
+        // is for the period that holds now.
+        let nudge = makeNudge(now: date(2026, 7, 26, hour: 14))
+        #expect(nudge?.fireDate == date(2026, 8, 2, hour: 9))
+    }
+
+    @Test("no stub nudge when the reminder is off")
+    func noStubNudgeWhenReminderOff() {
+        #expect(makeNudge(now: date(2026, 7, 20, hour: 20), isReminderEnabled: false) == nil)
+    }
+
+    @Test("the stub nudge carries the period it is about")
+    func stubNudgeCarriesItsPeriod() throws {
+        let nudge = try #require(makeNudge(now: date(2026, 7, 20, hour: 20)))
+        #expect(Calendar.current.isDate(nudge.periodStart, inSameDayAs: date(2026, 7, 13)))
+        #expect(Calendar.current.isDate(nudge.periodEnd, inSameDayAs: date(2026, 7, 19)))
     }
 
     /// A nil snapshot is a refusal, not a zero. Rule 4 on the one surface
