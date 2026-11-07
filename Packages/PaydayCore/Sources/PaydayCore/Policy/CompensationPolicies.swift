@@ -49,8 +49,12 @@ public struct CompensationPolicies: Hashable, Codable, Sendable {
     /// The rate in effect on `day`: the last policy whose `effectiveFrom` is
     /// on or before it. Nil when the wage feature was never turned on, or
     /// when `day` predates the earliest rate.
+    ///
+    /// The "All roles" rate only: a policy for one role never answers for
+    /// the account as a whole (`CompensationLedger.ratePolicy` picks per
+    /// shift).
     public func rate(on day: CivilDay) -> PayRatePolicy? {
-        CompensationLedger.policy(in: rates, onOrBefore: day, key: \.effectiveFrom)
+        CompensationLedger.policy(in: allRolesRates, onOrBefore: day, key: \.effectiveFrom)
     }
 
     /// The calendar policy in effect on `day`, from the policies that survive
@@ -70,7 +74,30 @@ public struct CompensationPolicies: Hashable, Codable, Sendable {
 
     /// The most recent rate, whatever its effective date: what Settings shows
     /// as "your rate" and what `baseHourlyWageCents` becomes a view of.
-    public var latestRate: PayRatePolicy? { rates.last }
+    /// The "All roles" rate: a role's own rate is never "your rate".
+    public var latestRate: PayRatePolicy? { allRolesRates.last }
+
+    /// The rates with no role, in effect order: what a shift without a role,
+    /// or with a role that has no rate of its own, is paid at.
+    public var allRolesRates: [PayRatePolicy] { rates.filter { $0.roleName == nil } }
+
+    /// One role's rates, in effect order (trimmed, case-insensitive match).
+    public func rates(forRole role: String) -> [PayRatePolicy] {
+        guard let key = ShiftRole.key(role) else { return [] }
+        return rates.filter { ShiftRole.key($0.roleName) == key }
+    }
+
+    /// The roles that have a rate of their own, latest spelling, in the
+    /// order their first rate takes effect.
+    public var roleNames: [String] {
+        var seen: Set<String> = []
+        var names: [String] = []
+        for rate in rates {
+            guard let name = rate.roleName, let key = ShiftRole.key(name), seen.insert(key).inserted else { continue }
+            names.append(name)
+        }
+        return names
+    }
 
     /// The frozen payroll time zone: the latest calendar policy's. Nil when
     /// no calendar policy exists yet, which is the only moment the app is
@@ -81,7 +108,7 @@ public struct CompensationPolicies: Hashable, Codable, Sendable {
     /// rate policy and every one of them is a legacy assumption. Gates the
     /// one-time rate-history prompt, alongside "the user actually has shifts".
     public var hasOnlyAssumedRates: Bool {
-        !rates.isEmpty && rates.allSatisfy { $0.provenance == .assumedFromLegacySetting }
+        !allRolesRates.isEmpty && allRolesRates.allSatisfy { $0.provenance == .assumedFromLegacySetting }
     }
 
     // MARK: Editing
@@ -98,6 +125,17 @@ public struct CompensationPolicies: Hashable, Codable, Sendable {
         var updated = calendars.filter { $0.id != policy.id }
         updated.append(policy)
         return CompensationPolicies(version: version, rates: rates, calendars: updated)
+    }
+
+    /// Returns a copy with every rate for `role` removed, so its shifts fall
+    /// back to the "All roles" rate.
+    public func removingRates(forRole role: String) -> CompensationPolicies {
+        let key = ShiftRole.key(role)
+        return CompensationPolicies(
+            version: version,
+            rates: rates.filter { ShiftRole.key($0.roleName) != key },
+            calendars: calendars
+        )
     }
 
     public func removingRate(id: UUID) -> CompensationPolicies {

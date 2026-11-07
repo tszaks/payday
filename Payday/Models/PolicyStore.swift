@@ -146,7 +146,13 @@ final class PolicyStore {
     /// `.rateNotSet` rather than a fabricated zero.
     func applyRateEdit(hourlyRateCents: Int?) {
         guard let cents = hourlyRateCents, cents > 0 else {
-            apply(CompensationPolicies(version: policies.version, rates: [], calendars: policies.calendars))
+            // Only the "All roles" rates. A role's own rate is removed from
+            // its own row in Roles and rates, never as a side effect here.
+            apply(CompensationPolicies(
+                version: policies.version,
+                rates: policies.rates.filter { $0.roleName != nil },
+                calendars: policies.calendars
+            ))
             return
         }
         if var latest = policies.latestRate {
@@ -186,6 +192,53 @@ final class PolicyStore {
             hourlyRateCents: hourlyRateCents,
             provenance: .confirmed
         ))
+    }
+
+    // MARK: Roles and rates
+
+    /// One role's current rate (its latest policy), nil when the role is
+    /// paid at the "All roles" rate.
+    func currentRateCents(forRole role: String) -> Int? {
+        policies.rates(forRole: role).last?.hourlyRateCents
+    }
+
+    /// A role's plain rate: rewrites its latest policy in place, or creates
+    /// one effective from the distant past, the same two moves the "Hourly
+    /// wage" row makes for "All roles".
+    func applyRoleRateEdit(role: String, hourlyRateCents cents: Int) {
+        guard cents > 0, let name = ShiftRole.normalized(role) else { return }
+        if var latest = policies.rates(forRole: name).last {
+            latest.hourlyRateCents = cents
+            latest.provenance = .confirmed
+            applyRate(latest)
+        } else {
+            applyRate(PayRatePolicy(
+                id: UUID(),
+                effectiveFrom: .distantPast,
+                hourlyRateCents: cents,
+                provenance: .confirmed,
+                roleName: name
+            ))
+        }
+    }
+
+    /// A dated change to one role's rate, as `applyRateChange` is for "All
+    /// roles".
+    func applyRoleRateChange(role: String, hourlyRateCents cents: Int, effectiveFrom day: CivilDay) {
+        guard cents > 0, let name = ShiftRole.normalized(role) else { return }
+        applyRate(PayRatePolicy(
+            id: UUID(),
+            effectiveFrom: day,
+            hourlyRateCents: cents,
+            provenance: .confirmed,
+            roleName: name
+        ))
+    }
+
+    /// Removes a role's rates: its shifts fall back to "All roles", and with
+    /// no "All roles" rate they read "no rate set", never $0.00.
+    func removeRates(forRole role: String) {
+        apply(policies.removingRates(forRole: role))
     }
 
     /// "Yes, since I started": the legacy rate really has always been the

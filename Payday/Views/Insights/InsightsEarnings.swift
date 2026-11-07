@@ -114,13 +114,22 @@ enum InsightsEarnings {
     /// set; reading the ids back off the snapshot would make the check
     /// tautological and it would pass while the page mixed bases, which is
     /// the one thing it exists to catch.
+    ///   - role: show one role alone, or nil for every shift. The ledger
+    ///     still values EVERY record, so weekly overtime is split over the
+    ///     whole workweek, and the snapshot reports only that role's shifts
+    ///     (`EarningsInputs.reportedShiftIDs`). Filtering the records first
+    ///     would drop the overtime a 30-hour bar week and a 20-hour floor
+    ///     week make together. The rows `StatsEngine` reads are that role's
+    ///     only, so every figure on the page is the role's.
     @MainActor
     static func build(
         records: [ShiftRecord],
         policies: CompensationPolicies,
-        payrollTimeZone: TimeZone
+        payrollTimeZone: TimeZone,
+        role: String? = nil
     ) -> Dataset {
         let adapted = ShiftInputAdapter.adapt(records, calendars: policies.calendars)
+        let reported = role.map { role in records.filter { ShiftRoleList.matches($0.roleName, role) } }
         let snapshot = try? EarningsSnapshot.build(EarningsInputs(
             shifts: adapted.inputs,
             rates: policies.rates,
@@ -129,13 +138,24 @@ enum InsightsEarnings {
             // page has never applied a to-date cutoff, and saying so once in
             // the stamp beats passing it at every query site.
             asOf: CivilDay(.distantFuture, in: payrollTimeZone),
-            unreadableReceiptShiftIDs: adapted.unreadableReceiptShiftIDs
+            unreadableReceiptShiftIDs: adapted.unreadableReceiptShiftIDs,
+            reportedShiftIDs: reported.map { Set($0.map(\.id)) }
         ))
+        let shown = reported ?? records
         return Dataset(
             snapshot: snapshot,
-            tipRecords: StatsRecordAdapter.tipRecords(from: records),
-            shiftIDs: records.map(\.id)
+            tipRecords: StatsRecordAdapter.tipRecords(from: shown),
+            shiftIDs: shown.map(\.id)
         )
+    }
+
+    /// The Insights role filter's options, most used first: empty unless at
+    /// least two distinct roles have shifts, so an account with one role or
+    /// none sees today's page.
+    @MainActor
+    static func roleOptions(records: [ShiftRecord]) -> [String] {
+        let roles = ShiftRoleList.byUse(ShiftRoleList.entries(records))
+        return roles.count >= 2 ? roles : []
     }
 
     /// A snapshot and the grouping whose `shiftID`s index it.
