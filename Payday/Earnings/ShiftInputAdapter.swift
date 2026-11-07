@@ -72,7 +72,9 @@ enum ShiftInputAdapter {
                 tipShareInCents: record.tipShareInCents,
                 minutesWorked: record.hoursWorked.map(WorkedMinutes.minutes(fromHours:)),
                 // Picks the rate policy; nil for a shift with no role.
-                roleName: record.roleName
+                roleName: record.roleName,
+                // Partitions pricing and overtime by job; nil = primary.
+                jobName: record.jobName
             ))
         }
 
@@ -131,7 +133,9 @@ enum PaycheckInputAdapter {
                 regularWagesCents: record.regularWagesCents,
                 overtimeWagesCents: record.overtimeWagesCents,
                 gratuityCents: record.gratuityCents,
-                taxesCents: record.taxesCents
+                taxesCents: record.taxesCents,
+                // Reconciled against its own job's shifts; nil = primary.
+                jobName: record.jobName
             )
         }
     }
