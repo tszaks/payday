@@ -50,6 +50,10 @@ The app is named after a moment; honor it. When `daysRemaining == 0`:
   say it plainly: "Your check's tips line should read about $618." When the
   user enters the real stub number, the comparison closes the loop the app
   opened. This is the app's most intelligent feature and it is just a sum.
+- **Predicted take-home** (PR "Predicted take-home learned from stubs"): the
+  check's gross plus "about $N after tax", learned from the person's own last
+  8 stubs (`WithholdingModel`, `MetricID.expectedPaycheckNet`); no tax tables,
+  nothing after tax under 2 stubs.
 
 ## Pillar 3: On-Device Stats Engine (instant, private, free)
 

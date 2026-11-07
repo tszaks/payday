@@ -665,3 +665,57 @@ struct PaycheckReconcilerDeltaTests {
             .stamp == nil)
     }
 }
+
+@Suite("PaycheckReconciler.Expectation.netFigure")
+struct PaycheckReconcilerNetFigureTests {
+    /// A line model whose seen range covers W2's $147.16 gross, so no suffix.
+    private let coveringModel = WithholdingModel(
+        kind: .line(slope: 0.75, interceptCents: 1_000),
+        stubCount: 7,
+        grossRangeCents: 12_000...16_000,
+        typicalMissCents: 120
+    )
+
+    @Test("unavailable without a model")
+    func noModel() throws {
+        let figure = try w2Expectation().netFigure(model: nil)
+        #expect(figure.isUnavailable)
+        #expect(figure.text == nil)
+        #expect(figure.metric == .expectedPaycheckNet)
+        #expect(figure.label == "After tax, about")
+    }
+
+    @Test("unavailable without a gross")
+    func noGross() {
+        let figure = PaycheckReconciler.Expectation.unbacked.netFigure(model: coveringModel)
+        #expect(figure.isUnavailable)
+        #expect(figure.caption == nil)
+    }
+
+    @Test("label, amount, caption and completeness follow the gross")
+    func available() throws {
+        let expectation = try w2Expectation()
+        let figure = expectation.netFigure(model: coveringModel)
+        // 0.75 × 14716 + 1000 = 12037
+        #expect(figure.amount == .cents(12_037))
+        #expect(figure.label == "After tax, about")
+        #expect(MetricID.expectedPaycheckNet.allowedLabels.contains(figure.label))
+        #expect(figure.completeness == expectation.grossFigure.completeness)
+        let expectedCaption = ["From 7 stubs", expectation.grossFigure.caption]
+            .compactMap { $0 }.joined(separator: " · ")
+        #expect(figure.caption == expectedCaption)
+        #expect(figure.caption?.hasPrefix("From 7 stubs") == true)
+    }
+
+    @Test("extrapolation suffix when the gross is outside the stubs seen")
+    func extrapolating() throws {
+        let farModel = WithholdingModel(
+            kind: .ratio(netOverGross: 0.8),
+            stubCount: 3,
+            grossRangeCents: 160_000...270_000,
+            typicalMissCents: nil
+        )
+        let figure = try w2Expectation().netFigure(model: farModel)
+        #expect(figure.caption?.hasPrefix("From 3 stubs · outside the checks it has seen") == true)
+    }
+}

@@ -195,7 +195,11 @@ struct PeriodDetailFacts: SnapshotFacts {
                 ? "Expected on \(payDateText)"
                 : "Check recorded · Payday couldn't read your shifts right now."
         } else {
-            noPaycheckCaption = "Expected \(Money.string(fromCents: expectedCheckCents)) · \(payDateText)"
+            // The after-tax half comes from the person's own stubs, through
+            // the same expectation; absent under 2 qualifying stubs.
+            let net = expectation.netFigure(model: WithholdingModelAdapter.model(from: paycheckRecords))
+            let afterTax = TakeHomeCopy.aboutAfterTax(net).map { " · \($0)" } ?? ""
+            noPaycheckCaption = "Expected \(Money.string(fromCents: expectedCheckCents))\(afterTax) · \(payDateText)"
         }
     }
 }

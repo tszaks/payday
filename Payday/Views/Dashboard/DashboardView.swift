@@ -159,6 +159,17 @@ struct DashboardFacts: SnapshotFacts {
     /// `MetricID.voluntaryTips`, cash component, same period and same query
     /// as `predictedPaycheck` — the gap between "You kept" and the check.
     let paydayCash: EarningsFigure
+    /// `MetricID.expectedPaycheckNet` for the same period and query as
+    /// `predictedPaycheck`. `.unavailable` under 2 qualifying stubs.
+    let predictedPaycheckNet: EarningsFigure
+
+    /// `MetricID.expectedPaycheckGross` over the hero's own `EarningsResult`
+    /// — the check so far, before tax. `.unavailable` when no dataset stands
+    /// behind it or the hero is not on the current period: nil is never zero.
+    let heroCheckGross: EarningsFigure
+    /// `MetricID.expectedPaycheckNet` from the same `Expectation` as
+    /// `heroCheckGross`. `.unavailable` with it, or under 2 qualifying stubs.
+    let heroCheckNet: EarningsFigure
 
     let stamp: SnapshotStamp?
 
@@ -197,6 +208,10 @@ struct DashboardFacts: SnapshotFacts {
         /// history, so the pace line and tonight's reveal silently vanished.
         /// A defaulted parameter is exactly how that caller forgets.
         allTipRecords: [TipRecord],
+        /// From `DashboardEarnings.Dataset.withholdingModel`. Not defaulted,
+        /// for the reason `allTipRecords` is not: a caller that forgets it
+        /// silently drops every after-tax figure.
+        withholdingModel: WithholdingModel?,
         schedule: PaySchedule?,
         now: Date,
         forcedPaydayPhase: PaydayMoment.Phase?,
@@ -400,7 +415,18 @@ struct DashboardFacts: SnapshotFacts {
         // rendered. The card deliberately does not repeat the pay date,
         // because the progress bar a few lines above already labels where the
         // period ends ([DB-22]), and `heroPayDate` is what draws that.
-        predictedPaycheck = PaycheckReconciler.Expectation(result: paydayResult?.1, stamp: snapshot?.stamp).grossFigure
+        let paydayExpectation = PaycheckReconciler.Expectation(result: paydayResult?.1, stamp: snapshot?.stamp)
+        predictedPaycheck = paydayExpectation.grossFigure
+        predictedPaycheckNet = paydayExpectation.netFigure(model: withholdingModel)
+
+        // ONE Expectation over the hero's own result behind the hero's check
+        // line, so its before- and after-tax figures cannot disagree with
+        // each other or with the hero. Current period only.
+        let heroExpectation = heroIsCurrent
+            ? PaycheckReconciler.Expectation(result: heroResult, stamp: snapshot?.stamp)
+            : .unbacked
+        heroCheckGross = heroExpectation.grossFigure
+        heroCheckNet = heroExpectation.netFigure(model: withholdingModel)
         // Cash tips in the payday-moment period — the ENTIRE gap between
         // "You kept" and the check, since cash is the one thing that never
         // runs through payroll. Named on the card so nobody has to subtract
@@ -605,6 +631,8 @@ struct DashboardView: View {
     /// The screen's only input — `ShiftRecord` is the only stored shape
     /// since the flip.
     @Query private var shiftRecords: [ShiftRecord]
+    /// Recorded stubs, read only to fit the after-tax model.
+    @Query private var paycheckRecords: [PaycheckRecord]
 
     @State private var sheetTarget: TipEntrySheetTarget?
     @State private var showSettings = false
@@ -701,17 +729,26 @@ struct DashboardView: View {
             : DashboardEarnings.build(
                 records: shiftRecords,
                 policies: policyStore.policies,
-                payrollTimeZone: payrollTimeZone
+                payrollTimeZone: payrollTimeZone,
+                // A stub inside its Undo window is hidden, not deleted, so
+                // the raw query still holds it. Periods and period detail
+                // drop it the same way; the after-tax model must too, or a
+                // removed stub keeps training a figure the person can see.
+                paychecks: paycheckRecords.hidingPendingRemoval()
             )
         let snapshot = dataset.snapshot
         // Rule 3: the facts are keyed on the dataset's own digest, the
         // complete computed key, plus this screen's presentational selection.
+        // A saved stub moves the withholding model without moving the shift
+        // digest, so the model is part of the key too.
         let facts = renderCache?.digest == snapshot?.stamp.digest && renderCache?.selection == selection
+            && renderCache?.dataset.withholdingModel == dataset.withholdingModel
             ? renderCache!.facts
             : DashboardFacts(
                 snapshot: snapshot,
                 allShiftRecords: dataset.shiftRecordDays,
                 allTipRecords: dataset.tipRecords,
+                withholdingModel: dataset.withholdingModel,
                 schedule: scheduleStore.schedule,
                 now: now,
                 forcedPaydayPhase: forcedPaydayPhase,
@@ -1012,6 +1049,17 @@ struct DashboardView: View {
                         .monospacedDigit()
                         .animation(reduceMotion ? nil : PaydayAnimation.premiumSpring, value: paceDeltaCents > 0)
                 }
+                // The check so far, before and after tax, from one
+                // Expectation. Nothing at all when the gross is unavailable;
+                // no after-tax half under 2 stubs.
+                if let checkLine = facts.heroCheckLine {
+                    Text(checkLine)
+                        .font(PaydayFont.caption)
+                        .foregroundStyle(PaydayColor.textSecondary)
+                        .multilineTextAlignment(.center)
+                        .monospacedDigit()
+                        .accessibilityLabel(checkLine)
+                }
                 // Projection line removed: it overlapped the pace line above
                 // (two framings of the same trajectory). Pace stays — it's
                 // grounded in real logged history on both sides and it's the
@@ -1139,6 +1187,16 @@ struct DashboardView: View {
                         .font(PaydayFont.caption2)
                         .foregroundStyle(PaydayColor.textSecondary)
                         .multilineTextAlignment(.center)
+                }
+                // The predicted take-home, learned from the person's own
+                // stubs. Absent under 2 stubs.
+                if let netLine = facts.paydayNetLine {
+                    Text(netLine)
+                        .font(PaydayFont.caption2)
+                        .foregroundStyle(PaydayColor.textSecondary)
+                        .multilineTextAlignment(.center)
+                        .monospacedDigit()
+                        .accessibilityLabel(netLine)
                 }
             }
             .popoverTip(paydayVerificationTip)

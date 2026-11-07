@@ -92,7 +92,8 @@ enum DashboardEarnings {
     static func build(
         records: [ShiftRecord],
         policies: CompensationPolicies,
-        payrollTimeZone: TimeZone
+        payrollTimeZone: TimeZone,
+        paychecks: [PaycheckRecord] = []
     ) -> Dataset {
         let adapted = ShiftInputAdapter.adapt(records, calendars: policies.calendars)
         let snapshot = try? EarningsSnapshot.build(EarningsInputs(
@@ -107,7 +108,8 @@ enum DashboardEarnings {
         return Dataset(
             snapshot: snapshot,
             shiftRecordDays: records,
-            tipRecords: StatsRecordAdapter.tipRecords(from: records)
+            tipRecords: StatsRecordAdapter.tipRecords(from: records),
+            withholdingModel: WithholdingModelAdapter.model(from: paychecks)
         )
     }
 
@@ -133,5 +135,8 @@ enum DashboardEarnings {
         /// empty history the moment an account flipped — the same starvation
         /// class `InsightsEarnings.Dataset.tipRecords` exists to prevent.
         let tipRecords: [TipRecord]
+        /// The person's after-tax model, fitted once per dataset from the
+        /// stubs that carry both gross and net. Nil under 2 such stubs.
+        let withholdingModel: WithholdingModel?
     }
 }
