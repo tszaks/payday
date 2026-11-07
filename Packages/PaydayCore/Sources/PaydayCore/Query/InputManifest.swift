@@ -61,7 +61,8 @@ import Foundation
 /// encoded line), then calendar policies sorted the same way:
 /// `R|id|effectiveFrom|hourlyRateCents|provenance`, then `|role=<roleName>`
 /// only when the policy is for one role.
-/// `C|id|effectiveFrom|workweekStartWeekday|overtimeThresholdMinutes|overtimeMultiplierHundredths|payrollTimeZone.identifier`
+/// `C|id|effectiveFrom|workweekStartWeekday|overtimeThresholdMinutes|overtimeMultiplierHundredths|payrollTimeZone.identifier`,
+/// then `|daily=<dailyOvertimeThresholdMinutes>` only when daily overtime is on.
 ///
 /// The whole encoded line is the final tiebreak in every sort so each key is
 /// a TOTAL order: `sorted` is not documented as stable in Swift, so two
@@ -401,7 +402,10 @@ public struct InputManifest: Hashable, Codable, Sendable {
                         "C", c.id.uuidString, c.effectiveFrom.iso, String(c.workweekStartWeekday),
                         String(c.overtimeThresholdMinutes), String(c.overtimeMultiplierHundredths),
                         c.payrollTimeZone.identifier,
-                    ].joined(separator: "|"))
+                    ].joined(separator: "|")
+                        // Only when set, so every digest from before daily
+                        // overtime existed stays identical.
+                        + (c.dailyOvertimeThresholdMinutes.map { "|daily=\($0)" } ?? ""))
                 }
                 .sorted { $0 < $1 }
                 .map { $0.2 }

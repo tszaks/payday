@@ -696,3 +696,27 @@ struct InputManifestTests {
         }
     }
 }
+
+extension InputManifestTests {
+    @Test("The C line gains |daily= only when daily overtime is on")
+    func dailyThresholdJoinsCalendarLineOnlyWhenSet() throws {
+        let base = try Self.manifest()
+        var withNil = Self.calendars
+        for i in withNil.indices { withNil[i].dailyOvertimeThresholdMinutes = nil }
+        // Off: byte-identical to before daily overtime existed.
+        #expect(try Self.manifest(calendars: withNil).digest == base.digest)
+        #expect(!(try Self.encodedText()).contains("|daily="))
+
+        var withDaily = Self.calendars
+        withDaily[0].dailyOvertimeThresholdMinutes = 480
+        let on = try Self.manifest(calendars: withDaily)
+        #expect(on.digest != base.digest)
+        #expect(on.policiesDigest != base.policiesDigest)
+        #expect(on.shiftsDigest == base.shiftsDigest)
+        let text = try InputManifest.canonicalText(
+            shifts: [], paychecks: [], schedule: nil, rates: [], calendars: [withDaily[0]], asOf: nil
+        )
+        let line = "C|\(Self.calendar1.uuidString)|2026-01-05|2|2400|150|America/New_York|daily=480"
+        #expect(text.components(separatedBy: "\n").contains(line))
+    }
+}
