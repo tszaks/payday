@@ -173,6 +173,22 @@ struct RolesTests {
         #expect(try JSONDecoder().decode(PayRatePolicy.self, from: barData) == Self.bar)
     }
 
+    @Test("the cap counts Unicode scalars, the server's unit, on character boundaries")
+    func capCountsScalars() {
+        // One chef emoji is three scalars (woman, joiner, cook): 14 of them
+        // are 14 Swift characters but 42 code points, which Postgres would
+        // cut to 40 and break the match with the role's rate policy.
+        let chef = "\u{1F469}\u{200D}\u{1F373}"
+        #expect(chef.unicodeScalars.count == 3)
+        let fourteen = String(repeating: chef, count: 14)
+        let capped = ShiftRole.normalized(fourteen)
+        #expect(capped == String(repeating: chef, count: 13))
+        #expect(capped!.unicodeScalars.count == 39)
+        // Plain text is capped at 40 as before.
+        #expect(ShiftRole.normalized(String(repeating: "a", count: 41)) == String(repeating: "a", count: 40))
+        #expect(ShiftRole.capped("abc") == "abc")
+    }
+
     @Test("role names are trimmed, capped at 40, nil when empty; keys ignore case")
     func normalization() {
         #expect(ShiftRole.normalized("  Bar  ") == "Bar")

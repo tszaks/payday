@@ -67,16 +67,34 @@ public struct PayRatePolicy: Hashable, Codable, Sendable, Identifiable {
 /// The rules for a shift's role name, in one place so the phone, the rate
 /// policies and the ledger agree on what "the same role" means.
 public enum ShiftRole {
-    /// The longest role name, matching the `shifts.role_name` check.
+    /// The longest role name, in UNICODE SCALARS, matching the
+    /// `shifts.role_name` check: Postgres `length` and `left` count code
+    /// points, while a Swift `Character` can be several (a family emoji is
+    /// seven). Capping by scalars here means the server never cuts a name
+    /// the phone sent, so a synced spelling always matches its rate policy.
     public static let maxLength = 40
 
-    /// Trimmed, at most `maxLength` characters, nil when empty. Stored as
+    /// Trimmed, at most `maxLength` scalars, nil when empty. Stored as
     /// typed otherwise.
     public static func normalized(_ raw: String?) -> String? {
         guard let raw else { return nil }
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
-        return String(trimmed.prefix(maxLength))
+        return capped(trimmed)
+    }
+
+    /// `text` cut to at most `maxLength` scalars, on a character boundary,
+    /// so a multi-scalar character is kept whole or dropped whole.
+    public static func capped(_ text: String) -> String {
+        var result = ""
+        var scalars = 0
+        for character in text {
+            let count = character.unicodeScalars.count
+            guard scalars + count <= maxLength else { break }
+            result.append(character)
+            scalars += count
+        }
+        return result
     }
 
     /// The comparison key: trimmed and case-insensitive. Nil for no role.

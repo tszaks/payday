@@ -37,6 +37,10 @@ public struct EarningsInputs: Hashable, Sendable {
     /// 30-hour bar week and a 20-hour floor week are 10 overtime hours, and
     /// filtering the shifts before the ledger would find none. The bar view
     /// plus the floor view therefore equal the whole, to the cent.
+    ///
+    /// Shifts only. `paychecks` are never narrowed (a check is for the whole
+    /// account), so a subset snapshot is for shift figures: nothing may
+    /// reconcile a paycheck against it. Today only Insights builds one.
     public var reportedShiftIDs: Set<UUID>?
 
     public init(
