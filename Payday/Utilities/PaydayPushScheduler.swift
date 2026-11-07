@@ -5,8 +5,12 @@ import UserNotifications
 /// payday morning carrying **the same number the Dashboard's payday card
 /// shows**, tapping straight into the current period's detail where the stub
 /// gets verified. Same restraint discipline as SmartNudgeScheduler: exactly
-/// one pending request at a time, always fully replaced on reschedule, never
-/// more.
+/// one pending request per identifier, always fully replaced on reschedule,
+/// never more. There are two identifiers: the payday moment itself, and one
+/// numberless stub nudge two days later if that period's paycheck is still
+/// not recorded. Both carry the period in `userInfo` (`periodStart`,
+/// `periodEnd`, seconds since 1970) so a tap lands in that period's stub
+/// sheet with the scanner started.
 ///
 /// ## PR 5 group 2.12: the one figure spoken with no screen behind it
 ///
@@ -95,6 +99,16 @@ import UserNotifications
 @MainActor
 enum PaydayPushScheduler {
     nonisolated static let notificationIdentifier = "payday-moment"
+    nonisolated static let stubNudgeIdentifier = "payday-stub-nudge"
+    nonisolated static let stubNudgeBody = "Snap your stub and Payday checks it."
+    /// Days after payday the stub nudge fires, at the same 9 AM.
+    private nonisolated static let stubNudgeOffsetDays = 2
+    /// Bound on the walk back from the period containing `now`. A payroll
+    /// lag longer than a few periods does not exist; this only stops a
+    /// degenerate schedule from walking forever.
+    private nonisolated static let maxPeriodsBack = 6
+    nonisolated static let periodStartKey = "periodStart"
+    nonisolated static let periodEndKey = "periodEnd"
     private nonisolated static let fireHour = 9
 
     /// What should be posted, computed purely from a schedule, this app's
@@ -112,6 +126,16 @@ enum PaydayPushScheduler {
         /// is non-nil, `body` contains `figure.text` and nothing else
         /// currency-shaped.
         let figure: EarningsFigure?
+        /// The period announced, carried into `userInfo` for the tap.
+        let periodStart: Date
+        let periodEnd: Date
+    }
+
+    /// The second, numberless nudge for a period whose stub is still not in.
+    struct StubNudge: Equatable {
+        let fireDate: Date
+        let periodStart: Date
+        let periodEnd: Date
     }
 
     /// The pending coalesced reschedule. A burst of triggers costs ONE
@@ -148,7 +172,7 @@ enum PaydayPushScheduler {
 
     private static func performReschedule(preferencesStore: UserPreferencesStore, schedule: PaySchedule?, shiftRecords: [ShiftRecord], paycheckRecords: [PaycheckRecord]) async {
         let center = UNUserNotificationCenter.current()
-        center.removePendingNotificationRequests(withIdentifiers: [notificationIdentifier])
+        center.removePendingNotificationRequests(withIdentifiers: [notificationIdentifier, stubNudgeIdentifier])
 
         // Read from the store's own suite, the same way the payroll zone
         // already is, so no caller's signature changes and every call site
@@ -165,7 +189,13 @@ enum PaydayPushScheduler {
         // that is already on the main actor, and everything below it stays
         // value types.
         let shiftInputs = ShiftInputAdapter.adapt(shiftRecords, calendars: policies.calendars)
-        guard let decision = decision(
+        let nudge = stubNudge(
+            now: .now,
+            calculator: calculator,
+            paycheckRecords: paycheckRecords,
+            isReminderEnabled: preferencesStore.isPaydayReminderEnabled
+        )
+        let decision = decision(
             now: .now,
             calculator: calculator,
             shiftInputs: shiftInputs,
@@ -173,18 +203,27 @@ enum PaydayPushScheduler {
             isReminderEnabled: preferencesStore.isPaydayReminderEnabled,
             policies: policies,
             payrollTimeZone: payrollTimeZone
-        ) else { return }
+        )
+        guard decision != nil || nudge != nil else { return }
 
         guard await isCurrentlyAuthorized(center: center) else { return }
-        enqueue(decision, center: center)
+        if let decision {
+            enqueue(identifier: notificationIdentifier, body: decision.body, fireDate: decision.fireDate,
+                    periodStart: decision.periodStart, periodEnd: decision.periodEnd, center: center)
+        }
+        if let nudge {
+            enqueue(identifier: stubNudgeIdentifier, body: stubNudgeBody, fireDate: nudge.fireDate,
+                    periodStart: nudge.periodStart, periodEnd: nudge.periodEnd, center: center)
+        }
     }
 
-    /// The rule: fire at 9AM on the payday for whichever period is
-    /// currently open — its check hasn't landed yet, so it's always the
-    /// right one to announce. Nothing if that moment has already passed,
-    /// nothing once that period's paycheck is already on record (verification
-    /// is done, there's nothing left to say), and nothing if the reminder is
-    /// turned off.
+    /// The rule: fire at 9AM on the payday of the EARLIEST period whose
+    /// payday moment is still ahead of `now` and whose paycheck is not yet
+    /// recorded. Not simply the period containing `now`: once that period's
+    /// end is behind, its check has not landed yet (payday is the end plus
+    /// the payroll lag), and announcing the open period instead would drop
+    /// the very payday that is coming next. Nothing once every candidate is
+    /// recorded (verification is done) and nothing if the reminder is off.
     ///
     /// - Parameters:
     ///   - policies: `PolicyStore.policies`, whole. Never a scalar rate and
@@ -208,18 +247,12 @@ enum PaydayPushScheduler {
         payrollTimeZone: TimeZone,
         calendar: Calendar = .current
     ) -> Decision? {
-        guard isReminderEnabled else { return nil }
-
-        var cal = calendar
-        cal.timeZone = .current
-        let period = calculator.period(containing: now)
-        let payDate = calculator.payDate(for: period)
-        guard let fireDate = cal.date(bySettingHour: fireHour, minute: 0, second: 0, of: payDate), fireDate > now else { return nil }
-
-        let alreadyRecorded = paycheckRecords.contains {
-            cal.isDate($0.periodStart, inSameDayAs: period.start) && cal.isDate($0.periodEnd, inSameDayAs: period.end)
-        }
-        guard !alreadyRecorded else { return nil }
+        guard isReminderEnabled,
+              let found = nextUnrecordedPeriod(
+                  now: now, calculator: calculator, paycheckRecords: paycheckRecords,
+                  offsetDays: 0, calendar: calendar
+              ) else { return nil }
+        let (period, fireDate) = found
 
         // ONE dataset and ONE figure behind the decision. Building it twice —
         // once for the words, once for the value the gate compares — is how a
@@ -232,7 +265,60 @@ enum PaydayPushScheduler {
             policies: policies,
             payrollTimeZone: payrollTimeZone
         )
-        return Decision(fireDate: fireDate, body: body(for: figure), figure: figure)
+        return Decision(fireDate: fireDate, body: body(for: figure), figure: figure,
+                        periodStart: period.start, periodEnd: period.end)
+    }
+
+    /// The stub nudge: 9 AM two days after the payday of the earliest period
+    /// whose nudge moment is still ahead and whose paycheck is not recorded.
+    /// Numberless by design, so it needs no dataset.
+    nonisolated static func stubNudge(
+        now: Date,
+        calculator: PayPeriodCalculator,
+        paycheckRecords: [PaycheckRecord],
+        isReminderEnabled: Bool,
+        calendar: Calendar = .current
+    ) -> StubNudge? {
+        guard isReminderEnabled,
+              let found = nextUnrecordedPeriod(
+                  now: now, calculator: calculator, paycheckRecords: paycheckRecords,
+                  offsetDays: stubNudgeOffsetDays, calendar: calendar
+              ) else { return nil }
+        let (period, fireDate) = found
+        return StubNudge(fireDate: fireDate, periodStart: period.start, periodEnd: period.end)
+    }
+
+    /// The shared walk. Candidates are the period containing `now` and the
+    /// periods before it, oldest first, whose 9 AM moment (payday plus
+    /// `offsetDays`) is still ahead of `now`. The walk back stops at the
+    /// first period whose moment is behind, since every earlier one is
+    /// behind too. The first unrecorded candidate wins.
+    private nonisolated static func nextUnrecordedPeriod(
+        now: Date,
+        calculator: PayPeriodCalculator,
+        paycheckRecords: [PaycheckRecord],
+        offsetDays: Int,
+        calendar: Calendar
+    ) -> (PayPeriod, Date)? {
+        var cal = calendar
+        cal.timeZone = .current
+        func moment(_ period: PayPeriod) -> Date? {
+            guard let day = cal.date(byAdding: .day, value: offsetDays, to: calculator.payDate(for: period)) else { return nil }
+            return cal.date(bySettingHour: fireHour, minute: 0, second: 0, of: day)
+        }
+
+        let current = calculator.period(containing: now)
+        var newestFirst: [(PayPeriod, Date)] = []
+        for period in [current] + calculator.priorPeriods(before: current, count: maxPeriodsBack) {
+            guard let fireDate = moment(period), fireDate > now else { break }
+            newestFirst.append((period, fireDate))
+        }
+
+        return newestFirst.reversed().first { period, _ in
+            !paycheckRecords.contains {
+                cal.isDate($0.periodStart, inSameDayAs: period.start) && cal.isDate($0.periodEnd, inSameDayAs: period.end)
+            }
+        }
     }
 
     // MARK: - The figure, and the words around it
@@ -318,15 +404,19 @@ enum PaydayPushScheduler {
         }
     }
 
-    private static func enqueue(_ decision: Decision, center: UNUserNotificationCenter) {
+    private static func enqueue(identifier: String, body: String, fireDate: Date, periodStart: Date, periodEnd: Date, center: UNUserNotificationCenter) {
         let content = UNMutableNotificationContent()
         content.title = "Payday."
-        content.body = decision.body
+        content.body = body
         content.sound = .default
+        content.userInfo = [
+            periodStartKey: periodStart.timeIntervalSince1970,
+            periodEndKey: periodEnd.timeIntervalSince1970
+        ]
 
-        let components = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: decision.fireDate)
+        let components = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: fireDate)
         let trigger = UNCalendarNotificationTrigger(dateMatching: components, repeats: false)
-        let request = UNNotificationRequest(identifier: notificationIdentifier, content: content, trigger: trigger)
+        let request = UNNotificationRequest(identifier: identifier, content: content, trigger: trigger)
         center.add(request)
     }
 }

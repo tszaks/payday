@@ -291,6 +291,55 @@ struct PaydayPushSchedulerTests {
         #expect(decision == nil)
     }
 
+    // MARK: The stub nudge, two days after payday
+
+    private func makeNudge(
+        now: Date,
+        paycheckRecords: [PaycheckRecord] = [],
+        isReminderEnabled: Bool = true
+    ) -> PaydayPushScheduler.StubNudge? {
+        PaydayPushScheduler.stubNudge(
+            now: now,
+            calculator: weeklyPaidFriday(),
+            paycheckRecords: paycheckRecords,
+            isReminderEnabled: isReminderEnabled
+        )
+    }
+
+    @Test("the stub nudge fires at 9AM two days after payday")
+    func stubNudgeFiresTwoDaysAfterPayday() {
+        // Period Jul 13-19, paid Fri Jul 24, nudged Sun Jul 26.
+        #expect(makeNudge(now: date(2026, 7, 20, hour: 20))?.fireDate == date(2026, 7, 26, hour: 9))
+    }
+
+    @Test("no stub nudge once that period's paycheck is recorded")
+    func noStubNudgeWhenRecorded() {
+        let record = PaycheckRecord(periodStart: date(2026, 7, 13), periodEnd: date(2026, 7, 19), paidTipsCents: 15000)
+        // The recorded period is skipped, so the next one is nudged instead.
+        let nudge = makeNudge(now: date(2026, 7, 20, hour: 20), paycheckRecords: [record])
+        #expect(nudge?.fireDate == date(2026, 8, 2, hour: 9))
+    }
+
+    @Test("no stub nudge once its moment has passed")
+    func noStubNudgeAfterItsMoment() {
+        // Sun Jul 26 at 2PM: the Jul 13-19 nudge is behind; the next one
+        // is for the period that holds now.
+        let nudge = makeNudge(now: date(2026, 7, 26, hour: 14))
+        #expect(nudge?.fireDate == date(2026, 8, 2, hour: 9))
+    }
+
+    @Test("no stub nudge when the reminder is off")
+    func noStubNudgeWhenReminderOff() {
+        #expect(makeNudge(now: date(2026, 7, 20, hour: 20), isReminderEnabled: false) == nil)
+    }
+
+    @Test("the stub nudge carries the period it is about")
+    func stubNudgeCarriesItsPeriod() throws {
+        let nudge = try #require(makeNudge(now: date(2026, 7, 20, hour: 20)))
+        #expect(Calendar.current.isDate(nudge.periodStart, inSameDayAs: date(2026, 7, 13)))
+        #expect(Calendar.current.isDate(nudge.periodEnd, inSameDayAs: date(2026, 7, 19)))
+    }
+
     /// A nil snapshot is a refusal, not a zero. Rule 4 on the one surface
     /// with no view to put a placeholder in: no currency text anywhere.
     @Test("no dataset means no currency in the body")
