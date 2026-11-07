@@ -131,7 +131,7 @@ public enum MetricID: String, CaseIterable, Codable, Sendable {
     /// **Definition:** expectedPaycheckGross passed through the WithholdingModel fitted on the person's last 8 stubs that have both gross and net.
     /// **Basis:** pay period.
     /// **Missing data:** .unavailable when the gross is unavailable or fewer than 2 stubs qualify; carries the gross figure's Completeness.
-    /// **Labels:** "After tax, about"; caption "From N stubs" (N >= 2), plus " · outside the checks it has seen" when extrapolating.
+    /// **Labels:** "After tax, about"; caption nil unless it warns: "Outside the checks it has seen" when extrapolating, then the gross figure's completeness caption. Never a stub count.
     case expectedPaycheckNet
 
     /// One-line definition from the registry table.

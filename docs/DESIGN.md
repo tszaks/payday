@@ -108,7 +108,8 @@ worth blocking on now; identical values in two files gets 100% of the look for
 - Hero carries ONE money number (plus the pace sentence). The check so far
   lives in the Breakdown drawer, under the bottom line, as two rows, current
   period only: "On your check, before tax  $G" and "After tax, about  $N".
-  The net is whole dollars (it is a prediction) and drops out under 2 stubs;
+  The net is whole dollars (it is a prediction), carries no stub count under
+  it (Tyler, 2026-11-07) and drops out under 2 stubs;
   neither row when the gross is unavailable. Why: until 2026-11-07 the same
   two figures were a caption line on the hero's face, and with the period
   total and the pace line the card showed four dollar amounts that answered

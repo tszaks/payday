@@ -2,23 +2,24 @@ import Foundation
 import PaydayCore
 
 /// The after-tax copy, in one place, so the three surfaces say it the same
-/// way: "about", never "will be"; always "from N stubs"; no percentages.
+/// way: "about", never "will be"; no stub count; no percentages.
 /// Formatting only — every amount comes from an `EarningsFigure`.
 enum TakeHomeCopy {
-    /// "$1,539" — the net is a prediction, so cents would be false precision.
+    /// "$1,234" — the net is a prediction, so cents would be false precision.
     static func wholeDollars(_ figure: EarningsFigure) -> String? {
         figure.cents.map(Money.wholeDollarString(fromCents:))
     }
 
-    /// "about $1,539 after tax", or nil when the figure is unavailable.
+    /// "about $1,234 after tax", or nil when the figure is unavailable.
     static func aboutAfterTax(_ net: EarningsFigure) -> String? {
         wholeDollars(net).map { "about \($0) after tax" }
     }
 
     /// Breakdown drawer, under the hero's bottom line: "On your check,
     /// before tax  $G" and "After tax, about  $N", the second in whole
-    /// dollars (a prediction) with the net figure's own caption ("From N
-    /// stubs …"). No rows when the gross is unavailable; no after-tax row
+    /// dollars (a prediction) with the net figure's own caption, which is
+    /// nil unless it warns (extrapolation, completeness; never a stub
+    /// count). No rows when the gross is unavailable; no after-tax row
     /// under 2 stubs.
     ///
     /// These two figures used to sit on the hero's FACE as one caption line
@@ -38,11 +39,15 @@ enum TakeHomeCopy {
         return rows
     }
 
-    /// Payday card: "About $1,234 after tax · from 7 stubs", carrying the
-    /// figure's whole caption (extrapolation, completeness) after the count.
+    /// Payday card: "About $1,234 after tax", plus " · " and the figure's
+    /// caption (extrapolation, completeness) when it has one. The line used
+    /// to end in "from 7 stubs"; Tyler asked for the count to go
+    /// (2026-11-07), and a line with no caption stands on its own.
     static func paydayNetLine(_ net: EarningsFigure) -> String? {
-        guard let dollars = wholeDollars(net), let caption = net.caption else { return nil }
-        return "About \(dollars) after tax · " + caption.prefix(1).lowercased() + caption.dropFirst()
+        guard let dollars = wholeDollars(net) else { return nil }
+        let line = "About \(dollars) after tax"
+        guard let caption = net.caption else { return line }
+        return line + " · " + caption.prefix(1).lowercased() + caption.dropFirst()
     }
 }
 

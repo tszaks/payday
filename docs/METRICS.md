@@ -19,7 +19,7 @@ The registry table below is copied verbatim from the plan.
 | `observedGross` | gross figure on the stub, exactly as entered; never inferred | pay date | nil until recorded | "Gross Income" |
 | `observedNet` | net figure on the stub, exactly as entered; never inferred | pay date | nil until recorded | "Net Income" |
 | `observedTaxes` | taxes figure on the stub, exactly as entered; never inferred | pay date | nil until recorded | "Taxes" |
-| `expectedPaycheckNet` | `expectedPaycheckGross` through the `WithholdingModel` fitted on the last 8 stubs with both gross and net (least-squares line at 3+, mean net/gross ratio at 2) | pay period | `.unavailable` when the gross is unavailable or fewer than 2 stubs qualify; carries the gross figure's completeness | "After tax, about"; caption "From N stubs" (+ " · outside the checks it has seen" when extrapolating) |
+| `expectedPaycheckNet` | `expectedPaycheckGross` through the `WithholdingModel` fitted on the last 8 stubs with both gross and net (least-squares line at 3+, mean net/gross ratio at 2) | pay period | `.unavailable` when the gross is unavailable or fewer than 2 stubs qualify; carries the gross figure's completeness | "After tax, about"; caption nil unless it warns: "Outside the checks it has seen" when extrapolating, then the gross figure's completeness caption (never a stub count) |
 
 Every `EarningsResult` carries `metric`, `scope`, `asOf`, `manifest`, `engineVersion`, `completeness`.
 
