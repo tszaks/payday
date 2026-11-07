@@ -256,7 +256,26 @@ final class PolicyStore {
     }
 
     /// Applies a workweek-start or payroll-zone change as ONE not-yet-effective
-    /// calendar policy.
+    /// calendar policy. The daily overtime setting is kept as it is on the
+    /// latest policy (pending or in effect), so this never turns it off.
+    /// See the overload below for the three rules.
+    @discardableResult
+    func applyCalendarChange(
+        workweekStartWeekday: Int,
+        payrollTimeZone: TimeZone,
+        today: CivilDay
+    ) -> PayrollCalendarPolicy? {
+        applyCalendarChange(
+            workweekStartWeekday: workweekStartWeekday,
+            payrollTimeZone: payrollTimeZone,
+            dailyOvertimeThresholdMinutes: policies.latestCalendar?.dailyOvertimeThresholdMinutes,
+            today: today
+        )
+    }
+
+    /// Applies a workweek-start, payroll-zone or daily-overtime change as ONE
+    /// not-yet-effective calendar policy. `dailyOvertimeThresholdMinutes`
+    /// is the full new value: 480 for "after 8 hours", nil for off.
     ///
     /// Three rules, each there for a reason:
     ///
@@ -269,13 +288,15 @@ final class PolicyStore {
     ///    user's payroll history.
     /// 3. **Reverting to what is already in effect removes the pending
     ///    policy entirely** rather than writing a no-op one, so the history
-    ///    only ever records real changes.
+    ///    only ever records real changes. "Already in effect" compares the
+    ///    workweek start, the zone AND the daily overtime threshold.
     ///
     /// Returns the pending policy, or nil when the change was a revert.
     @discardableResult
     func applyCalendarChange(
         workweekStartWeekday: Int,
         payrollTimeZone: TimeZone,
+        dailyOvertimeThresholdMinutes: Int?,
         today: CivilDay
     ) -> PayrollCalendarPolicy? {
         let settled = policies.calendars.filter { $0.effectiveFrom <= today }
@@ -285,12 +306,13 @@ final class PolicyStore {
         var kept = settled
         if let inEffect,
            inEffect.workweekStartWeekday == workweekStartWeekday,
-           inEffect.payrollTimeZone == payrollTimeZone {
+           inEffect.payrollTimeZone == payrollTimeZone,
+           inEffect.dailyOvertimeThresholdMinutes == dailyOvertimeThresholdMinutes {
             apply(CompensationPolicies(version: policies.version, rates: policies.rates, calendars: kept))
             return nil
         }
 
-        let policy = PolicyMigration.calendarPolicy(
+        var policy = PolicyMigration.calendarPolicy(
             effectiveFrom: today.adding(days: 1),
             workweekStartWeekday: workweekStartWeekday,
             payrollTimeZone: payrollTimeZone,
@@ -299,6 +321,7 @@ final class PolicyStore {
             // adding a second future policy.
             id: pending.first?.id ?? UUID()
         )
+        policy.dailyOvertimeThresholdMinutes = dailyOvertimeThresholdMinutes
         kept.append(policy)
         apply(CompensationPolicies(version: policies.version, rates: policies.rates, calendars: kept))
         return policy

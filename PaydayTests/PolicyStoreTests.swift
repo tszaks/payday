@@ -535,6 +535,79 @@ struct PolicyStoreEditTests {
         // shift logged from now on will be dated in.
         #expect(store.payrollTimeZone == PaydayTestZone.tokyo)
     }
+
+    @Test("turning daily overtime on queues a pending policy at the next boundary that carries the threshold")
+    func dailyOvertimeIsPending() {
+        let store = migratedStore(weekday: 2)
+        let today = CivilDay(year: 2026, month: 9, day: 30)
+
+        let pending = try! #require(store.applyCalendarChange(
+            workweekStartWeekday: 2, payrollTimeZone: PaydayTestZone.newYork,
+            dailyOvertimeThresholdMinutes: 480, today: today
+        ))
+        #expect(pending.dailyOvertimeThresholdMinutes == 480)
+        #expect(pending.effectiveFrom == CivilDay(year: 2026, month: 10, day: 5))
+        #expect(store.calendarPolicyInEffect(today: today)?.dailyOvertimeThresholdMinutes == nil)
+        #expect(store.pendingCalendarPolicy(today: today)?.id == pending.id)
+        #expect(CompensationLedger.acceptCalendarPolicies(store.policies.calendars).diagnostics.isEmpty)
+    }
+
+    @Test("turning daily overtime back off before it lands removes the pending policy")
+    func dailyOvertimeRevertRemoves() {
+        let store = migratedStore(weekday: 2)
+        let today = CivilDay(year: 2026, month: 9, day: 30)
+
+        store.applyCalendarChange(workweekStartWeekday: 2, payrollTimeZone: PaydayTestZone.newYork,
+                                  dailyOvertimeThresholdMinutes: 480, today: today)
+        #expect(store.policies.calendars.count == 2)
+        let reverted = store.applyCalendarChange(workweekStartWeekday: 2, payrollTimeZone: PaydayTestZone.newYork,
+                                                 dailyOvertimeThresholdMinutes: nil, today: today)
+        #expect(reverted == nil)
+        #expect(store.policies.calendars.count == 1)
+    }
+
+    @Test("a workweek change keeps daily overtime on, pending or already in effect")
+    func workweekChangeCarriesDailyOvertime() {
+        let store = migratedStore(weekday: 2)
+        let today = CivilDay(year: 2026, month: 9, day: 30)
+
+        // Pending: on, then the workweek start changes before it lands.
+        store.applyCalendarChange(workweekStartWeekday: 2, payrollTimeZone: PaydayTestZone.newYork,
+                                  dailyOvertimeThresholdMinutes: 480, today: today)
+        let replaced = try! #require(store.applyCalendarChange(
+            workweekStartWeekday: 1, payrollTimeZone: PaydayTestZone.newYork, today: today
+        ))
+        #expect(replaced.workweekStartWeekday == 1)
+        #expect(replaced.dailyOvertimeThresholdMinutes == 480)
+        #expect(store.policies.calendars.count == 2)
+
+        // In effect: weeks later the setting is live; a new workweek change keeps it.
+        let later = CivilDay(year: 2026, month: 10, day: 14)
+        let next = try! #require(store.applyCalendarChange(
+            workweekStartWeekday: 4, payrollTimeZone: PaydayTestZone.newYork, today: later
+        ))
+        #expect(next.dailyOvertimeThresholdMinutes == 480)
+        // And the engine helper carries it from `previous` on its own.
+        let helper = PolicyMigration.calendarPolicy(
+            effectiveFrom: later, workweekStartWeekday: 3, payrollTimeZone: PaydayTestZone.tokyo,
+            previous: store.calendarPolicyInEffect(today: later)
+        )
+        #expect(helper.dailyOvertimeThresholdMinutes == 480)
+    }
+
+    @Test("the daily overtime threshold survives the sync payload round trip")
+    func dailyOvertimeSyncRoundTrip() throws {
+        let store = migratedStore(weekday: 2)
+        store.applyCalendarChange(workweekStartWeekday: 2, payrollTimeZone: PaydayTestZone.newYork,
+                                  dailyOvertimeThresholdMinutes: 480, today: CivilDay(year: 2026, month: 9, day: 30))
+        let policiesJSON = try #require(String(data: JSONEncoder().encode(store.policies), encoding: .utf8))
+        let json = #"{"user_id":"11111111-1111-4111-8111-111111111111","smart_nudge_enabled":true,"payday_reminder_enabled":true,"move_ledger":{},"compensation_policies":"#
+            + policiesJSON + #","client_updated_at":"2026-10-01T00:00:00Z"}"#
+        let decoded = try JSONDecoder().decode(RemoteUserSettings.self, from: Data(json.utf8))
+        #expect(decoded.compensationPolicies == store.policies)
+        let again = try JSONDecoder().decode(RemoteUserSettings.self, from: JSONEncoder().encode(decoded))
+        #expect(again.compensationPolicies?.latestCalendar?.dailyOvertimeThresholdMinutes == 480)
+    }
 }
 
 /// The frozen payroll zone, measured on the two app types that bucket by
