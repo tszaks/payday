@@ -71,21 +71,14 @@ struct LogShiftRoleFactsTests {
         #expect(LogShiftRoleFacts(shifts: shifts, tappedAddRole: false).chips == ["Bar", "Host", "Floor"])
     }
 
-    @Test("preselect: same weekday and period first, else the most recent shift")
-    func preselect() {
-        // 2026-10-03 and 2026-10-10 are Saturdays.
-        let shifts = [
-            entry("Bar", day(2026, 10, 3), .lunch),
-            entry("Floor", day(2026, 10, 3), .dinner),
-            entry("Floor", day(2026, 10, 8), .lunch),
-        ]
-        let calendar = rolesCalendar()
-        #expect(LogShiftRoleFacts.preselected(shifts: shifts, workDate: day(2026, 10, 10), period: .lunch, calendar: calendar) == "Bar")
-        #expect(LogShiftRoleFacts.preselected(shifts: shifts, workDate: day(2026, 10, 10), period: .dinner, calendar: calendar) == "Floor")
-        // A Monday dinner has no match: the most recent shift's role.
-        #expect(LogShiftRoleFacts.preselected(shifts: shifts, workDate: day(2026, 10, 12), period: .dinner, calendar: calendar) == "Floor")
-        #expect(LogShiftRoleFacts.preselected(shifts: [entry(nil, day(2026, 10, 3))], workDate: day(2026, 10, 10), period: nil, calendar: calendar) == nil)
-        #expect(LogShiftRoleFacts.preselected(shifts: [], workDate: day(2026, 10, 10), period: nil, calendar: calendar) == nil)
+    @Test("a new shift never starts with a role: nothing is seeded from history")
+    func nothingSeeded() {
+        // Tyler's no-assumptions law (2026-07-27). The facts carry no
+        // "starts with" at all; the only role a draft has is the one chosen.
+        let shifts = [entry("Bar", day(2026, 10, 3), .lunch), entry("Floor", day(2026, 10, 8), .dinner)]
+        let facts = LogShiftRoleFacts(shifts: shifts, tappedAddRole: false, draftRole: nil)
+        #expect(facts.chips == ["Floor", "Bar"])
+        #expect(facts.isRowVisible)
     }
 
     @Test("tapping a chip selects it; tapping the selected chip clears it")

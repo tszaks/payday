@@ -499,7 +499,9 @@ struct LogTipSheet: View {
             // Nothing is seeded from history — Tyler's no-assumptions law
             // (2026-07-27): every shift is different, patterns never
             // pre-populate a field. Only facts prefill: a live session's
-            // exact punches (init) and today's date.
+            // exact punches (init) and today's date. The role (PR B) is no
+            // exception: a wrong role silently moves the wage, and the chips
+            // are one tap, most recent first.
             break
         case .editShift:
             // Nothing to upgrade: the record already carried every
@@ -513,22 +515,6 @@ struct LogTipSheet: View {
         prefersCreditFirstCache = computePrefersCreditFirst()
         applyLiveShiftEndModeIfNeeded()
         seedShiftDetailDefaults()
-        seedRole()
-    }
-
-    /// A new shift starts with the role of the most recent shift on the same
-    /// weekday and period, else the most recent shift's role (PR B's plan,
-    /// a deliberate exception to "nothing is seeded from history": the role
-    /// picks the wage, and a coworker who always works the bar on Saturday
-    /// mornings should not have to say so every time). Nil on an account
-    /// with no roles, so nothing changes there.
-    private func seedRole() {
-        guard case .new = target, roleName == nil else { return }
-        roleName = LogShiftRoleFacts.preselected(
-            shifts: ShiftRoleList.entries(shiftRecords),
-            workDate: date,
-            period: shiftPeriod
-        )
     }
 
     /// Top to bottom, this sheet is ordered by a deliberate hierarchy:
@@ -1135,13 +1121,18 @@ struct LogTipSheet: View {
                                 roleName = LogShiftRoleFacts.toggled(roleName, tapping: chip)
                             }
                         }
-                        // A role typed this session that no saved shift has yet.
-                        if let roleName, !roleFacts.chips.contains(where: { ShiftRoleList.matches($0, roleName) }) {
+                        // A role typed this session that no saved shift has yet,
+                        // once the field is closed; while it is open the field
+                        // itself is the role.
+                        if !isTypingNewRole, let roleName, !roleFacts.chips.contains(where: { ShiftRoleList.matches($0, roleName) }) {
                             roleChip(roleName, isSelected: true) { self.roleName = nil }
                         }
                         if !isTypingNewRole {
                             roleChip("New role", isSelected: false) {
+                                // A new role replaces the selected chip, so
+                                // the field starts empty and so does the role.
                                 newRoleText = ""
+                                roleName = nil
                                 isTypingNewRole = true
                             }
                         }
@@ -1152,9 +1143,18 @@ struct LogTipSheet: View {
                         .textInputAutocapitalization(.words)
                         .submitLabel(.done)
                         .onChange(of: newRoleText) { _, text in
-                            if text.count > ShiftRole.maxLength {
-                                newRoleText = String(text.prefix(ShiftRole.maxLength))
+                            // Capped in the server's unit (scalars), see
+                            // `ShiftRole.maxLength`.
+                            let capped = ShiftRole.capped(text)
+                            if capped != text {
+                                newRoleText = capped
+                                return
                             }
+                            // The field IS the role while it is open, so a
+                            // name typed and never submitted still saves (and
+                            // live-saves an edited shift) instead of being
+                            // lost when the sheet closes.
+                            roleName = ShiftRole.normalized(text)
                         }
                         .onSubmit {
                             if let typed = ShiftRole.normalized(newRoleText) {

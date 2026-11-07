@@ -166,9 +166,10 @@ struct LogShiftFacts: Equatable, SnapshotFacts {
     }
 }
 
-/// The log sheet's Role row: whether it shows, which chips it offers, and
-/// which role a new shift starts with. Pure, so the invisibility rule is a
-/// test rather than a hope.
+/// The log sheet's Role row: whether it shows and which chips it offers.
+/// Pure, so the invisibility rule is a test rather than a hope. A new shift
+/// never starts with a role: Tyler's no-assumptions law (2026-07-27), nothing
+/// is seeded from history, and a wrong role would silently move the wage.
 struct LogShiftRoleFacts: Equatable {
     /// The roles already used on this account, most recent first.
     let chips: [String]
@@ -181,21 +182,6 @@ struct LogShiftRoleFacts: Equatable {
     init(shifts entries: [ShiftRoleList.Entry], tappedAddRole: Bool, draftRole: String? = nil) {
         chips = ShiftRoleList.byRecency(entries)
         isRowVisible = !chips.isEmpty || tappedAddRole || draftRole != nil
-    }
-
-    /// The role a NEW shift starts with (see `ShiftRoleList.preselected`).
-    static func preselected(
-        shifts entries: [ShiftRoleList.Entry],
-        workDate: Date,
-        period: ShiftPeriod?,
-        calendar: Calendar = .current
-    ) -> String? {
-        ShiftRoleList.preselected(
-            entries,
-            weekday: calendar.component(.weekday, from: workDate),
-            period: period,
-            calendar: calendar
-        )
     }
 
     /// Tapping a chip selects it; tapping the selected chip clears it.

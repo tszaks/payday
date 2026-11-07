@@ -61,24 +61,6 @@ enum ShiftRoleList {
             .map(\.element)
     }
 
-    /// The role a new shift starts with: the role of the most recent shift
-    /// on the same weekday AND period, else the role of the most recent
-    /// shift. Nil when the most recent match has no role, or no shift has one.
-    static func preselected(
-        _ entries: [Entry],
-        weekday: Int,
-        period: ShiftPeriod?,
-        calendar: Calendar = .current
-    ) -> String? {
-        let ordered = newestFirst(entries)
-        if let match = ordered.first(where: {
-            calendar.component(.weekday, from: $0.workDate) == weekday && $0.shiftPeriod == period
-        }), let role = ShiftRole.normalized(match.roleName) {
-            return role
-        }
-        return ordered.first.flatMap { ShiftRole.normalized($0.roleName) }
-    }
-
     /// Whether `roleName` is `role` under the comparison rule.
     static func matches(_ roleName: String?, _ role: String) -> Bool {
         guard let key = ShiftRole.key(roleName) else { return false }
