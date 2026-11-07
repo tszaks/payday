@@ -686,6 +686,62 @@ struct LogShiftPreviewPerformanceTests {
 @Suite("The workweek window changes no figure")
 @MainActor
 struct LogShiftPreviewWindowTests {
+    /// E2a review (Codex): the ledger buckets each job by its OWN calendars,
+    /// so the preview window must be the draft's job's workweek. A Cafe
+    /// week starting Sunday, windowed by a Monday-start primary calendar,
+    /// would drop Sunday and understate Wednesday's overtime while typing.
+    @Test("a second job's draft is windowed by its own workweek, so the preview equals the whole history")
+    func windowedEqualsWholeHistoryForASecondJob() throws {
+        let cafeRate = PayRatePolicy(
+            id: PolicyMigration.deterministicID("log/rate/cafe"),
+            effectiveFrom: .distantPast, hourlyRateCents: 1_000, provenance: .confirmed, jobName: "Cafe")
+        let primaryMonday = PayrollCalendarPolicy(
+            id: PolicyMigration.deterministicID("log/calendar/primary-monday"),
+            effectiveFrom: .distantPast, workweekStartWeekday: 2, payrollTimeZone: PaydayTestZone.payroll)
+        let cafeSunday = PayrollCalendarPolicy(
+            id: PolicyMigration.deterministicID("log/calendar/cafe-sunday"),
+            effectiveFrom: .distantPast, workweekStartWeekday: 1, payrollTimeZone: PaydayTestZone.payroll,
+            jobName: "Cafe")
+        let policies = CompensationPolicies(
+            rates: sundayStartPolicies().rates + [cafeRate],
+            calendars: [primaryMonday, cafeSunday],
+            jobs: [
+                JobPolicy(id: logShiftID(901), name: "Bistro", schedule: nil, isPrimary: true),
+                JobPolicy(id: logShiftID(902), name: "Cafe", schedule: nil, isPrimary: false),
+            ])
+        let history = weekOfFiftyHours().map { record in record.jobName = "Cafe"; return record }
+        let draft = ShiftDraftPreview.draftInput(
+            date: Draft.date,
+            cashCents: Draft.cashCents,
+            creditCents: Draft.creditCents,
+            recordedAt: Draft.recordedAt,
+            shiftID: logShiftID(99),
+            hoursWorked: Draft.hoursWorked,
+            tipOutCents: Draft.tipOutCents,
+            salesCents: 0,
+            shiftPeriod: .dinner,
+            clockIn: nil,
+            clockOut: nil,
+            serverCount: nil,
+            jobName: "Cafe",
+            receiptMetrics: nil,
+            normalizeEarnings: false,
+            policies: policies
+        )
+        #expect(draft?.jobName == "Cafe")
+
+        let windowed = draftFacts(records: history, policies: policies, draft: draft, windowed: true)
+        let whole = draftFacts(records: history, policies: policies, draft: draft, windowed: false)
+
+        #expect(windowed.total.cents == whole.total.cents)
+        #expect(windowed.hourlyRateText == whole.hourlyRateText)
+        #expect(windowed.draftMinutes == whole.draftMinutes)
+        // The Cafe week under its own Sunday-start calendar is the one-job
+        // fixture week under the one-job calendar, so the figure is the
+        // measured one: the job changes nothing but the partition.
+        #expect(windowed.total.cents == 24_075)
+    }
+
     @Test("the windowed preview and the whole-history preview give the identical figure")
     func windowedEqualsWholeHistory() throws {
         // Four years of shifts BEFORE the fixture week, so the window is
