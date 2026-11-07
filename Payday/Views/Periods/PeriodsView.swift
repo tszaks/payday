@@ -246,17 +246,25 @@ struct PeriodsView: View {
                     // the share sheet actually asks for the file's data
                     // (inside CSVExport's FileRepresentation closure) —
                     // never on a plain render of this toolbar item.
-                    ShareLink(
-                        item: CSVExport {
-                            CSVExporter.export(
-                                records: shiftRecords,
-                                paycheckRecords: paycheckRecords.hidingPendingRemoval(),
-                                calculator: calculator
-                            )
-                        },
-                        preview: SharePreview("Payday-Export.csv")
-                    ) {
-                        Image(systemName: "square.and.arrow.up")
+                    // One job: the plain share, exactly as before. Two or
+                    // more (E3): a menu, "All jobs" first, then each job.
+                    if jobs.count >= 2 {
+                        Menu {
+                            csvShareLink("All jobs", job: .all)
+                            ForEach(jobs) { job in
+                                csvShareLink(job.name, job: .job(job.tag))
+                            }
+                        } label: {
+                            Image(systemName: "square.and.arrow.up")
+                        }
+                        .accessibilityLabel("Export")
+                    } else {
+                        ShareLink(
+                            item: csvExport(job: .all),
+                            preview: SharePreview("Payday-Export.csv")
+                        ) {
+                            Image(systemName: "square.and.arrow.up")
+                        }
                     }
                 }
             }
@@ -320,6 +328,25 @@ struct PeriodsView: View {
             policies: policies,
             payrollTimeZone: zone
         )
+    }
+
+    /// The file is built only when the share sheet asks for it. Every row
+    /// is priced on its own job's grid; `job` drops the other jobs' rows.
+    private func csvExport(job: JobScope) -> CSVExport {
+        CSVExport {
+            CSVExporter.export(
+                records: shiftRecords,
+                paycheckRecords: paycheckRecords.hidingPendingRemoval(),
+                calculatorForJob: { policyStore.calculator(forJob: $0, primarySchedule: scheduleStore.schedule) },
+                job: job
+            )
+        }
+    }
+
+    private func csvShareLink(_ title: String, job: JobScope) -> some View {
+        ShareLink(item: csvExport(job: job), preview: SharePreview("Payday-Export.csv")) {
+            Text(title)
+        }
     }
 
     private var calculator: PayPeriodCalculator {

@@ -60,23 +60,50 @@ enum CSVExporter {
         calendar: Calendar = .current,
         valuations: [UUID: ShiftValuation] = [:]
     ) -> String {
-        export(shifts: records.map(RowShift.init(record:)), paycheckRecords: paycheckRecords, calculator: calculator, calendar: calendar, valuations: valuations)
+        export(records: records, paycheckRecords: paycheckRecords, calculatorForJob: { _ in calculator }, calendar: calendar, valuations: valuations)
+    }
+
+    /// The same file with each row priced on its OWN job's pay-period grid
+    /// (E3): a second job paid on another schedule must not have its shifts
+    /// filed under the primary's periods or matched to the primary's check.
+    /// `job` drops the other jobs' rows; `.all` keeps every row. Build
+    /// `calculatorForJob` from `PolicyStore.calculator(forJob:primarySchedule:)`.
+    @MainActor
+    static func export(
+        records: [ShiftRecord],
+        paycheckRecords: [PaycheckRecord],
+        calculatorForJob: (String?) -> PayPeriodCalculator,
+        job: JobScope = .all,
+        calendar: Calendar = .current,
+        valuations: [UUID: ShiftValuation] = [:]
+    ) -> String {
+        let kept = records.filter { job.includes($0.jobName) }
+        return export(shifts: kept.map(RowShift.init(record:)), paycheckRecords: paycheckRecords, calculatorForJob: calculatorForJob, calendar: calendar, valuations: valuations)
     }
 
     private static func export(
         shifts unsorted: [RowShift],
         paycheckRecords: [PaycheckRecord],
-        calculator: PayPeriodCalculator,
+        calculatorForJob: (String?) -> PayPeriodCalculator,
         calendar: Calendar,
         valuations: [UUID: ShiftValuation]
     ) -> String {
         let shifts = unsorted.sorted { $0.day < $1.day }
         let includesRole = shifts.contains { $0.roleName != nil }
         let includesJob = shifts.contains { $0.jobName != nil }
+        // One calculator per job, built once rather than once per row.
+        var calculators: [String?: PayPeriodCalculator] = [:]
+        func calculator(for jobName: String?) -> PayPeriodCalculator {
+            let key = ShiftRole.key(jobName)
+            if let cached = calculators[key] { return cached }
+            let built = calculatorForJob(ShiftRole.normalized(jobName))
+            calculators[key] = built
+            return built
+        }
         var dayShiftCounts: [Date: Int] = [:]
         for shift in shifts { dayShiftCounts[shift.day, default: 0] += 1 }
         let rows = shifts.map { shift -> String in
-            row(for: shift, dayHasMultipleShifts: (dayShiftCounts[shift.day] ?? 0) >= 2, paycheckRecords: paycheckRecords, calculator: calculator, calendar: calendar, valuation: valuations[shift.shiftID], includesRole: includesRole, includesJob: includesJob)
+            row(for: shift, dayHasMultipleShifts: (dayShiftCounts[shift.day] ?? 0) >= 2, paycheckRecords: paycheckRecords, calculator: calculator(for: shift.jobName), calendar: calendar, valuation: valuations[shift.shiftID], includesRole: includesRole, includesJob: includesJob)
         }
         return ([header(includesRole: includesRole, includesJob: includesJob)] + rows).joined(separator: "\n")
     }
