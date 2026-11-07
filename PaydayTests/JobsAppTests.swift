@@ -156,6 +156,20 @@ struct JobCommandsTests {
                 == "Cafe is on 2 shifts and 1 paycheck. Move them to another job first.")
     }
 
+    @Test("other Settings edits (clearing the wage, changing the workweek) keep the job list")
+    func otherPolicyEditsKeepJobs() {
+        store.apply(twoJobs())
+        store.applyRateEdit(hourlyRateCents: nil)
+        #expect(store.policies.jobNames == ["Bistro", "Cafe"])
+        let today = CivilDay(year: 2026, month: 10, day: 5)
+        _ = store.applyCalendarChange(workweekStartWeekday: 2, payrollTimeZone: PaydayTestZone.payroll,
+                                      dailyOvertimeThresholdMinutes: nil, today: today)
+        #expect(store.policies.jobNames == ["Bistro", "Cafe"])
+        _ = store.applyCalendarChange(workweekStartWeekday: 2, payrollTimeZone: PaydayTestZone.payroll,
+                                      dailyOvertimeThresholdMinutes: nil, today: today)
+        #expect(store.policies.jobNames == ["Bistro", "Cafe"])
+    }
+
     @Test("deleting the only extra job returns to one job: no list, no Job row")
     func deleteToOneJob() {
         store.apply(twoJobs())
