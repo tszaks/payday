@@ -2,16 +2,17 @@ import SwiftData
 import SwiftUI
 
 /// Settings > Payroll: the rate, the rate's history, the workweek the
-/// overtime threshold is counted over, and the payroll time zone those
-/// civil days are measured in (PaydayCore Design 1).
+/// overtime threshold is counted over, the optional daily overtime rule, and
+/// the payroll time zone those civil days are measured in (PaydayCore Design 1).
 ///
 /// It is a section rather than its own screen because these four facts are
 /// read together: "what am I paid, since when, over which week, in which
 /// zone" is one question. The estimate disclaimer is part of the section for
-/// the same reason — the overtime rule this engine supports (1.5x past 40
-/// hours in a workweek) is the common federal one, not a guarantee about
-/// anybody's state or employer, and the number is labelled where it is
-/// produced rather than in an About screen nobody opens.
+/// the same reason — the overtime rules this engine supports (1.5x past 40
+/// hours in a workweek, and optionally past 8 hours in a payroll day, with no
+/// double time) are an estimate, not a guarantee about anybody's state or
+/// employer, and the number is labelled where it is produced rather than in
+/// an About screen nobody opens.
 struct PayrollSettingsSection: View {
     @Environment(PolicyStore.self) private var policyStore
     @Environment(UserPreferencesStore.self) private var preferencesStore
@@ -204,6 +205,8 @@ struct PayrollSettingsSection: View {
                 }
             }
 
+            Toggle("Daily overtime after 8 hours", isOn: dailyOvertimeBinding)
+
             if let pending = policyStore.pendingCalendarPolicy(today: today) {
                 // Never silent about the delay: a change that took effect
                 // today would re-bucket days already worked and move the
@@ -241,7 +244,7 @@ struct PayrollSettingsSection: View {
         } footer: {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Your shifts are dated in the payroll time zone, so travelling never moves one into a different day or week.")
-                Text("Overtime is an estimate: 1.5x after 40 hours in a workweek. Your state or employer may count it differently.")
+                Text("Overtime is an estimate: 1.5x after 40 hours in a workweek, and after 8 hours in a day when daily overtime is on. California, Alaska, Nevada and Colorado count it that way. No double time. Your state or employer may count it differently.")
                 if policyStore.policies.hasOnlyAssumedRates, shiftCount > 0 {
                     Text("Wages are estimated from your current rate.")
                 }
@@ -265,6 +268,26 @@ struct PayrollSettingsSection: View {
             Text("Shifts you have already logged keep the zone they were dated in. Only shifts from the next workweek on use the new one.")
         }
     }
+
+    /// On when the latest calendar policy (pending or in effect) has a daily
+    /// threshold. A change queues a pending policy like the workweek picker,
+    /// so the "Takes effect" line above shows for it too.
+    private var dailyOvertimeBinding: Binding<Bool> {
+        Binding(
+            get: { policyStore.policies.latestCalendar?.dailyOvertimeThresholdMinutes != nil },
+            set: { isOn in
+                policyStore.applyCalendarChange(
+                    workweekStartWeekday: workweekStartWeekday,
+                    payrollTimeZone: policyStore.payrollTimeZone,
+                    dailyOvertimeThresholdMinutes: isOn ? Self.dailyOvertimeThresholdMinutes : nil,
+                    today: today
+                )
+            }
+        )
+    }
+
+    /// 8 hours: the daily rule in California, Alaska, Nevada and Colorado.
+    static let dailyOvertimeThresholdMinutes = 480
 
     private var wageRow: some View {
         HStack {
