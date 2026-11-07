@@ -75,23 +75,19 @@ public struct CompensationPolicies: Hashable, Codable, Sendable {
     /// Job names, primary first, then in the order they were added.
     public var jobNames: [String] { jobs.map(\.name) }
 
-    /// The policies that belong to one job: rates and calendars whose
-    /// `jobName` matches (trimmed, case-insensitive). Policies with no job
-    /// belong to the primary, so `nil` and the primary's own name both
-    /// answer with them. Jobs are carried through unchanged.
-    public func policies(forJob job: String?) -> CompensationPolicies {
-        let key = ShiftRole.key(job)
-        let primaryKey = ShiftRole.key(primaryJob?.name)
-        let isPrimary = key == nil || key == primaryKey
-        func belongs(_ jobName: String?) -> Bool {
-            let policyKey = ShiftRole.key(jobName)
-            if policyKey == nil { return isPrimary }
-            return policyKey == key || (isPrimary && policyKey == primaryKey)
-        }
+    /// The policies that belong to one job TAG (`JobPolicy.tag`): rates and
+    /// calendars whose `jobName` matches it (trimmed, case-insensitive).
+    /// Nil is the primary job, and only nil: this is exactly the partition
+    /// `CompensationLedger.evaluate` makes, so a screen and the engine can
+    /// never disagree about which policies price a shift. The primary's name
+    /// is not a tag (see `JobPolicy.tag`) and answers with nothing. Jobs are
+    /// carried through unchanged.
+    public func policies(forJob tag: String?) -> CompensationPolicies {
+        let key = ShiftRole.key(tag)
         return CompensationPolicies(
             version: version,
-            rates: rates.filter { belongs($0.jobName) },
-            calendars: calendars.filter { belongs($0.jobName) },
+            rates: rates.filter { ShiftRole.key($0.jobName) == key },
+            calendars: calendars.filter { ShiftRole.key($0.jobName) == key },
             jobs: jobs
         )
     }

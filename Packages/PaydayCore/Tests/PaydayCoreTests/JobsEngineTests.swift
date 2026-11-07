@@ -143,6 +143,25 @@ struct JobsEngineTests {
         #expect(byID[primaryCheck.id]?.expected.shiftIDs == Self.primaryIDs)
     }
 
+    @Test("Two jobs paid on the same day: the job scope finds each job's own check")
+    func sharedPaydayPerJob() throws {
+        let end = Self.day("2026-01-11")
+        let cafeCheck = PaycheckInput(
+            id: Self.uuid(310), periodStart: Self.day("2026-01-05"), periodEnd: end,
+            paidTipsCents: 0, jobName: "Cafe")
+        let primaryCheck = PaycheckInput(
+            id: Self.uuid(311), periodStart: Self.day("2026-01-05"), periodEnd: end,
+            paidTipsCents: 0)
+        let snap = try Self.snapshot(paychecks: [cafeCheck, primaryCheck])
+        #expect(snap.paycheck(periodEnd: end, job: .job("Cafe"))?.paycheck.id == cafeCheck.id)
+        #expect(snap.paycheck(periodEnd: end, job: .job("Cafe"))?.expected.shiftIDs == Self.cafeIDs)
+        #expect(snap.paycheck(periodEnd: end, job: .job(nil))?.paycheck.id == primaryCheck.id)
+        #expect(snap.paycheck(periodEnd: end, job: .job(nil))?.expected.shiftIDs == Self.primaryIDs)
+        // `.all` keeps the pre-jobs rule: the first in canonical order.
+        #expect(snap.paycheck(periodEnd: end)?.paycheck.id == cafeCheck.id)
+        #expect(snap.paycheck(periodEnd: end, job: .job("Nowhere")) == nil)
+    }
+
     @Test("A job tag changes the manifest digest; no tag leaves the line as before")
     func manifestCarriesJob() throws {
         let untagged = try EarningsInputs(shifts: Self.week(cafe: nil), asOf: Self.day("2026-12-31")).manifest()

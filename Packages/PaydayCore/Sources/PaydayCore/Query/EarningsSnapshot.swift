@@ -228,13 +228,16 @@ public struct EarningsSnapshot: Codable, Sendable, Equatable {
     /// whole-period stub against, and it would report a shortfall equal to
     /// the period's remaining days.
     ///
-    /// Nil when no paycheck was recorded for that period end. With two
-    /// paychecks sharing a period end (nothing forbids it), this returns the
-    /// first in canonical `(periodEnd, periodStart, id)` order — a
-    /// deterministic choice rather than an arbitrary one, so two consumers
-    /// pick the same row.
-    public func paycheck(periodEnd: CivilDay) -> PaycheckReconciliation? {
-        guard let paycheck = index.paycheckByPeriodEnd[periodEnd.dayNumber] else { return nil }
+    /// Nil when no paycheck was recorded for that period end. `job` narrows
+    /// to one job's paycheck: two jobs paid on the same day each have their
+    /// own check, and a Periods row for one job must find its own, not the
+    /// other's. With `.all` and two paychecks sharing a period end (nothing
+    /// forbids it), this returns the first in canonical `(periodEnd,
+    /// periodStart, id)` order — a deterministic choice rather than an
+    /// arbitrary one, so two consumers pick the same row.
+    public func paycheck(periodEnd: CivilDay, job: JobScope = .all) -> PaycheckReconciliation? {
+        guard let paycheck = index.paychecksByPeriodEnd[periodEnd.dayNumber]?
+            .first(where: { job.includes($0.jobName) }) else { return nil }
         return PaycheckReconciliation(
             paycheck: paycheck,
             expected: settled(
@@ -469,16 +472,15 @@ public struct EarningsSnapshot: Codable, Sendable, Equatable {
     private struct Index: Sendable {
         let byID: [UUID: ShiftValuation]
         let byDay: [Int: [ShiftValuation]]
-        let paycheckByPeriodEnd: [Int: PaycheckInput]
+        /// Every paycheck ending that day, in canonical order, so a lookup
+        /// can pick one job's check (`paycheck(periodEnd:job:)`).
+        let paychecksByPeriodEnd: [Int: [PaycheckInput]]
         let completeness: Completeness
 
         init(shifts: [ShiftValuation], paychecks: [PaycheckInput], wageFeatureEnabled: Bool) {
             byID = Dictionary(shifts.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
             byDay = Dictionary(grouping: shifts, by: { $0.workDay.dayNumber })
-            paycheckByPeriodEnd = Dictionary(
-                paychecks.map { ($0.periodEnd.dayNumber, $0) },
-                uniquingKeysWith: { first, _ in first }
-            )
+            paychecksByPeriodEnd = Dictionary(grouping: paychecks, by: { $0.periodEnd.dayNumber })
             completeness = Completeness(valuations: shifts, wageFeatureEnabled: wageFeatureEnabled)
         }
     }
