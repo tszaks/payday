@@ -77,6 +77,7 @@ struct PeriodsPageFacts: SnapshotFacts {
         paycheckRecords: [PaycheckRecord],
         schedule: PaySchedule?,
         payrollTimeZone: TimeZone,
+        cardTipsPaidAtClose: Bool = false,
         now: Date = .now,
         calendar: Calendar = .current
     ) {
@@ -115,7 +116,8 @@ struct PeriodsPageFacts: SnapshotFacts {
                 paycheck: paycheck,
                 result: result,
                 earned: result.map(EarningsFigure.earnedIncome) ?? .unavailable(),
-                checked: PeriodCheckComparison(result: result, paycheck: paycheck)
+                checked: PeriodCheckComparison(
+                    result: result, paycheck: paycheck, cardTipsOnCheck: !cardTipsPaidAtClose)
             )
         }
 
@@ -160,6 +162,7 @@ struct PeriodsView: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(PayScheduleStore.self) private var scheduleStore
     @Environment(PolicyStore.self) private var policyStore
+    @Environment(UserPreferencesStore.self) private var preferencesStore
     @Environment(TabRouter.self) private var tabRouter
     /// The other representation. `snapshotBuild` picks one, and it must be
     /// the SAME one `PeriodDetailView` picks: this list pushes into that
@@ -188,6 +191,7 @@ struct PeriodsView: View {
             paycheckRecords: paycheckRecords.hidingPendingRemoval(),
             schedule: schedule,
             payrollTimeZone: policyStore.payrollTimeZone,
+            cardTipsPaidAtClose: preferencesStore.isCardTipsPaidAtClose,
             now: currentDay
         )
         NavigationStack(path: $path) {

@@ -90,6 +90,11 @@ extension BreakdownRow {
         if components.gratuityFeesCents > 0 {
             rows.append(BreakdownRow("Gratuity & fees", cents: components.gratuityFeesCents))
         }
+        // `MetricID.tipShareIn`. It ADDS, so it sits with the other adds,
+        // and only when something was received.
+        if components.tipShareInCents > 0 {
+            rows.append(BreakdownRow("Tip share received", cents: components.tipShareInCents))
+        }
         if result.completeness.shiftsWageValued > 0 {
             // Regular hours only. `result.minutes` is the TOTAL, so captioning
             // this row with it would claim the base-rate line covers hours

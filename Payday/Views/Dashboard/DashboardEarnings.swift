@@ -93,7 +93,8 @@ enum DashboardEarnings {
         records: [ShiftRecord],
         policies: CompensationPolicies,
         payrollTimeZone: TimeZone,
-        paychecks: [PaycheckRecord] = []
+        paychecks: [PaycheckRecord] = [],
+        cardTipsPaidAtClose: Bool = false
     ) -> Dataset {
         let adapted = ShiftInputAdapter.adapt(records, calendars: policies.calendars)
         let snapshot = try? EarningsSnapshot.build(EarningsInputs(
@@ -109,7 +110,8 @@ enum DashboardEarnings {
             snapshot: snapshot,
             shiftRecordDays: records,
             tipRecords: StatsRecordAdapter.tipRecords(from: records),
-            withholdingModel: WithholdingModelAdapter.model(from: paychecks)
+            withholdingModel: WithholdingModelAdapter.model(from: paychecks),
+            cardTipsPaidAtClose: cardTipsPaidAtClose
         )
     }
 
@@ -138,5 +140,8 @@ enum DashboardEarnings {
         /// The person's after-tax model, fitted once per dataset from the
         /// stubs that carry both gross and net. Nil under 2 such stubs.
         let withholdingModel: WithholdingModel?
+        /// Settings → Payroll, "Card tips are paid". Carried on the dataset
+        /// so every expected-check figure built from it uses one answer.
+        var cardTipsPaidAtClose: Bool = false
     }
 }

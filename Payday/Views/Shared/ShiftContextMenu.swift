@@ -95,6 +95,7 @@ private func duplicateShift(_ record: ShiftRecord, into context: ModelContext) {
             clockIn: record.clockIn,
             clockOut: record.clockOut,
             serverCount: record.serverCount,
+            tipShareInCents: record.tipShareInCents,
             receiptMetrics: record.receiptMetrics,
             note: record.note
         )
