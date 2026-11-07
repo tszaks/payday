@@ -143,7 +143,8 @@ struct JobsDashboardCardsTests {
         #expect(after[0].heroPeriod == today.heroPeriod)
         #expect(after[0].shiftCount == today.shiftCount)
         #expect(after[0].predictedPaycheckNet == today.predictedPaycheckNet)
-        #expect(after[0].heroCheckLine == today.heroCheckLine)
+        #expect(after[0].heroCheckGross == today.heroCheckGross)
+        #expect(after[0].heroCheckNet == today.heroCheckNet)
         #expect(after[0].shiftRecordDays.map(\.id) == today.shiftRecordDays.map(\.id))
     }
 

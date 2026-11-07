@@ -323,9 +323,11 @@ struct DashboardRecordsArmParityTests {
         #expect(c.tipOutCents > 0, "the fixture must exercise a tip-out, or the sign is untested")
     }
 
-    /// **"Nothing after tax under 2 stubs."** The hero's check line keeps
-    /// its before-tax half whenever the gross is available; the after-tax
-    /// half appears only once the person's own stubs can fit a model.
+    /// **"Nothing after tax under 2 stubs."** The drawer's check rows keep
+    /// the before-tax row whenever the gross is available; the after-tax
+    /// row appears only once the person's own stubs can fit a model. (The
+    /// same two figures were one caption line on the hero's face until
+    /// 2026-11-07; the rows carry the same rule.)
     @Test("heroCheckNet is unavailable under 2 qualifying stubs and available with 3")
     func heroCheckNetNeedsStubs() throws {
         func stub(_ day: Int, _ gross: Int, _ net: Int?) -> PaycheckRecord {
@@ -339,8 +341,11 @@ struct DashboardRecordsArmParityTests {
                          paychecks: [stub(1, 200_000, 165_000), stub(5, 210_000, nil)])
         #expect(!thin.heroCheckGross.isUnavailable)
         #expect(thin.heroCheckNet.isUnavailable)
-        #expect(thin.heroCheckLine?.hasPrefix("Check so far · ") == true)
-        #expect(thin.heroCheckLine?.contains("after tax") == false)
+        let thinRows = thin.heroCheckRows
+        #expect(thinRows.map(\.label) == ["On your check, before tax"])
+        #expect(thinRows.first?.cents == thin.heroCheckGross.cents)
+        #expect(thinRows.first?.wholeDollars == false, "the check so far is exact, not a prediction")
+        #expect(MetricID.expectedPaycheckGross.allowedLabels.contains(thinRows[0].label))
 
         let three = facts(Self.records(), now: now, schedule: Self.schedule(),
                           paychecks: [stub(1, 200_000, 165_000), stub(5, 220_000, 179_000), stub(9, 180_000, 151_000)])
@@ -348,7 +353,31 @@ struct DashboardRecordsArmParityTests {
         #expect(three.heroCheckNet.metric == .expectedPaycheckNet)
         #expect(three.heroCheckNet.completeness == three.heroCheckGross.completeness)
         #expect(three.heroCheckNet.caption?.hasPrefix("From 3 stubs") == true)
-        #expect(three.heroCheckLine?.contains("after tax") == true)
+        let threeRows = three.heroCheckRows
+        #expect(threeRows.map(\.label) == ["On your check, before tax", "After tax, about"])
+        #expect(threeRows.last?.cents == three.heroCheckNet.cents)
+        #expect(threeRows.last?.wholeDollars == true, "the net is a prediction: whole dollars")
+        #expect(threeRows.last?.caption?.hasPrefix("From 3 stubs") == true)
+        #expect(MetricID.expectedPaycheckNet.allowedLabels.contains(threeRows[1].label))
+    }
+
+    /// **"A wage-only period still shows its check."** The ledger has no
+    /// tip rows for it, so `BreakdownRow.hasBreakdown` says there is nothing
+    /// to itemize; but the check rows live in the drawer now, so the drawer
+    /// must open for them or the figure the face used to state becomes
+    /// unreachable (Codex and Devin on PR #166).
+    @Test("the drawer opens for a wage-only current period because its check rows exist")
+    func wageOnlyPeriodKeepsItsCheckReachable() throws {
+        let now = Self.at(2026, 10, 7, hour: 12)
+        let wageOnly = [
+            ShiftRecord(workDate: Self.at(2026, 10, 5), shiftPeriod: .dinner,
+                        cashTipsCents: 0, creditTipsCents: 0,
+                        hoursWorked: 8, recordedAt: Self.at(2026, 10, 5)),
+        ]
+        let facts = facts(wageOnly, now: now, schedule: Self.schedule())
+        #expect(!facts.heroCheckGross.isUnavailable, "a priced shift backs a check figure")
+        #expect(facts.heroCheckRows.map(\.label) == ["On your check, before tax"])
+        #expect(facts.heroHasBreakdown, "the check rows are in the drawer, so the drawer must open")
     }
 
     /// **"The check is the tips line plus gratuity plus wages, and the gap

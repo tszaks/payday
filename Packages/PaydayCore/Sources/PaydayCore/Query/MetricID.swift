@@ -244,7 +244,7 @@ public enum MetricID: String, CaseIterable, Codable, Sendable {
         case .expectedPaycheckTipsLine:
             return ["Your check's tips line"]
         case .expectedPaycheckGross:
-            return ["Expected"]
+            return ["Expected", "On your check, before tax"]
         case .observedPaidTips:
             return ["Paid"]
         case .proposedPaidTipsCorrection:

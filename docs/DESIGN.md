@@ -105,12 +105,16 @@ worth blocking on now; identical values in two files gets 100% of the look for
   true card: `cardBackground` + `paydayPremiumShadow()` (the 3-layer diffusion
   in light, minimal in dark).
 - Hero amount: `PaydayFont.displayXXL` (60pt heavy rounded) + monospacedDigit.
-- Hero carries ONE check line under the pace line, current period only:
-  "Check so far · $G before tax · about $N after tax". Why: the hero says what
-  you kept, but the question people bring is "what lands in my account"; one
-  line answers both halves without a second card. The net is whole dollars
-  (it is a prediction) and drops out under 2 stubs; no line when the gross is
-  unavailable.
+- Hero carries ONE money number (plus the pace sentence). The check so far
+  lives in the Breakdown drawer, under the bottom line, as two rows, current
+  period only: "On your check, before tax  $G" and "After tax, about  $N".
+  The net is whole dollars (it is a prediction) and drops out under 2 stubs;
+  neither row when the gross is unavailable. Why: until 2026-11-07 the same
+  two figures were a caption line on the hero's face, and with the period
+  total and the pace line the card showed four dollar amounts that answered
+  four questions and read as a disagreement (Tyler: "Too many conflicting
+  numbers here - gotta keep it clean"). One number per card; everything else
+  is itemized where the other itemized facts already are.
 - StatChips and MoneyTiles: drop the calendar and briefcase icons (text-forward:
   the label already says it), solid `fieldBackground` fills, caption labels.
 - "Log Tips" button: green prominent glass, text only, no plus icon.

@@ -396,6 +396,7 @@ struct DashboardFacts: SnapshotFacts {
         // Nothing here adds, subtracts, scales or rounds a cents value; the
         // four `BreakdownRow` builders are wave 0's shared composition and
         // this is their first production caller ([SC-02], [SC-03]).
+        let ledgerHasBreakdown: Bool
         if let heroResult {
             let figure = Self.declaringDeferral(
                 EarningsFigure.earnedIncome(heroResult),
@@ -411,7 +412,7 @@ struct DashboardFacts: SnapshotFacts {
             heroBreakdownTotal = deferredShiftCount > 0
                 ? BreakdownRow(figure.label, cents: total.cents, emphasized: true)
                 : total
-            heroHasBreakdown = BreakdownRow.hasBreakdown(heroResult)
+            ledgerHasBreakdown = BreakdownRow.hasBreakdown(heroResult)
         } else {
             // A label is still owed even with no figure: VoiceOver reads it
             // next to the placeholder glyph. It comes from the figure so the
@@ -420,7 +421,7 @@ struct DashboardFacts: SnapshotFacts {
             hero = unavailable
             heroBreakdownRows = []
             heroBreakdownTotal = BreakdownRow(unavailable.label, cents: nil, emphasized: true)
-            heroHasBreakdown = false
+            ledgerHasBreakdown = false
         }
 
         // The whole pre-tax check in one number, fed the components the
@@ -438,15 +439,25 @@ struct DashboardFacts: SnapshotFacts {
         predictedPaycheck = paydayExpectation.grossFigure
         predictedPaycheckNet = paydayExpectation.netFigure(model: withholdingModel)
 
-        // ONE Expectation over the hero's own result behind the hero's check
-        // line, so its before- and after-tax figures cannot disagree with
-        // each other or with the hero. Current period only.
+        // ONE Expectation over the hero's own result behind the drawer's
+        // check rows, so its before- and after-tax figures cannot disagree
+        // with each other or with the hero. Current period only.
         let heroExpectation = heroIsCurrent
             ? PaycheckReconciler.Expectation(
                 result: heroResult, stamp: snapshot?.stamp, cardTipsOnCheck: !cardTipsPaidAtClose)
             : .unbacked
-        heroCheckGross = heroExpectation.grossFigure
-        heroCheckNet = heroExpectation.netFigure(model: withholdingModel)
+        let checkGross = heroExpectation.grossFigure
+        let checkNet = heroExpectation.netFigure(model: withholdingModel)
+        heroCheckGross = checkGross
+        heroCheckNet = checkNet
+        // The drawer opens when the ledger has tips to itemize OR the check
+        // rows exist. A wage-only period has no tip rows, so the ledger's
+        // own test says "nothing to show" — but its check is a fact the face
+        // no longer states, and a closed drawer would hide it from the tap
+        // and from VoiceOver alike (Codex and Devin on PR #166). One flag
+        // gates the drawer, the tap and the accessibility action.
+        heroHasBreakdown = ledgerHasBreakdown
+            || !TakeHomeCopy.checkRows(gross: checkGross, net: checkNet).isEmpty
         // Cash tips in the payday-moment period — the ENTIRE gap between
         // "You kept" and the check, since cash is the one thing that never
         // runs through payroll. Named on the card so nobody has to subtract
@@ -1003,6 +1014,7 @@ struct DashboardView: View {
             rows: facts.heroBreakdownRows,
             total: facts.heroBreakdownTotal,
             hasBreakdown: facts.heroHasBreakdown,
+            footer: facts.heroCheckRows,
             isExpanded: isExpanded
         ) {
             heroCard(facts, caption: caption, isExpanded: isExpanded, showsShiftBand: showsShiftBand)
@@ -1164,17 +1176,11 @@ struct DashboardView: View {
                         .monospacedDigit()
                         .animation(reduceMotion ? nil : PaydayAnimation.premiumSpring, value: paceDeltaCents > 0)
                 }
-                // The check so far, before and after tax, from one
-                // Expectation. Nothing at all when the gross is unavailable;
-                // no after-tax half under 2 stubs.
-                if let checkLine = facts.heroCheckLine {
-                    Text(checkLine)
-                        .font(PaydayFont.caption)
-                        .foregroundStyle(PaydayColor.textSecondary)
-                        .multilineTextAlignment(.center)
-                        .monospacedDigit()
-                        .accessibilityLabel(checkLine)
-                }
+                // No check line here any more. The check so far, before and
+                // after tax, is two rows under the drawer's bottom line
+                // (`DashboardFacts.heroCheckRows`): with it, the face carried
+                // four dollar amounts (Tyler, 2026-11-07: "Too many
+                // conflicting numbers here - gotta keep it clean").
                 // Projection line removed: it overlapped the pace line above
                 // (two framings of the same trajectory). Pace stays — it's
                 // grounded in real logged history on both sides and it's the
