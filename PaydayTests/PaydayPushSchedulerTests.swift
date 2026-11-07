@@ -90,6 +90,19 @@ struct PaydayPushSchedulerTests {
         #expect(decision?.fireDate == date(2026, 7, 24, hour: 9))
     }
 
+    /// The period that closed yesterday is the one whose check lands next.
+    /// Announcing the period containing `now` would replace that pending
+    /// payday with the one a week later.
+    @Test("in the following period, the last period's payday is still the one announced")
+    func announcesLastPeriodWhilePaydayAhead() throws {
+        let decision = try #require(makeDecision(
+            now: date(2026, 7, 20, hour: 20),
+            records: [creditRecord(cents: 15000, on: date(2026, 7, 15))]
+        ))
+        #expect(decision.fireDate == date(2026, 7, 24, hour: 9))
+        #expect(decision.figure?.cents == 15_000)
+    }
+
     @Test("nothing once the fire moment has already passed")
     func nothingAfterPayday() {
         // No payroll lag: payday is the last day of the period itself, at
