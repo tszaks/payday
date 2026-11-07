@@ -356,6 +356,14 @@ language sql
 security invoker
 set search_path = ''
 as $$
+  -- Serialised per user, as private.write_shifts is. The missing-key
+  -- fallback below reads the STORED job in the insert's source; without
+  -- this lock a newer phone's upload could commit between that read and
+  -- the conflict update, and an older phone's write would put the old job
+  -- back. Its own statement, so the insert's snapshot starts after the lock.
+  select pg_advisory_xact_lock(hashtextextended('payday:paychecks:' || (select auth.uid())::text, 0))
+  where (select auth.uid()) is not null;
+
   insert into public.paycheck_records (
     id, user_id, period_start, period_end, paid_tips_cents, note,
     hourly_rate_cents, owed_tips_cents, gross_pay_cents, net_pay_cents,

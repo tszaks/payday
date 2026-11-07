@@ -1,4 +1,5 @@
 import Foundation
+import PaydayCore
 
 /// Turns logged shifts into a plain CSV, one row per shift (one closeout;
 /// cash and credit merged, same "a shift, not a row" rule as ShiftDayRow) —
@@ -167,7 +168,15 @@ enum CSVExporter {
         let note = shift.note
 
         let period = calculator.period(containing: day)
-        let paycheck = paycheckRecords.first { $0.periodEnd >= period.start && $0.periodEnd <= period.end }
+        // The check for THIS shift's job (PR E1): same period and the same job
+        // tag, nil meaning the primary on both sides. Two jobs paid in the
+        // same period have two checks, and a Cafe shift must not show the
+        // Bistro check's tips. With one job every tag is nil, so this is the
+        // lookup it always was.
+        let paycheck = paycheckRecords.first {
+            $0.periodEnd >= period.start && $0.periodEnd <= period.end
+                && ShiftRole.key($0.jobName) == ShiftRole.key(shift.jobName)
+        }
 
         // Bound individually rather than inline in the array literal below —
         // that many chained `.map(...) ?? ""` expressions in one array

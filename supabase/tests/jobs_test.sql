@@ -248,13 +248,25 @@ select pg_temp.expect('anExplicitNullMovesThePaycheckToThePrimaryJob',
   (select job_name is null from public.paycheck_records where id = '0c0c0c0c-0000-4000-8000-000000000001'),
   '');
 
+-- ---------------------------------------------------------------------------
+-- The paycheck upsert queues writers for one user (an advisory lock, as
+-- private.write_shifts does): its missing-key fallback reads the STORED job,
+-- and without the lock a newer phone's upload could commit between that read
+-- and the conflict update. Two concurrent sessions cannot be produced here,
+-- so the lock itself is pinned.
+-- ---------------------------------------------------------------------------
+
+select pg_temp.expect('upsertPaycheckRecordsSerialisesPerUser',
+  pg_get_functiondef('public.upsert_paycheck_records(jsonb)'::regprocedure) like '%pg_advisory_xact_lock%',
+  '');
+
 -- ===========================================================================
 -- Report
 -- ===========================================================================
 
 select pg_temp.expect('theSuiteRanEveryAssertion',
-  (select count(*) from results) = 19,
-  'ran ' || (select count(*) from results)::text || ' of 19');
+  (select count(*) from results) = 20,
+  'ran ' || (select count(*) from results)::text || ' of 20');
 
 select seq, case when ok then 'PASS' else 'FAIL' end as result, name, detail
 from results order by seq;

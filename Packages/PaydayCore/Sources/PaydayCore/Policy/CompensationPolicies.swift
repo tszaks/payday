@@ -35,7 +35,9 @@ public struct CompensationPolicies: Hashable, Codable, Sendable {
 
     public static let empty = CompensationPolicies()
 
-    public var isEmpty: Bool { rates.isEmpty && calendars.isEmpty }
+    /// Nothing stored at all. Jobs count (PR E1): a payload that carries a
+    /// job list and nothing else is still a state worth adopting from sync.
+    public var isEmpty: Bool { rates.isEmpty && calendars.isEmpty && jobs.isEmpty }
 
     private enum CodingKeys: String, CodingKey { case version, rates, calendars, jobs }
 

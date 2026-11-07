@@ -138,6 +138,12 @@ struct JobsTests {
         #expect(swapped.rates.first { $0.id == Self.primaryRate.id }?.jobName == "Bistro")
     }
 
+    @Test("A payload with a job list and nothing else is not empty, so sync adopts it")
+    func jobsOnlyPayloadIsNotEmpty() {
+        #expect(CompensationPolicies().isEmpty)
+        #expect(!CompensationPolicies(jobs: [Self.bistro, Self.cafe]).isEmpty)
+    }
+
     @Test("Removing the last extra job returns to the no-jobs shape")
     func removing() throws {
         let deli = JobPolicy(id: Self.uuid(12), name: "Deli", schedule: nil, isPrimary: false)
