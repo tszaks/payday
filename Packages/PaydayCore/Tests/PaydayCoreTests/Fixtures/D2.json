@@ -1,0 +1,167 @@
+{
+  "id": "D2",
+  "description": "Five 10-hour days then an 8-hour Saturday, daily overtime on. Daily overtime does not count toward the 40-hour week (no pyramiding): Mon-Fri = 2400 regular + 600 daily overtime; Saturday is all weekly overtime.",
+  "kind": "ledger",
+  "policies": {
+    "rate": [
+      {
+        "effectiveFrom": "2025-12-29",
+        "hourlyRateCents": 1500,
+        "provenance": "confirmed"
+      }
+    ],
+    "calendar": [
+      {
+        "effectiveFrom": "2025-12-29",
+        "workweekStartWeekday": 2,
+        "overtimeThresholdMinutes": 2400,
+        "overtimeMultiplierHundredths": 150,
+        "payrollTimeZone": "America/Los_Angeles",
+        "dailyOvertimeThresholdMinutes": 480
+      }
+    ]
+  },
+  "schedule": null,
+  "shifts": [
+    {
+      "id": "00000000-0000-0000-0000-0000000d0001",
+      "workDay": "2026-10-05",
+      "period": "dinner",
+      "minutesWorked": 600,
+      "voluntaryCashCents": 0,
+      "voluntaryCreditCents": 0,
+      "gratuityFeesCents": 0,
+      "tipOutCents": null
+    },
+    {
+      "id": "00000000-0000-0000-0000-0000000d0002",
+      "workDay": "2026-10-06",
+      "period": "dinner",
+      "minutesWorked": 600,
+      "voluntaryCashCents": 0,
+      "voluntaryCreditCents": 0,
+      "gratuityFeesCents": 0,
+      "tipOutCents": null
+    },
+    {
+      "id": "00000000-0000-0000-0000-0000000d0003",
+      "workDay": "2026-10-07",
+      "period": "dinner",
+      "minutesWorked": 600,
+      "voluntaryCashCents": 0,
+      "voluntaryCreditCents": 0,
+      "gratuityFeesCents": 0,
+      "tipOutCents": null
+    },
+    {
+      "id": "00000000-0000-0000-0000-0000000d0004",
+      "workDay": "2026-10-08",
+      "period": "dinner",
+      "minutesWorked": 600,
+      "voluntaryCashCents": 0,
+      "voluntaryCreditCents": 0,
+      "gratuityFeesCents": 0,
+      "tipOutCents": null
+    },
+    {
+      "id": "00000000-0000-0000-0000-0000000d0005",
+      "workDay": "2026-10-09",
+      "period": "dinner",
+      "minutesWorked": 600,
+      "voluntaryCashCents": 0,
+      "voluntaryCreditCents": 0,
+      "gratuityFeesCents": 0,
+      "tipOutCents": null
+    },
+    {
+      "id": "00000000-0000-0000-0000-0000000d0006",
+      "workDay": "2026-10-10",
+      "period": "dinner",
+      "minutesWorked": 480,
+      "voluntaryCashCents": 0,
+      "voluntaryCreditCents": 0,
+      "gratuityFeesCents": 0,
+      "tipOutCents": null
+    }
+  ],
+  "legacyEntries": [],
+  "paychecks": [],
+  "asOf": null,
+  "expected": {
+    "perShift": [
+      {
+        "id": "00000000-0000-0000-0000-0000000d0001",
+        "workDay": "2026-10-05",
+        "minutesWorked": 600,
+        "regularMinutes": 480,
+        "overtimeMinutes": 120,
+        "regularWagesCents": 12000,
+        "overtimeWagesCents": 4500,
+        "wagesCents": 16500,
+        "nonWageEarningsCents": 0,
+        "earnedIncomeCents": 16500
+      },
+      {
+        "id": "00000000-0000-0000-0000-0000000d0002",
+        "workDay": "2026-10-06",
+        "minutesWorked": 600,
+        "regularMinutes": 480,
+        "overtimeMinutes": 120,
+        "regularWagesCents": 12000,
+        "overtimeWagesCents": 4500,
+        "wagesCents": 16500,
+        "nonWageEarningsCents": 0,
+        "earnedIncomeCents": 16500
+      },
+      {
+        "id": "00000000-0000-0000-0000-0000000d0003",
+        "workDay": "2026-10-07",
+        "minutesWorked": 600,
+        "regularMinutes": 480,
+        "overtimeMinutes": 120,
+        "regularWagesCents": 12000,
+        "overtimeWagesCents": 4500,
+        "wagesCents": 16500,
+        "nonWageEarningsCents": 0,
+        "earnedIncomeCents": 16500
+      },
+      {
+        "id": "00000000-0000-0000-0000-0000000d0004",
+        "workDay": "2026-10-08",
+        "minutesWorked": 600,
+        "regularMinutes": 480,
+        "overtimeMinutes": 120,
+        "regularWagesCents": 12000,
+        "overtimeWagesCents": 4500,
+        "wagesCents": 16500,
+        "nonWageEarningsCents": 0,
+        "earnedIncomeCents": 16500
+      },
+      {
+        "id": "00000000-0000-0000-0000-0000000d0005",
+        "workDay": "2026-10-09",
+        "minutesWorked": 600,
+        "regularMinutes": 480,
+        "overtimeMinutes": 120,
+        "regularWagesCents": 12000,
+        "overtimeWagesCents": 4500,
+        "wagesCents": 16500,
+        "nonWageEarningsCents": 0,
+        "earnedIncomeCents": 16500
+      },
+      {
+        "id": "00000000-0000-0000-0000-0000000d0006",
+        "workDay": "2026-10-10",
+        "minutesWorked": 480,
+        "regularMinutes": 0,
+        "overtimeMinutes": 480,
+        "regularWagesCents": 0,
+        "overtimeWagesCents": 18000,
+        "wagesCents": 18000,
+        "nonWageEarningsCents": 0,
+        "earnedIncomeCents": 18000
+      }
+    ]
+  },
+  "notes": "Rate 1500c/h. Each weekday: 480 regular (12000c) + 120 daily OT (4500c); the week cursor advances 480 a day, reaching 2400 on Friday. Saturday: 480 under the daily threshold, but 0 weekly regular remains, so 480 weekly OT = 18000c. Week: 2400 regular (60000c), 1080 OT (40500c)."
+}

@@ -61,7 +61,8 @@ import Foundation
 /// encoded line), then calendar policies sorted the same way:
 /// `R|id|effectiveFrom|hourlyRateCents|provenance`, then `|role=<roleName>`
 /// only when the policy is for one role.
-/// `C|id|effectiveFrom|workweekStartWeekday|overtimeThresholdMinutes|overtimeMultiplierHundredths|payrollTimeZone.identifier`
+/// `C|id|effectiveFrom|workweekStartWeekday|overtimeThresholdMinutes|overtimeMultiplierHundredths|payrollTimeZone.identifier`,
+/// then `|daily=<dailyOvertimeThresholdMinutes>` only when daily overtime is on.
 ///
 /// The whole encoded line is the final tiebreak in every sort so each key is
 /// a TOTAL order: `sorted` is not documented as stable in Swift, so two
@@ -97,7 +98,14 @@ import Foundation
 /// section is followed directly by the next header). All hex is lowercase.
 public struct InputManifest: Hashable, Codable, Sendable {
     /// Bump when the arithmetic changes in a way that should invalidate stored results.
-    public static let currentEngineVersion = 1
+    ///
+    /// 2 (2026-11): tip share received, a rate per role, and the optional
+    /// daily overtime rule. A build on engine 1 ignores all three when it
+    /// decodes the synced policies and shifts, so its answer for the same
+    /// dataset revision can differ; the server's `upsert_earnings_snapshot`
+    /// keeps the higher engine at an equal revision, so an older phone can
+    /// no longer overwrite a newer phone's snapshot with weekly-only wages.
+    public static let currentEngineVersion = 2
     /// The version prefix of the canonical encoding.
     public static let formatVersion = "paydaycore-manifest-v1"
 
@@ -401,7 +409,10 @@ public struct InputManifest: Hashable, Codable, Sendable {
                         "C", c.id.uuidString, c.effectiveFrom.iso, String(c.workweekStartWeekday),
                         String(c.overtimeThresholdMinutes), String(c.overtimeMultiplierHundredths),
                         c.payrollTimeZone.identifier,
-                    ].joined(separator: "|"))
+                    ].joined(separator: "|")
+                        // Only when set, so every digest from before daily
+                        // overtime existed stays identical.
+                        + (c.dailyOvertimeThresholdMinutes.map { "|daily=\($0)" } ?? ""))
                 }
                 .sorted { $0 < $1 }
                 .map { $0.2 }

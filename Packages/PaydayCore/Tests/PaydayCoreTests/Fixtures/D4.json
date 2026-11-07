@@ -1,0 +1,79 @@
+{
+  "id": "D4",
+  "description": "Lunch and dinner on one payroll day, 300 minutes each, daily overtime on. The day is 600 minutes, so 120 daily overtime, all on the second shift.",
+  "kind": "ledger",
+  "policies": {
+    "rate": [
+      {
+        "effectiveFrom": "2025-12-29",
+        "hourlyRateCents": 1500,
+        "provenance": "confirmed"
+      }
+    ],
+    "calendar": [
+      {
+        "effectiveFrom": "2025-12-29",
+        "workweekStartWeekday": 2,
+        "overtimeThresholdMinutes": 2400,
+        "overtimeMultiplierHundredths": 150,
+        "payrollTimeZone": "America/Los_Angeles",
+        "dailyOvertimeThresholdMinutes": 480
+      }
+    ]
+  },
+  "schedule": null,
+  "shifts": [
+    {
+      "id": "00000000-0000-0000-0000-0000000d0001",
+      "workDay": "2026-10-05",
+      "period": "lunch",
+      "minutesWorked": 300,
+      "voluntaryCashCents": 0,
+      "voluntaryCreditCents": 0,
+      "gratuityFeesCents": 0,
+      "tipOutCents": null
+    },
+    {
+      "id": "00000000-0000-0000-0000-0000000d0002",
+      "workDay": "2026-10-05",
+      "period": "dinner",
+      "minutesWorked": 300,
+      "voluntaryCashCents": 0,
+      "voluntaryCreditCents": 0,
+      "gratuityFeesCents": 0,
+      "tipOutCents": null
+    }
+  ],
+  "legacyEntries": [],
+  "paychecks": [],
+  "asOf": null,
+  "expected": {
+    "perShift": [
+      {
+        "id": "00000000-0000-0000-0000-0000000d0001",
+        "workDay": "2026-10-05",
+        "minutesWorked": 300,
+        "regularMinutes": 300,
+        "overtimeMinutes": 0,
+        "regularWagesCents": 7500,
+        "overtimeWagesCents": 0,
+        "wagesCents": 7500,
+        "nonWageEarningsCents": 0,
+        "earnedIncomeCents": 7500
+      },
+      {
+        "id": "00000000-0000-0000-0000-0000000d0002",
+        "workDay": "2026-10-05",
+        "minutesWorked": 300,
+        "regularMinutes": 180,
+        "overtimeMinutes": 120,
+        "regularWagesCents": 4500,
+        "overtimeWagesCents": 4500,
+        "wagesCents": 9000,
+        "nonWageEarningsCents": 0,
+        "earnedIncomeCents": 9000
+      }
+    ]
+  },
+  "notes": "Rate 1500c/h. Daily overtime counts per payroll day, not per shift. Lunch sorts first (canonical order: workDay, then period). Lunch 300 regular = 7500c; dinner 180 regular (4500c) + 120 OT (4500c)."
+}

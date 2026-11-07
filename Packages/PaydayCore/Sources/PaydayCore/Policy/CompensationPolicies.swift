@@ -256,7 +256,10 @@ public enum PolicyMigration {
             workweekStartWeekday: workweekStartWeekday,
             overtimeThresholdMinutes: previous?.overtimeThresholdMinutes ?? 2400,
             overtimeMultiplierHundredths: previous?.overtimeMultiplierHundredths ?? 150,
-            payrollTimeZone: payrollTimeZone
+            payrollTimeZone: payrollTimeZone,
+            // Carried forward like the threshold and multiplier, so changing
+            // the workweek start or zone never turns daily overtime off.
+            dailyOvertimeThresholdMinutes: previous?.dailyOvertimeThresholdMinutes
         )
     }
 }

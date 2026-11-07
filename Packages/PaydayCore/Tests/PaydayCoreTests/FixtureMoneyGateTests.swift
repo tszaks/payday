@@ -166,9 +166,10 @@ struct FixtureMoneyGateTests {
     /// - S2: the as-of fixture, including the future shift the query excludes.
     /// - B1: the bartender fixture, a received tip share kept out of
     ///   voluntary tips.
+    /// - D1-D4: daily overtime (per payroll day, no pyramiding, one multiplier).
     @Test(
         "every per-shift money value these fixtures declare is the real ledger's",
-        arguments: ["W3", "C1", "S2", "B1"]
+        arguments: ["W3", "C1", "S2", "B1", "D1", "D2", "D3", "D4"]
     )
     func perShiftMoneyIsLedgerTruth(_ id: String) throws {
         let fixture = try FixtureLoader.load(id)

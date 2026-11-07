@@ -1,0 +1,57 @@
+{
+  "id": "D3",
+  "description": "One 13-hour day with daily overtime: 480 regular, 300 overtime, all at the one 1.5x multiplier (no double time; an estimate).",
+  "kind": "ledger",
+  "policies": {
+    "rate": [
+      {
+        "effectiveFrom": "2025-12-29",
+        "hourlyRateCents": 1500,
+        "provenance": "confirmed"
+      }
+    ],
+    "calendar": [
+      {
+        "effectiveFrom": "2025-12-29",
+        "workweekStartWeekday": 2,
+        "overtimeThresholdMinutes": 2400,
+        "overtimeMultiplierHundredths": 150,
+        "payrollTimeZone": "America/Los_Angeles",
+        "dailyOvertimeThresholdMinutes": 480
+      }
+    ]
+  },
+  "schedule": null,
+  "shifts": [
+    {
+      "id": "00000000-0000-0000-0000-0000000d0001",
+      "workDay": "2026-10-05",
+      "period": "dinner",
+      "minutesWorked": 780,
+      "voluntaryCashCents": 0,
+      "voluntaryCreditCents": 0,
+      "gratuityFeesCents": 0,
+      "tipOutCents": null
+    }
+  ],
+  "legacyEntries": [],
+  "paychecks": [],
+  "asOf": null,
+  "expected": {
+    "perShift": [
+      {
+        "id": "00000000-0000-0000-0000-0000000d0001",
+        "workDay": "2026-10-05",
+        "minutesWorked": 780,
+        "regularMinutes": 480,
+        "overtimeMinutes": 300,
+        "regularWagesCents": 12000,
+        "overtimeWagesCents": 11250,
+        "wagesCents": 23250,
+        "nonWageEarningsCents": 0,
+        "earnedIncomeCents": 23250
+      }
+    ]
+  },
+  "notes": "Rate 1500c/h. 480*25 = 12000; 300*37.5 = 11250. California would pay hours past 12 at 2x; Payday does not model double time."
+}
