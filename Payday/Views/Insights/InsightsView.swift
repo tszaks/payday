@@ -61,6 +61,9 @@ struct InsightsView: View {
     /// flew somewhere read a different reference date from the one the
     /// engine buckets by.
     @State private var dayTick = Date.now
+    /// The Insights role filter. Nil is "All". Only offered when two or more
+    /// roles have shifts (`InsightsEarnings.roleOptions`).
+    @State private var selectedRole: String?
 
     var body: some View {
         let payrollTimeZone = policyStore.payrollTimeZone
@@ -89,12 +92,19 @@ struct InsightsView: View {
         // The representation switch, inside `InsightsEarnings.build` exactly
         // as this comment promised before the switch existed, and on the
         // same predicate every other switched screen uses.
-        let dataset = renderCache?.revision == snapshotRevision
+        let roleOptions = InsightsEarnings.roleOptions(records: shiftRecords)
+        // A role that has left the list (its last shift deleted or renamed)
+        // reads as All rather than an empty page.
+        let role = selectedRole.flatMap { selected in
+            roleOptions.first { ShiftRoleList.matches($0, selected) }
+        }
+        let dataset = renderCache?.revision == snapshotRevision && renderCache?.role == role
             ? renderCache!.dataset
             : InsightsEarnings.build(
                 records: shiftRecords,
                 policies: policyStore.policies,
-                payrollTimeZone: payrollTimeZone
+                payrollTimeZone: payrollTimeZone,
+                role: role
             )
         // Rule 3: the facts are keyed on the dataset's own digest, the
         // complete computed key, plus this screen's presentational selection.
@@ -111,12 +121,18 @@ struct InsightsView: View {
         NavigationStack {
             Group {
                 if let facts = pageFacts.facts {
-                    resultList(facts, pageFacts: pageFacts)
+                    resultList(facts, pageFacts: pageFacts, roleOptions: roleOptions)
                 } else {
                     ScrollView {
-                        emptyState(unlocks: pageFacts.unlocks, shiftCount: pageFacts.shiftCount)
-                            .frame(maxWidth: .infinity)
-                            .padding()
+                        VStack(spacing: PaydaySpacing.p16) {
+                            // Kept above the empty state too, so a role with
+                            // too few shifts for insights can be switched
+                            // back to All.
+                            rolePicker(roleOptions)
+                            emptyState(unlocks: pageFacts.unlocks, shiftCount: pageFacts.shiftCount)
+                                .frame(maxWidth: .infinity)
+                        }
+                        .padding()
                     }
                 }
             }
@@ -136,9 +152,10 @@ struct InsightsView: View {
                 }
             }
         }
-        .task(id: InsightsCacheIdentity(revision: snapshotRevision, selection: selection)) {
+        .task(id: InsightsCacheIdentity(revision: snapshotRevision, selection: selection, role: role)) {
             renderCache = InsightsRenderCache(
                 revision: snapshotRevision,
+                role: role,
                 dataset: dataset,
                 digest: dataset.snapshot?.stamp.digest,
                 selection: selection,
@@ -154,7 +171,23 @@ struct InsightsView: View {
         }
     }
 
-    private func resultList(_ facts: InsightsFacts, pageFacts: InsightsPageFacts) -> some View {
+    /// "All · Bar · Floor". Nothing at all unless two or more roles have
+    /// shifts, so an account without roles sees today's page.
+    @ViewBuilder
+    private func rolePicker(_ roleOptions: [String]) -> some View {
+        if !roleOptions.isEmpty {
+            Picker("Role", selection: $selectedRole) {
+                Text("All").tag(String?.none)
+                ForEach(roleOptions, id: \.self) { role in
+                    Text(role).tag(Optional(role))
+                }
+            }
+            .pickerStyle(.segmented)
+            .accessibilityLabel("Show insights for")
+        }
+    }
+
+    private func resultList(_ facts: InsightsFacts, pageFacts: InsightsPageFacts, roleOptions: [String]) -> some View {
         let moves = pageFacts.moves
         let followUps = pageFacts.followUps
         let chartFacts = pageFacts.chartFacts
@@ -189,6 +222,8 @@ struct InsightsView: View {
                 // each name theirs in their own caption, because a wage is
                 // not a tip and folding one in would make "tipped 16.7% of
                 // sales" false. See `InsightsEarnings`' header.
+                rolePicker(roleOptions)
+
                 if let note = pageFacts.basis.note {
                     Text(note)
                         .font(PaydayFont.caption)
@@ -740,6 +775,7 @@ private struct InsightsSelection: Hashable {
 private struct InsightsCacheIdentity: Hashable {
     let revision: Int
     let selection: InsightsSelection
+    let role: String?
 }
 
 /// One render's worth of work, kept so a `@State` change (presenting the
@@ -757,6 +793,8 @@ private struct InsightsCacheIdentity: Hashable {
 ///   remainder.
 private struct InsightsRenderCache {
     let revision: Int
+    /// The role filter the dataset was built for; nil is All.
+    let role: String?
     /// The grouping AND the snapshot built from it, together, because they
     /// have to be the same pair every render: the grouping's `shiftID`s are
     /// what index the snapshot, and what the pricing map is checked against.

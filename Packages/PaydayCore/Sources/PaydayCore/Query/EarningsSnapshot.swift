@@ -132,7 +132,9 @@ public struct EarningsSnapshot: Codable, Sendable, Equatable {
                 computedAt: computedAt,
                 serverDatasetRevision: serverDatasetRevision
             ),
-            shifts: output.valuations,
+            shifts: inputs.reportedShiftIDs.map { reported in
+                output.valuations.filter { reported.contains($0.id) }
+            } ?? output.valuations,
             paychecks: inputs.paychecks,
             wageFeatureEnabled: output.wageFeatureEnabled,
             diagnostics: output.diagnostics,

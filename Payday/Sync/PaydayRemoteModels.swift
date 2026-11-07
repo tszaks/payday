@@ -527,6 +527,10 @@ struct RemoteShift: Codable, Equatable, Sendable {
     /// Defaulted so every existing memberwise call site still compiles; nil
     /// means "not entered", the same as the column.
     var tipShareInCents: Int? = nil
+    /// The person's role on the shift. Decoded with `decodeIfPresent`
+    /// (synthesized for an optional), so a row from a server or a build
+    /// without the column decodes as nil.
+    var roleName: String? = nil
     let receiptMetrics: ShiftReceiptMetrics?
     let note: String?
     let recordedAt: String?
@@ -557,6 +561,7 @@ struct RemoteShift: Codable, Equatable, Sendable {
         case clockOut = "clock_out"
         case serverCount = "server_count"
         case tipShareInCents = "tip_share_in_cents"
+        case roleName = "role_name"
         case receiptMetrics = "receipt_metrics"
         case note
         case recordedAt = "recorded_at"
@@ -592,6 +597,10 @@ struct RemoteShift: Codable, Equatable, Sendable {
         // here clears it. `write_shifts` keeps the stored share only when the
         // key is ABSENT, which is what an older build sends.
         try container.encode(tipShareInCents, forKey: .tipShareInCents)
+        // Same rule as the share: always sent, so a null clears the role,
+        // and `write_shifts` keeps the stored role when an older build omits
+        // the key.
+        try container.encode(roleName, forKey: .roleName)
         try container.encode(receiptMetrics, forKey: .receiptMetrics)
         try container.encode(note, forKey: .note)
         try container.encode(recordedAt, forKey: .recordedAt)
@@ -817,6 +826,9 @@ struct ShiftBusinessValue: Codable, Equatable, Sendable {
     /// fingerprints exactly as it did before this field existed and nothing
     /// re-uploads on the first sync after the update.
     var tipShareInCents: Int? = nil
+    /// Skipped when nil for the same reason, so a shift with no role
+    /// fingerprints exactly as before and nothing re-uploads.
+    var roleName: String? = nil
     let receiptMetrics: ShiftReceiptMetrics?
     let note: String?
     let recordedAt: String?
@@ -846,6 +858,7 @@ extension RemoteShift {
             clockOut: record.clockOut.map(PaydayRemoteDate.instant),
             serverCount: record.serverCount,
             tipShareInCents: record.tipShareInCents,
+            roleName: record.roleName,
             receiptMetrics: record.receiptMetrics,
             note: record.note,
             recordedAt: record.recordedAt.map(PaydayRemoteDate.instant),
@@ -879,6 +892,7 @@ extension RemoteShift {
             clockOut: PaydayRemoteDate.canonicalInstant(clockOut),
             serverCount: serverCount,
             tipShareInCents: tipShareInCents,
+            roleName: roleName,
             receiptMetrics: receiptMetrics,
             note: note,
             recordedAt: PaydayRemoteDate.canonicalInstant(recordedAt)

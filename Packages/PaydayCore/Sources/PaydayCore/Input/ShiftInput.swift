@@ -46,6 +46,9 @@ public struct ShiftInput: Hashable, Codable, Sendable, Identifiable {
     /// Nil means hours were never logged: the shift contributes no wage and
     /// counts as `missingHours` in `Completeness`.
     public var minutesWorked: Int?
+    /// The person's role on this shift (bar, floor). Nil means no role. It
+    /// picks the rate policy (`PayRatePolicy.roleName`); it is not money.
+    public var roleName: String?
 
     public init(
         id: UUID,
@@ -57,7 +60,8 @@ public struct ShiftInput: Hashable, Codable, Sendable, Identifiable {
         gratuityFeesCents: Int = 0,
         tipOutCents: Int? = nil,
         tipShareInCents: Int? = nil,
-        minutesWorked: Int? = nil
+        minutesWorked: Int? = nil,
+        roleName: String? = nil
     ) {
         self.id = id
         self.workDay = workDay
@@ -69,6 +73,7 @@ public struct ShiftInput: Hashable, Codable, Sendable, Identifiable {
         self.tipOutCents = tipOutCents
         self.tipShareInCents = tipShareInCents
         self.minutesWorked = minutesWorked
+        self.roleName = ShiftRole.normalized(roleName)
     }
 
     /// The non-wage components this shift contributes, before any valuation.

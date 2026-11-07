@@ -1362,6 +1362,10 @@ function shiftResponse(row: JsonObject): JsonObject {
     // Read-only here: agent writes still land on the legacy rows, which do
     // not carry a received tip share. Already inside the stored net.
     tip_share_in_cents: row.tip_share_in_cents ?? null,
+    // The person's role on the shift (bar, floor), or null. Read-only for
+    // the same reason as the share: agent writes land on the legacy rows,
+    // which carry no role. Not money: the wage it picks is the phone's.
+    role_name: row.role_name ?? null,
     net_tip_earnings_cents: netCents,
     sales_cents: row.sales_cents ?? null,
     hours_worked: row.hours_worked ?? null,

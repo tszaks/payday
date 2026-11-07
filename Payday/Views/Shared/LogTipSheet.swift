@@ -243,6 +243,15 @@ struct LogTipSheet: View {
     /// tip-out, and the mirror of it: money in instead of out. 0 means "not
     /// entered" and saves as nil.
     @State private var tipShareInCents: Int = 0
+    /// The person's role on this shift (bar, floor), nil for none. Picks the
+    /// hourly rate, so it is part of the draft the header is valued from.
+    @State private var roleName: String?
+    /// Whether "Add role" was tapped, which shows the Role row on an account
+    /// that has no roles yet (`LogShiftRoleFacts`).
+    @State private var tappedAddRole = false
+    /// The "New role" text field, open or not, and its text.
+    @State private var isTypingNewRole = false
+    @State private var newRoleText = ""
     @State private var salesCents: Int = 0
     @State private var shiftPeriod: ShiftPeriod?
     /// Automatic period inference follows the start time until the person
@@ -309,6 +318,7 @@ struct LogTipSheet: View {
             _hoursWorked = State(initialValue: record.hoursWorked)
             _tipOutCents = State(initialValue: record.tipOutCents ?? 0)
             _tipShareInCents = State(initialValue: record.tipShareInCents ?? 0)
+            _roleName = State(initialValue: record.roleName)
             _salesCents = State(initialValue: record.salesCents ?? 0)
             _shiftPeriod = State(initialValue: record.shiftPeriod)
             _hasManuallySelectedShiftPeriod = State(initialValue: record.shiftPeriod != nil)
@@ -362,6 +372,7 @@ struct LogTipSheet: View {
             clockOut: clockOut,
             serverCount: serverCount,
             tipShareInCents: tipShareInCents,
+            roleName: roleName,
             receiptMetrics: receiptMetrics,
             normalizeEarnings: editingRecord != nil,
             policies: policyStore.policies
@@ -488,7 +499,9 @@ struct LogTipSheet: View {
             // Nothing is seeded from history — Tyler's no-assumptions law
             // (2026-07-27): every shift is different, patterns never
             // pre-populate a field. Only facts prefill: a live session's
-            // exact punches (init) and today's date.
+            // exact punches (init) and today's date. The role (PR B) is no
+            // exception: a wrong role silently moves the wage, and the chips
+            // are one tap, most recent first.
             break
         case .editShift:
             // Nothing to upgrade: the record already carried every
@@ -967,6 +980,7 @@ struct LogTipSheet: View {
                 }
                 .padding(.vertical, 14)
                 Divider()
+                roleRow
                 HStack {
                     Text("Started")
                     Spacer()
@@ -1076,9 +1090,111 @@ struct LogTipSheet: View {
                 .padding(.vertical, 14)
                 .id(CurrencyRowField.servers)
                 receiptDetailRows
+                addRoleButton
             }
             .padding()
             .tint(PaydayColor.textPrimary)
+        }
+    }
+
+    private var roleFacts: LogShiftRoleFacts {
+        LogShiftRoleFacts(
+            shifts: ShiftRoleList.entries(shiftRecords),
+            tappedAddRole: tappedAddRole,
+            draftRole: roleName
+        )
+    }
+
+    /// The Role row: a chip per role already used (most recent first) plus
+    /// "New role". Tapping the selected chip clears it. Hidden on an account
+    /// with no roles until "Add role" is tapped, so that sheet is unchanged.
+    @ViewBuilder
+    private var roleRow: some View {
+        let roleFacts = roleFacts
+        if roleFacts.isRowVisible {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Role")
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(roleFacts.chips, id: \.self) { chip in
+                            roleChip(chip, isSelected: ShiftRoleList.matches(roleName, chip)) {
+                                roleName = LogShiftRoleFacts.toggled(roleName, tapping: chip)
+                            }
+                        }
+                        // A role typed this session that no saved shift has yet,
+                        // once the field is closed; while it is open the field
+                        // itself is the role.
+                        if !isTypingNewRole, let roleName, !roleFacts.chips.contains(where: { ShiftRoleList.matches($0, roleName) }) {
+                            roleChip(roleName, isSelected: true) { self.roleName = nil }
+                        }
+                        if !isTypingNewRole {
+                            roleChip("New role", isSelected: false) {
+                                // A new role replaces the selected chip, so
+                                // the field starts empty and so does the role.
+                                newRoleText = ""
+                                roleName = nil
+                                isTypingNewRole = true
+                            }
+                        }
+                    }
+                }
+                if isTypingNewRole {
+                    TextField("Role name", text: $newRoleText)
+                        .textInputAutocapitalization(.words)
+                        .submitLabel(.done)
+                        .onChange(of: newRoleText) { _, text in
+                            // Capped in the server's unit (scalars), see
+                            // `ShiftRole.maxLength`.
+                            let capped = ShiftRole.capped(text)
+                            if capped != text {
+                                newRoleText = capped
+                                return
+                            }
+                            // The field IS the role while it is open, so a
+                            // name typed and never submitted still saves (and
+                            // live-saves an edited shift) instead of being
+                            // lost when the sheet closes.
+                            roleName = ShiftRole.normalized(text)
+                        }
+                        .onSubmit {
+                            if let typed = ShiftRole.normalized(newRoleText) {
+                                // An existing role typed again keeps its spelling.
+                                roleName = roleFacts.chips.first { ShiftRoleList.matches($0, typed) } ?? typed
+                            }
+                            isTypingNewRole = false
+                        }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 14)
+            .onChange(of: roleName) { _, _ in liveSaveEdit() }
+            Divider()
+        }
+    }
+
+    private func roleChip(_ title: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(PaydayFont.subheadline)
+                .foregroundStyle(isSelected ? PaydayColor.primary : PaydayColor.textPrimary)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(isSelected ? PaydayColor.primary.opacity(0.15) : PaydayColor.textTertiary.opacity(0.12), in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+
+    /// The small affordance that reveals the Role row on an account with no
+    /// roles yet. Last in the details card, after every other optional row.
+    @ViewBuilder
+    private var addRoleButton: some View {
+        if roleFacts.showsAddRole {
+            Divider()
+            Button("Add role") { tappedAddRole = true }
+                .font(PaydayFont.subheadline)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 14)
         }
     }
 
@@ -1689,6 +1805,7 @@ struct LogTipSheet: View {
                 clockOut: clockOut,
                 serverCount: serverCount,
                 tipShareInCents: tipShareInCents > 0 ? tipShareInCents : nil,
+                roleName: roleName,
                 receiptMetrics: receiptMetrics,
                 note: trimmedNote,
                 recordedAt: recordedAt
@@ -1810,6 +1927,7 @@ struct LogTipSheet: View {
                     edited.hoursWorked = hoursWorked
                     edited.tipOutCents = tipOutCents > 0 ? tipOutCents : nil
                     edited.tipShareInCents = tipShareInCents > 0 ? tipShareInCents : nil
+                    edited.roleName = ShiftRole.normalized(roleName)
                     edited.salesCents = salesCents > 0 ? salesCents : nil
                     edited.shiftPeriod = shiftPeriod
                     edited.clockIn = clockIn

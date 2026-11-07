@@ -46,7 +46,10 @@ import Foundation
 ///
 /// Shifts, sorted by (`id.uuidString`, whole encoded line):
 /// `S|id|workDay|period|recordedAt|voluntaryCashCents|voluntaryCreditCents|gratuityFeesCents|tipOutCents|minutesWorked`
-/// followed by `|tsi=<tipShareInCents>` only when that is non-zero.
+/// followed by `|tsi=<tipShareInCents>` only when that is non-zero, then
+/// `|role=<roleName>` only when the shift has a role (the role picks the
+/// rate, so it can move a wage). The role is percent-encoded
+/// (`Canonical.roleField`), so free text can never break the encoding.
 ///
 /// Paychecks, sorted by (`id.uuidString`, whole encoded line):
 /// `P|id|periodStart|periodEnd|paidTipsCents|grossPayCents|netPayCents|regularWagesCents|overtimeWagesCents|gratuityCents|taxesCents`
@@ -56,7 +59,8 @@ import Foundation
 ///
 /// Policies: rate policies sorted by (`effectiveFrom`, `id.uuidString`, whole
 /// encoded line), then calendar policies sorted the same way:
-/// `R|id|effectiveFrom|hourlyRateCents|provenance`
+/// `R|id|effectiveFrom|hourlyRateCents|provenance`, then `|role=<roleName>`
+/// only when the policy is for one role.
 /// `C|id|effectiveFrom|workweekStartWeekday|overtimeThresholdMinutes|overtimeMultiplierHundredths|payrollTimeZone.identifier`
 ///
 /// The whole encoded line is the final tiebreak in every sort so each key is
@@ -85,6 +89,8 @@ import Foundation
 /// <rate lines...>
 /// calendars|<count>\n
 /// <calendar lines...>
+/// reported|<count>\n          (only when the snapshot reports a subset)
+/// <reported shift ids, sorted...>
 /// ```
 ///
 /// again joined by `\n` with no trailing newline (the count line of an empty
@@ -155,6 +161,11 @@ public struct InputManifest: Hashable, Codable, Sendable {
     public let calendarPolicyCount: Int
     public let engineVersion: Int
     public let asOf: CivilDay?
+    /// The shifts a subset snapshot reports (`EarningsInputs
+    /// .reportedShiftIDs`), nil for every shift. Part of `digest`, because
+    /// a role view and the whole dataset are different answers and a cache
+    /// keyed on the digest must not mistake one for the other.
+    public let reportedShiftCount: Int?
 
     /// Throws `ValidationError.reservedCharacter` when a free-text input
     /// would break the canonical encoding. Refusing here rather than in a
@@ -168,7 +179,8 @@ public struct InputManifest: Hashable, Codable, Sendable {
         rates: [PayRatePolicy] = [],
         calendars: [PayrollCalendarPolicy] = [],
         asOf: CivilDay? = nil,
-        engineVersion: Int = InputManifest.currentEngineVersion
+        engineVersion: Int = InputManifest.currentEngineVersion,
+        reportedShiftIDs: Set<UUID>? = nil
     ) throws {
         try InputManifest.validate(shifts: shifts, schedule: schedule, calendars: calendars)
         let shiftLines = Canonical.shiftLines(shifts)
@@ -185,9 +197,11 @@ public struct InputManifest: Hashable, Codable, Sendable {
         let full = Canonical.fullText(
             engineVersion: engineVersion, asOf: asOf,
             shiftLines: shiftLines, paycheckLines: paycheckLines, scheduleLine: scheduleLine,
-            rateLines: rateLines, calendarLines: calendarLines
+            rateLines: rateLines, calendarLines: calendarLines,
+            reportedLines: Canonical.reportedLines(reportedShiftIDs)
         )
         digest = Canonical.sha256Hex(full)
+        reportedShiftCount = reportedShiftIDs?.count
 
         shiftCount = shifts.count
         paycheckCount = paychecks.count
@@ -208,7 +222,8 @@ public struct InputManifest: Hashable, Codable, Sendable {
         rates: [PayRatePolicy] = [],
         calendars: [PayrollCalendarPolicy] = [],
         asOf: CivilDay? = nil,
-        engineVersion: Int = InputManifest.currentEngineVersion
+        engineVersion: Int = InputManifest.currentEngineVersion,
+        reportedShiftIDs: Set<UUID>? = nil
     ) throws -> String {
         try validate(shifts: shifts, schedule: schedule, calendars: calendars)
         return Canonical.fullText(
@@ -217,7 +232,8 @@ public struct InputManifest: Hashable, Codable, Sendable {
             paycheckLines: Canonical.paycheckLines(paychecks),
             scheduleLine: Canonical.scheduleLine(schedule),
             rateLines: Canonical.rateLines(rates),
-            calendarLines: Canonical.calendarLines(calendars)
+            calendarLines: Canonical.calendarLines(calendars),
+            reportedLines: Canonical.reportedLines(reportedShiftIDs)
         )
     }
 
@@ -274,7 +290,8 @@ public struct InputManifest: Hashable, Codable, Sendable {
         static func fullText(
             engineVersion: Int, asOf: CivilDay?,
             shiftLines: [String], paycheckLines: [String], scheduleLine: String,
-            rateLines: [String], calendarLines: [String]
+            rateLines: [String], calendarLines: [String],
+            reportedLines: [String]? = nil
         ) -> String {
             var lines: [String] = []
             lines.append("engine|\(engineVersion)")
@@ -288,6 +305,12 @@ public struct InputManifest: Hashable, Codable, Sendable {
             lines.append(contentsOf: rateLines)
             lines.append("calendars|\(calendarLines.count)")
             lines.append(contentsOf: calendarLines)
+            // Only for a subset snapshot, so every whole-dataset digest is
+            // byte-identical to the one written before subsets existed.
+            if let reportedLines {
+                lines.append("reported|\(reportedLines.count)")
+                lines.append(contentsOf: reportedLines)
+            }
             return sectionText(lines)
         }
 
@@ -331,7 +354,10 @@ public struct InputManifest: Hashable, Codable, Sendable {
                     // Appended only when it moves money, so every digest
                     // written before tip share existed is byte-identical,
                     // and nil and 0 collapse for the reason given above.
-                    + ((s.tipShareInCents ?? 0) != 0 ? "|tsi=\(s.tipShareInCents ?? 0)" : ""))
+                    + ((s.tipShareInCents ?? 0) != 0 ? "|tsi=\(s.tipShareInCents ?? 0)" : "")
+                    // Appended only for a shift with a role, for the same
+                    // reason: every digest of a role-less shift is unchanged.
+                    + (s.roleName.map { "|role=\(roleField($0))" } ?? ""))
                 }
                 .sorted { $0 < $1 }
                 .map { $0.1 }
@@ -361,7 +387,8 @@ public struct InputManifest: Hashable, Codable, Sendable {
                 .map { r -> (CivilDay, String, String) in
                     (r.effectiveFrom, r.id.uuidString,
                      ["R", r.id.uuidString, r.effectiveFrom.iso, String(r.hourlyRateCents), r.provenance.rawValue]
-                         .joined(separator: "|"))
+                         .joined(separator: "|")
+                         + (r.roleName.map { "|role=\(roleField($0))" } ?? ""))
                 }
                 .sorted { $0 < $1 }
                 .map { $0.2 }
@@ -378,6 +405,17 @@ public struct InputManifest: Hashable, Codable, Sendable {
                 }
                 .sorted { $0 < $1 }
                 .map { $0.2 }
+        }
+
+        /// The ids a subset snapshot reports, sorted; nil for every shift.
+        static func reportedLines(_ ids: Set<UUID>?) -> [String]? {
+            ids.map { $0.map(\.uuidString).sorted() }
+        }
+
+        /// A role name as typed, percent-encoded to letters and digits, so
+        /// `|`, a newline or `=` in a name cannot collide with the structure.
+        static func roleField(_ role: String) -> String {
+            role.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? ""
         }
 
         static func field(_ value: Int?) -> String { value.map(String.init) ?? "-" }

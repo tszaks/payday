@@ -228,6 +228,10 @@ enum DebugSeeder {
             // the CSV column have something to show. Keyed on the weekday,
             // not `next`, so the rest of the seeded data is unchanged.
             tipShareInCents: period == .dinner && calendar.component(.weekday, from: day) == 7 ? 3_000 : nil,
+            // Two roles, so the role chips, the Insights role filter and
+            // Settings > Roles and rates have something to show. Keyed on the
+            // period, so no money in the seeded data changes.
+            roleName: period == .lunch ? "Bar" : "Floor",
             recordedAt: recordedAt
         ))
     }

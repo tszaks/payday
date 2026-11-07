@@ -22,6 +22,11 @@ enum CSVExporter {
     /// index, which is the same rule from the reader's side.
     static let header = "Date,Shift,Cash,Credit,Gratuity-Fees,Tip-Out,Net,Hours,Start,End,Sales,Servers,Double,Note,Period,Paycheck,Hours-Clock,Non-Wage-Earnings,Regular-Wages,Overtime-Wages,Earned-Income,Completeness,Tip-Share-In"
 
+    /// The header once any shift has a role: `Role` appended last. With no
+    /// roles the file is exactly what it was before roles existed, header
+    /// included (the invisibility rule, PRODUCT.md Pillar 9).
+    static let headerWithRole = header + ",Role"
+
     /// `valuations` carries the engine's answer for each shift, keyed by shift
     /// id. When a shift has none the five engine columns are EMPTY rather than
     /// zero: a blank says "not computed", a zero says "the engine says you
@@ -58,12 +63,13 @@ enum CSVExporter {
         valuations: [UUID: ShiftValuation]
     ) -> String {
         let shifts = unsorted.sorted { $0.day < $1.day }
+        let includesRole = shifts.contains { $0.roleName != nil }
         var dayShiftCounts: [Date: Int] = [:]
         for shift in shifts { dayShiftCounts[shift.day, default: 0] += 1 }
         let rows = shifts.map { shift -> String in
-            row(for: shift, dayHasMultipleShifts: (dayShiftCounts[shift.day] ?? 0) >= 2, paycheckRecords: paycheckRecords, calculator: calculator, calendar: calendar, valuation: valuations[shift.shiftID])
+            row(for: shift, dayHasMultipleShifts: (dayShiftCounts[shift.day] ?? 0) >= 2, paycheckRecords: paycheckRecords, calculator: calculator, calendar: calendar, valuation: valuations[shift.shiftID], includesRole: includesRole)
         }
-        return ([header] + rows).joined(separator: "\n")
+        return ([includesRole ? headerWithRole : header] + rows).joined(separator: "\n")
     }
 
     /// One shift's facts as a row needs them, from EITHER representation.
@@ -87,6 +93,7 @@ enum CSVExporter {
         let nonWageEarningsCents: Int
         let tipOutCents: Int?
         let tipShareInCents: Int?
+        let roleName: String?
         let hoursWorked: Double?
         let clockIn: Date?
         let clockOut: Date?
@@ -128,6 +135,7 @@ enum CSVExporter {
             nonWageEarningsCents = record.nonWageEarningsCents
             tipOutCents = record.tipOutCents
             tipShareInCents = record.tipShareInCents
+            roleName = record.roleName
             hoursWorked = record.hoursWorked
             clockIn = record.clockIn
             clockOut = record.clockOut
@@ -138,7 +146,7 @@ enum CSVExporter {
         }
     }
 
-    private static func row(for shift: RowShift, dayHasMultipleShifts: Bool, paycheckRecords: [PaycheckRecord], calculator: PayPeriodCalculator, calendar: Calendar, valuation: ShiftValuation?) -> String {
+    private static func row(for shift: RowShift, dayHasMultipleShifts: Bool, paycheckRecords: [PaycheckRecord], calculator: PayPeriodCalculator, calendar: Calendar, valuation: ShiftValuation?, includesRole: Bool) -> String {
         let day = shift.day
         let shiftDetails = shift
         let cashCents = shift.cashCents
@@ -173,7 +181,7 @@ enum CSVExporter {
         let paycheckField: String = paycheck.map { dollars($0.paidTipsCents) } ?? ""
         let periodField = "\(isoDate(period.start)) to \(isoDate(period.end))"
 
-        let fields = [
+        var fields = [
             isoDate(day),
             shiftField,
             dollars(cashCents),
@@ -200,6 +208,10 @@ enum CSVExporter {
             // Appended, per the header's rule. Empty when not entered.
             tipShareInField
         ]
+        if includesRole {
+            // Appended last, and only when the file has a role at all.
+            fields.append(escape(shift.roleName ?? ""))
+        }
         return fields.joined(separator: ",")
     }
 

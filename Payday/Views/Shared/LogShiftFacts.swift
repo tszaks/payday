@@ -165,3 +165,27 @@ struct LogShiftFacts: Equatable, SnapshotFacts {
         }
     }
 }
+
+/// The log sheet's Role row: whether it shows and which chips it offers.
+/// Pure, so the invisibility rule is a test rather than a hope. A new shift
+/// never starts with a role: Tyler's no-assumptions law (2026-07-27), nothing
+/// is seeded from history, and a wrong role would silently move the wage.
+struct LogShiftRoleFacts: Equatable {
+    /// The roles already used on this account, most recent first.
+    let chips: [String]
+    /// Hidden unless some shift has a role or the person tapped "Add role":
+    /// with no roles and no tap, the sheet is the sheet it always was.
+    let isRowVisible: Bool
+    /// The small "Add role" button, offered only while the row is hidden.
+    var showsAddRole: Bool { !isRowVisible }
+
+    init(shifts entries: [ShiftRoleList.Entry], tappedAddRole: Bool, draftRole: String? = nil) {
+        chips = ShiftRoleList.byRecency(entries)
+        isRowVisible = !chips.isEmpty || tappedAddRole || draftRole != nil
+    }
+
+    /// Tapping a chip selects it; tapping the selected chip clears it.
+    static func toggled(_ current: String?, tapping chip: String) -> String? {
+        ShiftRoleList.matches(current, chip) ? nil : chip
+    }
+}

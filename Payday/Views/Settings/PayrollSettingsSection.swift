@@ -1,3 +1,4 @@
+import SwiftData
 import SwiftUI
 
 /// Settings > Payroll: the rate, the rate's history, the workweek the
@@ -24,6 +25,23 @@ struct PayrollSettingsSection: View {
     @State private var workweekStartWeekday = 1
     @State private var isShowingRateChange = false
     @State private var isShowingZoneChange = false
+    /// The role whose rate sheet is open, if any.
+    @State private var editingRole: RoleRateEdit?
+
+    /// Read for their roles only, so Roles and rates can appear once a shift
+    /// has a role, before any role has a rate.
+    @Query private var shiftRecords: [ShiftRecord]
+
+    /// The account's roles: on shifts (most recent first), then any that
+    /// only a rate policy names. Empty means no roles, and then the section
+    /// does not exist.
+    private var roleNames: [String] {
+        var names = ShiftRoleList.byRecency(ShiftRoleList.entries(shiftRecords))
+        for name in policyStore.policies.roleNames where !names.contains(where: { ShiftRoleList.matches($0, name) }) {
+            names.append(name)
+        }
+        return names
+    }
 
     private let weekdaySymbols = Calendar.current.weekdaySymbols
 
@@ -64,6 +82,7 @@ struct PayrollSettingsSection: View {
                 rateHistoryPrompt(rate: rate)
             }
             payrollSection
+            rolesSection
         }
         .onAppear(perform: load)
         .onChange(of: wageDigitsText) { _, newValue in
@@ -95,15 +114,80 @@ struct PayrollSettingsSection: View {
         }
         .sheet(isPresented: $isShowingRateChange) {
             RateChangeSheet(currentRateCents: currentRateCents) { cents, day in
+                guard let day else { return }
                 policyStore.applyRateChange(hourlyRateCents: cents, effectiveFrom: day)
                 preferencesStore.baseHourlyWageCents = policyStore.currentHourlyRateCents
                 load()
             }
             .paydayAppearance()
         }
+        .sheet(item: $editingRole) { edit in
+            RateChangeSheet(
+                currentRateCents: policyStore.currentRateCents(forRole: edit.role),
+                title: "\(edit.role) Rate",
+                asksForDate: policyStore.currentRateCents(forRole: edit.role) != nil
+            ) { cents, day in
+                if let day {
+                    policyStore.applyRoleRateChange(role: edit.role, hourlyRateCents: cents, effectiveFrom: day)
+                } else {
+                    policyStore.applyRoleRateEdit(role: edit.role, hourlyRateCents: cents)
+                }
+            }
+            .paydayAppearance()
+        }
     }
 
     // MARK: Sections
+
+    /// "Roles and rates": one rate per role. Appears only once a role exists,
+    /// on a shift or in a rate, so an account without roles sees today's
+    /// Settings. The existing rate is "All roles" and stays the default: a
+    /// role with no rate of its own is paid at it, and removing a role's rate
+    /// falls back to it rather than to zero.
+    @ViewBuilder
+    private var rolesSection: some View {
+        let roles = roleNames
+        if !roles.isEmpty {
+            Section {
+                HStack {
+                    Text("All roles")
+                        .foregroundStyle(PaydayColor.textPrimary)
+                    Spacer()
+                    Text(Self.rateDisplay(currentRateCents))
+                        .foregroundStyle(currentRateCents == nil ? PaydayColor.textSecondary : PaydayColor.textPrimary)
+                        .monospacedDigit()
+                }
+                .accessibilityElement(children: .combine)
+                ForEach(roles, id: \.self) { role in
+                    let rate = policyStore.currentRateCents(forRole: role)
+                    Button {
+                        editingRole = RoleRateEdit(role: role)
+                    } label: {
+                        HStack {
+                            Text(role)
+                                .foregroundStyle(PaydayColor.textPrimary)
+                            Spacer()
+                            Text(rate.map { Money.string(fromCents: $0) } ?? "All roles rate")
+                                .foregroundStyle(rate == nil ? PaydayColor.textSecondary : PaydayColor.textPrimary)
+                                .monospacedDigit()
+                        }
+                    }
+                    .swipeActions {
+                        if rate != nil {
+                            Button("Remove Rate", role: .destructive) {
+                                policyStore.removeRates(forRole: role)
+                            }
+                        }
+                    }
+                }
+            } header: {
+                Text("Roles and rates")
+            } footer: {
+                Text("A shift with a role is paid at that role's rate. A role without its own rate is paid at the All roles rate (the hourly wage above).")
+            }
+            .listRowBackground(PaydayColor.fieldBackground)
+        }
+    }
 
     @ViewBuilder
     private var payrollSection: some View {
@@ -302,7 +386,13 @@ private struct RateChangeSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     let currentRateCents: Int?
-    let onSave: (Int, CivilDay) -> Void
+    /// "Rate Change" for All roles; "Bar Rate" for a role.
+    var title = "Rate Change"
+    /// False for a role's first rate, which applies to every shift with
+    /// that role (like the "Hourly wage" row) and so has no date; `onSave`
+    /// then receives a nil day.
+    var asksForDate = true
+    let onSave: (Int, CivilDay?) -> Void
 
     @State private var effectiveFrom = Date.now
     @State private var digitsText = ""
@@ -346,17 +436,23 @@ private struct RateChangeSheet: View {
                     .contentShape(Rectangle())
                     .onTapGesture { isFieldFocused = true }
 
-                    DatePicker("First day at this rate", selection: $effectiveFrom, in: ...Date.now, displayedComponents: .date)
+                    if asksForDate {
+                        DatePicker("First day at this rate", selection: $effectiveFrom, in: ...Date.now, displayedComponents: .date)
+                    }
                 } header: {
                     Text("New rate")
                 } footer: {
-                    Text("Shifts before this day keep the rate they were paid at. Nothing you have already logged changes.")
+                    if asksForDate {
+                        Text("Shifts before this day keep the rate they were paid at. Nothing you have already logged changes.")
+                    } else {
+                        Text("Every shift with this role is paid at this rate.")
+                    }
                 }
                 .listRowBackground(PaydayColor.fieldBackground)
             }
             .scrollContentBackground(.hidden)
             .background(PaydayColor.background)
-            .navigationTitle("Rate Change")
+            .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -365,6 +461,11 @@ private struct RateChangeSheet: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
                         guard let cents else { return }
+                        guard asksForDate else {
+                            onSave(cents, nil)
+                            dismiss()
+                            return
+                        }
                         var calendar = Calendar(identifier: .gregorian)
                         calendar.timeZone = .current
                         let components = calendar.dateComponents([.year, .month, .day], from: effectiveFrom)
@@ -385,4 +486,10 @@ private struct RateChangeSheet: View {
         }
         .presentationBackground(PaydayColor.background)
     }
+}
+
+/// The role a rate sheet is open for.
+private struct RoleRateEdit: Identifiable {
+    let role: String
+    var id: String { role }
 }
