@@ -28,6 +28,17 @@ public struct EarningsInputs: Hashable, Sendable {
     /// for the same dataset.
     public var unreadableReceiptShiftIDs: [UUID]
 
+    /// The shifts the snapshot REPORTS. Nil (the default) reports every one.
+    ///
+    /// The ledger still values every shift in `shifts`, so the weekly
+    /// overtime threshold is split over the complete workweek; only the
+    /// valuations whose id is in this set reach the snapshot. That is how a
+    /// role view keeps the overtime premium that falls on its own shifts: a
+    /// 30-hour bar week and a 20-hour floor week are 10 overtime hours, and
+    /// filtering the shifts before the ledger would find none. The bar view
+    /// plus the floor view therefore equal the whole, to the cent.
+    public var reportedShiftIDs: Set<UUID>?
+
     public init(
         shifts: [ShiftInput],
         paychecks: [PaycheckInput] = [],
@@ -36,7 +47,8 @@ public struct EarningsInputs: Hashable, Sendable {
         calendars: [PayrollCalendarPolicy] = [],
         asOf: CivilDay,
         engineVersion: Int = InputManifest.currentEngineVersion,
-        unreadableReceiptShiftIDs: [UUID] = []
+        unreadableReceiptShiftIDs: [UUID] = [],
+        reportedShiftIDs: Set<UUID>? = nil
     ) {
         self.shifts = shifts
         self.paychecks = paychecks
@@ -46,6 +58,7 @@ public struct EarningsInputs: Hashable, Sendable {
         self.asOf = asOf
         self.engineVersion = engineVersion
         self.unreadableReceiptShiftIDs = unreadableReceiptShiftIDs
+        self.reportedShiftIDs = reportedShiftIDs
     }
 
     /// The fingerprint of these inputs. Throws `InputManifest
@@ -60,7 +73,8 @@ public struct EarningsInputs: Hashable, Sendable {
             rates: rates,
             calendars: calendars,
             asOf: asOf,
-            engineVersion: engineVersion
+            engineVersion: engineVersion,
+            reportedShiftIDs: reportedShiftIDs
         )
     }
 }

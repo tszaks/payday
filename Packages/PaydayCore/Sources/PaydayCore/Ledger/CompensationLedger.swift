@@ -223,7 +223,7 @@ public enum CompensationLedger {
         var overtimeCentsAllocated = 0
 
         for shift in weekShifts {
-            let ratePolicy = policy(in: rates, onOrBefore: shift.workDay, key: \.effectiveFrom)
+            let ratePolicy = ratePolicy(in: rates, for: shift)
 
             guard let rawMinutes = shift.minutesWorked else {
                 // Hours were never logged: no minutes toward the threshold,
@@ -379,6 +379,23 @@ public enum CompensationLedger {
         return found
     }
 
+    /// The rate that pays `shift`, from a list already in `ratePolicyOrder`.
+    ///
+    /// A shift with a role takes the latest effective policy for that role
+    /// (trimmed, case-insensitive), else the latest effective policy with no
+    /// role. A shift with no role only ever sees no-role policies, so an
+    /// account with no roles picks exactly what it picked before roles
+    /// existed.
+    static func ratePolicy(in rates: [PayRatePolicy], for shift: ShiftInput) -> PayRatePolicy? {
+        let general = rates.filter { $0.roleName == nil }
+        guard let role = ShiftRole.key(shift.roleName) else {
+            return policy(in: general, onOrBefore: shift.workDay, key: \.effectiveFrom)
+        }
+        let forRole = rates.filter { ShiftRole.key($0.roleName) == role }
+        return policy(in: forRole, onOrBefore: shift.workDay, key: \.effectiveFrom)
+            ?? policy(in: general, onOrBefore: shift.workDay, key: \.effectiveFrom)
+    }
+
     // MARK: Canonical orders
 
     /// Order within a workweek, and the order of the whole result: work day,
@@ -406,7 +423,7 @@ public enum CompensationLedger {
     /// Untagged shifts sort after lunch and dinner.
     static let untaggedPeriodRank = 2
 
-    private static func ratePolicyOrder(_ lhs: PayRatePolicy, _ rhs: PayRatePolicy) -> Bool {
+    static func ratePolicyOrder(_ lhs: PayRatePolicy, _ rhs: PayRatePolicy) -> Bool {
         (lhs.effectiveFrom.dayNumber, lhs.id.uuidString) < (rhs.effectiveFrom.dayNumber, rhs.id.uuidString)
     }
 
