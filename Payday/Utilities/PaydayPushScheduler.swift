@@ -192,8 +192,10 @@ enum PaydayPushScheduler {
         let nudge = stubNudge(
             now: .now,
             calculator: calculator,
+            shiftInputs: shiftInputs,
             paycheckRecords: paycheckRecords,
-            isReminderEnabled: preferencesStore.isPaydayReminderEnabled
+            isReminderEnabled: preferencesStore.isPaydayReminderEnabled,
+            payrollTimeZone: payrollTimeZone
         )
         let decision = decision(
             now: .now,
@@ -270,19 +272,27 @@ enum PaydayPushScheduler {
     }
 
     /// The stub nudge: 9 AM two days after the payday of the earliest period
-    /// whose nudge moment is still ahead and whose paycheck is not recorded.
-    /// Numberless by design, so it needs no dataset.
+    /// whose nudge moment is still ahead, whose paycheck is not recorded, and
+    /// which has at least one shift logged: "Payday checks it" needs
+    /// something to check against, so a period with nothing logged is
+    /// skipped, not nagged about. Numberless by design, so no dataset.
     nonisolated static func stubNudge(
         now: Date,
         calculator: PayPeriodCalculator,
+        shiftInputs: ShiftInputAdapter.Output,
         paycheckRecords: [PaycheckRecord],
         isReminderEnabled: Bool,
+        payrollTimeZone: TimeZone,
         calendar: Calendar = .current
     ) -> StubNudge? {
         guard isReminderEnabled,
               let found = nextUnrecordedPeriod(
                   now: now, calculator: calculator, paycheckRecords: paycheckRecords,
-                  offsetDays: stubNudgeOffsetDays, calendar: calendar
+                  offsetDays: stubNudgeOffsetDays, calendar: calendar,
+                  qualifies: { period in
+                      let days = CivilDay(period.start, in: payrollTimeZone)...CivilDay(period.end, in: payrollTimeZone)
+                      return shiftInputs.inputs.contains { days.contains($0.workDay) }
+                  }
               ) else { return nil }
         let (period, fireDate) = found
         return StubNudge(fireDate: fireDate, periodStart: period.start, periodEnd: period.end)
@@ -292,13 +302,14 @@ enum PaydayPushScheduler {
     /// periods before it, oldest first, whose 9 AM moment (payday plus
     /// `offsetDays`) is still ahead of `now`. The walk back stops at the
     /// first period whose moment is behind, since every earlier one is
-    /// behind too. The first unrecorded candidate wins.
+    /// behind too. The first unrecorded candidate that `qualifies` wins.
     private nonisolated static func nextUnrecordedPeriod(
         now: Date,
         calculator: PayPeriodCalculator,
         paycheckRecords: [PaycheckRecord],
         offsetDays: Int,
-        calendar: Calendar
+        calendar: Calendar,
+        qualifies: (PayPeriod) -> Bool = { _ in true }
     ) -> (PayPeriod, Date)? {
         var cal = calendar
         cal.timeZone = .current
@@ -315,7 +326,7 @@ enum PaydayPushScheduler {
         }
 
         return newestFirst.reversed().first { period, _ in
-            !paycheckRecords.contains {
+            qualifies(period) && !paycheckRecords.contains {
                 cal.isDate($0.periodStart, inSameDayAs: period.start) && cal.isDate($0.periodEnd, inSameDayAs: period.end)
             }
         }

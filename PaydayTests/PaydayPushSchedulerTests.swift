@@ -293,17 +293,38 @@ struct PaydayPushSchedulerTests {
 
     // MARK: The stub nudge, two days after payday
 
+    /// One shift in each of the two periods the cases walk (Jul 13-19 and
+    /// Jul 20-26) unless a case says otherwise.
     private func makeNudge(
         now: Date,
+        records: [ShiftRecord]? = nil,
         paycheckRecords: [PaycheckRecord] = [],
         isReminderEnabled: Bool = true
     ) -> PaydayPushScheduler.StubNudge? {
-        PaydayPushScheduler.stubNudge(
+        let records = records ?? [
+            creditRecord(cents: 15000, on: date(2026, 7, 15)),
+            creditRecord(cents: 15000, on: date(2026, 7, 22))
+        ]
+        let compensation = policies(rateCents: nil)
+        return PaydayPushScheduler.stubNudge(
             now: now,
             calculator: weeklyPaidFriday(),
+            shiftInputs: ShiftInputAdapter.adapt(records, calendars: compensation.calendars),
             paycheckRecords: paycheckRecords,
-            isReminderEnabled: isReminderEnabled
+            isReminderEnabled: isReminderEnabled,
+            payrollTimeZone: PaydayTestZone.payroll
         )
+    }
+
+    @Test("no stub nudge for a period with no shift logged")
+    func noStubNudgeWithoutShifts() {
+        // Only Jul 22 is logged: Jul 13-19 has nothing to check a stub
+        // against, so it is skipped and Jul 20-26 is nudged instead.
+        let nudge = makeNudge(
+            now: date(2026, 7, 20, hour: 20),
+            records: [creditRecord(cents: 15000, on: date(2026, 7, 22))]
+        )
+        #expect(nudge?.fireDate == date(2026, 8, 2, hour: 9))
     }
 
     @Test("the stub nudge fires at 9AM two days after payday")

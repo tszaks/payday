@@ -317,22 +317,28 @@ struct PeriodsView: View {
     /// Only acts when the stack is empty, same guard the -OpenPeriodWithPaycheck
     /// debug hook uses, so it never interrupts navigation already in flight.
     ///
-    /// A `.paycheckScan` landing (a tapped payday push) pushes the carried
-    /// period, matched on civil days the way the scheduler matches a
-    /// recorded paycheck, or the current period when nothing matches, and
-    /// then asks that detail to open its stub sheet with the scanner.
+    /// A `.paycheckScan` landing (a tapped payday push) lands in the carried
+    /// period and asks that detail to open its stub sheet with the scanner.
+    /// The period is resolved from the SCHEDULE, not looked up in the rows:
+    /// the list stops at the oldest shift or paycheck, so a period with
+    /// nothing logged has no row, and landing on another row would save the
+    /// stub against the wrong period. Only when the schedule no longer
+    /// produces that period (edited since the push was queued) does it fall
+    /// back to the current one. And it REPLACES the stack rather than
+    /// refusing on a non-empty one: a tap can arrive while a detail is
+    /// already open (the app was backgrounded on it).
     private func consumePendingCurrentPeriodDetail(_ facts: PeriodsPageFacts) {
-        guard let landing = tabRouter.pendingPeriodLanding, path.isEmpty, let currentPeriod = facts.rows.first?.period else { return }
+        guard let landing = tabRouter.pendingPeriodLanding, let currentPeriod = facts.rows.first?.period else { return }
         switch landing {
         case .currentDetail:
+            guard path.isEmpty else { return }
             path.append(currentPeriod)
             tabRouter.pendingPeriodLanding = nil
         case .paycheckScan(let start, let end):
             let calendar = Calendar.current
-            let match = facts.rows.first {
-                calendar.isDate($0.period.start, inSameDayAs: start) && calendar.isDate($0.period.end, inSameDayAs: end)
-            }?.period
-            path.append(match ?? currentPeriod)
+            let resolved = calculator.period(containing: start)
+            let matches = calendar.isDate(resolved.start, inSameDayAs: start) && calendar.isDate(resolved.end, inSameDayAs: end)
+            path = NavigationPath([matches ? resolved : currentPeriod])
             tabRouter.pendingPeriodLanding = nil
             tabRouter.pendingPaycheckScan = true
         }

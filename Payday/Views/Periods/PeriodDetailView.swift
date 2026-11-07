@@ -295,12 +295,8 @@ struct PeriodDetailView: View {
             )
             .paydayAppearance()
         }
-        .onAppear {
-            guard let tabRouter, tabRouter.pendingPaycheckScan else { return }
-            tabRouter.pendingPaycheckScan = false
-            paycheckSheetStartsScanner = true
-            showPaycheckSheet = true
-        }
+        .onAppear { openPaycheckScanIfPending() }
+        .onChange(of: tabRouter?.pendingPaycheckScan) { _, _ in openPaycheckScanIfPending() }
         .undoDeleteToast(undoState, context: modelContext)
         .environment(\.undoDeleteToastState, undoState)
         .task(id: SnapshotBuildKey(
@@ -482,6 +478,17 @@ struct PeriodDetailView: View {
     /// into the nav title instead frees that space for the payday/rate line.
     /// The year only shows when the period crosses into one other than the
     /// current one — most periods live entirely inside a single year.
+    /// A tapped payday push asked for this period's stub sheet with the
+    /// scanner started. Both onAppear and onChange call through here: the
+    /// detail may already be on screen when the tap arrives (the app was
+    /// backgrounded on it), and then no appear happens.
+    private func openPaycheckScanIfPending() {
+        guard let tabRouter, tabRouter.pendingPaycheckScan else { return }
+        tabRouter.pendingPaycheckScan = false
+        paycheckSheetStartsScanner = true
+        showPaycheckSheet = true
+    }
+
     private var periodTitle: String {
         let currentYear = Calendar.current.component(.year, from: Date())
         let endYear = Calendar.current.component(.year, from: period.end)

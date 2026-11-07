@@ -105,7 +105,10 @@ struct PaycheckEntrySheet: View {
     @State private var factsCache: PaycheckEntryFacts?
 
     /// Set when a tapped payday push opened this sheet: once presented, it
-    /// starts the camera (or the scan options where there is no camera).
+    /// opens the camera straight away when nothing leaves the phone, and
+    /// the scan options otherwise (they carry the disclosure that stub
+    /// photos are sent for scanning, which a tap must not skip; also the
+    /// only path when there is no camera).
     let startsScanner: Bool
 
     /// How long to wait before presenting the scanner over this sheet. A
@@ -342,7 +345,7 @@ struct PaycheckEntrySheet: View {
             guard startsScanner else { return }
             try? await Task.sleep(for: Self.scannerPresentationDelay)
             guard !Task.isCancelled else { return }
-            if PaydayCameraView.isCameraAvailable {
+            if PaydayCameraView.isCameraAvailable, !PaycheckAIParser.isConfigured {
                 photoSource = .camera
             } else {
                 showScanOptions = true
