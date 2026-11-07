@@ -458,6 +458,18 @@ Deno.test("a shift with no tip share reports null, not zero", () => {
   assertEquals(shift.tip_share_in_cents, null);
 });
 
+Deno.test("a shift row carries its role, and null without one", () => {
+  const base = {
+    id: "66666666-6666-4666-8666-666666666666",
+    work_date: "2026-09-05",
+    non_wage_earnings_cents: 10000,
+  };
+  assertEquals(testing.shiftResponse({ ...base, role_name: "Bar" }).role_name, "Bar");
+  assertEquals(testing.shiftResponse(base).role_name, null);
+  // A role is not money.
+  assertEquals(testing.shiftResponse({ ...base, role_name: "Bar" }).net_tip_earnings_cents, 10000);
+});
+
 Deno.test("snapshot sums carry a received tip share into earned income", () => {
   const days = [{
     day: "2026-09-05",
