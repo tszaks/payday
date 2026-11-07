@@ -29,6 +29,11 @@ struct JobsLookupTests {
         id: uuid(4), effectiveFrom: day("2026-03-01"), workweekStartWeekday: 2, payrollTimeZone: west,
         dailyOvertimeThresholdMinutes: 480, jobName: "Cafe")
 
+    /// A role's rate on the job, later than everything the primary has.
+    static let cafeBarRate = PayRatePolicy(
+        id: uuid(5), effectiveFrom: day("2026-04-01"), hourlyRateCents: 1100, provenance: .confirmed,
+        roleName: "Bar", jobName: "Cafe")
+
     static let primaryOnly = CompensationPolicies(rates: [primaryRate], calendars: [primaryCalendar])
     static let both = CompensationPolicies(
         rates: [primaryRate, cafeRate], calendars: [primaryCalendar, cafeCalendar])
@@ -62,6 +67,17 @@ struct JobsLookupTests {
     func allRolesRates() {
         #expect(Self.both.allRolesRates == [Self.primaryRate])
         #expect(Self.both.policies(forJob: "Cafe").allRolesRates == [Self.cafeRate])
+    }
+
+    @Test("rates(forRole:) and roleNames ignore a job's role rate")
+    func roleRates() {
+        let withRole = CompensationPolicies(
+            rates: [Self.primaryRate, Self.cafeRate, Self.cafeBarRate],
+            calendars: [Self.primaryCalendar, Self.cafeCalendar])
+        #expect(withRole.rates(forRole: "Bar").isEmpty)
+        #expect(withRole.roleNames.isEmpty)
+        #expect(withRole.policies(forJob: "Cafe").rates(forRole: "bar") == [Self.cafeBarRate])
+        #expect(withRole.policies(forJob: "Cafe").roleNames == ["Bar"])
     }
 
     @Test("payrollTimeZone ignores a job's zone")

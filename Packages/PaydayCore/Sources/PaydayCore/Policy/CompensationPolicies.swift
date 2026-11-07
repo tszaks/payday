@@ -155,7 +155,7 @@ public struct CompensationPolicies: Hashable, Codable, Sendable {
     /// One role's rates, in effect order (trimmed, case-insensitive match).
     public func rates(forRole role: String) -> [PayRatePolicy] {
         guard let key = ShiftRole.key(role) else { return [] }
-        return rates.filter { ShiftRole.key($0.roleName) == key }
+        return lookupRates.filter { ShiftRole.key($0.roleName) == key }
     }
 
     /// The roles that have a rate of their own, latest spelling, in the
@@ -163,7 +163,7 @@ public struct CompensationPolicies: Hashable, Codable, Sendable {
     public var roleNames: [String] {
         var seen: Set<String> = []
         var names: [String] = []
-        for rate in rates {
+        for rate in lookupRates {
             guard let name = rate.roleName, let key = ShiftRole.key(name), seen.insert(key).inserted else { continue }
             names.append(name)
         }
