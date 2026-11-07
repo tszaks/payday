@@ -63,6 +63,7 @@ enum ShiftDraftPreview {
         serverCount: Int?,
         tipShareInCents: Int = 0,
         roleName: String? = nil,
+        jobName: String? = nil,
         receiptMetrics: ShiftReceiptMetrics?,
         normalizeEarnings: Bool,
         policies: CompensationPolicies
@@ -94,6 +95,10 @@ enum ShiftDraftPreview {
             serverCount: serverCount,
             tipShareInCents: tipShareInCents > 0 ? tipShareInCents : nil,
             roleName: roleName,
+            // The job partitions pricing and overtime (E2a), so the preview
+            // must carry it or it would price a second job's shift as the
+            // primary's and the saved shift would then value differently.
+            jobName: jobName,
             receiptMetrics: receiptMetrics,
             note: note,
             recordedAt: recordedAt

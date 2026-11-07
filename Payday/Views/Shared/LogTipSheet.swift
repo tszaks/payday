@@ -377,6 +377,7 @@ struct LogTipSheet: View {
             serverCount: serverCount,
             tipShareInCents: tipShareInCents,
             roleName: roleName,
+            jobName: jobName,
             receiptMetrics: receiptMetrics,
             normalizeEarnings: editingRecord != nil,
             policies: policyStore.policies

@@ -341,6 +341,35 @@ struct LogShiftFactsTests {
         #expect(facts.hoursCaption == "6h 23m")
     }
 
+    /// E2a review (Codex): the engine prices and runs overtime per job, so
+    /// the preview must carry the draft's job or a second job's shift would
+    /// preview at the primary's wage and value differently once saved.
+    @Test("the draft carries its job to the engine; the primary's is nil")
+    func draftCarriesJob() throws {
+        func draft(job: String?) -> ShiftInput? {
+            ShiftDraftPreview.draftInput(
+                date: Draft.date,
+                cashCents: Draft.cashCents,
+                creditCents: Draft.creditCents,
+                recordedAt: Draft.recordedAt,
+                shiftID: logShiftID(99),
+                hoursWorked: Draft.hoursWorked,
+                tipOutCents: 0,
+                salesCents: 0,
+                shiftPeriod: .dinner,
+                clockIn: nil,
+                clockOut: nil,
+                serverCount: nil,
+                jobName: job,
+                receiptMetrics: nil,
+                normalizeEarnings: false,
+                policies: sundayStartPolicies()
+            )
+        }
+        #expect(try #require(draft(job: nil)).jobName == nil)
+        #expect(try #require(draft(job: " Cafe ")).jobName == "Cafe")
+    }
+
     @Test("a draft with no hours logged is headed 'Known so far', never 'Total'")
     func partialDraftIsNeverATotal() throws {
         let draft = ShiftDraftPreview.draftInput(
