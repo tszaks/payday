@@ -4,15 +4,15 @@ import Testing
 
 @Suite("MetricID registry")
 struct MetricIDTests {
-    @Test("The registry has exactly the 17 rows from the plan, by name")
+    @Test("The registry has exactly the 18 rows from the plan, by name")
     func exactCases() {
         let expected: Set<String> = [
             "earnedIncome", "nonWageEarnings", "voluntaryTips", "gratuityFees", "tipOut",
             "regularWages", "overtimeWages", "expectedPaycheckTipsLine", "expectedPaycheckGross",
             "observedPaidTips", "proposedPaidTipsCorrection", "reconciliationDelta", "hourlyRate",
-            "observedGross", "observedNet", "observedTaxes", "expectedPaycheckNet",
+            "observedGross", "observedNet", "observedTaxes", "expectedPaycheckNet", "tipShareIn",
         ]
-        #expect(MetricID.allCases.count == 17)
+        #expect(MetricID.allCases.count == 18)
         #expect(Set(MetricID.allCases.map(\.rawValue)) == expected)
     }
 
@@ -33,6 +33,7 @@ struct MetricIDTests {
         #expect(MetricID.voluntaryTips.allowedLabels == ["Cash tips", "Credit tips", "Tips"])
         #expect(MetricID.gratuityFees.allowedLabels == ["Gratuity & fees"])
         #expect(MetricID.tipOut.allowedLabels == ["Tipped out"])
+        #expect(MetricID.tipShareIn.allowedLabels == ["Tip share received"])
         #expect(MetricID.regularWages.allowedLabels == ["Wages"])
         #expect(MetricID.overtimeWages.allowedLabels == ["Overtime"])
         #expect(MetricID.expectedPaycheckTipsLine.allowedLabels == ["Your check's tips line"])
@@ -55,14 +56,14 @@ struct MetricIDTests {
             .earnedIncome, .nonWageEarnings, .voluntaryTips, .gratuityFees, .tipOut, .regularWages, .overtimeWages,
             .expectedPaycheckTipsLine, .expectedPaycheckGross, .observedPaidTips, .proposedPaidTipsCorrection,
             .reconciliationDelta, .hourlyRate,
-            .observedGross, .observedNet, .observedTaxes, .expectedPaycheckNet,
+            .observedGross, .observedNet, .observedTaxes, .expectedPaycheckNet, .tipShareIn,
         ]
         #expect(pinned == Set(MetricID.allCases))
     }
 
     @Test("Bases follow the plan table")
     func bases() {
-        for m in [MetricID.earnedIncome, .nonWageEarnings, .voluntaryTips, .gratuityFees, .tipOut, .regularWages, .overtimeWages] {
+        for m in [MetricID.earnedIncome, .nonWageEarnings, .voluntaryTips, .gratuityFees, .tipOut, .tipShareIn, .regularWages, .overtimeWages] {
             #expect(m.basis == .workDate)
         }
         for m in [MetricID.expectedPaycheckTipsLine, .expectedPaycheckGross, .reconciliationDelta, .expectedPaycheckNet] {

@@ -50,10 +50,18 @@ public enum PaycheckReconciler {
     /// minus the tip-out. The cash fallback exists for legacy all-cash
     /// periods, which would otherwise expect nothing on a stub that plainly
     /// paid something. Clamped at zero: a stub never prints a negative line.
-    public static func tipsLineCents(from components: EarningsComponents) -> Int {
-        let base = components.voluntaryCreditCents > 0
-            ? components.voluntaryCreditCents
-            : components.voluntaryTipsCents
+    ///
+    /// A tip share RECEIVED rides with the card tips: payroll pays it the
+    /// same way. When `cardTipsOnCheck` is false (Settings → Payroll, "Card
+    /// tips are paid: At the end of my shift") the tips were handed over at
+    /// close, so the stub carries no tips line at all and this is 0.
+    public static func tipsLineCents(
+        from components: EarningsComponents,
+        cardTipsOnCheck: Bool = true
+    ) -> Int {
+        guard cardTipsOnCheck else { return 0 }
+        let onCheck = components.voluntaryCreditCents + components.tipShareInCents
+        let base = onCheck > 0 ? onCheck : components.voluntaryTipsCents
         return max(0, base - components.tipOutCents)
     }
 
@@ -61,16 +69,39 @@ public enum PaycheckReconciler {
     /// the History row's delta and of period detail's verdict. Two registry
     /// rows summed, kept in one function because that is the figure both
     /// surfaces render.
-    public static func tipsAndGratuityCents(from components: EarningsComponents) -> Int {
-        tipsLineCents(from: components) + components.gratuityFeesCents
+    public static func tipsAndGratuityCents(
+        from components: EarningsComponents,
+        cardTipsOnCheck: Bool = true
+    ) -> Int {
+        tipsLineCents(from: components, cardTipsOnCheck: cardTipsOnCheck)
+            + components.gratuityFeesCents
     }
 
     /// `MetricID.expectedPaycheckGross`: the whole pre-tax check. Wages come
     /// from the components, so a period whose wages are `.unavailable`
     /// contributes zero for them and the `Completeness` on the result says
     /// so — which is why `Expectation.grossFigure` carries the caption.
-    public static func grossCents(from components: EarningsComponents) -> Int {
-        tipsAndGratuityCents(from: components) + components.wagesCents
+    ///
+    /// With card tips paid at close this is gratuity + wages.
+    public static func grossCents(
+        from components: EarningsComponents,
+        cardTipsOnCheck: Bool = true
+    ) -> Int {
+        tipsAndGratuityCents(from: components, cardTipsOnCheck: cardTipsOnCheck)
+            + components.wagesCents
+    }
+
+    /// What the person already took home before payday when card tips are
+    /// paid at close: cash + card + tip share received − tip-out. The
+    /// payday card's "Tips already paid" line. Zero when nothing is paid
+    /// at close.
+    public static func tipsAlreadyPaidCents(
+        from components: EarningsComponents,
+        cardTipsOnCheck: Bool
+    ) -> Int {
+        if cardTipsOnCheck { return components.voluntaryCashCents }
+        return components.voluntaryTipsCents + components.tipShareInCents
+            - components.tipOutCents
     }
 
     /// `MetricID.reconciliationDelta` for one component: observed minus
@@ -112,9 +143,15 @@ public enum PaycheckReconciler {
         /// snapshot: there is no dataset to stamp.
         public let stamp: SnapshotStamp?
 
-        public init(result: EarningsResult?, stamp: SnapshotStamp?) {
+        /// Where card tips are paid (Settings → Payroll). False means at
+        /// the end of the shift: no tips line on the stub, nothing to audit
+        /// against it.
+        public let cardTipsOnCheck: Bool
+
+        public init(result: EarningsResult?, stamp: SnapshotStamp?, cardTipsOnCheck: Bool = true) {
             self.result = result
             self.stamp = result == nil ? nil : stamp
+            self.cardTipsOnCheck = cardTipsOnCheck
         }
 
         /// No dataset, so no expectation. Every check that needs one stays
@@ -133,7 +170,7 @@ public enum PaycheckReconciler {
 
         /// `MetricID.expectedPaycheckTipsLine`.
         public var tipsLineCents: Int? {
-            components.map(PaycheckReconciler.tipsLineCents(from:))
+            components.map { PaycheckReconciler.tipsLineCents(from: $0, cardTipsOnCheck: cardTipsOnCheck) }
         }
 
         /// The tips line the AUDIT compares a stub against, which is nil for
@@ -146,15 +183,20 @@ public enum PaycheckReconciler {
         /// auditing. The History row and period detail's verdict keep using
         /// the fallback, because there the figure is a comparison the person
         /// asked for rather than a warning Payday volunteered.
+        ///
+        /// Also nil when card tips are paid at close: the stub has no tips
+        /// line to check.
         public var auditableTipsLineCents: Int? {
-            guard let components, components.voluntaryCreditCents > 0 else { return nil }
+            guard cardTipsOnCheck, let components,
+                  components.voluntaryCreditCents + components.tipShareInCents > 0
+            else { return nil }
             return PaycheckReconciler.tipsLineCents(from: components)
         }
 
         /// The Tips line plus the Gratuity line, the "expected" half of a
         /// paycheck comparison.
         public var tipsAndGratuityCents: Int? {
-            components.map(PaycheckReconciler.tipsAndGratuityCents(from:))
+            components.map { PaycheckReconciler.tipsAndGratuityCents(from: $0, cardTipsOnCheck: cardTipsOnCheck) }
         }
 
         /// `MetricID.gratuityFees` for the period, nil when none was logged:
@@ -167,7 +209,12 @@ public enum PaycheckReconciler {
 
         /// `MetricID.expectedPaycheckGross`.
         public var grossCents: Int? {
-            components.map(PaycheckReconciler.grossCents(from:))
+            components.map { PaycheckReconciler.grossCents(from: $0, cardTipsOnCheck: cardTipsOnCheck) }
+        }
+
+        /// `PaycheckReconciler.tipsAlreadyPaidCents` for this period.
+        public var tipsAlreadyPaidCents: Int? {
+            components.map { PaycheckReconciler.tipsAlreadyPaidCents(from: $0, cardTipsOnCheck: cardTipsOnCheck) }
         }
 
         /// Whether the period has a computed wage worth auditing a stub

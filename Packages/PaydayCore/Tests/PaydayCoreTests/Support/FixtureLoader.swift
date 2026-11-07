@@ -54,6 +54,7 @@ struct Fixture: Decodable, Sendable {
         var voluntaryCreditCents: Int?
         var gratuityFeesCents: Int?
         var tipOutCents: Int?
+        var tipShareInCents: Int?
     }
 
     /// A legacy `TipEntry` row as stored today. `date` is kept as the raw
@@ -146,6 +147,7 @@ struct Fixture: Decodable, Sendable {
                 voluntaryCreditCents: s.voluntaryCreditCents ?? 0,
                 gratuityFeesCents: s.gratuityFeesCents ?? 0,
                 tipOutCents: s.tipOutCents,
+                tipShareInCents: s.tipShareInCents,
                 minutesWorked: s.minutesWorked
             )
         }

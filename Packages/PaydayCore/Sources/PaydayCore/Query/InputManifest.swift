@@ -46,6 +46,7 @@ import Foundation
 ///
 /// Shifts, sorted by (`id.uuidString`, whole encoded line):
 /// `S|id|workDay|period|recordedAt|voluntaryCashCents|voluntaryCreditCents|gratuityFeesCents|tipOutCents|minutesWorked`
+/// followed by `|tsi=<tipShareInCents>` only when that is non-zero.
 ///
 /// Paychecks, sorted by (`id.uuidString`, whole encoded line):
 /// `P|id|periodStart|periodEnd|paidTipsCents|grossPayCents|netPayCents|regularWagesCents|overtimeWagesCents|gratuityCents|taxesCents`
@@ -326,7 +327,11 @@ public struct InputManifest: Hashable, Codable, Sendable {
                         // column.
                         String(s.tipOutCents ?? 0),
                         field(s.minutesWorked),
-                    ].joined(separator: "|"))
+                    ].joined(separator: "|")
+                    // Appended only when it moves money, so every digest
+                    // written before tip share existed is byte-identical,
+                    // and nil and 0 collapse for the reason given above.
+                    + ((s.tipShareInCents ?? 0) != 0 ? "|tsi=\(s.tipShareInCents ?? 0)" : ""))
                 }
                 .sorted { $0 < $1 }
                 .map { $0.1 }
