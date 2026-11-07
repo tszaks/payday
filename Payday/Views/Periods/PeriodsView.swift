@@ -403,7 +403,11 @@ struct PeriodsView: View {
             // job the picker last showed; with one job this is
             // `currentPeriod` exactly.
             pickedJobID = nil
-            path.append(jobs.count >= 2 ? calculator.period(containing: currentDay) : currentPeriod)
+            // The current INSTANT, not the device calendar's start of day
+            // (`currentDay`): a payroll zone ahead of the device can already
+            // be in the next period while the device's midnight still falls
+            // in the last one, and the Dashboard card was built on `.now`.
+            path.append(jobs.count >= 2 ? calculator.period(containing: .now) : currentPeriod)
             tabRouter.pendingPeriodLanding = nil
         case .jobCurrentDetail(let jobTag):
             // A second job's "See all" (E3): switch the picker to that job
@@ -413,7 +417,7 @@ struct PeriodsView: View {
             let landingJob = jobs.first { ShiftRole.key($0.tag) == ShiftRole.key(jobTag) }
             pickedJobID = landingJob?.id
             let scope = JobScope.picked(landingJob?.tag, jobCount: jobs.count)
-            path.append(jobs.count >= 2 ? calculator(for: scope).period(containing: currentDay) : currentPeriod)
+            path.append(jobs.count >= 2 ? calculator(for: scope).period(containing: .now) : currentPeriod)
             tabRouter.pendingPeriodLanding = nil
         case .paycheckScan(let start, let end, let jobTag):
             // The push carries its job (E2b): switch the picker to it and
@@ -421,7 +425,7 @@ struct PeriodsView: View {
             let landingJob = jobs.first { ShiftRole.key($0.tag) == ShiftRole.key(jobTag) }
             pickedJobID = landingJob?.id
             let scope = JobScope.picked(landingJob?.tag, jobCount: jobs.count)
-            let jobCurrent = calculator(for: scope).period(containing: currentDay)
+            let jobCurrent = calculator(for: scope).period(containing: .now)
             let calendar = Calendar.current
             let resolved = calculator(for: scope).period(containing: start)
             let matches = calendar.isDate(resolved.start, inSameDayAs: start) && calendar.isDate(resolved.end, inSameDayAs: end)
