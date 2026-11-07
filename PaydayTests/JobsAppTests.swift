@@ -190,6 +190,18 @@ struct JobCommandsTests {
         #expect(!JobsSettingsView.nameIsTaken("   ", existing: ["Bistro"], primaryName: "Main job"))
     }
 
+    @Test("a job schedule keeps the civil date that was picked, whatever the payroll zone")
+    func scheduleKeepsPickedDay() {
+        var newYork = Calendar(identifier: .gregorian)
+        newYork.timeZone = TimeZone(identifier: "America/New_York")!
+        // Midnight November 7 in New York is still November 6 in Los Angeles.
+        let picked = newYork.date(from: DateComponents(year: 2026, month: 11, day: 7))!
+        let input = JobsSettingsView.scheduleInput(
+            PaySchedule(frequency: .weekly, anchorPeriodEnd: picked), pickedIn: newYork.timeZone)
+        #expect(input.anchorPeriodEnd == CivilDay(year: 2026, month: 11, day: 7))
+        #expect(CivilDay(picked, in: TimeZone(identifier: "America/Los_Angeles")!) == CivilDay(year: 2026, month: 11, day: 6))
+    }
+
     @Test("delete is refused while a shift or paycheck carries the name, and says how many")
     func deleteRefused() {
         store.apply(twoJobs())

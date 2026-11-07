@@ -102,7 +102,7 @@ struct JobsSettingsView: View {
             AddJobSheet(asksForPrimaryName: jobs.isEmpty, takenNames: jobs.map(\.name), primarySchedule: scheduleStore.schedule) { name, primaryName, schedule in
                 JobCommands.add(
                     name: name,
-                    schedule: schedule.map { scheduleInput($0) },
+                    schedule: schedule.map { Self.scheduleInput($0) },
                     primaryName: ShiftRole.normalized(primaryName) ?? "Main job",
                     policyStore: policyStore
                 )
@@ -135,10 +135,15 @@ struct JobsSettingsView: View {
         do { try body() } catch { saveFailed = true }
     }
 
-    private func scheduleInput(_ schedule: PaySchedule) -> PayScheduleInput {
+    /// The picked date as the civil day the person SAW. The date picker and
+    /// the midnight normalisation in `AddJobSheet` run in the device
+    /// calendar, so the day is read back in that same zone. Reading it in
+    /// the payroll zone moved November 7 at New York midnight to November 6
+    /// in Los Angeles, and this screen has no editor to put it right.
+    static func scheduleInput(_ schedule: PaySchedule, pickedIn zone: TimeZone = .current) -> PayScheduleInput {
         PayScheduleInput(
             frequency: schedule.frequency.rawValue,
-            anchorPeriodEnd: CivilDay(schedule.anchorPeriodEnd, in: policyStore.payrollTimeZone),
+            anchorPeriodEnd: CivilDay(schedule.anchorPeriodEnd, in: zone),
             payDelayDays: schedule.resolvedPayDelayDays,
             firstWeekday: schedule.firstWeekday
         )
