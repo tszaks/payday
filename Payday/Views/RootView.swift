@@ -89,6 +89,13 @@ struct RootView: View {
         .onReceive(NotificationCenter.default.publisher(for: PolicyStore.didChange)) { _ in
             PaydayPushScheduler.reschedule(preferencesStore: preferencesStore, schedule: scheduleStore.schedule, shiftRecords: shiftRecords, paycheckRecords: paycheckRecords)
         }
+        // Where card tips are paid changes the expected check, and the
+        // pending payday reminder quotes that check. Observed here rather
+        // than on the Settings picker, so a choice that arrives through
+        // settings sync from another device reschedules just the same.
+        .onChange(of: preferencesStore.isCardTipsPaidAtClose) { _, _ in
+            PaydayPushScheduler.reschedule(preferencesStore: preferencesStore, schedule: scheduleStore.schedule, shiftRecords: shiftRecords, paycheckRecords: paycheckRecords)
+        }
         .task {
             // Backgrounding an already-running app arms the lock via the
             // scenePhase handler above, but a fully-terminated app (swiped

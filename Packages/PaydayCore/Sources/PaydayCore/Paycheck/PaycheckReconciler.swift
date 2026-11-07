@@ -439,6 +439,14 @@ public enum PaycheckReconciler {
             paidTipsCents != nil || grossCents != nil || taxesCents != nil || netCents != nil
         }
 
+        /// Whether anything at all was entered: every line of the stub,
+        /// the gratuity line included. The paycheck sheet's save rule when
+        /// card tips are paid at close, where the stub prints no tips line
+        /// and any other figure is what makes it a stub.
+        public var hasAnyField: Bool {
+            hasAnyNonWageField || hasAnyWageField || gratuityCents != nil
+        }
+
         public var hasAnyWageField: Bool {
             regularWagesCents != nil || overtimeWagesCents != nil
         }

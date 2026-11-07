@@ -204,12 +204,96 @@ select pg_temp.expect('anOlderBuildsUpsertKeepsTheStoredChoice',
   '');
 
 -- ===========================================================================
+-- 3. The deriver compares legacy money against legacy money
+-- ===========================================================================
+-- A closed shift that carries a share must not report a conflict the size
+-- of that share every time an old build touches one of its legacy rows.
+-- Every fold here is also invoked explicitly, as shift_deriver_test.sql
+-- does, so the assertions hold whether or not the on-arrival trigger ran
+-- first; conflict rows are therefore counted as "none" or "at least one, all
+-- carrying the same two figures", never as an exact number.
+
+-- A night first logged on an old build: one legacy cash row of $50.
+insert into public.tip_entries (id, user_id, shift_id, work_date, amount_cents, kind, client_updated_at)
+values ('cccccccc-0000-4000-8000-000000000001', '66666666-6666-4666-8666-666666666666',
+        'dddddddd-0000-4000-8000-000000000001', '2026-10-10', 5000, 'cash',
+        '2026-10-10 23:00:00+00');
+select private.derive_shifts('66666666-6666-4666-8666-666666666666',
+  array['dddddddd-0000-4000-8000-000000000001'::uuid]);
+
+-- The person edits that night on the new build: same $50 cash, plus a $30
+-- share received. private.write_shifts closes the shift to the fold.
+select pg_temp.rpc_as('66666666-6666-4666-8666-666666666666', $s$
+  select * from public.upsert_shifts($j$[
+    {"id":"dddddddd-0000-4000-8000-000000000001","work_date":"2026-10-10",
+     "cash_tips_cents":5000,"tip_share_in_cents":3000}
+  ]$j$::jsonb)
+$s$);
+
+select pg_temp.expect('aDeviceEditWithAShareClosesTheShift',
+  (select native_modified_at is not null and tip_share_in_cents = 3000
+          and non_wage_earnings_cents = 8000
+     from public.shifts where id = 'dddddddd-0000-4000-8000-000000000001'),
+  (select coalesce(tip_share_in_cents::text, 'NULL') || '/' || non_wage_earnings_cents::text
+     from public.shifts where id = 'dddddddd-0000-4000-8000-000000000001'));
+
+select pg_temp.expect('theLegacyComparableNetIsTheNetWithoutTheShare',
+  (select private.shift_legacy_net_cents(s) = 5000 from public.shifts s
+    where s.id = 'dddddddd-0000-4000-8000-000000000001'),
+  (select private.shift_legacy_net_cents(s)::text from public.shifts s
+    where s.id = 'dddddddd-0000-4000-8000-000000000001'));
+
+-- The old build edits the note only. The legacy money still says $50, the
+-- shift's legacy-comparable net still says $50: no disagreement.
+update public.tip_entries set note = 'edited on an old build',
+       client_updated_at = '2026-10-11 00:00:00+00'
+ where id = 'cccccccc-0000-4000-8000-000000000001';
+select private.derive_shifts('66666666-6666-4666-8666-666666666666',
+  array['dddddddd-0000-4000-8000-000000000001'::uuid]);
+
+select pg_temp.expect('anUnchangedLegacyRowOnAShareBearingClosedShiftRecordsNoConflict',
+  (select count(*) = 0 from public.shift_legacy_conflicts
+    where user_id = '66666666-6666-4666-8666-666666666666'
+      and shift_id = 'dddddddd-0000-4000-8000-000000000001')
+  and (select unconverted_legacy_cents = 0 and tip_share_in_cents = 3000
+              and non_wage_earnings_cents = 8000
+         from public.shifts where id = 'dddddddd-0000-4000-8000-000000000001'),
+  'conflicts=' || (select count(*) from public.shift_legacy_conflicts
+                    where shift_id = 'dddddddd-0000-4000-8000-000000000001')::text
+  || ' unconverted=' || (select unconverted_legacy_cents::text from public.shifts
+                          where id = 'dddddddd-0000-4000-8000-000000000001'));
+
+-- The old build changes the money to $70. That IS a disagreement, and it is
+-- recorded against the legacy-comparable $50, never against the $80 that
+-- includes the share.
+update public.tip_entries set amount_cents = 7000,
+       client_updated_at = '2026-10-11 01:00:00+00'
+ where id = 'cccccccc-0000-4000-8000-000000000001';
+select private.derive_shifts('66666666-6666-4666-8666-666666666666',
+  array['dddddddd-0000-4000-8000-000000000001'::uuid]);
+
+select pg_temp.expect('aRealLegacyDisagreementIsRecordedWithTheShareExcluded',
+  exists (select 1 from public.shift_legacy_conflicts
+           where shift_id = 'dddddddd-0000-4000-8000-000000000001')
+  and not exists (select 1 from public.shift_legacy_conflicts
+                   where shift_id = 'dddddddd-0000-4000-8000-000000000001'
+                     and not (shift_cents_before = 5000 and legacy_cents_after = 7000))
+  and (select unconverted_legacy_cents = 2000 and tip_share_in_cents = 3000
+              and non_wage_earnings_cents = 8000 and cash_tips_cents = 5000
+         from public.shifts where id = 'dddddddd-0000-4000-8000-000000000001'),
+  coalesce((select string_agg(shift_cents_before || '->' || legacy_cents_after, ' ' order by id)
+              from public.shift_legacy_conflicts
+             where shift_id = 'dddddddd-0000-4000-8000-000000000001'), 'none')
+  || ' unconverted=' || (select unconverted_legacy_cents::text from public.shifts
+                          where id = 'dddddddd-0000-4000-8000-000000000001'));
+
+-- ===========================================================================
 -- Report
 -- ===========================================================================
 
 select pg_temp.expect('theSuiteRanEveryAssertion',
-  (select count(*) from results) = 13,
-  'ran ' || (select count(*) from results)::text || ' of 13');
+  (select count(*) from results) = 17,
+  'ran ' || (select count(*) from results)::text || ' of 17');
 
 select seq, case when ok then 'PASS' else 'FAIL' end as result, name, detail
 from results order by seq;

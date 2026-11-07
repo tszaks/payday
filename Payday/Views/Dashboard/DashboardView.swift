@@ -503,7 +503,7 @@ struct DashboardFacts: SnapshotFacts {
                 shiftID: latest.shiftID
             )
             let components = valuation.components
-            tonightRevealText = "\(RevealCopy.headline(cents: revealCents, includesNonTipIncome: components.wagesCents > 0 || components.gratuityFeesCents > 0)) \(RevealCopy.comparison(for: result.comparison, period: latest.shiftPeriod))"
+            tonightRevealText = "\(RevealCopy.headline(cents: revealCents, includesNonTipIncome: components.wagesCents > 0 || components.gratuityFeesCents > 0 || components.tipShareInCents > 0)) \(RevealCopy.comparison(for: result.comparison, period: latest.shiftPeriod))"
         }
         tonightLine = TonightLine.compose(
             tonightRevealText: tonightRevealText,
