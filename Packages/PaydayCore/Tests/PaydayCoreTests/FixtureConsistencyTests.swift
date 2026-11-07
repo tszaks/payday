@@ -12,8 +12,10 @@ struct FixtureConsistencyTests {
     /// The `kind` vocabulary from `Fixtures/README.md`.
     static let allowedKinds: Set<String> = ["ledger", "migration", "query", "export", "paycheck", "presentation"]
 
-    /// The 14 plan fixtures (plan "PR 1", `.pr1-spec.md`), plus B1 (tip share received, PR A).
-    static let planIDs: Set<String> = ["W1", "W2", "W3", "N1", "N2", "N3", "M1", "H1", "P1", "E1", "S2", "Z1", "T1", "C1", "B1"]
+    /// The 14 plan fixtures (plan "PR 1", `.pr1-spec.md`), plus B1 (tip share received, PR A)
+    /// and D1-D4 (daily overtime, PR C).
+    static let planIDs: Set<String> = ["W1", "W2", "W3", "N1", "N2", "N3", "M1", "H1", "P1", "E1", "S2", "Z1", "T1", "C1", "B1",
+                                       "D1", "D2", "D3", "D4"]
 
     /// W2's five base shifts, by id suffix.
     static let baseShiftIDs: [UUID] = (1...5).map { UUID(uuidString: "00000000-0000-0000-0000-00000000000\($0)")! }
@@ -24,7 +26,7 @@ struct FixtureConsistencyTests {
         Dictionary(uniqueKeysWithValues: fixture.shifts.map { ($0.id, $0) })
     }
 
-    @Test("Exactly the 15 fixtures are present and every id matches its filename")
+    @Test("Exactly the 19 fixtures are present and every id matches its filename")
     func idsMatchFilenames() throws {
         let ids = FixtureLoader.availableIDs()
         #expect(Set(ids) == Self.planIDs, "present: \(ids)")
@@ -62,7 +64,7 @@ struct FixtureConsistencyTests {
             #expect(throws: Never.self) { try fixture.toCalendarPolicies() }
         }
         // Every plan fixture declares exactly one calendar policy today.
-        #expect(checked == 15)
+        #expect(checked == 19)
     }
 
     @Test("Every Monday-start calendar policy takes effect on a Monday")
@@ -77,7 +79,7 @@ struct FixtureConsistencyTests {
             }
         }
         // Every plan fixture is Monday-start today; the check must have bitten.
-        #expect(checked == 15)
+        #expect(checked == 19)
     }
 
     @Test("W2 base: five shifts 001..005, Monday-start policies effective 2025-12-29, biweekly schedule anchored 2026-10-04")

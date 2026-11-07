@@ -1,0 +1,57 @@
+{
+  "id": "D1",
+  "description": "One 10-hour day with daily overtime after 8 hours: 480 regular, 120 overtime.",
+  "kind": "ledger",
+  "policies": {
+    "rate": [
+      {
+        "effectiveFrom": "2025-12-29",
+        "hourlyRateCents": 1500,
+        "provenance": "confirmed"
+      }
+    ],
+    "calendar": [
+      {
+        "effectiveFrom": "2025-12-29",
+        "workweekStartWeekday": 2,
+        "overtimeThresholdMinutes": 2400,
+        "overtimeMultiplierHundredths": 150,
+        "payrollTimeZone": "America/Los_Angeles",
+        "dailyOvertimeThresholdMinutes": 480
+      }
+    ]
+  },
+  "schedule": null,
+  "shifts": [
+    {
+      "id": "00000000-0000-0000-0000-0000000d0001",
+      "workDay": "2026-10-05",
+      "period": "dinner",
+      "minutesWorked": 600,
+      "voluntaryCashCents": 0,
+      "voluntaryCreditCents": 0,
+      "gratuityFeesCents": 0,
+      "tipOutCents": null
+    }
+  ],
+  "legacyEntries": [],
+  "paychecks": [],
+  "asOf": null,
+  "expected": {
+    "perShift": [
+      {
+        "id": "00000000-0000-0000-0000-0000000d0001",
+        "workDay": "2026-10-05",
+        "minutesWorked": 600,
+        "regularMinutes": 480,
+        "overtimeMinutes": 120,
+        "regularWagesCents": 12000,
+        "overtimeWagesCents": 4500,
+        "wagesCents": 16500,
+        "nonWageEarningsCents": 0,
+        "earnedIncomeCents": 16500
+      }
+    ]
+  },
+  "notes": "Made-up rate 1500c/h = 25c per regular minute, 37.5c per overtime minute at 1.5x. 480*25 = 12000; 120*37.5 = 4500."
+}

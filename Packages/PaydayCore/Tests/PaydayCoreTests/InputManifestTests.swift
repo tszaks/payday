@@ -127,7 +127,7 @@ struct InputManifestTests {
     /// digest changes, and the format version must be bumped.
     static let canonicalText = """
     paydaycore-manifest-v1
-    engine|1
+    engine|2
     asOf|2026-10-02
     shifts|3
     S|11111111-1111-4111-8111-111111111111|2026-09-28|dinner|1790000000|6000|4000|0|1000|255
@@ -155,7 +155,7 @@ struct InputManifestTests {
     /// was extracted and hashed with `shasum -a 256` independently, and that
     /// external hash agrees with what the encoder produces. A hex pasted from
     /// the code's own output would only prove the code equals itself.
-    static let pinnedDigest = "d359073164e7dfac00264936c65a17e1b156cf90a23660b690d463b289656cda"
+    static let pinnedDigest = "59d2d2aba8a869cd884001d74c2218396a87a7c5dc8c9914a3d4b5929f0f8a63"
 
     /// The pair that must be read together, so neither half looks like a bug.
     ///
@@ -327,7 +327,7 @@ struct InputManifestTests {
         #expect(m.paycheckCount == 1)
         #expect(m.ratePolicyCount == 2)
         #expect(m.calendarPolicyCount == 2)
-        #expect(m.engineVersion == 1)
+        #expect(m.engineVersion == 2)
         #expect(m.asOf == Self.asOf)
     }
 
@@ -538,7 +538,8 @@ struct InputManifestTests {
         #expect(later.policiesDigest == base.policiesDigest)
 
         let bumped = try InputManifest(shifts: Self.shifts, paychecks: Self.paychecks, schedule: Self.schedule,
-                                   rates: Self.rates, calendars: Self.calendars, asOf: Self.asOf, engineVersion: 2)
+                                   rates: Self.rates, calendars: Self.calendars, asOf: Self.asOf,
+                                   engineVersion: InputManifest.currentEngineVersion + 1)
         #expect(bumped.digest != base.digest)
         #expect(bumped.shiftsDigest == base.shiftsDigest)
     }
@@ -694,5 +695,29 @@ struct InputManifestTests {
             let date = Date(timeIntervalSince1970: seconds)
             #expect(InputManifest.Canonical.wholeSeconds(date) == Int(seconds.rounded(.towardZero)))
         }
+    }
+}
+
+extension InputManifestTests {
+    @Test("The C line gains |daily= only when daily overtime is on")
+    func dailyThresholdJoinsCalendarLineOnlyWhenSet() throws {
+        let base = try Self.manifest()
+        var withNil = Self.calendars
+        for i in withNil.indices { withNil[i].dailyOvertimeThresholdMinutes = nil }
+        // Off: byte-identical to before daily overtime existed.
+        #expect(try Self.manifest(calendars: withNil).digest == base.digest)
+        #expect(!(try Self.encodedText()).contains("|daily="))
+
+        var withDaily = Self.calendars
+        withDaily[0].dailyOvertimeThresholdMinutes = 480
+        let on = try Self.manifest(calendars: withDaily)
+        #expect(on.digest != base.digest)
+        #expect(on.policiesDigest != base.policiesDigest)
+        #expect(on.shiftsDigest == base.shiftsDigest)
+        let text = try InputManifest.canonicalText(
+            shifts: [], paychecks: [], schedule: nil, rates: [], calendars: [withDaily[0]], asOf: nil
+        )
+        let line = "C|\(Self.calendar1.uuidString)|2026-01-05|2|2400|150|America/New_York|daily=480"
+        #expect(text.components(separatedBy: "\n").contains(line))
     }
 }

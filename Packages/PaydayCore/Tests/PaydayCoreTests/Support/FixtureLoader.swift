@@ -36,6 +36,7 @@ struct Fixture: Decodable, Sendable {
         var overtimeThresholdMinutes: Int?
         var overtimeMultiplierHundredths: Int?
         var payrollTimeZone: String
+        var dailyOvertimeThresholdMinutes: Int?
     }
 
     struct Schedule: Decodable, Equatable, Sendable {
@@ -190,14 +191,18 @@ struct Fixture: Decodable, Sendable {
             }
             let threshold = c.overtimeThresholdMinutes ?? 2400
             let multiplier = c.overtimeMultiplierHundredths ?? 150
+            // The daily threshold joins the id only when set, so every
+            // fixture from before daily overtime keeps its id.
+            let daily = c.dailyOvertimeThresholdMinutes.map { "/daily=\($0)" } ?? ""
             return PayrollCalendarPolicy(
                 id: FixtureLoader.deterministicUUID(
-                    "policy/calendar/\(c.effectiveFrom.iso)/\(c.workweekStartWeekday)/\(threshold)/\(multiplier)/\(zone.identifier)"),
+                    "policy/calendar/\(c.effectiveFrom.iso)/\(c.workweekStartWeekday)/\(threshold)/\(multiplier)/\(zone.identifier)\(daily)"),
                 effectiveFrom: c.effectiveFrom,
                 workweekStartWeekday: c.workweekStartWeekday,
                 overtimeThresholdMinutes: threshold,
                 overtimeMultiplierHundredths: multiplier,
-                payrollTimeZone: zone
+                payrollTimeZone: zone,
+                dailyOvertimeThresholdMinutes: c.dailyOvertimeThresholdMinutes
             )
         }
     }

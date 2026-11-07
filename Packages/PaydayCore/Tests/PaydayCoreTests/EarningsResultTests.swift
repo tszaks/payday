@@ -81,7 +81,7 @@ struct EarningsResultTests {
         #expect(r.shiftIDs.isEmpty)
         // PR 4 fills these from the snapshot; the shell carries the current engine and no digest.
         #expect(r.engineVersion == InputManifest.currentEngineVersion)
-        #expect(r.engineVersion == 1)
+        #expect(r.engineVersion == 2)
         #expect(r.manifestDigest == nil)
     }
 

@@ -102,7 +102,10 @@ public enum CompensationLedger {
     /// The returned array is in the engine's canonical order regardless of
     /// the order `shifts` arrived in, and the cents in it never depend on the
     /// caller's date range: the weekly overtime threshold is always split
-    /// over the COMPLETE workweek (Design 1, step 2).
+    /// over the COMPLETE workweek (Design 1, step 2). When the calendar
+    /// policy sets `dailyOvertimeThresholdMinutes`, minutes past it on one
+    /// payroll day are overtime too and do not count toward the week; all
+    /// overtime is priced at the one multiplier (an estimate: no double time).
     public static func value(
         _ shifts: [ShiftInput],
         rates: [PayRatePolicy],
@@ -215,8 +218,12 @@ public enum CompensationLedger {
         result.reserveCapacity(weekShifts.count)
 
         // The weekly threshold is continuous across a rate change, so the
-        // minute cursor is per week and the rate is per shift.
+        // minute cursor is per week and the rate is per shift. The optional
+        // daily threshold has its own cursor per payroll day; canonical order
+        // sorts by workDay first, so a day's shifts are adjacent.
         var cumulativeMinutes = 0
+        var currentDay: CivilDay?
+        var dayMinutes = 0
         var regularUnits = 0
         var overtimeUnits = 0
         var regularCentsAllocated = 0
@@ -254,13 +261,29 @@ public enum CompensationLedger {
                 minutes = 0
             }
 
+            // Daily rule (optional): minutes past the daily threshold for
+            // this payroll day are overtime and never also count toward the
+            // week (no pyramiding). With the threshold nil, dailyOvertime is
+            // 0 and the weekly arithmetic below is exactly the weekly-only rule.
+            var dailyOvertimeMinutes = 0
+            if let dailyThreshold = calendarPolicy.dailyOvertimeThresholdMinutes {
+                if shift.workDay != currentDay {
+                    currentDay = shift.workDay
+                    dayMinutes = 0
+                }
+                let remainingDaily = max(0, dailyThreshold - dayMinutes)
+                dailyOvertimeMinutes = minutes - min(remainingDaily, minutes)
+                dayMinutes += minutes
+            }
+            let nonDailyMinutes = minutes - dailyOvertimeMinutes
+
             let remainingRegular = max(0, calendarPolicy.overtimeThresholdMinutes - cumulativeMinutes)
-            let regularMinutes = min(remainingRegular, minutes)
-            let overtimeMinutes = minutes - regularMinutes
+            let regularMinutes = min(remainingRegular, nonDailyMinutes)
+            let overtimeMinutes = dailyOvertimeMinutes + (nonDailyMinutes - regularMinutes)
             // Minutes count toward the threshold even when the rate is
             // unknown: a shift the engine cannot value still pushes the rest
             // of the week into overtime (Design 1, step 4).
-            cumulativeMinutes += minutes
+            cumulativeMinutes += nonDailyMinutes
 
             guard let ratePolicy else {
                 result.append(ShiftValuation(

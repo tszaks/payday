@@ -69,3 +69,27 @@ struct PayrollCalendarPolicyTests {
         // from Swift Testing and is covered by the decoding test above.
     }
 }
+
+extension PayrollCalendarPolicyTests {
+    @Test("A stored policy without dailyOvertimeThresholdMinutes decodes with daily overtime off")
+    func oldJSONDecodesDailyOff() throws {
+        let policy = try JSONDecoder().decode(PayrollCalendarPolicy.self, from: Self.json(weekday: 2))
+        #expect(policy.dailyOvertimeThresholdMinutes == nil)
+        // And nil is not written back, so the blob keeps its old shape.
+        let encoded = try #require(String(data: JSONEncoder().encode(policy), encoding: .utf8))
+        #expect(!encoded.contains("dailyOvertimeThresholdMinutes"))
+    }
+
+    @Test("dailyOvertimeThresholdMinutes round-trips")
+    func dailyThresholdRoundTrips() throws {
+        let policy = PayrollCalendarPolicy(
+            id: UUID(uuidString: "55555555-5555-4555-8555-555555555555")!,
+            effectiveFrom: Self.monday, workweekStartWeekday: 2,
+            payrollTimeZone: Self.zone, dailyOvertimeThresholdMinutes: 480
+        )
+        let data = try JSONEncoder().encode(policy)
+        let decoded = try JSONDecoder().decode(PayrollCalendarPolicy.self, from: data)
+        #expect(decoded == policy)
+        #expect(decoded.dailyOvertimeThresholdMinutes == 480)
+    }
+}

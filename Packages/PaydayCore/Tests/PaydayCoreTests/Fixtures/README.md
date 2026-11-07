@@ -13,7 +13,7 @@ Loaded by `Tests/PaydayCoreTests/Support/FixtureLoader.swift` via
   "kind": "ledger | migration | query | export | paycheck | presentation",
   "policies": {
     "rate": [ { "effectiveFrom": "YYYY-MM-DD", "hourlyRateCents": 283, "provenance": "confirmed | assumedFromLegacySetting" } ],
-    "calendar": [ { "effectiveFrom": "YYYY-MM-DD", "workweekStartWeekday": 2, "overtimeThresholdMinutes": 2400, "overtimeMultiplierHundredths": 150, "payrollTimeZone": "America/New_York" } ]
+    "calendar": [ { "effectiveFrom": "YYYY-MM-DD", "workweekStartWeekday": 2, "overtimeThresholdMinutes": 2400, "overtimeMultiplierHundredths": 150, "payrollTimeZone": "America/New_York", "dailyOvertimeThresholdMinutes": 480 } ]
   },
   "schedule": { "frequency": "weekly | biweekly | twiceMonthly | monthly", "anchorPeriodEnd": "YYYY-MM-DD", "firstWeekday": 2 } | null,
   "shifts": [ { "id": "uuid", "workDay": "YYYY-MM-DD", "period": "lunch | dinner" | null, "minutesWorked": 255 | null, "voluntaryCashCents": 0, "voluntaryCreditCents": 0, "gratuityFeesCents": 0, "tipOutCents": 0 | null } ],

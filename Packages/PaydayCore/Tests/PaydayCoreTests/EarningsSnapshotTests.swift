@@ -576,7 +576,7 @@ struct EarningsSnapshotDigestTests {
         // FORMAT is pinned independently by `InputManifestTests.pinnedDigest`,
         // whose new hex was derived with an external `shasum -a 256` over the
         // documented contract text rather than copied from the code.
-        #expect(a.stamp.digest == "5a719c9aa196ce16a121b2ecc10664ab9c6f1695eac904a05ec4bcfb08a3e0a6")
+        #expect(a.stamp.digest == "96aff24c5ff6aa70147168acc4a9c13ee7c6f92f4fedba38bacf7a503821f3b8")
         #expect(a.shifts == b.shifts, "the valuations are order-independent too")
         #expect(a.stamp.generation != b.stamp.generation, "only the generation differs")
     }
