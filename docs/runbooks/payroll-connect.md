@@ -35,7 +35,8 @@ data"). The key decides which Truv data comes back. Keep the two in step.
 2. In the app: Settings > Connect payroll > Connect payroll.
 3. In Truv Bridge, search **Truv Payroll Provider**. Sign in with
    `goodlogin` / `goodpassword` (prefilled in sandbox).
-4. The screen shows a preview (about 55 bi-weekly stubs). Tap **Import**.
+4. The screen shows a preview (52 bi-weekly stubs, employer "Acme", on
+   2026-11-08). Tap **Import**.
 5. Check Periods: one paycheck per stub period. A period that already had a
    typed paycheck keeps it, with only its empty fields filled.
 
@@ -52,10 +53,42 @@ secrets and set `TRUV_ENV=production`. No app change and no new build.
   Import tap. After that, the app imports on open (at most every 6 hours)
   and on pull-to-refresh in Periods.
 - "Check for new paystubs" starts a Truv data refresh. The server allows one
-  per link every 20 hours.
+  per link every 20 hours, counted from the link's `updated_at` (when Truv
+  last read the account), so a link connected a moment ago is already fresh.
+  On top of that, each function isolate reserves the 20 hours in memory
+  before it calls Truv, so two taps at once start one paid refresh.
+  **Known limit:** there is deliberately no table, so the reservation is per
+  isolate. A request that reaches another isolate, or comes after a cold
+  start, sees only `updated_at`, and can start a second refresh before Truv
+  moves `updated_at`.
+- Disconnect deletes the Truv link. Truv answered 403 to a single-link
+  delete for our sandbox account (2026-11-08) while it allows deleting the
+  Truv user, so when the link is the person's only one the server deletes
+  their Truv user instead (same result: no link, no data at Truv). With more
+  links it reports the refusal. Errors carry `truv_status` for this reason.
+- Account deletion calls `forget` first: it deletes the person's Truv user,
+  all links and the data Truv read. Best effort, with a 5 second timeout:
+  Truv being down never blocks an account deletion. **Known limit:** if
+  `forget` fails at that moment, the Truv user stays at Truv, and no Payday
+  account can reach it any more. Delete it from the Truv dashboard (search
+  by external user id = the deleted Supabase user id).
+- A link that exists but is not `done` (still syncing, or needs a new
+  sign-in) keeps the connection on: the app keeps checking and shows
+  "Still connecting". The server lists every link and reads only `done`
+  ones.
 - "Remove imported paychecks" deletes only paychecks the import made that
   nobody changed since.
-- Tip lines: "tips" words count as tips paid on the check, except cash /
-  declared / reported tips (already in the person's pocket) and tip credit or
-  make-up lines (wages). Gratuity and service charge lines go to gratuity.
-  The rules are in `normalize.ts`.
+- The server only reads stubs (cents, dates, every line as printed). Which
+  lines are tips, gratuity or taxes is decided in PaydayCore,
+  `PayStubFigures`: "tips" words count as tips paid on the check, except
+  cash / declared / reported tips (already in the person's pocket) and tip
+  credit or make-up lines (wages). Gratuity and service charge lines go to
+  gratuity. Taxes are the federal, state, local, Social Security and
+  Medicare lines.
+- The employer name comes from Bridge's employer choice, or else from the
+  link's employment record. It picks a Payday job only on an exact name
+  match; otherwise the paycheck goes to the primary job.
+- An imported paycheck's id is derived from the account and the stub, so two
+  phones importing the same stub upload one row. The pay stub map stays on
+  each phone, so a paycheck deleted on one phone can come back from another
+  phone's import.

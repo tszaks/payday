@@ -274,6 +274,9 @@ final class PaydayCloudState {
         // Recorded first, deliberately. If this call throws, or the process is
         // killed mid-flight, the device must still come back signed out.
         PaydayAuthorizationState.markExplicitlySignedOut()
+        // Nothing of this account's payroll (preview, pay stubs, status) may
+        // stay on screen, and in-flight payroll requests must not land.
+        PayrollConnection.shared.reset()
         // The widget renders from the shared store in its own process and
         // would otherwise keep printing the last period total on the Lock
         // Screen of a signed-out device.
@@ -309,6 +312,14 @@ final class PaydayCloudState {
         moveLedgerStore: MoveLedgerStore,
         policyStore: PolicyStore
     ) async -> String? {
+        // Payroll first: once the account is gone, nobody can prove they own
+        // its Truv connection, so it could never be removed. Best effort,
+        // with a short timeout: a payroll provider being down must never
+        // block someone deleting their account.
+        if await PayrollConnection.shared.forgetRemote() == false {
+            Self.logger.error("Payroll removal before account deletion did not complete; deleting the account anyway")
+        }
+
         do {
             try await client.rpc("delete_my_account").execute()
         } catch {

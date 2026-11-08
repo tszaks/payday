@@ -1,10 +1,11 @@
 import Foundation
+import PaydayCore
 import Supabase
 
-/// One pay stub as the `payroll-connect` edge function returns it: already
-/// integer cents and ISO days, read off the stub and nothing more (see
-/// `supabase/functions/payroll-connect/normalize.ts` for the rules, tips and
-/// taxes included).
+/// One pay stub as the `payroll-connect` edge function returns it: integer
+/// cents and ISO days, read off the stub and nothing more
+/// (`supabase/functions/payroll-connect/normalize.ts`). What its lines mean
+/// (tips, gratuity, taxes) is decided by `PayStubFigures` in PaydayCore.
 struct PayrollStatement: Codable, Equatable, Sendable, Identifiable {
     var id: String { sourceID }
 
@@ -22,13 +23,12 @@ struct PayrollStatement: Codable, Equatable, Sendable, Identifiable {
     let hours: String?
     let regularCents: Int?
     let overtimeCents: Int?
-    /// Tips paid on this check. 0 when the stub lists earnings and none is a
-    /// tip; nil when it lists none.
-    let tipsCents: Int?
-    let gratuityCents: Int?
-    let declaredTipsCents: Int?
-    let taxesCents: Int?
-    let deductions: [PayrollDeduction]
+    let earnings: [PayStubLine]
+    let deductions: [PayStubLine]
+
+    var figures: PayStubFigures {
+        PayStubFigures(earnings: earnings, deductions: deductions)
+    }
 
     enum CodingKeys: String, CodingKey {
         case sourceID = "source_id"
@@ -43,18 +43,9 @@ struct PayrollStatement: Codable, Equatable, Sendable, Identifiable {
         case hours
         case regularCents = "regular_cents"
         case overtimeCents = "overtime_cents"
-        case tipsCents = "tips_cents"
-        case gratuityCents = "gratuity_cents"
-        case declaredTipsCents = "declared_tips_cents"
-        case taxesCents = "taxes_cents"
+        case earnings
         case deductions
     }
-}
-
-struct PayrollDeduction: Codable, Equatable, Sendable, Hashable {
-    let name: String
-    let category: String
-    let cents: Int
 }
 
 struct PayrollLink: Codable, Equatable, Sendable, Identifiable {
@@ -135,6 +126,9 @@ protocol PayrollConnectAPI: Sendable {
     func paystubs(since: String?) async throws -> PayrollPaystubs
     func refresh(linkID: String) async throws
     func disconnect(linkID: String) async throws
+    /// Account deletion: removes the person's Truv user, every link and the
+    /// payroll data Truv read.
+    func forget() async throws
 }
 
 /// Calls the edge function with the signed-in person's session: the
@@ -210,5 +204,9 @@ struct PayrollConnectService: PayrollConnectAPI {
 
     func disconnect(linkID: String) async throws {
         let _: Empty = try await call(["action": "disconnect", "link_id": linkID])
+    }
+
+    func forget() async throws {
+        let _: Empty = try await call(["action": "forget"])
     }
 }

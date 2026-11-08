@@ -57,13 +57,23 @@ struct PayrollImporterTests {
         taxes: Int? = 28_969,
         hours: String? = "80.00"
     ) -> PayrollStatement {
-        PayrollStatement(
+        // The lines as the server sends them. `tips: nil` is a stub that
+        // lists no earnings lines at all; PaydayCore's `PayStubFigures`
+        // turns the lines into the figures.
+        var earnings: [PayStubLine] = []
+        if let tips {
+            earnings.append(PayStubLine(name: "Regular", category: "regular", cents: regular ?? 0))
+            if tips != 0 { earnings.append(PayStubLine(name: "Credit Card Tips", category: "other", cents: tips)) }
+            if let gratuity { earnings.append(PayStubLine(name: "Service Charge", category: "other", cents: gratuity)) }
+        }
+        var deductions = [PayStubLine(name: "401k", category: "retirement", cents: 5_000)]
+        if let taxes { deductions.append(PayStubLine(name: "Federal", category: "federal", cents: taxes)) }
+        return PayrollStatement(
             sourceID: id, linkID: "link-1", providerName: "Toast", employerName: employer,
             payDate: pay, periodStart: start, periodEnd: end,
             grossPayCents: gross, netPayCents: net, hours: hours,
             regularCents: regular, overtimeCents: overtime,
-            tipsCents: tips, gratuityCents: gratuity, declaredTipsCents: nil, taxesCents: taxes,
-            deductions: [PayrollDeduction(name: "Federal", category: "federal", cents: 15_000)])
+            earnings: earnings, deductions: deductions)
     }
 
     @discardableResult
@@ -123,7 +133,7 @@ struct PayrollImporterTests {
         #expect(entry.recordID == record.id)
         #expect(entry.origin == .created)
         #expect(entry.hours == "80.00")
-        #expect(entry.deductions.count == 1)
+        #expect(entry.deductions.count == 2)
         #expect(entry.recordModifiedAt == record.modifiedAt)
         #expect(ledger.lastSyncedAt != nil)
     }
@@ -213,11 +223,11 @@ struct PayrollImporterTests {
         #expect(typed.grossPayCents == 162_998)
     }
 
-    @Test("same net close to the pay date matches when the periods disagree")
+    @Test("same net close to the pay date matches when the periods disagree but overlap")
     func netMatch() throws {
-        // Ends Oct 27, the next grid period, but carries the stub's net and
-        // sits three days before its pay date.
-        let typed = try manual(start: "2026-10-26", end: "2026-10-27") { $0.netPayCents = 120_150 }
+        // Oct 20 - Oct 27: ends in the next grid period, but shares days
+        // with the stub's Oct 12 - Oct 25 and carries its net.
+        let typed = try manual(start: "2026-10-20", end: "2026-10-27") { $0.netPayCents = 120_150 }
         var ledger = PayrollImportLedger()
         try importing([stub("s1")], into: &ledger)
         #expect(try records().count == 1)
@@ -226,10 +236,104 @@ struct PayrollImporterTests {
         // A different net in that spot is a different paycheck.
         try context.delete(model: PaycheckRecord.self)
         try context.save()
-        try manual(start: "2026-10-26", end: "2026-10-27") { $0.netPayCents = 99 }
+        try manual(start: "2026-10-20", end: "2026-10-27") { $0.netPayCents = 99 }
         var other = PayrollImportLedger()
         try importing([stub("s1")], into: &other)
         #expect(try records().count == 2)
+
+        // The same net on a period that shares no day is another paycheck:
+        // a steady wage pays the same net every week.
+        try context.delete(model: PaycheckRecord.self)
+        try context.save()
+        try manual(start: "2026-10-26", end: "2026-10-27") { $0.netPayCents = 120_150 }
+        var third = PayrollImportLedger()
+        try importing([stub("s1")], into: &third)
+        #expect(try records().count == 2)
+    }
+
+    @Test("adjacent weekly stubs never take a typed paycheck for the other week")
+    func adjacentWeeksStayApart() throws {
+        // Bi-weekly grid Oct 12 - 25. The person typed only the second week.
+        let secondWeek = try manual(start: "2026-10-19", end: "2026-10-25") { $0.netPayCents = 61_000 }
+        var ledger = PayrollImportLedger()
+        // The FIRST week's stub, same net (a steady wage), same grid period.
+        try importing([stub("w1", pay: "2026-10-23", start: "2026-10-12", end: "2026-10-18", net: 61_000)], into: &ledger)
+        let all = try records()
+        #expect(all.count == 2, "week one is its own paycheck")
+        #expect(secondWeek.grossPayCents == nil, "week two's typed paycheck is untouched")
+        #expect(ledger.entries["w1"]?.origin == .created)
+        // ...and week two's stub then finds the typed week-two paycheck.
+        try importing([stub("w2", pay: "2026-10-30", start: "2026-10-19", end: "2026-10-25", net: 61_000)], into: &ledger)
+        #expect(try records().count == 2)
+        #expect(ledger.entries["w2"]?.recordID == secondWeek.id)
+    }
+
+    @Test("consecutive stubs with equal net: each finds its own period's paycheck")
+    func equalNetConsecutiveStubs() throws {
+        // The review's case: a steady wage, so both stubs carry the same net.
+        // The person typed only the Oct 26 - Nov 8 paycheck.
+        let typed = try manual(start: "2026-10-26", end: "2026-11-08") { $0.netPayCents = 120_150 }
+        var ledger = PayrollImportLedger()
+        try importing([
+            stub("oct", pay: "2026-10-30", start: "2026-10-12", end: "2026-10-25"),
+            stub("nov", pay: "2026-11-13", start: "2026-10-26", end: "2026-11-08"),
+        ], into: &ledger)
+        let all = try records()
+        #expect(all.count == 2, "one paycheck per period")
+        #expect(ledger.entries["nov"]?.recordID == typed.id)
+        #expect(ledger.entries["oct"]?.origin == .created)
+        #expect(Set(all.map(\.periodEnd)) == [day("2026-10-25"), day("2026-11-08")])
+    }
+
+    @Test("a stronger match for a later stub wins over an amount-only match for an earlier one")
+    func strongerMatchesAreReservedFirst() throws {
+        // Typed Oct 22 - Nov 8: it shares days with BOTH stubs. By amount it
+        // fits the October stub (same net, ends 9 days from its pay date); by
+        // grid it is the November period's paycheck. The grid wins, even
+        // though the October stub is looked at first.
+        let typed = try manual(start: "2026-10-22", end: "2026-11-08") { $0.netPayCents = 120_150 }
+        var ledger = PayrollImportLedger()
+        try importing([
+            stub("oct", pay: "2026-10-30", start: "2026-10-12", end: "2026-10-25"),
+            stub("nov", pay: "2026-11-13", start: "2026-10-26", end: "2026-11-08"),
+        ], into: &ledger)
+        #expect(ledger.entries["nov"]?.recordID == typed.id)
+        #expect(ledger.entries["oct"]?.origin == .created)
+        #expect(try records().count == 2)
+    }
+
+    @Test("a check that finds nothing new still moves Last synced")
+    func unchangedCheckMovesLastSynced() throws {
+        var ledger = PayrollImportLedger()
+        try importing([stub("s1")], into: &ledger, now: Date(timeIntervalSince1970: 1_800_000_000))
+        let later = Date(timeIntervalSince1970: 1_800_086_400)
+        let outcome = try importing([stub("s1")], into: &ledger, now: later)
+        #expect(outcome.created + outcome.merged == 0)
+        #expect(ledger.lastSyncedAt == later)
+        try importing([], into: &ledger, now: later.addingTimeInterval(60))
+        #expect(ledger.lastSyncedAt == later.addingTimeInterval(60))
+    }
+
+    @Test("an imported paycheck's id is the same on every device, so two phones upload one row")
+    func stableRecordID() throws {
+        let alice = UUID()
+        var phoneA = PayrollImportLedger(userID: alice)
+        try importing([stub("s1")], into: &phoneA)
+        let made = try #require(try records().first)
+        #expect(made.id == PayrollImporter.recordID(sourceID: "s1", userID: alice))
+        #expect(made.id != PayrollImporter.recordID(sourceID: "s1", userID: UUID()), "per account")
+        #expect(made.id != PayrollImporter.recordID(sourceID: "s2", userID: alice), "per stub")
+
+        // Phone B (or phone A after losing its ledger) sees the synced row:
+        // it records it and writes nothing.
+        let before = made.modifiedAt
+        var phoneB = PayrollImportLedger(userID: alice)
+        let outcome = try importing([stub("s1")], into: &phoneB)
+        #expect(try records().count == 1)
+        #expect(outcome.created == 0)
+        #expect(made.modifiedAt == before)
+        #expect(phoneB.entries["s1"]?.recordID == made.id)
+        #expect(phoneB.entries["s1"]?.origin == .merged, "edits unknown, so Remove leaves it")
     }
 
     @Test("two stubs in one grid period are two paychecks, told apart by id")
@@ -320,7 +424,7 @@ struct PayrollImporterTests {
     @Test("values the server would refuse are dropped, never written")
     func serverChecksModelled() throws {
         var ledger = PayrollImportLedger()
-        try importing([stub("neg", gross: -5, net: Int(Int32.max) + 1, regular: -1, overtime: 0, tips: -300, gratuity: -2, taxes: -9)], into: &ledger)
+        try importing([stub("neg", gross: -5, net: Int(Int32.max) + 1, regular: -1, overtime: 0, tips: -300, gratuity: -2, taxes: Int(Int32.max) + 1)], into: &ledger)
         let record = try #require(try records().first)
         #expect(satisfiesServerChecks(record))
         #expect(record.grossPayCents == nil)

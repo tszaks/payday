@@ -6,11 +6,9 @@ import {
   MAX_PAGES_PER_LINK,
 } from "./index.ts";
 import {
-  classifyEarning,
   normalizeStatement,
   parseCents,
   parseHours,
-  sumTaxes,
   type TruvStatement,
 } from "./normalize.ts";
 import { mapStatus, TruvClient, TruvError } from "./truv.ts";
@@ -19,7 +17,8 @@ import { mapStatus, TruvClient, TruvError } from "./truv.ts";
 //
 // It models the refusals the real services make, not just their happy
 // answers: Auth 401s an unknown token, Truv 401s wrong keys, 404s a user or
-// link that does not exist, and filters users by external_user_id.
+// link that does not exist, filters users by external_user_id, and 403s a
+// call the account is not allowed to make (`forbidden`).
 
 const CLIENT_ID = "truv-client-id-SECRET-1234";
 const ACCESS_SECRET = "truv-access-secret-SECRET-5678";
@@ -38,6 +37,8 @@ interface FakeLink {
   provider: { id: string; name: string };
   updated_at: string;
   statements: TruvStatement[];
+  company_mapping?: { name: string } | null;
+  employments?: { is_active: boolean | null; company: { name: string } }[];
 }
 
 interface Call {
@@ -62,6 +63,9 @@ class Fake {
     TRUV_ENV: "sandbox",
   };
   pageSize = 100;
+  /// "METHOD /path/" prefixes Truv answers 403 for: keys valid, call not
+  /// allowed for this account.
+  forbidden: string[] = [];
 
   deps(): Dependencies {
     return {
@@ -146,6 +150,9 @@ class Fake {
       return this.respond(401, { detail: "bad keys" });
     }
     const path = url.pathname.replace(/^\/v1/, "");
+    if (this.forbidden.some((rule) => `${method} ${path}`.startsWith(rule))) {
+      return this.respond(403, { detail: "not allowed" });
+    }
     let m: RegExpMatchArray | null;
     if (method === "GET" && path === "/users/") {
       const ext = url.searchParams.get("external_user_id");
@@ -155,7 +162,7 @@ class Fake {
         ...u,
         links: url.searchParams.get("list_links") === "true"
           ? this.links.filter((l) => l.owner === u.id).map((
-            { statements: _s, owner: _o, ...rest },
+            { statements: _s, owner: _o, employments: _e, ...rest },
           ) => rest)
           : undefined,
       }));
@@ -200,6 +207,20 @@ class Fake {
         ? `${url.origin}${url.pathname}?page=${page + 1}`
         : null;
       return this.respond(200, { count: rows.length, next, results: slice });
+    }
+    if (
+      method === "GET" && (m = path.match(/^\/links\/([^/]+)\/employments\/$/))
+    ) {
+      const link = this.links.find((l) => l.id === m![1]);
+      if (!link) return this.respond(404);
+      return this.respond(200, link.employments ?? []);
+    }
+    if (method === "DELETE" && (m = path.match(/^\/users\/([^/]+)\/$/))) {
+      const id = m[1];
+      if (!this.users.some((u) => u.id === id)) return this.respond(404);
+      this.users = this.users.filter((u) => u.id !== id);
+      this.links = this.links.filter((l) => l.owner !== id);
+      return this.respond(204);
     }
     if (method === "POST" && path === "/refresh/tasks/") {
       if (!this.links.some((l) => l.id === body.link_id)) {
@@ -470,10 +491,10 @@ Deno.test("paystubs: normalized, cents, ISO dates, sorted newest first, only don
     hours: "80.00",
     regular_cents: 150000,
     overtime_cents: 12998,
-    tips_cents: 0,
-    gratuity_cents: null,
-    declared_tips_cents: null,
-    taxes_cents: 15000 + 10106 + 2363 + 4000 + 500,
+    earnings: [
+      { name: "Regular", category: "other", cents: 150000 },
+      { name: "Overtime", category: "other", cents: 12998 },
+    ],
     deductions: [
       { name: "Federal Income Tax", category: "federal", cents: 15000 },
       { name: "Social Security", category: "socialsec", cents: 10106 },
@@ -630,6 +651,9 @@ Deno.test("truv client: sends both key headers and maps statuses", async () => {
   assertEquals(seen?.get("X-Access-Client-Id"), "id");
   assertEquals(seen?.get("X-Access-Secret"), "secret");
   assertEquals(mapStatus(401).status, 503);
+  assertEquals(mapStatus(401).code, "truv_not_configured");
+  assertEquals(mapStatus(403).status, 502);
+  assertEquals(mapStatus(403).code, "truv_forbidden");
   assertEquals(mapStatus(404).status, 404);
   assertEquals(mapStatus(429).status, 429);
   assertEquals(mapStatus(500).status, 502);
@@ -697,71 +721,40 @@ Deno.test("hours: decimal strings only", () => {
   assertEquals(parseHours(null), null);
 });
 
-Deno.test("taxes: federal + state + local + socialsec + medicare only; none -> null", () => {
-  assertEquals(
-    sumTaxes([
-      { name: "a", category: "federal", cents: 100 },
-      { name: "b", category: "state", cents: 20 },
-      { name: "c", category: "local", cents: 3 },
-      { name: "d", category: "socialsec", cents: 40 },
-      { name: "e", category: "medicare", cents: 5 },
-      { name: "f", category: "retirement", cents: 999 },
-      { name: "g", category: "benefit", cents: 999 },
-      { name: "h", category: "memo", cents: 999 },
-      { name: "i", category: "garnishment", cents: 999 },
-    ]),
-    168,
-  );
-  assertEquals(
-    sumTaxes([{ name: "401k", category: "retirement", cents: 999 }]),
-    null,
-  );
-  assertEquals(sumTaxes([]), null);
-});
-
-Deno.test("tips: classification rules", () => {
-  assertEquals(classifyEarning("Credit Card Tips"), "tips");
-  assertEquals(classifyEarning("CC TIPS"), "tips");
-  assertEquals(classifyEarning("Tips Paid"), "tips");
-  assertEquals(classifyEarning("Tip Share"), "tips");
-  assertEquals(classifyEarning("Charged Tip"), "tips");
-  assertEquals(classifyEarning("Cash Tips"), "declared_tips");
-  assertEquals(classifyEarning("Declared Tips"), "declared_tips");
-  assertEquals(classifyEarning("Tips Reported"), "declared_tips");
-  assertEquals(classifyEarning("Gratuity"), "gratuity");
-  assertEquals(classifyEarning("Auto Gratuities"), "gratuity");
-  assertEquals(classifyEarning("Service Charge"), "gratuity");
-  assertEquals(classifyEarning("Tip Credit"), "other");
-  assertEquals(classifyEarning("Tip Makeup"), "other");
-  assertEquals(classifyEarning("Regular"), "other");
-  assertEquals(
-    classifyEarning("Multiple Shifts"),
-    "other",
-    "'tip' must be a word, not a prefix",
-  );
-  assertEquals(classifyEarning(null), "other");
-});
-
-Deno.test("tips: a stub's tip, declared and gratuity lines are summed apart", () => {
+Deno.test("lines: every earnings line comes back as printed, sign kept, nothing classified", () => {
   const stub = normalizeStatement(
     stmt("t", "2026-10-31", {
       earnings: [
-        { name: "Regular", amount: "300.00" },
+        { name: "Regular", category: "Regular", amount: "300.00" },
         { name: "Credit Card Tips", amount: "412.35" },
-        { name: "Tips - Charged", amount: "10.00" },
-        { name: "Cash Tips", amount: "88.00" },
-        { name: "Service Charge", amount: "55.10" },
         { name: "Tip Credit", amount: "-120.00" },
+        { name: "  ", amount: "1.00" },
+        { name: "Unreadable", amount: "n/a" },
+      ],
+      deductions: [
+        { name: "Federal", category: "Federal", amount: "-15.00" },
+        { name: null, category: null, amount: "2.50" },
       ],
     }),
     { linkId: "l", providerName: "Toast", employerName: null },
   )!;
-  assertEquals(stub.tips_cents, 42235);
-  assertEquals(stub.declared_tips_cents, 8800);
-  assertEquals(stub.gratuity_cents, 5510);
+  assertEquals(stub.earnings, [
+    { name: "Regular", category: "regular", cents: 30000 },
+    { name: "Credit Card Tips", category: "other", cents: 41235 },
+    { name: "Tip Credit", category: "other", cents: -12000 },
+    { name: "Earnings", category: "other", cents: 100 },
+  ]);
+  assertEquals(stub.deductions, [
+    { name: "Federal", category: "federal", cents: 1500 },
+    { name: "Deduction", category: "other", cents: 250 },
+  ]);
+  // The app's earnings engine decides tips and taxes; none of that is here.
+  for (const key of ["tips_cents", "gratuity_cents", "taxes_cents"]) {
+    assertFalse(key in stub, key);
+  }
 });
 
-Deno.test("statement: no pay date -> skipped; no earnings lines -> tips unknown", () => {
+Deno.test("statement: no pay date -> skipped; no earnings lines -> an empty list", () => {
   const ctx = { linkId: "l", providerName: null, employerName: null };
   assertEquals(normalizeStatement(stmt("x", ""), ctx), null);
   assertEquals(normalizeStatement(stmt("x", "2026-02-30"), ctx), null);
@@ -773,7 +766,205 @@ Deno.test("statement: no pay date -> skipped; no earnings lines -> tips unknown"
     }),
     ctx,
   )!;
-  assertEquals(bare.tips_cents, null);
+  assertEquals(bare.earnings, []);
   assertEquals(bare.period_start, null);
   assertEquals(bare.period_end, null);
+});
+
+// MARK: - Employer name
+
+Deno.test("employer: read from the link's employment when Bridge mapped none", async () => {
+  const fake = new Fake();
+  const alice = fake.addUser(ALICE);
+  fake.addLink(alice, "link-toast", [stmt("s1", "2026-10-31")], {
+    employments: [
+      { is_active: false, company: { name: "Old Diner" } },
+      { is_active: true, company: { name: " Blue Door Bistro " } },
+    ],
+  });
+  fake.addLink(alice, "link-mapped", [stmt("s2", "2026-10-30")], {
+    company_mapping: { name: "Mapped Employer" },
+    employments: [{ is_active: true, company: { name: "Ignored" } }],
+  });
+  const result = await call(fake, { action: "paystubs" });
+  assertEquals(result.status, 200);
+  const byId = Object.fromEntries(
+    result.json.data.paystubs.map((
+      s: { source_id: string; employer_name: string | null },
+    ) => [s.source_id, s.employer_name]),
+  );
+  assertEquals(byId, { s1: "Blue Door Bistro", s2: "Mapped Employer" });
+  assertEquals(
+    result.json.data.links.map((l: { employer_name: string }) =>
+      l.employer_name
+    ),
+    ["Blue Door Bistro", "Mapped Employer"],
+  );
+  assertFalse(
+    fake.calls.some((c) => c.url.includes("link-mapped/employments")),
+    "a mapped employer needs no extra call",
+  );
+});
+
+Deno.test("employer: a refused employment lookup still imports the stubs, unnamed", async () => {
+  const fake = new Fake();
+  const alice = fake.addUser(ALICE);
+  fake.addLink(alice, "link-a", [stmt("s1", "2026-10-31")]);
+  fake.forbidden = ["GET /links/link-a/employments/"];
+  const result = await call(fake, { action: "paystubs" });
+  assertEquals(result.status, 200);
+  assertEquals(result.json.data.paystubs.length, 1);
+  assertEquals(result.json.data.paystubs[0].employer_name, null);
+});
+
+// MARK: - Account deletion
+
+Deno.test("forget: deletes the caller's Truv user and links, and nobody else's", async () => {
+  const fake = new Fake();
+  const alice = fake.addUser(ALICE);
+  const bob = fake.addUser(BOB);
+  fake.addLink(alice, "link-a1");
+  fake.addLink(alice, "link-a2");
+  fake.addLink(bob, "link-b");
+  const result = await call(fake, { action: "forget" });
+  assertEquals(result.status, 200);
+  assertEquals(result.json.data.deleted, true);
+  assertEquals(fake.users.map((u) => u.id), [bob]);
+  assertEquals(fake.links.map((l) => l.id), ["link-b"]);
+  assert(
+    fake.calls.some((c) =>
+      c.method === "DELETE" && c.url.endsWith(`/users/${alice}/`)
+    ),
+  );
+  // Again, with nothing left: still done, nothing else touched.
+  const again = await call(fake, { action: "forget" });
+  assertEquals(again.status, 200);
+  assertEquals(fake.links.map((l) => l.id), ["link-b"]);
+});
+
+Deno.test("forget: a refusal from Truv is an error with Truv's status, not a success", async () => {
+  const fake = new Fake();
+  const alice = fake.addUser(ALICE);
+  fake.addLink(alice, "link-a1");
+  fake.forbidden = [`DELETE /users/${alice}/`];
+  const result = await call(fake, { action: "forget" });
+  assertEquals(result.status, 502);
+  assertEquals(result.json.error.code, "truv_forbidden");
+  assertEquals(result.json.error.truv_status, 403);
+  assertEquals(fake.links.length, 1);
+});
+
+Deno.test("disconnect: when Truv refuses a link delete, the only link goes by deleting the Truv user", async () => {
+  const fake = new Fake();
+  const alice = fake.addUser(ALICE);
+  const bob = fake.addUser(BOB);
+  fake.addLink(alice, "link-a1");
+  fake.addLink(bob, "link-b");
+  fake.forbidden = ["DELETE /links/"];
+  const result = await call(fake, {
+    action: "disconnect",
+    link_id: "link-a1",
+  });
+  assertEquals(result.status, 200);
+  assertEquals(result.json.data.disconnected, true);
+  assertEquals(fake.users.map((u) => u.id), [bob]);
+  assertEquals(fake.links.map((l) => l.id), ["link-b"]);
+});
+
+Deno.test("disconnect: a refused link delete with other links left is an error, and deletes nothing", async () => {
+  const fake = new Fake();
+  const alice = fake.addUser(ALICE);
+  fake.addLink(alice, "link-a1");
+  fake.addLink(alice, "link-a2");
+  fake.forbidden = ["DELETE /links/"];
+  const result = await call(fake, {
+    action: "disconnect",
+    link_id: "link-a1",
+  });
+  assertEquals(result.status, 502);
+  assertEquals(result.json.error.code, "truv_forbidden");
+  assertEquals(result.json.error.truv_status, 403);
+  assertEquals(fake.links.map((l) => l.id), ["link-a1", "link-a2"]);
+  assertEquals(fake.users.map((u) => u.id), [alice]);
+});
+
+Deno.test("disconnect: a link delete Truv allows removes only that link", async () => {
+  const fake = new Fake();
+  const alice = fake.addUser(ALICE);
+  fake.addLink(alice, "link-a1");
+  const result = await call(fake, {
+    action: "disconnect",
+    link_id: "link-a1",
+  });
+  assertEquals(result.status, 200);
+  assertEquals(fake.links.length, 0);
+  assertEquals(fake.users.map((u) => u.id), [alice], "the user stays");
+});
+
+// MARK: - Refresh cooldown and links that are not ready
+
+Deno.test("refresh: two taps at once start one paid refresh, not two", async () => {
+  const fake = new Fake();
+  const alice = fake.addUser(ALICE);
+  // Eligible by updated_at (well over 20 hours ago).
+  fake.addLink(alice, "link-a1", [], { updated_at: "2026-11-01T00:00:00Z" });
+  const handler = createHandler(fake.deps());
+  const body = { action: "refresh", link_id: "link-a1" };
+  const [first, second] = await Promise.all([
+    handler(post(body)),
+    handler(post(body)),
+  ]);
+  const statuses = [first.status, second.status].sort();
+  assertEquals(statuses, [200, 429]);
+  assertEquals(fake.refreshes, ["link-a1"]);
+  await first.body?.cancel();
+  await second.body?.cancel();
+  // Later, still inside the reservation: refused without asking Truv.
+  const third = await handler(post(body));
+  assertEquals(third.status, 429);
+  assertEquals(
+    (await third.json()).error.refresh_available_at,
+    "2026-11-09T08:00:00.000Z",
+  );
+  assertEquals(fake.refreshes.length, 1);
+});
+
+Deno.test("refresh: a refresh Truv refused does not hold the cooldown", async () => {
+  const fake = new Fake();
+  const alice = fake.addUser(ALICE);
+  fake.addLink(alice, "link-a1", [], { updated_at: "2026-11-01T00:00:00Z" });
+  const handler = createHandler(fake.deps());
+  const body = { action: "refresh", link_id: "link-a1" };
+  fake.forbidden = ["POST /refresh/tasks/"];
+  const refused = await handler(post(body));
+  assertEquals(refused.status, 502);
+  await refused.body?.cancel();
+  fake.forbidden = [];
+  const retried = await handler(post(body));
+  assertEquals(retried.status, 200);
+  await retried.body?.cancel();
+  assertEquals(fake.refreshes, ["link-a1"]);
+});
+
+Deno.test("paystubs: links that are not ready are listed, not read", async () => {
+  const fake = new Fake();
+  const alice = fake.addUser(ALICE);
+  fake.addLink(alice, "link-done", [stmt("s1", "2026-10-31")]);
+  fake.addLink(alice, "link-sync", [stmt("s2", "2026-10-31")], {
+    status: "pending",
+  });
+  const result = await call(fake, { action: "paystubs" });
+  assertEquals(result.status, 200);
+  assertEquals(
+    result.json.data.links.map((l: { link_id: string; status: string }) => [
+      l.link_id,
+      l.status,
+    ]),
+    [["link-done", "done"], ["link-sync", "pending"]],
+  );
+  assertEquals(
+    result.json.data.paystubs.map((p: { source_id: string }) => p.source_id),
+    ["s1"],
+  );
+  assertFalse(fake.calls.some((c) => c.url.includes("link-sync/")));
 });

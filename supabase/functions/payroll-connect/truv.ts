@@ -90,11 +90,20 @@ export class TruvClient {
   }
 }
 
-/// Truv's status, translated. A 401/403 from Truv means OUR keys are wrong
-/// or revoked, which is a server problem, never the caller's: it maps to 503
-/// so the app does not sign the person out over it.
+/// Truv's status, translated. A 401 from Truv means OUR keys are wrong or
+/// revoked, which is a server problem, never the caller's: it maps to 503 so
+/// the app does not sign the person out over it. A 403 is different: the keys
+/// work, and Truv does not allow this one call for this account.
 export function mapStatus(status: number): TruvError {
-  if (status === 401 || status === 403) {
+  if (status === 403) {
+    return new TruvError(
+      502,
+      "truv_forbidden",
+      "Payroll did not allow this. Try again later.",
+      status,
+    );
+  }
+  if (status === 401) {
     return new TruvError(
       503,
       "truv_not_configured",

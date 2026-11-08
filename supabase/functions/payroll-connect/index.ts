@@ -2,8 +2,9 @@
 //
 // The app holds a Supabase session and nothing else. This function holds the
 // Truv keys, turns the session into a Truv user, and hands back only what the
-// app needs: a short-lived bridge token, link summaries, and pay stubs already
-// normalized to integer cents (normalize.ts).
+// app needs: a short-lived bridge token, link summaries, and pay stubs read
+// into integer cents and ISO days (normalize.ts). Which lines are tips or
+// taxes is decided in the app's earnings engine, not here.
 //
 // No table. Truv keeps the mapping: every Truv user is created with
 // `external_user_id` = the Supabase auth uid, and every route looks the caller
@@ -266,10 +267,47 @@ async function ownedLink(
   return link;
 }
 
-function employerName(link: TruvLink): string | null {
-  const name = link.company_mapping?.name ??
-    link.company_mapping?.company?.name ?? null;
+function cleanName(name: unknown): string | null {
   return typeof name === "string" && name.trim() ? name.trim() : null;
+}
+
+/// The employer the person searched for in Bridge, when they searched for an
+/// employer. Picking a payroll provider ("Toast") leaves this empty.
+function mappedEmployer(link: TruvLink): string | null {
+  return cleanName(
+    link.company_mapping?.name ?? link.company_mapping?.company?.name,
+  );
+}
+
+interface TruvEmployment {
+  is_active?: boolean | null;
+  company?: { name?: string | null } | null;
+}
+
+/// The employer on the link's own payroll record: the active employment, or
+/// the first one listed. Truv's statements endpoint reads the most recent
+/// employment by default, so this is the employer those stubs belong to.
+/// Only a label for matching a job, so a failure here is not the caller's
+/// failure: the stubs still import, to the primary job.
+async function employmentEmployer(
+  truv: TruvClient,
+  linkId: string,
+): Promise<string | null> {
+  try {
+    const result = await truv.request<
+      TruvEmployment[] | Paged<TruvEmployment>
+    >("GET", `/links/${encodeURIComponent(linkId)}/employments/`);
+    const rows = Array.isArray(result)
+      ? result
+      : Array.isArray(result?.results)
+      ? result.results
+      : [];
+    const pick = rows.find((row) => row?.is_active === true) ?? rows[0];
+    return cleanName(pick?.company?.name);
+  } catch (error) {
+    if (error instanceof TruvError) return null;
+    throw error;
+  }
 }
 
 function refreshAvailableAt(link: TruvLink, now: Date): string | null {
@@ -279,16 +317,30 @@ function refreshAvailableAt(link: TruvLink, now: Date): string | null {
   return next > now.getTime() ? new Date(next).toISOString() : null;
 }
 
-function linkSummary(link: TruvLink, now: Date): JsonObject {
+function linkSummary(
+  link: TruvLink,
+  now: Date,
+  employer: string | null = mappedEmployer(link),
+): JsonObject {
   return {
     link_id: link.id,
     status: link.status ?? null,
     provider_id: link.provider?.id ?? null,
     provider_name: link.provider?.name ?? null,
-    employer_name: employerName(link),
+    employer_name: employer,
     updated_at: link.updated_at ?? null,
     refresh_available_at: refreshAvailableAt(link, now),
   };
+}
+
+/// Deletes a Truv user and, with it, every link and all payroll data Truv
+/// read for them. Already gone is the outcome asked for, so 404 is success.
+async function deleteTruvUser(truv: TruvClient, userId: string): Promise<void> {
+  try {
+    await truv.request("DELETE", `/users/${encodeURIComponent(userId)}/`);
+  } catch (error) {
+    if (!(error instanceof TruvError && error.truvStatus === 404)) throw error;
+  }
 }
 
 // MARK: - Statements
@@ -326,12 +378,25 @@ async function statements(
 
 // MARK: - Routes
 
+/// Refreshes this isolate has started, link id -> when the next one is
+/// allowed (ms). Truv's `updated_at` moves only once Truv has read the
+/// account again, so two "Check for new paystubs" taps a second apart would
+/// both pass the `updated_at` check and both start a paid refresh. The
+/// reservation is taken BEFORE the Truv call, in the same synchronous turn
+/// as the check, so a second request in this isolate sees it.
+///
+/// Known limit: per isolate, not global. There is deliberately no table
+/// for this feature, and a request routed to another isolate (or after a
+/// cold start) does not see it; it then falls back on `updated_at`.
+export type RefreshReservations = Map<string, number>;
+
 async function route(
   action: string,
   body: JsonObject,
   uid: string,
   cfg: Config,
   deps: Dependencies,
+  reservations: RefreshReservations,
 ): Promise<JsonObject> {
   const { truv, environment } = cfg;
   const now = deps.now();
@@ -391,12 +456,20 @@ async function route(
           : null;
       const from = since && since > cap ? since : cap;
       const paystubs: Paystub[] = [];
-      const links = linksOf(user).filter((link) => link.status === "done");
+      // Every link is reported, ready or not: a link that is still syncing
+      // or needs a new sign-in is not a disconnected one, and the app keeps
+      // checking it. Only `done` links are read.
+      const allLinks = linksOf(user);
+      const links = allLinks.filter((link) => link.status === "done");
+      const employers = new Map<string, string | null>();
       for (const link of links) {
+        const employer = mappedEmployer(link) ??
+          await employmentEmployer(truv, link.id);
+        employers.set(link.id, employer);
         const context = {
           linkId: link.id,
           providerName: link.provider?.name ?? null,
-          employerName: employerName(link),
+          employerName: employer,
         };
         for (const statement of await statements(truv, link.id, from)) {
           const stub = normalizeStatement(statement, context);
@@ -409,13 +482,22 @@ async function route(
       );
       return {
         environment,
-        links: links.map((link) => linkSummary(link, now)),
+        links: allLinks.map((link) =>
+          linkSummary(
+            link,
+            now,
+            employers.get(link.id) ?? mappedEmployer(link),
+          )
+        ),
         paystubs,
       };
     }
     case "refresh": {
       const link = await ownedLink(truv, uid, body.link_id);
-      const availableAt = refreshAvailableAt(link, now);
+      const reservedUntil = reservations.get(link.id) ?? 0;
+      const availableAt = reservedUntil > now.getTime()
+        ? new Date(reservedUntil).toISOString()
+        : refreshAvailableAt(link, now);
       if (availableAt) {
         throw new ApiError(
           429,
@@ -426,13 +508,46 @@ async function route(
           },
         );
       }
-      await truv.request("POST", "/refresh/tasks/", { link_id: link.id });
+      reservations.set(
+        link.id,
+        now.getTime() + REFRESH_INTERVAL_HOURS * 3_600_000,
+      );
+      try {
+        await truv.request("POST", "/refresh/tasks/", { link_id: link.id });
+      } catch (error) {
+        // Not started, so not billed: the next tap may try again.
+        reservations.delete(link.id);
+        throw error;
+      }
       return { environment, started: true };
     }
     case "disconnect": {
       const link = await ownedLink(truv, uid, body.link_id);
-      await truv.request("DELETE", `/links/${encodeURIComponent(link.id)}/`);
+      try {
+        await truv.request("DELETE", `/links/${encodeURIComponent(link.id)}/`);
+      } catch (error) {
+        // Truv answers 403 to a single-link delete for some accounts (seen
+        // live in sandbox, 2026-11-08) while it allows deleting the user.
+        // When this is the person's only link, deleting their Truv user is
+        // the same outcome: no link and no payroll data left at Truv. With
+        // other links still there, it would take those too, so it refuses.
+        if (!(error instanceof TruvError && error.truvStatus === 403)) {
+          throw error;
+        }
+        const user = await findTruvUser(truv, uid);
+        const others = linksOf(user).filter((other) => other.id !== link.id);
+        if (!user || others.length > 0) throw error;
+        await deleteTruvUser(truv, user.id);
+      }
       return { environment, disconnected: true };
+    }
+    case "forget": {
+      // Account deletion. Deleting the Truv user removes every link and all
+      // the payroll data Truv read for it. Runs before the Supabase identity
+      // is deleted: afterwards nobody could prove they own these links.
+      const user = await findTruvUser(truv, uid);
+      if (user) await deleteTruvUser(truv, user.id);
+      return { environment, deleted: true };
     }
     default:
       throw new ApiError(400, "unknown_action", "Unknown action.");
@@ -464,6 +579,7 @@ async function readBody(req: Request): Promise<JsonObject> {
 export function createHandler(
   deps: Dependencies,
 ): (req: Request) => Promise<Response> {
+  const reservations: RefreshReservations = new Map();
   return async (req: Request) => {
     let action = "unknown";
     try {
@@ -476,7 +592,9 @@ export function createHandler(
       const body = await readBody(req);
       action = typeof body.action === "string" ? body.action : "unknown";
       const cfg = config(deps);
-      return json({ data: await route(action, body, uid, cfg, deps) });
+      return json({
+        data: await route(action, body, uid, cfg, deps, reservations),
+      });
     } catch (error) {
       if (error instanceof ApiError) {
         return json({
@@ -490,8 +608,17 @@ export function createHandler(
             error.truvStatus ?? "-"
           }`,
         );
+        // Truv's status number goes back too: it is not a secret, and it
+        // tells "our keys are wrong" (401) from "Truv does not allow this
+        // for our account" (403) without reading server logs.
         return json(
-          { error: { code: error.code, message: error.message } },
+          {
+            error: {
+              code: error.code,
+              message: error.message,
+              ...(error.truvStatus ? { truv_status: error.truvStatus } : {}),
+            },
+          },
           error.status,
         );
       }

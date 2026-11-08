@@ -1,8 +1,9 @@
 // Truv pay statement -> the typed, integer-cents shape the app imports.
 //
-// This module only READS what the stub says. It does not estimate, infer or
-// reconcile anything: the one sum it makes is the tax lines into
-// `taxes_cents`, which is what "taxes withheld" on a stub is.
+// This module only READS what the stub says: decimal strings become integer
+// cents, dates become ISO days. It classifies and sums nothing. Which lines
+// are tips, gratuity or taxes is an earnings rule, and earnings rules live in
+// PaydayCore (`PayStubFigures`), so the app gets every line as printed.
 
 export interface TruvEarning {
   name?: string | null;
@@ -32,7 +33,9 @@ export interface TruvStatement {
   deductions?: TruvDeduction[] | null;
 }
 
-export interface Deduction {
+/// One earnings or deduction line, as printed. `category` is Truv's, lower
+/// case ("federal", "retirement", ...), or "other" when Truv gave none.
+export interface Line {
   name: string;
   category: string;
   cents: number;
@@ -52,26 +55,13 @@ export interface Paystub {
   hours: string | null;
   regular_cents: number | null;
   overtime_cents: number | null;
-  /// Tips paid on this check (see `classifyEarning`). 0 when the stub has
-  /// earnings lines and none of them is a tip; null when it has no lines.
-  tips_cents: number | null;
-  gratuity_cents: number | null;
-  /// Cash tips the person declared and already has. On the stub for tax
-  /// only; never part of `tips_cents`.
-  declared_tips_cents: number | null;
-  /// federal + state + local + socialsec + medicare. Null when the stub has
-  /// no tax lines at all (not the same as zero tax).
-  taxes_cents: number | null;
-  deductions: Deduction[];
+  /// Every earnings line with a readable amount, sign kept (an adjustment
+  /// can be negative). Empty when the stub lists none.
+  earnings: Line[];
+  /// Every deduction line with a readable amount, as a positive amount
+  /// withheld.
+  deductions: Line[];
 }
-
-export const TAX_CATEGORIES = new Set([
-  "federal",
-  "state",
-  "local",
-  "socialsec",
-  "medicare",
-]);
 
 const DECIMAL = /^(-?)(\d+)(?:\.(\d+))?$/;
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
@@ -122,71 +112,46 @@ export function isoDay(value: unknown): string | null {
     : null;
 }
 
-export type EarningKind = "tips" | "declared_tips" | "gratuity" | "other";
-
-// The rules, in the order they are tried. Payroll systems name these lines
-// freely ("CC Tips", "Tips - Credit Card", "Charged Tips", "Auto Gratuity",
-// "Service Charge"), so the match is on the words that carry the meaning:
-//
-// 1. Not a tip at all, even though the word is there:
-//    "tip credit" / "tip makeup" / "tip adjustment" are the employer's
-//    minimum-wage accounting (FLSA 3(m)), wages rather than tips.
-// 2. Gratuity: "gratuity", "gratuities", "grat", "service charge". A
-//    mandatory charge the employer distributes is wages-like and Payday keeps
-//    it apart from tips (`PaycheckRecord.gratuityCents`).
-// 3. Declared tips: a tip line that says "cash", "declared" or "reported".
-//    Cash already in the person's pocket, on the stub so it can be taxed
-//    (usually offset by a memo deduction). Not paid by this check.
-// 4. Tips: any other line with "tip" or "tips" as a word ("Credit Card Tips",
-//    "Tips Paid", "Tip Share").
-const NOT_TIPS = /\btips?\s*(credit|make\s*-?\s*up|adj(ustment)?)\b/i;
-const GRATUITY =
-  /\b(gratuit(y|ies)|grat|service\s*charges?|auto\s*-?\s*grat)\b/i;
-const DECLARED = /\b(cash|declared|reported)\b/i;
-const TIPS = /\btips?\b/i;
-
-export function classifyEarning(name: string | null | undefined): EarningKind {
-  const text = (name ?? "").trim();
-  if (!text) return "other";
-  if (NOT_TIPS.test(text)) return "other";
-  if (GRATUITY.test(text)) return "gratuity";
-  if (TIPS.test(text)) return DECLARED.test(text) ? "declared_tips" : "tips";
-  return "other";
+function lineName(name: string | null | undefined, fallback: string): string {
+  return (name ?? "").trim() || fallback;
 }
 
-function sumKind(earnings: TruvEarning[], kind: EarningKind): number | null {
-  let total: number | null = null;
-  for (const earning of earnings) {
-    if (classifyEarning(earning.name) !== kind) continue;
-    const cents = parseCents(earning.amount);
+function lineCategory(category: string | null | undefined): string {
+  return (category ?? "other").trim().toLowerCase() || "other";
+}
+
+export function normalizeEarnings(
+  earnings: TruvEarning[] | null | undefined,
+): Line[] {
+  const result: Line[] = [];
+  for (const line of Array.isArray(earnings) ? earnings : []) {
+    const cents = parseCents(line.amount);
     if (cents === null) continue;
-    total = (total ?? 0) + cents;
+    result.push({
+      name: lineName(line.name, "Earnings"),
+      category: lineCategory(line.category),
+      cents,
+    });
   }
-  return total;
+  return result;
 }
 
 export function normalizeDeductions(
   deductions: TruvDeduction[] | null | undefined,
-): Deduction[] {
-  const result: Deduction[] = [];
-  for (const line of deductions ?? []) {
+): Line[] {
+  const result: Line[] = [];
+  for (const line of Array.isArray(deductions) ? deductions : []) {
     const cents = parseCents(line.amount);
     if (cents === null) continue;
     result.push({
-      name: (line.name ?? "").trim() || "Deduction",
-      category: (line.category ?? "other").trim().toLowerCase() || "other",
+      name: lineName(line.name, "Deduction"),
+      category: lineCategory(line.category),
       // A withholding is a positive amount taken out. Some payroll systems
       // print it negative; the sign carries no extra meaning here.
       cents: Math.abs(cents),
     });
   }
   return result;
-}
-
-export function sumTaxes(deductions: Deduction[]): number | null {
-  const taxes = deductions.filter((line) => TAX_CATEGORIES.has(line.category));
-  if (taxes.length === 0) return null;
-  return taxes.reduce((total, line) => total + line.cents, 0);
 }
 
 /// One Truv statement as the app imports it, or null when it has no
@@ -203,9 +168,6 @@ export function normalizeStatement(
   if (!payDate || typeof statement.id !== "string" || !statement.id) {
     return null;
   }
-  const earnings = Array.isArray(statement.earnings) ? statement.earnings : [];
-  const hasEarnings = earnings.length > 0;
-  const deductions = normalizeDeductions(statement.deductions);
   return {
     source_id: statement.id,
     link_id: context.linkId,
@@ -219,12 +181,7 @@ export function normalizeStatement(
     hours: parseHours(statement.hours),
     regular_cents: parseCents(statement.regular),
     overtime_cents: parseCents(statement.overtime),
-    tips_cents: hasEarnings ? (sumKind(earnings, "tips") ?? 0) : null,
-    gratuity_cents: hasEarnings ? sumKind(earnings, "gratuity") : null,
-    declared_tips_cents: hasEarnings
-      ? sumKind(earnings, "declared_tips")
-      : null,
-    taxes_cents: sumTaxes(deductions),
-    deductions,
+    earnings: normalizeEarnings(statement.earnings),
+    deductions: normalizeDeductions(statement.deductions),
   };
 }

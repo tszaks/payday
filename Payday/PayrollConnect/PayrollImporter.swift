@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import PaydayCore
 import SwiftData
@@ -7,9 +8,8 @@ import SwiftData
 /// The importer writes what the stub says into the fields a person would
 /// have typed from the same paper stub, through the same commit boundary the
 /// paycheck sheet uses, so an imported paycheck syncs and reconciles exactly
-/// like a typed one. It computes nothing for display: the one sum it makes is
-/// the stub's tax lines into `taxesCents`, and that sum is made on the server
-/// (`taxes_cents`).
+/// like a typed one. It computes nothing itself: what the stub's lines mean
+/// (tips, gratuity, taxes) comes from `PayStubFigures` in PaydayCore.
 ///
 /// ## The rule that matters most
 ///
@@ -17,12 +17,16 @@ import SwiftData
 /// already has. Before creating, it looks for a paycheck of the same job that
 /// is not already tied to another stub, in this order:
 ///
+/// 0. the paycheck this same stub made before, on this or another device:
+///    its id is derived from the account and the stub (`recordID`);
 /// 1. the same period: start and end on the same civil days;
-/// 2. the same pay period on the person's own grid, the way the Periods list
-///    pairs a paycheck with a period (`HistoryEarnings.paycheck`: its
-///    `periodEnd` falls inside the period that holds the stub's end);
-/// 3. the same net pay, with its period end within one stub-period of the
-///    pay date.
+/// 2. the same pay period on the person's own grid;
+/// 3. the same net pay, near the pay date.
+///
+/// Each of 1-3 runs over the whole batch before the next (`MatchStep`).
+/// Steps 2 and 3 also need the two periods to share at least one day. Two
+/// weekly checks inside one biweekly grid period are two paychecks, and a
+/// typed check for one week must never take the other week's stub.
 ///
 /// A match is FILLED, never overwritten: only fields that are nil there take
 /// the stub's value. `paidTipsCents` is never touched on a match, because it
@@ -115,6 +119,22 @@ enum PayrollImporter {
         return calculator.period(containing: lastWorkedDay.date(in: zone))
     }
 
+    /// The id a paycheck made from this stub gets: the same on every device
+    /// signed in to the account, so two phones importing the same new stub
+    /// at once upload one row (the upsert is keyed on id), and a phone that
+    /// lost its ledger recognizes the paychecks it made. A name-based UUID
+    /// (RFC 9562 version 8 layout) over SHA-256.
+    static func recordID(sourceID: String, userID: UUID?) -> UUID {
+        let key = "payday.payroll-import|\(userID?.uuidString.lowercased() ?? "")|\(sourceID)"
+        var bytes = Array(SHA256.hash(data: Data(key.utf8)).prefix(16))
+        bytes[6] = (bytes[6] & 0x0F) | 0x80
+        bytes[8] = (bytes[8] & 0x3F) | 0x80
+        return UUID(uuid: (
+            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+            bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]
+        ))
+    }
+
     static func fields(
         for statement: PayrollStatement,
         jobs: [JobPolicy],
@@ -122,17 +142,18 @@ enum PayrollImporter {
     ) -> Fields? {
         let job = jobTag(for: statement, jobs: jobs)
         guard let period = period(for: statement, calculator: calculator(job)) else { return nil }
+        let figures = statement.figures
         return Fields(
             periodStart: period.start,
             periodEnd: period.end,
             jobName: ShiftRole.normalized(job),
-            paidTipsCents: representable(statement.tipsCents) ?? 0,
+            paidTipsCents: representable(figures.paidTipsCents) ?? 0,
             grossPayCents: representable(statement.grossPayCents),
             netPayCents: representable(statement.netPayCents),
             regularWagesCents: representable(statement.regularCents),
             overtimeWagesCents: representable(statement.overtimeCents),
-            gratuityCents: representable(statement.gratuityCents),
-            taxesCents: representable(statement.taxesCents)
+            gratuityCents: representable(figures.gratuityCents),
+            taxesCents: representable(figures.taxesCents)
         )
     }
 
@@ -142,6 +163,25 @@ enum PayrollImporter {
     }
 
     // MARK: - Plan
+
+    /// The three ways a stub can find a paycheck the person already has,
+    /// strongest first. Each runs over the WHOLE batch before the next one
+    /// starts, so a weaker match can never take a paycheck that a stronger
+    /// one (possibly a later stub's) would have taken. With a steady wage
+    /// every stub has the same net, and an amount-only match made first
+    /// would give one period's paycheck to the period before it.
+    enum MatchStep: CaseIterable {
+        /// Start and end on the same civil days.
+        case samePeriod
+        /// The same pay period on the person's grid, the way the Periods
+        /// list pairs a paycheck with a period (`HistoryEarnings.paycheck`:
+        /// its `periodEnd` falls inside the period that holds the stub's
+        /// end), and sharing at least one day with the stub.
+        case sameGrid
+        /// The same net pay, a period end within one stub-period of the pay
+        /// date, and at least one day shared with the stub.
+        case sameNet
+    }
 
     /// What importing `statements` would do, without doing it. The preview
     /// shows this, and `apply` performs exactly this.
@@ -156,32 +196,57 @@ enum PayrollImporter {
         // are never matched again: one stub per paycheck. Two stubs from the
         // same payroll are told apart by their ids, never by period.
         var claimed = Set(ledger.entries.values.map(\.recordID))
+        let present = Set(records.map(\.id))
         var seen: Set<String> = []
-        var items: [Item] = []
-        let ordered = statements.sorted { ($0.payDate, $0.sourceID) < ($1.payDate, $1.sourceID) }
+        var decided: [String: Action] = [:]
+        var open: [(statement: PayrollStatement, fields: Fields)] = []
+        let ordered = statements
+            .sorted { ($0.payDate, $0.sourceID) < ($1.payDate, $1.sourceID) }
+            .filter { seen.insert($0.sourceID).inserted }
+
         for statement in ordered {
-            guard seen.insert(statement.sourceID).inserted else { continue }
             if ledger.entries[statement.sourceID] != nil {
-                items.append(Item(statement: statement, action: .alreadyImported))
+                decided[statement.sourceID] = .alreadyImported
+                continue
+            }
+            // Made by this stub before, on this phone (ledger since lost) or on
+            // another one. Already here: record it, change nothing. Marked
+            // merged, not created, because whether the person edited it since
+            // is unknown, and "Remove imported" deletes only what it knows
+            // is untouched.
+            let ownID = recordID(sourceID: statement.sourceID, userID: ledger.userID)
+            if present.contains(ownID), !claimed.contains(ownID) {
+                claimed.insert(ownID)
+                decided[statement.sourceID] = .merge(recordID: ownID, fill: Fill())
                 continue
             }
             guard let fields = fields(for: statement, jobs: jobs, calculator: calculator) else { continue }
-            let candidates = records.filter {
-                !claimed.contains($0.id) && ShiftRole.key($0.jobName) == ShiftRole.key(fields.jobName)
-            }
-            if let match = match(fields, statement: statement, in: candidates, calculator: calculator(fields.jobName)) {
-                claimed.insert(match.id)
-                items.append(Item(statement: statement, action: .merge(recordID: match.id, fill: fill(match, from: fields))))
-            } else {
-                items.append(Item(statement: statement, action: .create(fields)))
+            open.append((statement, fields))
+        }
+
+        for step in MatchStep.allCases {
+            for (statement, fields) in open where decided[statement.sourceID] == nil {
+                let candidates = records.filter {
+                    !claimed.contains($0.id) && ShiftRole.key($0.jobName) == ShiftRole.key(fields.jobName)
+                }
+                if let found = match(fields, statement: statement, step: step, in: candidates, calculator: calculator(fields.jobName)) {
+                    claimed.insert(found.id)
+                    decided[statement.sourceID] = .merge(recordID: found.id, fill: fill(found, from: fields))
+                }
             }
         }
-        return items
+
+        return ordered.compactMap { statement in
+            if let action = decided[statement.sourceID] { return Item(statement: statement, action: action) }
+            guard let fields = open.first(where: { $0.statement.sourceID == statement.sourceID })?.fields else { return nil }
+            return Item(statement: statement, action: .create(fields))
+        }
     }
 
     private static func match(
         _ fields: Fields,
         statement: PayrollStatement,
+        step: MatchStep,
         in candidates: [PaycheckRecord],
         calculator: PayPeriodCalculator
     ) -> PaycheckRecord? {
@@ -191,23 +256,26 @@ enum PayrollImporter {
         let stable: (PaycheckRecord, PaycheckRecord) -> Bool = {
             ($0.periodEnd, $0.id.uuidString) < ($1.periodEnd, $1.id.uuidString)
         }
-        // 1. Same period, day for day.
-        if let exact = candidates.filter({
-            CivilDay($0.periodStart, in: zone) == start && CivilDay($0.periodEnd, in: zone) == end
-        }).min(by: stable) {
-            return exact
+        // Past an exact match the dates differ, so the two periods must at
+        // least share a day: adjacent weekly checks are different paychecks.
+        let overlapping = candidates.filter {
+            CivilDay($0.periodStart, in: zone) <= end && CivilDay($0.periodEnd, in: zone) >= start
         }
-        // 2. Same period on the person's grid.
-        let grid = calculator.period(containing: fields.periodEnd)
-        if let sameGrid = candidates.filter({ $0.periodEnd >= grid.start && $0.periodEnd <= grid.end }).min(by: stable) {
-            return sameGrid
+        switch step {
+        case .samePeriod:
+            return candidates.filter {
+                CivilDay($0.periodStart, in: zone) == start && CivilDay($0.periodEnd, in: zone) == end
+            }.min(by: stable)
+        case .sameGrid:
+            let grid = calculator.period(containing: fields.periodEnd)
+            return overlapping.filter { $0.periodEnd >= grid.start && $0.periodEnd <= grid.end }.min(by: stable)
+        case .sameNet:
+            guard let net = fields.netPayCents, let payDay = CivilDay(iso: statement.payDate) else { return nil }
+            let periodDays = CivilDay.daysBetween(start, end) + 1
+            return overlapping.filter {
+                $0.netPayCents == net && abs(CivilDay.daysBetween(CivilDay($0.periodEnd, in: zone), payDay)) <= periodDays
+            }.min(by: stable)
         }
-        // 3. Same net, close to the pay date.
-        guard let net = fields.netPayCents, let payDay = CivilDay(iso: statement.payDate) else { return nil }
-        let periodDays = CivilDay.daysBetween(start, end) + 1
-        return candidates.filter {
-            $0.netPayCents == net && abs(CivilDay.daysBetween(CivilDay($0.periodEnd, in: zone), payDay)) <= periodDays
-        }.min(by: stable)
     }
 
     private static func fill(_ record: PaycheckRecord, from fields: Fields) -> Fill {
@@ -244,7 +312,10 @@ enum PayrollImporter {
         var written: [(PayrollStatement, PaycheckRecord, PayrollImportLedger.Origin)] = []
 
         guard items.contains(where: { $0.action != .alreadyImported }) else {
+            // Nothing to write, but the check itself succeeded: "Last
+            // synced" means the last time Payday read the payroll.
             outcome.unchanged = items.count
+            ledger.lastSyncedAt = now
             return outcome
         }
 
@@ -255,6 +326,7 @@ enum PayrollImporter {
                     outcome.unchanged += 1
                 case .create(let fields):
                     let record = PaycheckRecord(
+                        id: recordID(sourceID: item.statement.sourceID, userID: ledger.userID),
                         periodStart: fields.periodStart,
                         periodEnd: fields.periodEnd,
                         paidTipsCents: fields.paidTipsCents,

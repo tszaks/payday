@@ -52,8 +52,10 @@ enum PaydayAccountEraser {
         try context.delete(model: ShiftRecord.self)
         try context.save()
         // "Connect payroll"'s map of pay stubs to paychecks, with hours and
-        // deduction lines that exist nowhere else on the device.
-        PayrollImportLedgerStore.shared.erase()
+        // deduction lines that exist nowhere else on the device. In-flight
+        // imports are stopped first so none can write the ledger back.
+        PayrollConnection.shared.reset()
+        try PayrollImportLedgerStore.shared.erase()
 
         // A successful save is not proof of an empty store: the deletes and
         // the save can each succeed against a context whose rows were

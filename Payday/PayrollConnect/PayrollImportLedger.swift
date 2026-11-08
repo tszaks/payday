@@ -1,4 +1,5 @@
 import Foundation
+import PaydayCore
 
 /// What "Connect payroll" remembers on this device, and nothing it syncs.
 ///
@@ -35,7 +36,7 @@ struct PayrollImportLedger: Codable, Equatable {
         var linkID: String
         var payDate: String
         var hours: String?
-        var deductions: [PayrollDeduction]
+        var deductions: [PayStubLine]
     }
 
     var userID: UUID?
@@ -87,7 +88,12 @@ struct PayrollImportLedgerStore {
         try data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
     }
 
-    func erase() {
-        try? FileManager.default.removeItem(at: url)
+    /// Throws when the file is still there afterwards. No file is success.
+    func erase() throws {
+        do {
+            try FileManager.default.removeItem(at: url)
+        } catch let error as CocoaError where error.code == .fileNoSuchFile {
+            return
+        }
     }
 }

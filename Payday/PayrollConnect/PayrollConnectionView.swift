@@ -109,6 +109,17 @@ struct PayrollConnectionView: View {
 
     private var connectSection: some View {
         Section {
+            ForEach(connection.waitingLinks) { link in
+                LabeledContent(link.displayName) {
+                    Text("Still connecting")
+                        .foregroundStyle(PaydayColor.textSecondary)
+                }
+            }
+            if !connection.waitingLinks.isEmpty {
+                Button("Check again") {
+                    Task { await connection.refreshStatus() }
+                }
+            }
             Button("Connect payroll") { startConnect() }
                 .disabled(!cloudState.canReachServer)
         } footer: {
@@ -173,8 +184,18 @@ struct PayrollConnectionView: View {
     private func previewSection(_ preview: PayrollConnection.Preview) -> some View {
         Section {
             if preview.isEmpty {
-                Text("No new pay stubs.")
+                Text("No new pay stubs yet.")
                     .foregroundStyle(PaydayColor.textSecondary)
+                if connection.ledger.importConfirmed == false {
+                    Button("Import new pay stubs automatically") {
+                        connection.confirmImport(context: modelContext, scope: scope, onWrite: reschedule)
+                    }
+                    .font(PaydayFont.bodySemibold)
+                    .tint(PaydayColor.primary)
+                }
+                Button("Check again") {
+                    Task { await connection.loadPreview(context: modelContext, scope: scope) }
+                }
             } else {
                 Text(Self.previewHeadline(preview))
                     .foregroundStyle(PaydayColor.textPrimary)
@@ -201,7 +222,9 @@ struct PayrollConnectionView: View {
         } header: {
             Text("Ready to import")
         } footer: {
-            if !preview.isEmpty {
+            if preview.isEmpty {
+                Text("Payday checks for new pay stubs when you open it.")
+            } else {
                 Text("Pay stubs for periods you already logged fill in only what's missing there.")
             }
         }
