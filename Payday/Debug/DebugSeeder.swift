@@ -17,14 +17,14 @@ enum DebugSeeder {
         if arguments.contains("-SeedSampleData") {
             seedSampleData(scheduleStore: scheduleStore, insightsStore: insightsStore)
         }
-        if arguments.contains("-SeedFollowUpDemo") {
-            seedFollowUpDemoData(insightsStore: insightsStore, moveLedgerStore: moveLedgerStore)
-        }
         if arguments.contains("-SeedColdStart") {
             seedColdStartData(scheduleStore: scheduleStore, insightsStore: insightsStore)
         }
         if arguments.contains("-SeedShowcase") {
             seedShowcaseData(scheduleStore: scheduleStore, insightsStore: insightsStore, preferencesStore: preferencesStore)
+        }
+        if arguments.contains("-SeedTipsOnlyShowcase") {
+            seedShowcaseData(scheduleStore: scheduleStore, insightsStore: insightsStore, preferencesStore: preferencesStore, tipsOnly: true)
         }
     }
 
@@ -32,11 +32,16 @@ enum DebugSeeder {
     /// Wed-through-Sun server at a dinner house, with lunch doubles on
     /// weekends, a summer that builds, and enough hours/sales/tip-outs
     /// logged that every gated insight (weekday reads, $/hr, tip percent,
-    /// Moves, plan-forward) actually clears its honesty threshold.
+    /// plan-forward) actually clears its honesty threshold.
     /// Deterministic: a seeded generator, so every screenshot run renders
     /// identical numbers.
+    ///
+    /// `tipsOnly` (`-SeedTipsOnlyShowcase`) is the same shifts with no
+    /// sales, no hours and no clock times: the busser or runner who logs
+    /// only a date and what the shift paid, so QA can see that their
+    /// Insights page reads as complete without the rest.
     @MainActor
-    static func seedShowcaseData(scheduleStore: PayScheduleStore, insightsStore: InsightsStore, preferencesStore: UserPreferencesStore) {
+    static func seedShowcaseData(scheduleStore: PayScheduleStore, insightsStore: InsightsStore, preferencesStore: UserPreferencesStore, tipsOnly: Bool = false) {
         let context = SharedModelContainer.shared.mainContext
         try? context.delete(model: ShiftRecord.self)
         try? context.delete(model: PaycheckRecord.self)
@@ -127,7 +132,7 @@ enum DebugSeeder {
                             cashFraction: cashShare(weekday: weekday) + 0.1,
                             clockIn: (10, 30), clockOut: (15, 15),
                             tipOutCents: Int(Double(lunchGross) * 0.11),
-                            salesCents: lunchGross * 9, period: .lunch, calendar: calendar, next: next)
+                            salesCents: lunchGross * 9, period: .lunch, tipsOnly: tipsOnly, calendar: calendar, next: next)
             }
 
             let dinnerGross = Int(Double(jitter(dinnerBase(weekday: weekday), 5200)) * ramp)
@@ -135,7 +140,7 @@ enum DebugSeeder {
                         cashFraction: cashShare(weekday: weekday),
                         clockIn: (16, 45), clockOut: (23, 15),
                         tipOutCents: Int(Double(dinnerGross) * 0.12),
-                        salesCents: dinnerGross * 8, period: .dinner, calendar: calendar, next: next)
+                        salesCents: dinnerGross * 8, period: .dinner, tipsOnly: tipsOnly, calendar: calendar, next: next)
 
             day = calendar.date(byAdding: .day, value: 1, to: day) ?? day.addingTimeInterval(86400)
         }
@@ -202,6 +207,7 @@ enum DebugSeeder {
         tipOutCents: Int,
         salesCents: Int,
         period: ShiftPeriod,
+        tipsOnly: Bool,
         calendar: Calendar,
         next: (Int) -> Int
     ) {
@@ -219,10 +225,10 @@ enum DebugSeeder {
             cashTipsCents: cashCents,
             creditTipsCents: creditCents,
             tipOutCents: tipOutCents,
-            salesCents: salesCents,
-            hoursWorked: hours,
-            clockIn: inDate,
-            clockOut: outDate,
+            salesCents: tipsOnly ? nil : salesCents,
+            hoursWorked: tipsOnly ? nil : hours,
+            clockIn: tipsOnly ? nil : inDate,
+            clockOut: tipsOnly ? nil : outDate,
             serverCount: 4 + next(3),
             // Saturday dinners receive a bar tip share, so the drawer row and
             // the CSV column have something to show. Keyed on the weekday,
@@ -263,66 +269,6 @@ enum DebugSeeder {
         }
 
         try? context.save()
-        PaydayWidgetRefresh.request()
-    }
-
-    /// QA-only fixture for the Phase B "SINCE THEN" follow-up card: enough
-    /// weeks of Friday/Monday history, split around a fabricated 35-day-old
-    /// weekdaySwap ledger entry, that followUps() has a real behavior change
-    /// and dollar effect to report. Not part of -SeedSampleData — that
-    /// dataset stays small and representative of a real early user;
-    /// exercising a 28-day-old follow-up needs its own dedicated history.
-    @MainActor
-    static func seedFollowUpDemoData(insightsStore: InsightsStore, moveLedgerStore: MoveLedgerStore) {
-        let context = SharedModelContainer.shared.mainContext
-        try? context.delete(model: ShiftRecord.self)
-        try? context.delete(model: PaycheckRecord.self)
-        insightsStore.snapshot = nil
-
-        let calendar = Calendar.current
-        let today = calendar.startOfDay(for: .now)
-
-        func mostRecentWeekday(_ weekday: Int, onOrBefore date: Date) -> Date {
-            var cursor = date
-            while calendar.component(.weekday, from: cursor) != weekday {
-                cursor = calendar.date(byAdding: .day, value: -1, to: cursor) ?? cursor
-            }
-            return cursor
-        }
-        let lastFriday = mostRecentWeekday(6, onOrBefore: today)
-        let lastMonday = mostRecentWeekday(2, onOrBefore: today)
-
-        func fridayWeeksAgo(_ weeks: Int) -> Date {
-            calendar.date(byAdding: .day, value: -7 * weeks, to: lastFriday) ?? lastFriday
-        }
-        func mondayWeeksAgo(_ weeks: Int) -> Date {
-            calendar.date(byAdding: .day, value: -7 * weeks, to: lastMonday) ?? lastMonday
-        }
-        func insertNight(_ date: Date, cents: Int) {
-            let at = calendar.date(bySettingHour: 20, minute: 0, second: 0, of: date) ?? date
-            context.insert(ShiftRecord(workDate: date, shiftPeriod: .dinner, creditTipsCents: cents, hoursWorked: 5.0, recordedAt: at))
-        }
-
-        // BEFORE the move was shown (weeks 12 down to 5 ago): Friday every
-        // other week, Monday every week — a real "before" pace establishing
-        // Friday as the clear best-paying weekday.
-        for week in stride(from: 12, through: 5, by: -1) {
-            if week.isMultiple(of: 2) { insertNight(fridayWeeksAgo(week), cents: 15000) }
-            insertNight(mondayWeeksAgo(week), cents: 8000)
-        }
-        // AFTER the move was shown (last 5 weeks): Friday every week, at a
-        // slightly higher average — the behavior change and dollar effect
-        // followUps() should catch.
-        for week in stride(from: 4, through: 0, by: -1) {
-            insertNight(fridayWeeksAgo(week), cents: 16000)
-        }
-
-        try? context.save()
-
-        let shownAt = calendar.date(byAdding: .day, value: -35, to: today) ?? today
-        moveLedgerStore.reset()
-        moveLedgerStore.recordShown([Move(id: "weekdaySwap", title: "", body: "", effectSize: 0, supportingShiftCount: 0)], now: shownAt)
-
         PaydayWidgetRefresh.request()
     }
 

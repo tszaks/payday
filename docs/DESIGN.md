@@ -81,6 +81,13 @@ the rule is being applied wrong. Look at the render.
     clears it; "N shifts" goes once the sample is no longer thin. (Tyler,
     2026-11-08, after the paycheck sheet stacked a kicker, an explainer, a
     labelled expectation and a second "Expected" around one field.)
+14. **Insights reports what happened, never a projection.** No "would
+    have", no pace-against-a-baseline dollar figure. A comparison names
+    both windows in words the person can see ("the last eight weeks than
+    the eight before"). With fewer than 8 shifts on either side, say
+    nothing. (Tyler, 2026-11-08, after the SINCE THEN card put a "less
+    than the earlier pace would have produced" dollar figure on a
+    baseline of three Fridays.)
 
 ## Implementation Plan
 
