@@ -645,13 +645,9 @@ struct CalendarView: View {
                         reduceMotion ? nil : PaydayAnimation.premiumSpring,
                         value: facts.monthFigure.cents
                     )
-                // The days and hours ride the completeness caption
-                // instead of standing alone under the drawer, where they
-                // were a .subheadline in primary ink -- the weight of a
-                // headline, orphaned below a grey slab, describing the
-                // number two elements above it. They describe the same
-                // selection the caption does, so they belong on its line.
-                Text("\(facts.monthCaption) · \(facts.daysWorkedCount) day\(facts.daysWorkedCount == 1 ? "" : "s") · \(facts.monthHoursLabel)")
+                // The month caption only (Tyler, 2026-11-08: no counts).
+                // The hours already sit under Wages in the Breakdown.
+                Text(facts.monthCaption)
                     .font(PaydayFont.caption)
                     .foregroundStyle(PaydayColor.textSecondary)
                     .monospacedDigit()

@@ -78,9 +78,9 @@ public enum CompletenessCopy {
     /// The sentence that goes under the figure, or nil when the figure
     /// stands alone.
     ///
-    /// - `.estimated`: "Wages estimated from your current rate" — shown
-    ///   until the rate-history prompt in Settings is answered, because
-    ///   PR 3's migration deliberately fabricated no rate history.
+    /// - `.estimated`: nil. The estimate is disclosed in Settings, next to
+    ///   the "Has your rate always been $X?" prompt that clears it (Tyler,
+    ///   2026-11-08); it is not actionable anywhere else.
     /// - `.partial`: what is missing and for how many shifts, naming hours
     ///   or the rate specifically. "wages missing for 1 shift" is a fact
     ///   someone can act on; a bare asterisk is not.
@@ -89,7 +89,7 @@ public enum CompletenessCopy {
         case .off, .complete, .noShifts:
             return nil
         case .estimated:
-            return "Wages estimated from your current rate"
+            return nil
         case .partial(let missingHours, let missingRate):
             // Hours first: it is the one the person can fix in the app.
             if missingHours > 0, missingRate > 0 {

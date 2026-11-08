@@ -1052,7 +1052,7 @@ struct FixtureSnapshotEngineTests {
         ))
         let day = snapshot.day(CivilDay(at(2026, 9, 28), in: PaydayTestZone.payroll))
         #expect(day.completeness.state == .estimated)
-        #expect(CompletenessCopy.caption(day.completeness.state) == "Wages estimated from your current rate")
+        #expect(CompletenessCopy.caption(day.completeness.state) == nil)
 
         // The same shifts under a CONFIRMED rate are complete, so the state
         // is tracking the provenance and not something else about the day.

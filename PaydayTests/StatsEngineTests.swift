@@ -593,7 +593,7 @@ struct ForecastAccuracyTests {
     func copyAvoidsPredictionFraming() {
         let engine = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: steadyHistory(weeks: 30))
         let line = RevealCopy.forecastAccuracyLine(engine.forecastAccuracy(referenceDate: date(2026, 8, 1))!)
-        #expect(line.contains("the week you actually had"))
+        #expect(line.contains("the week you had"))
         #expect(line.lowercased().contains("predict") == false)
     }
 }

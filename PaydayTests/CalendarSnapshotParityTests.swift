@@ -275,7 +275,7 @@ struct CalendarSnapshotParityTests {
             displayedMonth: day(2026, 10, 1),
             calendar: calendarInPayrollZone()
         )
-        #expect(facts.monthFigure.caption == "Wages estimated from your current rate")
+        #expect(facts.monthFigure.caption == nil)
         #expect(facts.monthFigure.label == "Total")
         #expect(facts.monthCaption == "this month")
     }

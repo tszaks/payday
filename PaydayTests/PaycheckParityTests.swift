@@ -359,7 +359,7 @@ struct PaycheckSheetEqualsPeriodExpectationTests {
         #expect(render.sheet.expectedGross.label == "Expected")
         #expect(MetricID.expectedPaycheckGross.allowedLabels
             .contains(render.sheet.expectedGross.label))
-        #expect(render.sheet.expectedTipsLine.label == "Your check's tips line")
+        #expect(render.sheet.expectedTipsLine.label == "Expected")
         #expect(MetricID.expectedPaycheckTipsLine.allowedLabels
             .contains(render.sheet.expectedTipsLine.label))
     }

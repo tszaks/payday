@@ -340,7 +340,8 @@ public enum PaycheckReconciler {
         /// named for it so the two can never be confused at a call site.**
         /// The only surface that renders this figure is
         /// `PaycheckEntrySheet`, directly under the TIPS ON STUB field, where
-        /// the label "Your check's tips line" is a claim about what payroll
+        /// the label "Expected" (renamed from "Your check's tips line", Tyler
+        /// 2026-11-08: fewer words under the numbers) is a claim about what payroll
         /// printed on the person's stub. The registry's cash FALLBACK cannot
         /// make that claim: cash never runs through payroll (Tyler,
         /// 2026-08-03, this file's header), so for a cash-only period the
@@ -374,7 +375,7 @@ public enum PaycheckReconciler {
                 return EarningsFigure(
                     metric: .expectedPaycheckTipsLine,
                     amount: .unavailable,
-                    label: "Your check's tips line",
+                    label: "Expected",
                     caption: nil,
                     completeness: .empty
                 )
@@ -382,7 +383,7 @@ public enum PaycheckReconciler {
             return EarningsFigure(
                 metric: .expectedPaycheckTipsLine,
                 amount: .cents(cents),
-                label: "Your check's tips line",
+                label: "Expected",
                 // The tips line has no wage term, so a partial wage picture
                 // cannot make it partial. `MetricID
                 // .expectedPaycheckTipsLine`'s missing-data rule is "none".

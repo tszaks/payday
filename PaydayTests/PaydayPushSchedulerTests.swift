@@ -228,8 +228,10 @@ struct PaydayPushSchedulerTests {
         #expect(try spokenBody(rateCents: 2_500) == "Your check should show about $350.00 before tax. Card tips, gratuity and wages, less tip-out.")
     }
 
-    @Test("an estimated rate carries its caption instead of the basis line")
-    func estimatedCarriesItsCaption() throws {
+    /// Tyler 2026-11-08: the "estimated" caption lives in Settings only, so
+    /// an estimated figure reads like a complete one here.
+    @Test("an estimated rate carries the basis line, like a complete figure")
+    func estimatedCarriesTheBasisLine() throws {
         let record = ShiftRecord(
             workDate: date(2026, 7, 15, hour: 17),
             creditTipsCents: 15_000,
@@ -241,7 +243,7 @@ struct PaydayPushSchedulerTests {
             policies: policies(rateCents: 2_000, provenance: .assumedFromLegacySetting)
         ))
         #expect(decision.figure?.completeness.state == .estimated)
-        #expect(decision.body == "Your check should show about $310.00 before tax. Wages estimated from your current rate")
+        #expect(decision.body == "Your check should show about $310.00 before tax. Card tips, gratuity and wages, less tip-out.")
     }
 
     /// Rule 4, enforced by silence rather than by a placeholder: a

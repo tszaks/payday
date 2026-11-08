@@ -92,7 +92,7 @@ struct CompletenessCopyTests {
 
     @Test("estimated carries its caption; complete and off carry none")
     func otherCaptions() {
-        #expect(CompletenessCopy.caption(.estimated) == "Wages estimated from your current rate")
+        #expect(CompletenessCopy.caption(.estimated) == nil)
         #expect(CompletenessCopy.caption(.complete) == nil)
         #expect(CompletenessCopy.caption(.off) == nil)
         #expect(CompletenessCopy.caption(.noShifts) == nil)

@@ -36,7 +36,7 @@ struct MetricIDTests {
         #expect(MetricID.tipShareIn.allowedLabels == ["Tip share received"])
         #expect(MetricID.regularWages.allowedLabels == ["Wages"])
         #expect(MetricID.overtimeWages.allowedLabels == ["Overtime"])
-        #expect(MetricID.expectedPaycheckTipsLine.allowedLabels == ["Your check's tips line"])
+        #expect(MetricID.expectedPaycheckTipsLine.allowedLabels == ["Expected"])
         #expect(MetricID.expectedPaycheckGross.allowedLabels == ["Expected", "On your check, before tax"])
         #expect(MetricID.observedPaidTips.allowedLabels == ["Paid"])
         #expect(MetricID.proposedPaidTipsCorrection.allowedLabels == ["Looks like $X (accept?)"])
