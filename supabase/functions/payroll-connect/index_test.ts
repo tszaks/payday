@@ -66,6 +66,9 @@ class Fake {
   /// "METHOD /path/" prefixes Truv answers 403 for: keys valid, call not
   /// allowed for this account.
   forbidden: string[] = [];
+  /// Truv masks a link's access token unless the link list is filtered by
+  /// `user_id`. True models an account where it is masked even then.
+  alwaysMaskAccessTokens = false;
 
   deps(): Dependencies {
     return {
@@ -215,6 +218,20 @@ class Fake {
       if (!link) return this.respond(404);
       return this.respond(200, link.employments ?? []);
     }
+    if (method === "GET" && path === "/links/") {
+      // Every link of every user unless filtered; the full access token only
+      // when filtered by user_id.
+      const userId = url.searchParams.get("user_id");
+      const full = userId !== null && !this.alwaysMaskAccessTokens;
+      const results = this.links
+        .filter((l) => userId === null || l.owner === userId)
+        .map((l) => ({
+          id: l.id,
+          status: l.status,
+          access_token: full ? `access-${l.id}` : `****${l.id.slice(-4)}`,
+        }));
+      return this.respond(200, { count: results.length, next: null, results });
+    }
     if (method === "DELETE" && (m = path.match(/^\/users\/([^/]+)\/$/))) {
       const id = m[1];
       if (!this.users.some((u) => u.id === id)) return this.respond(404);
@@ -363,6 +380,50 @@ Deno.test("link_token: creates the Truv user once, keyed by the auth uid, and re
   const second = await call(fake, { action: "link_token" });
   assertEquals(second.json.data.bridge_token, "bridge-for-truv-user-1");
   assertEquals(fake.users.length, 1, "no second Truv user");
+});
+
+Deno.test("link_token reconnect: opens Bridge on the caller's own link with its full access token, never returned", async () => {
+  const fake = new Fake();
+  const owner = fake.addUser(ALICE);
+  fake.addLink(owner, "link-a", [], { status: "login_error" });
+  const result = await call(fake, { action: "link_token", link_id: "link-a" });
+  assertEquals(result.status, 200);
+  assertEquals(result.json.data.bridge_token, `bridge-for-${owner}`);
+  const list = fake.calls.find((c) => c.url.includes("/v1/links/?"));
+  assertEquals(new URL(list!.url).searchParams.get("user_id"), owner);
+  const token = fake.calls.find((c) => c.url.includes("/tokens/"));
+  assertEquals(token?.body, {
+    product_type: "income",
+    tracking_info: ALICE,
+    access_token: "access-link-a",
+  });
+  assertFalse(result.text.includes("access-link-a"));
+  assertEquals(fake.links.length, 1, "no second link");
+});
+
+Deno.test("link_token reconnect: someone else's link, or a bad id, gets no Bridge token", async () => {
+  const fake = new Fake();
+  fake.addUser(ALICE);
+  const bob = fake.addUser(BOB);
+  fake.addLink(bob, "link-b", [], { status: "login_error" });
+  const other = await call(fake, { action: "link_token", link_id: "link-b" });
+  assertEquals(other.status, 404);
+  assertEquals(other.json.error.code, "link_not_found");
+  const bad = await call(fake, { action: "link_token", link_id: "../x" });
+  assertEquals(bad.status, 400);
+  assertFalse(fake.calls.some((c) => c.url.includes("/tokens/")));
+  assertFalse(fake.calls.some((c) => c.url.includes("/v1/links/?")));
+});
+
+Deno.test("link_token reconnect: a masked access token is refused, not sent to Truv as one", async () => {
+  const fake = new Fake();
+  const owner = fake.addUser(ALICE);
+  fake.addLink(owner, "link-a", [], { status: "mfa_error" });
+  fake.alwaysMaskAccessTokens = true;
+  const result = await call(fake, { action: "link_token", link_id: "link-a" });
+  assertEquals(result.status, 409);
+  assertEquals(result.json.error.code, "reconnect_unavailable");
+  assertFalse(fake.calls.some((c) => c.url.includes("/tokens/")));
 });
 
 Deno.test("exchange: confirms the caller's own link and never returns the access token", async () => {

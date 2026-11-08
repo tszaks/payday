@@ -78,6 +78,18 @@ struct PayrollLink: Codable, Equatable, Sendable, Identifiable {
     }
 
     var isConnected: Bool { status == "done" }
+
+    /// Truv's task states while a sign-in or a read is still running.
+    static let inProgressStatuses: Set<String> = ["new", "login", "mfa", "parse", "full_parse", "pending"]
+
+    /// Not done and not running: the sign-in failed or expired (a changed
+    /// password, an MFA session that ran out, a locked account) or Truv
+    /// could not read the account. Signing in again is the way out.
+    var needsSignIn: Bool {
+        guard !isConnected else { return false }
+        guard let status else { return false }
+        return !Self.inProgressStatuses.contains(status)
+    }
 }
 
 enum PayrollEnvironment: String, Codable, Sendable {
@@ -121,7 +133,9 @@ struct PayrollConnectError: LocalizedError, Equatable {
 /// app uses `PayrollConnectService`.
 protocol PayrollConnectAPI: Sendable {
     func status() async throws -> PayrollStatus
-    func bridgeToken() async throws -> PayrollBridgeToken
+    /// A Bridge token. With `linkID`, Bridge opens on that existing link so
+    /// the person signs in again (update mode); without, it makes a new one.
+    func bridgeToken(linkID: String?) async throws -> PayrollBridgeToken
     func exchange(publicToken: String) async throws -> PayrollLink
     func paystubs(since: String?) async throws -> PayrollPaystubs
     func refresh(linkID: String) async throws
@@ -182,8 +196,10 @@ struct PayrollConnectService: PayrollConnectAPI {
         try await call(["action": "status"])
     }
 
-    func bridgeToken() async throws -> PayrollBridgeToken {
-        try await call(["action": "link_token"])
+    func bridgeToken(linkID: String?) async throws -> PayrollBridgeToken {
+        var body = ["action": "link_token"]
+        if let linkID { body["link_id"] = linkID }
+        return try await call(body)
     }
 
     func exchange(publicToken: String) async throws -> PayrollLink {

@@ -302,6 +302,57 @@ struct PayrollImporterTests {
         #expect(try records().count == 2)
     }
 
+    @Test("two weekly stubs competing for one typed biweekly paycheck: the one with its net takes it")
+    func competingGridMatchUsesNet() throws {
+        // The review's case: the person typed Oct 12 - 25 with a $610 net.
+        // Both weekly stubs sit in that grid period; the SECOND week is $610.
+        let typed = try manual(start: "2026-10-12", end: "2026-10-25") { $0.netPayCents = 61_000 }
+        var ledger = PayrollImportLedger()
+        try importing([
+            stub("w1", pay: "2026-10-23", start: "2026-10-12", end: "2026-10-18", gross: 80_000, net: 60_000),
+            stub("w2", pay: "2026-10-30", start: "2026-10-19", end: "2026-10-25", gross: 81_000, net: 61_000),
+        ], into: &ledger)
+        #expect(ledger.entries["w2"]?.recordID == typed.id)
+        #expect(ledger.entries["w1"]?.origin == .created)
+        #expect(typed.grossPayCents == 81_000, "filled from its own week, not the other one")
+        #expect(try records().count == 2)
+    }
+
+    @Test("competing grid matches: gross decides when net is missing; date order only when amounts say nothing")
+    func competingGridMatchUsesGrossThenDate() throws {
+        let byGross = try manual(start: "2026-10-12", end: "2026-10-25") { $0.grossPayCents = 81_000 }
+        var ledger = PayrollImportLedger()
+        try importing([
+            stub("w1", pay: "2026-10-23", start: "2026-10-12", end: "2026-10-18", gross: 80_000, net: 60_000),
+            stub("w2", pay: "2026-10-30", start: "2026-10-19", end: "2026-10-25", gross: 81_000, net: 61_000),
+        ], into: &ledger)
+        #expect(ledger.entries["w2"]?.recordID == byGross.id)
+        #expect(byGross.netPayCents == 61_000)
+
+        // No amounts on the typed paycheck: the earlier stub takes it.
+        let blank = try manual(start: "2026-10-26", end: "2026-11-08")
+        try importing([
+            stub("w3", pay: "2026-11-06", start: "2026-10-26", end: "2026-11-01", gross: 80_000, net: 60_000),
+            stub("w4", pay: "2026-11-13", start: "2026-11-02", end: "2026-11-08", gross: 81_000, net: 61_000),
+        ], into: &ledger)
+        #expect(ledger.entries["w3"]?.recordID == blank.id)
+        #expect(ledger.entries["w4"]?.origin == .created)
+    }
+
+    @Test("the preview says when stubs come more often than the pay schedule")
+    func paysMoreOftenThanSchedule() throws {
+        let weekly = [
+            stub("w1", pay: "2026-10-23", start: "2026-10-12", end: "2026-10-18"),
+            stub("w2", pay: "2026-10-30", start: "2026-10-19", end: "2026-10-25"),
+        ]
+        #expect(PayrollImporter.paysMoreOftenThanSchedule(statements: weekly, jobs: jobs, calculator: scope))
+        let biweekly = [stub("b1"), stub("b2", pay: "2026-11-13", start: "2026-10-26", end: "2026-11-08")]
+        #expect(!PayrollImporter.paysMoreOftenThanSchedule(statements: biweekly, jobs: jobs, calculator: scope))
+        // Two jobs paid for the same period are not "more often".
+        let twoJobs = [stub("a"), stub("b", employer: "Cafe Rosa")]
+        #expect(!PayrollImporter.paysMoreOftenThanSchedule(statements: twoJobs, jobs: jobs, calculator: scope))
+    }
+
     @Test("a check that finds nothing new still moves Last synced")
     func unchangedCheckMovesLastSynced() throws {
         var ledger = PayrollImportLedger()
@@ -491,6 +542,29 @@ struct PayrollImporterTests {
         // says so honestly, and nothing else duplicates.
         try importing([stub("s-oct"), stub("s-nov", pay: "2026-11-13", start: "2026-10-26", end: "2026-11-08")], into: &ledger)
         #expect(try records().count == 4)
+    }
+
+    @Test("a removal that fails part way still leaves automatic imports off")
+    func partialRemovalTurnsImportsOff() throws {
+        var ledger = PayrollImportLedger()
+        try importing([
+            stub("s1"),
+            stub("s2", pay: "2026-11-13", start: "2026-10-26", end: "2026-11-08"),
+        ], into: &ledger)
+        ledger.importConfirmed = true
+        var calls = 0
+        #expect(throws: CocoaError.self) {
+            try PayrollImporter.removeImported(in: context, ledger: &ledger) { id, context in
+                calls += 1
+                if calls == 2 { throw CocoaError(.fileWriteUnknown) }
+                let record = try context.fetch(FetchDescriptor<PaycheckRecord>(predicate: #Predicate { $0.id == id })).first
+                if let record { context.delete(record) }
+                try context.save()
+            }
+        }
+        #expect(calls == 2)
+        #expect(ledger.entries.count == 1, "the one removed is forgotten")
+        #expect(ledger.importConfirmed == false, "and the next import can't bring it back unasked")
     }
 
     // MARK: - Preview

@@ -267,6 +267,32 @@ async function ownedLink(
   return link;
 }
 
+/// The full access token of one of this Truv user's links, for update
+/// mode. Truv masks it (`****7610`) everywhere except a link list filtered
+/// by `user_id`. Masked or missing means a reconnect cannot be offered.
+async function linkAccessToken(
+  truv: TruvClient,
+  truvUserId: string,
+  linkId: string,
+): Promise<string> {
+  const page = await truv.request<
+    Paged<{ id?: unknown; access_token?: unknown }>
+  >(
+    "GET",
+    `/links/?user_id=${encodeURIComponent(truvUserId)}`,
+  );
+  const rows = Array.isArray(page?.results) ? page.results : [];
+  const token = rows.find((row) => row?.id === linkId)?.access_token;
+  if (typeof token !== "string" || !token || token.includes("*")) {
+    throw new ApiError(
+      409,
+      "reconnect_unavailable",
+      "Payday can't reconnect this payroll. Disconnect it, then connect again.",
+    );
+  }
+  return token;
+}
+
 function cleanName(name: unknown): string | null {
   return typeof name === "string" && name.trim() ? name.trim() : null;
 }
@@ -410,10 +436,24 @@ async function route(
     }
     case "link_token": {
       const user = await findOrCreateTruvUser(truv, uid);
+      const request: JsonObject = {
+        product_type: "income",
+        tracking_info: uid,
+      };
+      // Reconnect: Bridge opens on the person's existing link in update
+      // mode, so they sign in again (changed password, expired session)
+      // without making a second link. That needs the link's access token,
+      // which is not stored anywhere: Truv returns it in full only when the
+      // links are listed for the Truv user, so it is read here, passed
+      // straight to Truv, and never returned to the app.
+      if (body.link_id !== undefined) {
+        const link = await ownedLink(truv, uid, body.link_id);
+        request.access_token = await linkAccessToken(truv, user.id, link.id);
+      }
       const token = await truv.request<{ bridge_token?: unknown }>(
         "POST",
         `/users/${encodeURIComponent(user.id)}/tokens/`,
-        { product_type: "income", tracking_info: uid },
+        request,
       );
       if (typeof token?.bridge_token !== "string" || !token.bridge_token) {
         throw new TruvError(

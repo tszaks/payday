@@ -42,8 +42,27 @@ data"). The key decides which Truv data comes back. Keep the two in step.
 
 ## Production
 
-Production needs a paid Truv plan. Put the production key into the same two
-secrets and set `TRUV_ENV=production`. No app change and no new build.
+Production needs a paid Truv plan. The switch is two Supabase secrets,
+nothing else:
+
+```sh
+supabase secrets set TRUV_ACCESS_SECRET=<production secret> TRUV_ENV=production
+```
+
+`TRUV_CLIENT_ID` stays the same unless Truv gives a different one for
+production. No app change, no new build: the app has no Truv key and no
+environment setting. The Bridge token the server makes decides which Truv
+environment the sign-in screen talks to, and the server tells the app which
+one it is (the "Test mode" line goes away).
+
+Before the switch, testers should tap **Remove imported paychecks** for
+any sample paychecks they imported. Sandbox Truv users and links do not
+exist under the production key, so after the switch the app shows "Connect
+payroll" again.
+
+If the secrets are missing or Truv refuses the key, the server answers 503
+(`not_configured` or `truv_not_configured`). The app then says "Payroll
+connection isn't available right now" and shows no Connect button.
 
 ## Rules the code keeps
 
@@ -72,12 +91,32 @@ secrets and set `TRUV_ENV=production`. No app change and no new build.
   `forget` fails at that moment, the Truv user stays at Truv, and no Payday
   account can reach it any more. Delete it from the Truv dashboard (search
   by external user id = the deleted Supabase user id).
-- A link that exists but is not `done` (still syncing, or needs a new
-  sign-in) keeps the connection on: the app keeps checking and shows
-  "Still connecting". The server lists every link and reads only `done`
-  ones.
+- A link that exists but is not `done` keeps the connection on. The server
+  lists every link and reads only `done` ones. A link still running (`new`,
+  `login`, `mfa`, `parse`, `full_parse`) shows "Still connecting". Any
+  other state (`login_error`, `mfa_error`, `account_locked`, ...) shows
+  "Sign in again" and a **Reconnect** button.
+- Reconnect opens Bridge in Truv's update mode on the SAME link, so no second
+  link is made. That needs the link's access token. Nothing stores it: Truv
+  returns it in full only in `GET /links/?user_id=<truv user>`, so the
+  server reads it there (after the ownership check), passes it to Truv in
+  the bridge token request, and never returns it. If Truv returns it masked,
+  the app says to disconnect and connect again (`reconnect_unavailable`).
+- Disconnect is offered for every link in any state, and "Remove imported
+  paychecks" for as long as the import record lists paychecks it made, even
+  after the last link is gone.
 - "Remove imported paychecks" deletes only paychecks the import made that
-  nobody changed since.
+  nobody changed since. It turns automatic imports off and saves that
+  BEFORE it deletes anything, so a removal that fails part way can't be
+  undone by the next automatic import.
+- When two stubs could match one paycheck the person typed (two weekly
+  stubs inside one biweekly period), the paycheck goes to the stub whose net,
+  then gross, it already holds. Date order decides only when the amounts
+  say nothing.
+- **Known limit:** when the payroll pays more often than the pay schedule
+  set in Payday (weekly stubs, biweekly schedule), each stub is still its
+  own paycheck, but Periods shows one paycheck per schedule period. The
+  preview warns about this so the person can fix their schedule.
 - The server only reads stubs (cents, dates, every line as printed). Which
   lines are tips, gratuity or taxes is decided in PaydayCore,
   `PayStubFigures`: "tips" words count as tips paid on the check, except

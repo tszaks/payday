@@ -24,6 +24,9 @@ import SwiftData
 /// 3. the same net pay, near the pay date.
 ///
 /// Each of 1-3 runs over the whole batch before the next (`MatchStep`).
+/// When two stubs could take the same paycheck in one step, the paycheck
+/// goes to the stub whose net (then gross) it already holds (`Evidence`);
+/// date order breaks only a tie that the amounts leave.
 /// Steps 2 and 3 also need the two periods to share at least one day. Two
 /// weekly checks inside one biweekly grid period are two paychecks, and a
 /// typed check for one week must never take the other week's stub.
@@ -225,14 +228,28 @@ enum PayrollImporter {
         }
 
         for step in MatchStep.allCases {
-            for (statement, fields) in open where decided[statement.sourceID] == nil {
+            // Every (stub, paycheck) pair this step allows, then the best
+            // pairs first. When two stubs could take one paycheck (two weekly
+            // stubs inside one biweekly grid period), the paycheck goes to
+            // the stub whose amounts it already holds, not to the earlier one.
+            var pairs: [(order: Int, statement: PayrollStatement, fields: Fields, record: PaycheckRecord)] = []
+            for (order, (statement, fields)) in open.enumerated() where decided[statement.sourceID] == nil {
                 let candidates = records.filter {
                     !claimed.contains($0.id) && ShiftRole.key($0.jobName) == ShiftRole.key(fields.jobName)
                 }
-                if let found = match(fields, statement: statement, step: step, in: candidates, calculator: calculator(fields.jobName)) {
-                    claimed.insert(found.id)
-                    decided[statement.sourceID] = .merge(recordID: found.id, fill: fill(found, from: fields))
+                for record in matches(fields, statement: statement, step: step, in: candidates, calculator: calculator(fields.jobName)) {
+                    pairs.append((order, statement, fields, record))
                 }
+            }
+            pairs.sort { a, b in
+                let ea = Evidence(a.record, a.fields), eb = Evidence(b.record, b.fields)
+                if ea != eb { return ea > eb }
+                if a.order != b.order { return a.order < b.order }
+                return (a.record.periodEnd, a.record.id.uuidString) < (b.record.periodEnd, b.record.id.uuidString)
+            }
+            for pair in pairs where decided[pair.statement.sourceID] == nil && !claimed.contains(pair.record.id) {
+                claimed.insert(pair.record.id)
+                decided[pair.statement.sourceID] = .merge(recordID: pair.record.id, fill: fill(pair.record, from: pair.fields))
             }
         }
 
@@ -243,19 +260,34 @@ enum PayrollImporter {
         }
     }
 
-    private static func match(
+    /// How strongly a paycheck's own amounts say it is this stub: the same
+    /// net pay first, then the same gross. Compared only to break a tie
+    /// between pairs a step already allows; it never makes a match.
+    struct Evidence: Comparable {
+        let sameNet: Bool
+        let sameGross: Bool
+
+        init(_ record: PaycheckRecord, _ fields: Fields) {
+            sameNet = record.netPayCents != nil && record.netPayCents == fields.netPayCents
+            sameGross = record.grossPayCents != nil && record.grossPayCents == fields.grossPayCents
+        }
+
+        static func < (a: Evidence, b: Evidence) -> Bool {
+            (a.sameNet ? 1 : 0, a.sameGross ? 1 : 0) < (b.sameNet ? 1 : 0, b.sameGross ? 1 : 0)
+        }
+    }
+
+    /// The paychecks `step` allows this stub to take.
+    private static func matches(
         _ fields: Fields,
         statement: PayrollStatement,
         step: MatchStep,
         in candidates: [PaycheckRecord],
         calculator: PayPeriodCalculator
-    ) -> PaycheckRecord? {
+    ) -> [PaycheckRecord] {
         let zone = calculator.payrollTimeZone
         let start = CivilDay(fields.periodStart, in: zone)
         let end = CivilDay(fields.periodEnd, in: zone)
-        let stable: (PaycheckRecord, PaycheckRecord) -> Bool = {
-            ($0.periodEnd, $0.id.uuidString) < ($1.periodEnd, $1.id.uuidString)
-        }
         // Past an exact match the dates differ, so the two periods must at
         // least share a day: adjacent weekly checks are different paychecks.
         let overlapping = candidates.filter {
@@ -265,17 +297,37 @@ enum PayrollImporter {
         case .samePeriod:
             return candidates.filter {
                 CivilDay($0.periodStart, in: zone) == start && CivilDay($0.periodEnd, in: zone) == end
-            }.min(by: stable)
+            }
         case .sameGrid:
             let grid = calculator.period(containing: fields.periodEnd)
-            return overlapping.filter { $0.periodEnd >= grid.start && $0.periodEnd <= grid.end }.min(by: stable)
+            return overlapping.filter { $0.periodEnd >= grid.start && $0.periodEnd <= grid.end }
         case .sameNet:
-            guard let net = fields.netPayCents, let payDay = CivilDay(iso: statement.payDate) else { return nil }
+            guard let net = fields.netPayCents, let payDay = CivilDay(iso: statement.payDate) else { return [] }
             let periodDays = CivilDay.daysBetween(start, end) + 1
             return overlapping.filter {
                 $0.netPayCents == net && abs(CivilDay.daysBetween(CivilDay($0.periodEnd, in: zone), payDay)) <= periodDays
-            }.min(by: stable)
+            }
         }
+    }
+
+    /// True when two or more stubs for one job fall in the same pay period
+    /// of that job's schedule: the payroll pays more often than the schedule
+    /// set in Payday (weekly stubs, biweekly schedule). Each stub still
+    /// becomes its own paycheck; the preview says so, so the person can fix
+    /// their pay schedule. Only dates are compared here, no amounts.
+    static func paysMoreOftenThanSchedule(
+        statements: [PayrollStatement],
+        jobs: [JobPolicy],
+        calculator: (String?) -> PayPeriodCalculator
+    ) -> Bool {
+        var seen: Set<String> = []
+        for statement in statements {
+            guard let fields = fields(for: statement, jobs: jobs, calculator: calculator) else { continue }
+            let grid = calculator(fields.jobName).period(containing: fields.periodEnd)
+            let key = "\(ShiftRole.key(fields.jobName) ?? "")|\(grid.start.timeIntervalSince1970)"
+            if !seen.insert(key).inserted { return true }
+        }
+        return false
     }
 
     private static func fill(_ record: PaycheckRecord, from fields: Fields) -> Fill {
@@ -405,6 +457,10 @@ enum PayrollImporter {
     ) throws -> Int {
         let records = try context.fetch(FetchDescriptor<PaycheckRecord>())
         let removable = removableRecordIDs(records: records, ledger: ledger)
+        // Off FIRST: if a deletion below fails part way, the ones already
+        // gone must not come back on the next automatic import. The next
+        // import is a previewed one again.
+        ledger.importConfirmed = false
         var removed = 0
         for id in removable.sorted(by: { $0.uuidString < $1.uuidString }) {
             try delete(id, context)
@@ -413,9 +469,6 @@ enum PayrollImporter {
                 ledger.entries[sourceID] = nil
             }
         }
-        // Nothing comes back on its own after this: the next import is a
-        // previewed one again.
-        ledger.importConfirmed = false
         return removed
     }
 }

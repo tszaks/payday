@@ -44,9 +44,13 @@ struct PayrollConnectionView: View {
             }
 
             if connection.isConnected {
-                connectedSections
+                connectedSection
             } else {
                 connectSection
+            }
+
+            if Self.showsManageSection(links: connection.allLinks, createdCount: connection.ledger.createdCount) {
+                manageSection
             }
 
             if !connection.importedStubs.isEmpty {
@@ -109,30 +113,47 @@ struct PayrollConnectionView: View {
 
     private var connectSection: some View {
         Section {
-            ForEach(connection.waitingLinks) { link in
-                LabeledContent(link.displayName) {
-                    Text("Still connecting")
-                        .foregroundStyle(PaydayColor.textSecondary)
-                }
+            waitingLinkRows
+            if !connection.isUnavailable {
+                Button("Connect payroll") { startConnect() }
+                    .disabled(!cloudState.canReachServer)
             }
-            if !connection.waitingLinks.isEmpty {
-                Button("Check again") {
-                    Task { await connection.refreshStatus() }
-                }
-            }
-            Button("Connect payroll") { startConnect() }
-                .disabled(!cloudState.canReachServer)
         } footer: {
             VStack(alignment: .leading, spacing: PaydaySpacing.p8) {
-                Text(cloudState.canReachServer ? Self.explanation : "Connect payroll needs an internet connection and a signed-in account.")
+                if !connection.isUnavailable {
+                    Text(cloudState.canReachServer ? Self.explanation : "Connect payroll needs an internet connection and a signed-in account.")
+                }
                 if let message = connection.message { Text(message) }
             }
         }
         .listRowBackground(PaydayColor.fieldBackground)
     }
 
+    /// Links that are not ready: still connecting, or needing a new sign-in
+    /// (a changed password, an expired session). Reconnect opens Bridge on
+    /// the same link, so no second connection is made.
     @ViewBuilder
-    private var connectedSections: some View {
+    private var waitingLinkRows: some View {
+        ForEach(connection.waitingLinks) { link in
+            LabeledContent(link.displayName) {
+                Text(link.needsSignIn ? "Sign in again" : "Still connecting")
+                    .foregroundStyle(link.needsSignIn ? PaydayColor.caution : PaydayColor.textSecondary)
+            }
+            if link.needsSignIn, !connection.isUnavailable {
+                Button(connection.waitingLinks.count > 1 ? "Reconnect \(link.displayName)" : "Reconnect") {
+                    startConnect(reconnecting: link)
+                }
+                .disabled(!cloudState.canReachServer)
+            }
+        }
+        if connection.waitingLinks.contains(where: { !$0.needsSignIn }) {
+            Button("Check again") {
+                Task { await connection.refreshStatus() }
+            }
+        }
+    }
+
+    private var connectedSection: some View {
         Section {
             ForEach(connection.connectedLinks) { link in
                 HStack {
@@ -162,23 +183,35 @@ struct PayrollConnectionView: View {
                     Task { await connection.loadPreview(context: modelContext, scope: scope) }
                 }
             }
+            waitingLinkRows
         } header: {
             Text("Connected")
         } footer: {
             if let message = connection.message { Text(message) }
         }
         .listRowBackground(PaydayColor.fieldBackground)
+    }
 
+    /// Clean-up, whatever state the links are in: every known link can be
+    /// disconnected (ready, syncing or broken), and imported paychecks can
+    /// be removed for as long as the import record lists some, connected or
+    /// not.
+    private var manageSection: some View {
         Section {
-            Button("Remove imported paychecks", role: .destructive) { isConfirmingRemove = true }
-                .disabled(connection.ledger.createdCount == 0)
-            ForEach(connection.connectedLinks) { link in
-                Button(connection.connectedLinks.count > 1 ? "Disconnect \(link.displayName)" : "Disconnect", role: .destructive) {
+            if connection.ledger.createdCount > 0 {
+                Button("Remove imported paychecks", role: .destructive) { isConfirmingRemove = true }
+            }
+            ForEach(connection.allLinks) { link in
+                Button(connection.allLinks.count > 1 ? "Disconnect \(link.displayName)" : "Disconnect", role: .destructive) {
                     disconnecting = link
                 }
             }
         }
         .listRowBackground(PaydayColor.fieldBackground)
+    }
+
+    static func showsManageSection(links: [PayrollLink], createdCount: Int) -> Bool {
+        !links.isEmpty || createdCount > 0
     }
 
     private func previewSection(_ preview: PayrollConnection.Preview) -> some View {
@@ -222,10 +255,16 @@ struct PayrollConnectionView: View {
         } header: {
             Text("Ready to import")
         } footer: {
-            if preview.isEmpty {
-                Text("Payday checks for new pay stubs when you open it.")
-            } else {
-                Text("Pay stubs for periods you already logged fill in only what's missing there.")
+            VStack(alignment: .leading, spacing: PaydaySpacing.p8) {
+                if preview.paysMoreOftenThanSchedule {
+                    Text(Self.scheduleNotice)
+                        .foregroundStyle(PaydayColor.caution)
+                }
+                if preview.isEmpty {
+                    Text("Payday checks for new pay stubs when you open it.")
+                } else {
+                    Text("Pay stubs for periods you already logged fill in only what's missing there.")
+                }
             }
         }
         .listRowBackground(PaydayColor.fieldBackground)
@@ -264,12 +303,12 @@ struct PayrollConnectionView: View {
 
     // MARK: - Actions
 
-    private func startConnect() {
+    private func startConnect(reconnecting link: PayrollLink? = nil) {
         PaydayHaptics.lightTap()
         connection.message = nil
         Task {
             connection.prepare(userID: PaydaySyncState.registeredUserID)
-            if let token = await connection.bridgeToken() {
+            if let token = await connection.bridgeToken(reconnecting: link) {
                 bridge = BridgeSession(token: token)
             }
         }
@@ -288,6 +327,8 @@ struct PayrollConnectionView: View {
         style.timeZone = .gmt
         return day.date(in: .gmt).formatted(style)
     }
+
+    static let scheduleNotice = "Some of these pay stubs are for the same pay period in Payday: your payroll pays more often than your pay schedule. Each one is its own paycheck. To compare them with your shifts, change your pay schedule in Settings."
 
     static func previewHeadline(_ preview: PayrollConnection.Preview) -> String {
         var parts: [String] = []

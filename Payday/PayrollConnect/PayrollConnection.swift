@@ -46,6 +46,9 @@ final class PayrollConnection {
         let lastPayDate: String?
         /// Newest first, a handful, for the person to recognize.
         let rows: [PayrollStatement]
+        /// Two or more stubs fall in one pay period of the schedule set in
+        /// Payday: the payroll pays more often than that schedule says.
+        var paysMoreOftenThanSchedule = false
 
         var isEmpty: Bool { newCount == 0 && filledCount == 0 }
     }
@@ -93,6 +96,13 @@ final class PayrollConnection {
     /// Links that exist but Truv has not finished with (syncing, or waiting
     /// for a new sign-in).
     var waitingLinks: [PayrollLink] { status?.links.filter { !$0.isConnected } ?? [] }
+    /// Every link the server knows, in any state. Each one can be
+    /// disconnected, ready or not.
+    var allLinks: [PayrollLink] { status?.links ?? [] }
+    /// The server answered that payroll connection is not set up (its Truv
+    /// keys are missing or refused). Nothing here can fix that; the screen
+    /// says so instead of offering a Connect that cannot work.
+    private(set) var isUnavailable = false
 
     /// Hours and deduction lines for the stubs imported so far, newest
     /// first. `PaycheckRecord` has no fields for these, so they live here.
@@ -142,6 +152,7 @@ final class PayrollConnection {
         ledgerUnsaved = false
         generation += 1
         status = nil
+        isUnavailable = false
         preview = nil
         pendingStatements = []
         message = nil
@@ -188,24 +199,42 @@ final class PayrollConnection {
             let status = try await api.status()
             guard generation == started else { return }
             self.status = status
+            isUnavailable = false
             ledger.hasConnection = Self.hasConnection(status.links)
             saveLedger()
         } catch {
             guard generation == started else { return }
+            note(error)
+        }
+    }
+
+    /// The server codes for "payroll connection is not set up": no Truv
+    /// keys (`not_configured`), or keys Truv refused (`truv_not_configured`).
+    static let unavailableCodes: Set<String> = ["not_configured", "truv_not_configured"]
+
+    private func note(_ error: Error) {
+        if let error = error as? PayrollConnectError, Self.unavailableCodes.contains(error.code) {
+            isUnavailable = true
+            message = Self.unavailableMessage
+        } else {
             message = Self.describe(error)
         }
     }
 
+    static let unavailableMessage = "Payroll connection isn't available right now. Your paychecks are not affected."
+
     /// A Truv Bridge token for the sign-in screen, or nil with `message` set.
-    func bridgeToken() async -> String? {
+    /// With `reconnecting`, Bridge opens on that link to sign in again
+    /// (a changed password, an expired session) instead of making a new one.
+    func bridgeToken(reconnecting link: PayrollLink? = nil) async -> String? {
         let started = generation
         isWorking = true
         defer { if generation == started { isWorking = false } }
         do {
-            let token = try await api.bridgeToken()
+            let token = try await api.bridgeToken(linkID: link?.linkID)
             return generation == started ? token.bridgeToken : nil
         } catch {
-            if generation == started { message = Self.describe(error) }
+            if generation == started { note(error) }
             return nil
         }
     }
@@ -219,7 +248,7 @@ final class PayrollConnection {
         do {
             _ = try await api.exchange(publicToken: publicToken)
         } catch {
-            if generation == started { message = Self.describe(error) }
+            if generation == started { note(error) }
             return
         }
         guard generation == started else { return }
@@ -241,11 +270,14 @@ final class PayrollConnection {
             guard generation == started else { return }
             pendingStatements = result.paystubs
             let records = try context.fetch(FetchDescriptor<PaycheckRecord>())
-            preview = Self.preview(of: PayrollImporter.plan(
+            var preview = Self.preview(of: PayrollImporter.plan(
                 statements: result.paystubs, records: records, ledger: ledger,
                 jobs: scope.jobs, calculator: scope.calculator))
+            preview.paysMoreOftenThanSchedule = PayrollImporter.paysMoreOftenThanSchedule(
+                statements: result.paystubs, jobs: scope.jobs, calculator: scope.calculator)
+            self.preview = preview
         } catch {
-            if generation == started { message = Self.describe(error) }
+            if generation == started { note(error) }
         }
     }
 
@@ -329,7 +361,7 @@ final class PayrollConnection {
         } catch {
             // Quiet on app open: the next attempt is six hours away and the
             // connection screen shows the last sync time.
-            if force, generation == started { message = Self.describe(error) }
+            if force, generation == started { note(error) }
         }
     }
 
@@ -350,7 +382,7 @@ final class PayrollConnection {
                 message = "Payday checked this payroll in the last day. New pay stubs still come in on their own."
             }
         } catch {
-            if generation == started { message = Self.describe(error) }
+            if generation == started { note(error) }
         }
     }
 
@@ -366,7 +398,7 @@ final class PayrollConnection {
             pendingStatements = []
             await refreshStatus()
         } catch {
-            if generation == started { message = Self.describe(error) }
+            if generation == started { note(error) }
         }
     }
 
@@ -395,14 +427,23 @@ final class PayrollConnection {
         }
     }
 
-    func removeImported(context: ModelContext, onWrite: () -> Void = {}) {
+    func removeImported(
+        context: ModelContext,
+        delete: @MainActor (UUID, ModelContext) throws -> Void = DeferredPaycheckRemoval.commitDelete(id:in:),
+        onWrite: () -> Void = {}
+    ) {
         guard !ledgerUnreadable else {
             message = "Payday couldn't read its import record. Nothing was removed."
             return
         }
+        // Automatic imports go off, and that is SAVED, before anything is
+        // deleted: a deletion that fails part way, or the app closing
+        // mid-way, must not leave imports on to bring the paychecks back.
+        ledger.importConfirmed = false
+        guard saveLedger() else { return }
         defer { saveLedger() }
         do {
-            let removed = try PayrollImporter.removeImported(in: context, ledger: &ledger)
+            let removed = try PayrollImporter.removeImported(in: context, ledger: &ledger, delete: delete)
             message = removed == 0
                 ? "Nothing to remove. Paychecks you edited stay."
                 : "Removed \(removed == 1 ? "1 paycheck" : "\(removed) paychecks")."
