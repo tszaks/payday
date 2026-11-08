@@ -553,7 +553,23 @@ async function route(
         now.getTime() + REFRESH_INTERVAL_HOURS * 3_600_000,
       );
       try {
-        await truv.request("POST", "/refresh/tasks/", { link_id: link.id });
+        // Truv's refresh task takes the link's full access token and the
+        // product, not a link id (RefreshTaskCreateRequest requires both).
+        // The token is read the same way reconnect reads it and goes
+        // straight to Truv; it is never returned to the app.
+        const owner = await findTruvUser(truv, uid);
+        if (!owner) {
+          throw new ApiError(
+            404,
+            "link_not_found",
+            "That payroll connection was not found.",
+          );
+        }
+        const accessToken = await linkAccessToken(truv, owner.id, link.id);
+        await truv.request("POST", "/refresh/tasks/", {
+          access_token: accessToken,
+          product_type: "income",
+        });
       } catch (error) {
         // Not started, so not billed: the next tap may try again.
         reservations.delete(link.id);

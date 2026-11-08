@@ -240,10 +240,18 @@ class Fake {
       return this.respond(204);
     }
     if (method === "POST" && path === "/refresh/tasks/") {
-      if (!this.links.some((l) => l.id === body.link_id)) {
-        return this.respond(404);
+      // Truv's contract: { access_token, product_type } (both required).
+      if (
+        typeof body.access_token !== "string" ||
+        typeof body.product_type !== "string" || body.link_id !== undefined
+      ) {
+        return this.respond(400);
       }
-      this.refreshes.push(body.link_id);
+      const refreshed = this.links.find((l) =>
+        `access-${l.id}` === body.access_token
+      );
+      if (!refreshed) return this.respond(404);
+      this.refreshes.push(refreshed.id);
       return this.respond(201, { task_id: "task-1" });
     }
     if (method === "DELETE" && (m = path.match(/^\/links\/([^/]+)\/$/))) {

@@ -358,6 +358,15 @@ final class PayrollConnection {
                 jobs: scope.jobs, calculator: scope.calculator, now: now)
             saveLedger()
             if outcome.created + outcome.merged > 0 { onWrite() }
+            // `paystubs` only reads what Truv already holds. Ask Truv to read
+            // each ready payroll account again so the next import brings the
+            // newest stubs. The server allows one per link every 20 hours
+            // (and says when via `refresh_available_at`), so this is quiet
+            // and cheap; a refusal or failure changes nothing here.
+            for link in result.links where link.isConnected && link.refreshAvailableAt == nil {
+                guard generation == started else { return }
+                try? await api.refresh(linkID: link.linkID)
+            }
         } catch {
             // Quiet on app open: the next attempt is six hours away and the
             // connection screen shows the last sync time.

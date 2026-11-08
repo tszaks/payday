@@ -39,7 +39,12 @@ private final class FakePayrollAPI: PayrollConnectAPI, @unchecked Sendable {
         // The server lists every link but reads only `done` ones.
         return PayrollPaystubs(environment: .sandbox, links: links, paystubs: linkStatus == "done" ? paystubs : [])
     }
-    func refresh(linkID: String) async throws {}
+    var refreshedLinkIDs: [String] = []
+    var refreshError: Error?
+    func refresh(linkID: String) async throws {
+        refreshedLinkIDs.append(linkID)
+        if let refreshError { throw refreshError }
+    }
     func disconnect(linkID: String) async throws {}
     func forget() async throws {
         forgetCalls += 1
@@ -163,6 +168,30 @@ struct PayrollConnectionTests {
         api.paystubs = [stub("s1")]
         await connection.importIfDue(context: context, scope: scope, force: true)
         #expect(try paychecks() == 1)
+    }
+
+    @Test("an automatic import also asks Truv to read the payroll again, and a refusal changes nothing")
+    func automaticImportRequestsProviderRefresh() async throws {
+        defer { try? FileManager.default.removeItem(at: url) }
+        let api = FakePayrollAPI()
+        let connection = PayrollConnection(api: api, store: PayrollImportLedgerStore(url: url))
+        connection.prepare(userID: alice)
+        await connection.refreshStatus()
+        await connection.loadPreview(context: context, scope: scope)
+        connection.confirmImport(context: context, scope: scope)
+        #expect(api.refreshedLinkIDs.isEmpty, "confirming the preview starts no refresh")
+
+        api.paystubs = [stub("s1")]
+        await connection.importIfDue(context: context, scope: scope, force: true)
+        #expect(try paychecks() == 1)
+        #expect(api.refreshedLinkIDs == ["link-1"])
+
+        // The server throttles (or Truv fails): the import still stands.
+        api.refreshError = PayrollConnectError(status: 429, code: "refresh_throttled", message: "x")
+        api.paystubs = [stub("s1"), stub("s2")]
+        await connection.importIfDue(context: context, scope: scope, force: true)
+        #expect(try paychecks() == 2)
+        #expect(api.refreshedLinkIDs == ["link-1", "link-1"])
     }
 
     @Test("account deletion asks the server to forget payroll, best effort, and never waits long")

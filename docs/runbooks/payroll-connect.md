@@ -64,6 +64,27 @@ If the secrets are missing or Truv refuses the key, the server answers 503
 (`not_configured` or `truv_not_configured`). The app then says "Payroll
 connection isn't available right now" and shows no Connect button.
 
+### Cost (Truv dashboard, 2026-11-08)
+
+Self-serve under Billing > Choose plan (use case "Consumer Lending"; no
+sales call needed):
+
+| Plan | Monthly commitment | Per successful payroll connection |
+| --- | --- | --- |
+| Launch | $300 | $30 |
+| Growth | $500 | $25 |
+| Professional | $1,000 | $20 |
+| Professional Plus | $1,500 | $15 |
+
+The monthly fee becomes prepaid credits that expire after each 30-day cycle;
+using them up starts the next cycle (and charge) early. Only successful
+verifications are billed. Refreshes of a report are free for 90 days. Cancel
+by emailing support@truv.com at least 30 days before renewal.
+
+To go live: Truv dashboard > Billing > choose a plan > company details >
+payment, then Development > API keys > production secret, then the
+`supabase secrets set` line above on the Payday project.
+
 ## Rules the code keeps
 
 - An import never makes a second paycheck for a period the person already
