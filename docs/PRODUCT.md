@@ -925,32 +925,13 @@ close that gap; each ships as its own commit series.
   firing and later re-fires doesn't reset its clock. `InsightsView` records
   every currently-showing move id the first time it's ever seen, via a
   `.task(id:)` keyed on the move id list.
-- **Follow-up engine.** `StatsEngine.followUps(ledger:referenceDate:)`
-  checks every ledger entry at least 28 days old and asks one question:
-  since the move was shown, did the recommended slice of nights (a
-  weekday, or doubles) get worked more or less than the OLD pace would
-  have predicted, and did that produce real dollars beyond what the old
-  pace would have. Both a behavior-changed gate (≥1 whole occurrence away
-  from the old-pace projection) and a materiality gate ($50+ dollar gap)
-  have to clear — same silence-over-weak-advice discipline as `moves()`.
-  The target weekday is re-derived from records strictly BEFORE the move
-  was shown (`targetWeekday`), not from current data — what was actually
-  true at the time, matching each move function's own targeting logic.
-  Deliberately uses one uniform dollar metric (net cents per matching
-  night) across all five move types for the follow-up question, even
-  though the original moves justify themselves with different units
-  ($/night, $/hr, tip%) — "did real dollars move in the recommended
-  direction" is honest and comparable regardless of which metric first
-  flagged it.
-- **"SINCE THEN" card.** Renders above MOVE cards in Insights (a verdict
-  on a past recommendation outranks a fresh one). The newest follow-up
-  also feeds the terra prompt as a labeled input, same non-repeating
-  treatment as TOP MOVE.
-- QA-only: `-SeedFollowUpDemo` launch arg / Settings → Developer → "Seed
-  follow-up demo" fabricates an 8-week-before / 5-week-after Friday
-  dataset around a 35-day-old weekdaySwap ledger entry, since exercising
-  a 28-day-old follow-up needs deliberately aged history that
-  `-SeedSampleData`'s small realistic dataset doesn't have.
+- **Follow-ups and the "SINCE THEN" card: REMOVED 2026-11-08.** The card
+  compared a person's pace against a baseline taken from their first weeks
+  in the app, over a span set by a ledger entry they could not see, and
+  added a count effect and a per-day effect into one "would have produced"
+  figure. It could tell a person something false. `followUps`, the Moves
+  engine, and `-SeedFollowUpDemo` are deleted. `MoveLedgerStore` and its
+  sync stay as they are; nothing writes to the ledger now.
 
 ### Phase C: Multiple Jobs (+8) — not started (design already committed, d01e7de)
 ### Phase D: Plan Forward (+6) — not started
@@ -970,12 +951,36 @@ the cross-job comparison") is deferred to the end of Phase D. Partial result
 so far:
 
 - ✅ Move with per-side sample sizes — confirmed (Phase A).
-- ✅ SINCE THEN follow-up with a dollar verdict — confirmed via
-  `-SeedFollowUpDemo` (Phase B): "Since we flagged this, you've worked 2
-  more Fridays than before - bringing in about $407 more than your old
-  pace would have."
+- ~~SINCE THEN follow-up with a dollar verdict~~ — removed 2026-11-08 (see
+  Phase B and "The Insights page" below).
 - ⬜ Plan card projecting a week — not built (Phase D).
 - ⬜ Two-job seed producing the cross-job comparison — not built (Phase C).
+
+## The Insights page (2026-11-08)
+
+Insights is for anyone who gets tips or a share of tips: servers,
+bartenders, food runners, bussers, barbacks. It is built on the one thing
+every one of them logs: shifts, and what each shift paid. A block that
+needs sales, hours or tables appears only for a person who logs them, and
+the page reads as complete without it. Top to bottom, under the job
+picker, the role picker and the basis note:
+
+1. **THIS MONTH.** This calendar month's take-home on the page basis, the
+   Calendar's month query, equal to the chart's bar for the month.
+   "November so far"; the previous month by name when nothing is logged
+   yet this month. The earnings chart sits directly under it.
+2. **WHAT A SHIFT USUALLY PAYS.** The middle-half range per weekday, and
+   the muted "All shifts" row.
+3. **NEXT WEEK.** "About $X", the forecast's track-record line, and the
+   per-day rows.
+4. **HOW IT'S BEEN RUNNING.** The trend and schedule sentences, when they
+   clear twelve shifts a side.
+5. **BY THE NUMBERS.** PER HOUR, TIP PERCENT ("of sales"), DOUBLE DAY and
+   SOLO DAY, each only when its data exists. No counts.
+
+It reports what happened, never what "would have" happened (DESIGN.md
+rule 14). QA: `-SeedShowcase` for the full page, `-SeedTipsOnlyShowcase`
+for the same shifts with no sales, hours or clock times.
 
 ## What NOT to build (the restraint is the product)
 

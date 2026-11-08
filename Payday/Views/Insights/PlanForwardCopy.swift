@@ -19,7 +19,9 @@ import Foundation
 /// ships. It had no caller outside its own test, so it was a second formatter
 /// for [IL-25]'s figure and nothing else.
 enum PlanForwardCopy {
+    /// The amount only: the NEXT WEEK kicker above it already says which
+    /// week, so "Next week:" in front of the number said it twice.
     static func headline(for plan: PlanForward) -> String {
-        "Next week: about \(Money.wholeDollarString(fromCents: plan.projectedTotalCents))."
+        "About \(Money.wholeDollarString(fromCents: plan.projectedTotalCents))"
     }
 }

@@ -87,38 +87,14 @@ struct EarningsChartAdaptiveAxisTests {
 /// one flat array (see InsightsNumbersGrid's own doc comment).
 @Suite("Insights numbers grid")
 struct InsightsNumbersGridTests {
-    private func baseFacts(cashWeekday: CashWeekdayFacts? = nil, lunchDinner: LunchDinnerFacts? = nil, doublesSolo: DoublesSoloFacts? = nil) -> InsightsFacts {
-        var facts = InsightsFacts(shiftCount: 5, lunchDinner: lunchDinner, doublesSolo: doublesSolo)
-        facts.cashWeekday = cashWeekday
-        return facts
+    private func baseFacts(doublesSolo: DoublesSoloFacts? = nil) -> InsightsFacts {
+        InsightsFacts(shiftCount: 5, doublesSolo: doublesSolo)
     }
 
-    /// The HOURLY tile's input, as `InsightsEarnings.hourlyRate(...)` returns
-    /// it: the engine's own blended rate plus the coverage behind it. The tile
-    /// no longer derives anything from `InsightsFacts.rate` — see
-    /// `InsightsNumbersGrid.rows(for:hourly:excluding:)`.
+    /// The PER HOUR tile's input, as `InsightsEarnings.hourlyRate(...)`
+    /// returns it: the engine's own blended rate plus the coverage behind it.
     private func hourlyRate(cents: Int = 4_200, covered: Int = 7, total: Int = 7) -> InsightsEarnings.HourlyRate {
         InsightsEarnings.HourlyRate(rateCents: cents, coveredShiftCount: covered, totalShiftCount: total)
-    }
-
-    private var receiptPerformance: ReceiptPerformanceFacts {
-        ReceiptPerformanceFacts(
-            guestShiftCount: 5,
-            totalGuests: 42,
-            averageSpendPerGuestCents: 2_950,
-            grossTipsPerGuestCents: 600,
-            netTipsPerGuestCents: 520,
-            tableShiftCount: 5,
-            totalTables: 21,
-            estimatedTableShiftCount: 4,
-            averageSpendPerTableCents: 5_900,
-            netTipsPerTableCents: 1_040,
-            averageGuestsPerTable: 2,
-            averageCheckCents: 5_900,
-            guestsPerHour: 1.7,
-            tipOutPercentOfGrossTips: 13.3,
-            topCategories: []
-        )
     }
 
     @Test("empty facts produce no rows")
@@ -126,7 +102,7 @@ struct InsightsNumbersGridTests {
         #expect(InsightsNumbersGrid.rows(for: baseFacts(), hourly: nil).isEmpty)
     }
 
-    @Test("hourly and tip percent share the same row, in order")
+    @Test("per hour and tip percent share the same row, in order")
     func hourlyAndTipPercentRow() {
         var facts = baseFacts()
         facts.sales = SalesFacts(overallTipPercent: 16.7, nightsWithSales: 5, bestWeekday: nil, bestWeekdayTipPercent: nil, bestWeekdayNightCount: nil)
@@ -134,55 +110,29 @@ struct InsightsNumbersGridTests {
         let rows = InsightsNumbersGrid.rows(for: facts, hourly: hourlyRate())
         #expect(rows.count == 1)
         #expect(rows[0].map(\.id) == ["hourly", "tipPercent"])
+        #expect(rows[0][0].label == "PER HOUR")
         #expect(rows[0][0].value == "$42/hr")
-        #expect(rows[0][0].context == "across 7 shifts")
+        #expect(rows[0][0].context == nil)
         #expect(rows[0][1].value == "16.7%")
-        #expect(rows[0][1].context == "of sales · 5 shifts")
-    }
-
-    /// HOURLY is the one tile whose count survives a large sample, because
-    /// what it prints is COVERAGE and not a sample size.
-    ///
-    /// Every other tile drops its count past eight shifts: restating "across
-    /// 160 shifts" on each of them repeats one fact. "across 141 of 160
-    /// shifts" is a different claim — nineteen shifts have no hours logged
-    /// and are therefore in neither half of the division — and it stays
-    /// material at any sample size. `docs/METRICS.md`'s presentation rules
-    /// require it of `MetricID.hourlyRate` specifically.
-    @Test("hourly keeps its coverage at a large sample, while tip percent drops its count")
-    func hourlyKeepsCoverageWhereTipPercentDropsItsCount() {
-        var facts = baseFacts()
-        facts.sales = SalesFacts(overallTipPercent: 16.7, nightsWithSales: 160, bestWeekday: nil, bestWeekdayTipPercent: nil, bestWeekdayNightCount: nil)
-
-        let rows = InsightsNumbersGrid.rows(
-            for: facts,
-            hourly: hourlyRate(cents: 4_200, covered: 141, total: 160)
-        )
-        #expect(rows.count == 1)
-        #expect(rows[0][0].context == "across 141 of 160 shifts")
-        // TIP PERCENT keeps "of sales" - the non-count half of its caption.
         #expect(rows[0][1].context == "of sales")
     }
 
-    /// Full coverage has no shortfall to disclose, so the fraction goes.
-    /// The plain count stays only while the sample is thin (under 8, the
-    /// same bar the other tiles use); at 160 it says nothing new (Tyler,
-    /// 2026-11-08).
-    @Test("hourly drops the count at full coverage once the sample clears 8 shifts")
-    func hourlyFullCoverageDropsTheFraction() {
-        let rows = InsightsNumbersGrid.rows(
-            for: baseFacts(),
-            hourly: hourlyRate(cents: 4_200, covered: 160, total: 160)
-        )
-        #expect(rows[0][0].context == "")
-        let thin = InsightsNumbersGrid.rows(
-            for: baseFacts(),
-            hourly: hourlyRate(cents: 4_200, covered: 7, total: 7)
-        )
-        #expect(thin[0][0].context == "across 7 shifts")
+    /// Re-pinned 2026-11-08 (Insights for anyone who gets tips): a tile
+    /// keeps a context line only when it names a basis different from the
+    /// page's. Counts, coverage fractions and "early read" notes go, at any
+    /// sample size (docs/DESIGN.md rule 13). TIP PERCENT keeps "of sales"
+    /// because a wage is not a tip.
+    @Test("no tile carries a count, at a thin or a large sample; tip percent keeps its basis")
+    func noCountsOnAnyTile() {
+        for (covered, total, nights) in [(141, 160, 160), (7, 7, 5), (2, 2, 2)] {
+            var facts = baseFacts(doublesSolo: DoublesSoloFacts(doubleAverageCents: 51_800, doubleCount: 2, soloAverageCents: 23_800, soloCount: total, doublePerShiftCents: 25_900))
+            facts.sales = SalesFacts(overallTipPercent: 16.7, nightsWithSales: nights, bestWeekday: nil, bestWeekdayTipPercent: nil, bestWeekdayNightCount: nil)
+            let rows = InsightsNumbersGrid.rows(for: facts, hourly: hourlyRate(cents: 4_200, covered: covered, total: total))
+            #expect(rows.flatMap { $0 }.compactMap(\.context) == ["of sales"])
+        }
     }
 
-    @Test("hourly alone still renders, with no tip percent tile beside it")
+    @Test("per hour alone still renders, with no tip percent tile beside it")
     func hourlyAlone() {
         let rows = InsightsNumbersGrid.rows(for: baseFacts(), hourly: hourlyRate())
         #expect(rows.count == 1)
@@ -192,7 +142,7 @@ struct InsightsNumbersGridTests {
     /// The tile is ABSENT when the engine cannot answer, never a fabricated
     /// `$0/hr`. `EarningsResult.hourlyRateCents` is nil without covered
     /// minutes, which is the registry's "nil without coverage".
-    @Test("no hourly tile at all when the engine has no rate to give")
+    @Test("no per hour tile at all when the engine has no rate to give")
     func noHourlyTileWithoutAnEngineAnswer() {
         var facts = baseFacts()
         facts.sales = SalesFacts(overallTipPercent: 16.7, nightsWithSales: 5, bestWeekday: nil, bestWeekdayTipPercent: nil, bestWeekdayNightCount: nil)
@@ -201,77 +151,7 @@ struct InsightsNumbersGridTests {
         #expect(rows.map { $0.map(\.id) } == [["tipPercent"]])
     }
 
-    @Test("receipt performance shows pre-tax spend per guest and estimated tips per table")
-    func receiptPerformanceRow() {
-        var facts = baseFacts()
-        facts.receiptPerformance = receiptPerformance
-
-        let rows = InsightsNumbersGrid.rows(for: facts, hourly: nil)
-
-        #expect(rows.count == 1)
-        #expect(rows[0].map(\.id) == ["spendPerGuest", "tipsPerTable"])
-        #expect(rows[0][0].value == "$29.50")
-        #expect(rows[0][0].context == "pre-tax sales · 5 shifts")
-        #expect(rows[0][1].value == "$10.40")
-        #expect(rows[0][1].context == "net tips · tables estimated on 4 of 5 shifts")
-    }
-
-    @Test("confirmed table metrics disclose a thin shift count")
-    func confirmedTableMetricDisclosesThinSample() {
-        var facts = baseFacts()
-        var confirmed = receiptPerformance
-        confirmed = ReceiptPerformanceFacts(
-            guestShiftCount: confirmed.guestShiftCount,
-            totalGuests: confirmed.totalGuests,
-            averageSpendPerGuestCents: confirmed.averageSpendPerGuestCents,
-            grossTipsPerGuestCents: confirmed.grossTipsPerGuestCents,
-            netTipsPerGuestCents: confirmed.netTipsPerGuestCents,
-            tableShiftCount: 5,
-            totalTables: confirmed.totalTables,
-            estimatedTableShiftCount: 0,
-            averageSpendPerTableCents: confirmed.averageSpendPerTableCents,
-            netTipsPerTableCents: confirmed.netTipsPerTableCents,
-            averageGuestsPerTable: confirmed.averageGuestsPerTable,
-            averageCheckCents: confirmed.averageCheckCents,
-            guestsPerHour: confirmed.guestsPerHour,
-            tipOutPercentOfGrossTips: confirmed.tipOutPercentOfGrossTips,
-            topCategories: confirmed.topCategories
-        )
-        facts.receiptPerformance = confirmed
-
-        let tableTile = InsightsNumbersGrid.rows(for: facts, hourly: nil)[0][1]
-
-        #expect(tableTile.context == "net tips · confirmed tables · 5 shifts")
-    }
-
-    @Test("lunch and dinner always land in the same row, per-shift averages")
-    func lunchDinnerRow() {
-        let facts = baseFacts(lunchDinner: LunchDinnerFacts(lunchCents: 31_800, lunchShiftCount: 2, dinnerCents: 167_500, dinnerShiftCount: 5))
-
-        let rows = InsightsNumbersGrid.rows(for: facts, hourly: nil)
-        #expect(rows.count == 1)
-        let row = rows[0]
-        #expect(row.map(\.id) == ["lunch", "dinner"])
-        #expect(row[0].value == "$159/shift")
-        #expect(row[0].context == "2 shifts · early read")
-        #expect(row[1].value == "$335/shift")
-        #expect(row[1].context == "5 shifts")
-    }
-
-    @Test("lunch and dinner drop their trailing shift count once the sample clears 8 shifts")
-    func lunchDinnerLargeSample() {
-        let facts = baseFacts(lunchDinner: LunchDinnerFacts(lunchCents: 318_000, lunchShiftCount: 20, dinnerCents: 1_675_000, dinnerShiftCount: 50))
-
-        let rows = InsightsNumbersGrid.rows(for: facts, hourly: nil)
-        let row = rows[0]
-        // The count was the only content in these captions - dropping it
-        // leaves nothing else to say, and that's the point: repeating
-        // "across 160 shifts" on every tile said nothing new.
-        #expect(row[0].context == "")
-        #expect(row[1].context == "")
-    }
-
-    @Test("doubles and solo always land in the same row")
+    @Test("double day and solo day always land in the same row")
     func doublesSoloRow() {
         let facts = baseFacts(doublesSolo: DoublesSoloFacts(doubleAverageCents: 51_800, doubleCount: 2, soloAverageCents: 23_800, soloCount: 3, doublePerShiftCents: 25_900))
 
@@ -279,141 +159,18 @@ struct InsightsNumbersGridTests {
         #expect(rows.count == 1)
         let row = rows[0]
         #expect(row.map(\.id) == ["doubles", "solo"])
+        #expect(row[0].label == "DOUBLE DAY")
         #expect(row[0].value == "$259/shift")
-        #expect(row[0].context == "2 double days · early read")
-        #expect(row[1].label == "SOLO")
+        #expect(row[1].label == "SOLO DAY")
         #expect(row[1].value == "$238/shift")
-        #expect(row[1].context == "3 days")
     }
 
-    @Test("doubles and solo drop their trailing count once the sample clears 8")
-    func doublesSoloLargeSample() {
+    /// The tips-only page (no sales, no hours): the doubles pair is the
+    /// whole grid, and nothing is there to read as missing.
+    @Test("a tips-only person gets the doubles pair and nothing else")
+    func tipsOnlyGrid() {
         let facts = baseFacts(doublesSolo: DoublesSoloFacts(doubleAverageCents: 51_800, doubleCount: 10, soloAverageCents: 23_800, soloCount: 30, doublePerShiftCents: 25_900))
-
         let rows = InsightsNumbersGrid.rows(for: facts, hourly: nil)
-        let row = rows[0]
-        #expect(row[0].context == "")
-        #expect(row[1].context == "")
-    }
-
-    @Test("cash nights renders the weekday's blended share, weekday name, and count")
-    func cashNights() {
-        let facts = baseFacts(cashWeekday: CashWeekdayFacts(weekday: 6, sharePercent: 58, restSharePercent: 31, nightCount: 8))
-
-        let rows = InsightsNumbersGrid.rows(for: facts, hourly: nil)
-        #expect(rows.count == 1)
-        #expect(rows[0].map(\.id) == ["cashNights"])
-        #expect(rows[0][0].label == "CASH NIGHTS")
-        #expect(rows[0][0].value == "58%")
-        #expect(rows[0][0].context == "of Friday tips are cash · 8 Fridays")
-    }
-
-    @Test("cash nights is omitted entirely when no weekday qualifies")
-    func cashNightsOmittedWhenAbsent() {
-        let facts = baseFacts()
-        #expect(InsightsNumbersGrid.rows(for: facts, hourly: nil).isEmpty)
-    }
-
-    @Test("start times shows the best window against the worst, counted and hedged when either side is thin")
-    func startTimes() {
-        var facts = baseFacts()
-        facts.startTime = StartTimeFacts(bestStartHour: 11, bestDollarsPerHour: 17, bestShiftCount: 4, worstStartHour: 17, worstDollarsPerHour: 14, worstShiftCount: 2)
-
-        let rows = InsightsNumbersGrid.rows(for: facts, hourly: nil)
-        #expect(rows.count == 1)
-        let tile = rows[0][0]
-        #expect(tile.id == "startTimes")
-        #expect(tile.value.contains("$17/hr"))
-        // Computed the same way production's hourLabel does, so this stays
-        // correct regardless of the test runner's locale/region.
-        let worstHourLabel = Calendar.current.date(bySettingHour: 17, minute: 0, second: 0, of: .now)!.formatted(.dateTime.hour())
-        // The thinner side (2 shifts) is the honesty signal and must survive
-        // in the caption, on top of the existing early-read flag below 3.
-        #expect(tile.context == "vs $14/hr at \(worstHourLabel) · 2 shifts · early read")
-    }
-
-    @Test("start times drops the trailing count once both sides clear 8 shifts")
-    func startTimesLargeSample() {
-        var facts = baseFacts()
-        facts.startTime = StartTimeFacts(bestStartHour: 11, bestDollarsPerHour: 17, bestShiftCount: 40, worstStartHour: 17, worstDollarsPerHour: 14, worstShiftCount: 12)
-
-        let rows = InsightsNumbersGrid.rows(for: facts, hourly: nil)
-        let tile = rows[0][0]
-        let worstHourLabel = Calendar.current.date(bySettingHour: 17, minute: 0, second: 0, of: .now)!.formatted(.dateTime.hour())
-        #expect(tile.context == "vs $14/hr at \(worstHourLabel)")
-    }
-
-    @Test("a metric already explained by a recommendation can be excluded without disturbing the remaining rows")
-    func excludesRedundantMetric() {
-        var facts = baseFacts()
-        let hourly = hourlyRate(cents: 4_200, covered: 12, total: 12)
-        facts.startTime = StartTimeFacts(bestStartHour: 16, bestDollarsPerHour: 48, bestShiftCount: 17, worstStartHour: 10, worstDollarsPerHour: 22, worstShiftCount: 6)
-
-        let rows = InsightsNumbersGrid.rows(for: facts, hourly: hourly, excluding: ["startTimes"])
-
-        #expect(rows.map { $0.map(\.id) } == [["hourly"]])
-    }
-
-    @Test("every populated fact produces its own row, in a stable order")
-    func fullGridOrder() {
-        var facts = baseFacts(
-            cashWeekday: CashWeekdayFacts(weekday: 6, sharePercent: 58, restSharePercent: 31, nightCount: 8),
-            lunchDinner: LunchDinnerFacts(lunchCents: 31_800, lunchShiftCount: 2, dinnerCents: 167_500, dinnerShiftCount: 5),
-            doublesSolo: DoublesSoloFacts(doubleAverageCents: 51_800, doubleCount: 2, soloAverageCents: 23_800, soloCount: 3, doublePerShiftCents: 25_900)
-        )
-        facts.sales = SalesFacts(overallTipPercent: 16.7, nightsWithSales: 5, bestWeekday: nil, bestWeekdayTipPercent: nil, bestWeekdayNightCount: nil)
-        facts.startTime = StartTimeFacts(bestStartHour: 11, bestDollarsPerHour: 17, bestShiftCount: 4, worstStartHour: 17, worstDollarsPerHour: 14, worstShiftCount: 4)
-        facts.receiptPerformance = receiptPerformance
-
-        let rows = InsightsNumbersGrid.rows(for: facts, hourly: hourlyRate())
-        #expect(rows.map { $0.map(\.id) } == [
-            ["hourly", "tipPercent"],
-            ["spendPerGuest", "tipsPerTable"],
-            ["lunch", "dinner"],
-            ["doubles", "solo"],
-            ["cashNights"],
-            ["startTimes"],
-        ])
-    }
-}
-
-@Suite("Insights presentation")
-struct InsightsPresentationTests {
-    @Test("supporting observations keep the comparison but omit the consistency clause")
-    func compactSupportingMove() {
-        let move = Move(
-            id: "doublesVerdict",
-            title: "Doubles, Hour For Hour",
-            body: "Doubles average $38/hr against $42/hr solo across twenty solo shifts. That's held across eleven doubles and twenty solo shifts.",
-            effectSize: 1.4,
-            supportingShiftCount: 11
-        )
-
-        #expect(InsightsPresentation.compactBody(for: move) == "Doubles average $38/hr against $42/hr solo across twenty solo shifts.")
-    }
-
-    @Test("supporting observations preserve a thin-sample warning")
-    func compactSupportingMoveKeepsHedge() {
-        let move = Move(
-            id: "startTimeLeader",
-            title: "4 PM Starts Lead Per Hour",
-            body: "Shifts starting around 4 PM average $48/hr against $22/hr around 10 AM. Only six 10 AM starts to compare against so far.",
-            effectSize: 0.9,
-            supportingShiftCount: 6
-        )
-
-        #expect(InsightsPresentation.compactBody(for: move).contains("Only six 10 AM starts"))
-    }
-
-    // The data-note filter test went with `InsightsPresentation.dataNotes`,
-    // which filtered narration sections for honesty hedges. It had no
-    // production caller — the page has rendered no DATA NOTE section since it
-    // became deterministic — and the narration that produced the sections is
-    // deleted with PR 5 group 2.7 (`docs/METRICS.md` [ID-12] onward).
-
-    @Test("a start-time observation suppresses the duplicate start-time tile")
-    func redundantMetricMapping() {
-        let moves = [Move(id: "startTimeLeader", title: "", body: "", effectSize: 0, supportingShiftCount: 0)]
-        #expect(InsightsPresentation.redundantMetricIDs(for: moves) == ["startTimes"])
+        #expect(rows.map { $0.map(\.id) } == [["doubles", "solo"]])
     }
 }

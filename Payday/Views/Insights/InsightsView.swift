@@ -36,7 +36,6 @@ import SwiftData
 /// than the offending comparison.
 struct InsightsView: View {
     @Environment(\.scenePhase) private var scenePhase
-    @Environment(MoveLedgerStore.self) private var moveLedgerStore
     @Environment(PolicyStore.self) private var policyStore
     /// The other representation. `InsightsEarnings.build` picks one, and it
     /// has to be the same one Dashboard picks: group 2.6's whole point is
@@ -84,12 +83,8 @@ struct InsightsView: View {
         // could move a number — the policies, the payroll zone, a
         // `dataRevision` counter. Every one of those is inside
         // `SnapshotStamp.digest` now, a SHA-256 over the complete input set.
-        // What is left is genuinely presentational: which civil day it is,
-        // and how many Moves have been shown.
-        let selection = InsightsSelection(
-            day: currentDay,
-            ledgerRevision: moveLedgerStore.revision
-        )
+        // What is left is genuinely presentational: which civil day it is.
+        let selection = InsightsSelection(day: currentDay)
         // ONE grouping and ONE snapshot built from it, over the WHOLE history
         // — the recent-window scoping this page applies is a query argument,
         // never a property of the dataset, because the ledger allocates the
@@ -125,7 +120,6 @@ struct InsightsView: View {
             ? renderCache!.facts
             : InsightsPageFacts(
                 dataset: dataset,
-                ledger: moveLedgerStore.firstShownAt,
                 payrollTimeZone: payrollTimeZone,
                 calendar: payrollCalendar,
                 now: currentDay
@@ -151,9 +145,6 @@ struct InsightsView: View {
             }
             .background(PaydayColor.background)
             .navigationTitle("Insights")
-            .task(id: pageFacts.moves.map(\.id)) {
-                moveLedgerStore.recordShown(pageFacts.moves)
-            }
             .sheet(isPresented: $isShowingBackfillSheet) {
                 BackfillSheet().paydayAppearance()
             }
@@ -217,44 +208,21 @@ struct InsightsView: View {
         }
     }
 
+    /// Five blocks, in this order: THIS MONTH (with the chart), WHAT A
+    /// SHIFT USUALLY PAYS, NEXT WEEK, HOW IT'S BEEN RUNNING, BY THE
+    /// NUMBERS. Built on the one thing every tipped worker logs, shifts and
+    /// what each paid; a block that needs sales, hours or tables is simply
+    /// absent for a person who does not log them. Insights reports what
+    /// happened, never what "would have" happened (docs/DESIGN.md rule 14).
     private func resultList(_ facts: InsightsFacts, pageFacts: InsightsPageFacts, roleOptions: [String], jobOptions: [JobPolicy]) -> some View {
-        let moves = pageFacts.moves
-        let followUps = pageFacts.followUps
-        let chartFacts = pageFacts.chartFacts
-        let plan = pageFacts.plan
+        let numberRows = InsightsNumbersGrid.rows(for: facts, hourly: pageFacts.hourly)
         return ScrollViewReader { proxy in
         ScrollView {
             VStack(spacing: PaydaySpacing.p16) {
-                let shownFollowUps = Array(followUps.prefix(1))
-                let primaryMove = moves.first
-                let supportingMoves = Array(moves.dropFirst().prefix(2))
-                let excludedTileIDs = InsightsPresentation.redundantMetricIDs(for: moves)
-                let numberRows = InsightsNumbersGrid.rows(
-                    for: facts,
-                    hourly: pageFacts.hourly,
-                    excluding: excludedTileIDs
-                )
-
-                // The basis, said ONCE, above every figure it governs.
-                //
-                // This is the plan's rule ("every comparison declares its
-                // basis") satisfied by declaring it for the page, because the
-                // page is on one basis by construction — `StatsEngine` reads
-                // a shift's money in exactly one place and the whole engine
-                // was handed one pricing. Thirty tiles each restating it
-                // reads as a form letter and eats the first screen, which is
-                // the same call this screen already made for the
-                // interquartile qualifier two sections down ("Said once here
-                // instead of five times below").
-                //
-                // The four tiles that are deliberately NOT on the page basis
-                // — TIP PERCENT, SPEND / GUEST, TIPS / TABLE, CASH NIGHTS —
-                // each name theirs in their own caption, because a wage is
-                // not a tip and folding one in would make "tipped 16.7% of
-                // sales" false. See `InsightsEarnings`' header.
                 jobPicker(jobOptions)
                 rolePicker(roleOptions)
 
+                // The basis, said ONCE, above every figure it governs.
                 if let note = pageFacts.basis.note {
                     Text(note)
                         .font(PaydayFont.caption)
@@ -262,150 +230,57 @@ struct InsightsView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
-                // Reliability leads the page. A server already knows the
-                // SHAPE of their week — that Friday is good and Monday is
-                // dead. What no amount of experience tells them is the
-                // SPREAD, which is the number anyone budgeting on variable
-                // income actually needs. It is also true from the first
-                // qualifying weekday and never false-alarms, which is why
-                // it holds the lead slot rather than the trend.
+                // 1. THIS MONTH, then the chart whose bar it equals.
+                VStack(alignment: .leading, spacing: PaydaySpacing.p12) {
+                    if let month = pageFacts.month, let text = month.figure.wholeDollarText {
+                        VStack(alignment: .leading, spacing: 2) {
+                            kicker("THIS MONTH")
+                            Text(text)
+                                .font(PaydayFont.displayLarge)
+                                .monospacedDigit()
+                                .contentTransition(.numericText())
+                                .foregroundStyle(PaydayColor.textPrimary)
+                            Text(month.label)
+                                .font(PaydayFont.caption)
+                                .foregroundStyle(PaydayColor.textSecondary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityElement(children: .combine)
+                    }
+                    // Chart card: the one visual, and this screen's object.
+                    // The chart owns its own label (it doubles as the scrub
+                    // readout).
+                    NightlyEarningsChart(facts: pageFacts.chartFacts)
+                        .paydayCard()
+                }
+                Divider()
+
+                // 2. WHAT A SHIFT USUALLY PAYS. The spread, which is what
+                // anyone budgeting on variable income needs.
                 if let reliability = pageFacts.reliability, reliability.hasVisibleRanges {
                     reliabilitySection(reliability)
                     Divider()
                 }
 
-                // Level over time. Often correctly absent: it demands a
-                // fully-covered prior window, twelve shifts a side, a
-                // stable-enough schedule, and both a materiality and a
-                // precision gate. See StatsEngine.earningTrend.
-                if let trend = pageFacts.trend {
-                    trendSection(trend)
-                    Divider()
-                }
-
-                // Change — something that MOVED outranks a standing
-                // pattern, since a shift in the data is the newer fact. Only
-                // the largest change leads; the full ledger still informs
-                // future ranking without turning this into a feed.
-                ForEach(shownFollowUps) { followUp in
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("SINCE THEN")
-                            .font(PaydayFont.caption2)
-                            .tracking(0.8)
-                            .foregroundStyle(PaydayColor.primary)
-                        Text(followUp.title)
-                            .font(PaydayFont.headline)
-                            .foregroundStyle(PaydayColor.textPrimary)
-                        Text(followUp.body)
-                            .font(PaydayFont.bodyRegular)
-                            .foregroundStyle(PaydayColor.textPrimary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    Divider()
-                }
-
-                // One finding owns the top of the screen. Moves are already
-                // ranked by strength of evidence; stating that hierarchy
-                // explicitly is easier to scan than three equally loud essays.
-                // The header describes rather than instructs — this page
-                // reports what the data shows and leaves the decision to the
-                // reader (see StatsEngine.moves()).
-                if let primaryMove {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("WHAT STANDS OUT")
-                            .font(PaydayFont.caption2)
-                            .tracking(0.8)
-                            .foregroundStyle(PaydayColor.primary)
-                        Text(primaryMove.title)
-                            .font(PaydayFont.title3)
-                            .foregroundStyle(PaydayColor.textPrimary)
-                        Text(primaryMove.body)
-                            .font(PaydayFont.bodyRegular)
-                            .foregroundStyle(PaydayColor.textPrimary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    Divider()
-                }
-
-                if !supportingMoves.isEmpty {
+                // 3. NEXT WEEK. A description of the coming week at the
+                // reader's own rhythm, not a schedule to follow.
+                if let plan = pageFacts.plan {
                     VStack(alignment: .leading, spacing: PaydaySpacing.p12) {
-                        Text("OTHER SIGNALS")
-                            .font(PaydayFont.caption2)
-                            .tracking(0.8)
-                            .foregroundStyle(PaydayColor.primary)
-                        ForEach(Array(supportingMoves.enumerated()), id: \.element.id) { index, move in
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(move.title)
-                                    .font(PaydayFont.headline)
-                                    .foregroundStyle(PaydayColor.textPrimary)
-                                Text(InsightsPresentation.compactBody(for: move))
-                                    .font(PaydayFont.subheadline)
-                                    .foregroundStyle(PaydayColor.textPrimary)
+                        VStack(alignment: .leading, spacing: 2) {
+                            kicker("NEXT WEEK")
+                            Text(PlanForwardCopy.headline(for: plan))
+                                .font(PaydayFont.displayLarge)
+                                .monospacedDigit()
+                                .contentTransition(.numericText())
+                                .foregroundStyle(PaydayColor.textPrimary)
+                            // The forecast's own track record: the one
+                            // warning about this number.
+                            if let accuracy = pageFacts.forecastAccuracy {
+                                Text(RevealCopy.forecastAccuracyLine(accuracy))
+                                    .font(PaydayFont.caption)
+                                    .foregroundStyle(PaydayColor.textSecondary)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                             }
-                            if index < supportingMoves.count - 1 {
-                                Divider()
-                            }
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    Divider()
-                }
-
-                // Deterministic metrics render immediately. Exact facts that
-                // already appear in a Move are omitted here so the user never
-                // has to decode the same 4 PM comparison twice.
-                if !numberRows.isEmpty {
-                    VStack(alignment: .leading, spacing: PaydaySpacing.p12) {
-                        Text("AT A GLANCE")
-                            .font(PaydayFont.caption2)
-                            .tracking(0.8)
-                            .foregroundStyle(PaydayColor.primary)
-                        VStack(spacing: PaydaySpacing.p16) {
-                            ForEach(numberRows, id: \.first?.id) { row in
-                                HStack(spacing: PaydaySpacing.p16) {
-                                    ForEach(row) { tile in
-                                        statTile(tile)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    Divider()
-                }
-
-                // Chart card — the one visual, and this screen's object: it
-                // keeps its card while everything else here goes flat. The
-                // chart owns its own label (it doubles as the scrub
-                // readout), so no separate header here.
-                NightlyEarningsChart(facts: chartFacts)
-                    .paydayCard()
-
-                // A description of the week ahead at the reader's existing
-                // rhythm, not a schedule to follow: each weekday and amount
-                // gets its own row so the total can be checked at a glance
-                // and sample sizes remain explicit. The optional-pickup row
-                // was removed — suggesting an extra shift is the one thing
-                // on this page that told the reader what to do.
-                if let plan {
-                    VStack(alignment: .leading, spacing: PaydaySpacing.p12) {
-                        Text("THE WEEK AHEAD")
-                            .font(PaydayFont.caption2)
-                            .tracking(0.8)
-                            .foregroundStyle(PaydayColor.primary)
-                        Text(PlanForwardCopy.headline(for: plan))
-                            .font(PaydayFont.headline)
-                            .foregroundStyle(PaydayColor.textPrimary)
-                        // The forecast's own track record, attached to the
-                        // forecast rather than given its own section: it is
-                        // a fact about the estimate, not about the reader.
-                        if let accuracy = pageFacts.forecastAccuracy {
-                            Text(RevealCopy.forecastAccuracyLine(accuracy))
-                                .font(PaydayFont.caption)
-                                .foregroundStyle(PaydayColor.textSecondary)
-                                .frame(maxWidth: .infinity, alignment: .leading)
                         }
                         VStack(spacing: PaydaySpacing.p12) {
                             ForEach(plan.nights, id: \.weekday) { night in
@@ -417,10 +292,29 @@ struct InsightsView: View {
                     Divider()
                 }
 
-                // No DATA NOTE section, no spinner, no error caption: this
-                // page is entirely deterministic and renders the same offline
-                // as on. PR 5 group 2.7 deleted the narration service rather
-                // than leaving it dormant on disk — see this view's header.
+                // 4. HOW IT'S BEEN RUNNING. Often correctly absent: it needs
+                // twelve shifts a side and names both windows. See
+                // StatsEngine.earningTrend.
+                if let trend = pageFacts.trend {
+                    trendSection(trend)
+                    Divider()
+                }
+
+                // 5. BY THE NUMBERS. Each tile only when its data exists.
+                if !numberRows.isEmpty {
+                    VStack(alignment: .leading, spacing: PaydaySpacing.p12) {
+                        kicker("BY THE NUMBERS")
+                        VStack(spacing: PaydaySpacing.p16) {
+                            ForEach(numberRows, id: \.first?.id) { row in
+                                HStack(alignment: .top, spacing: PaydaySpacing.p16) {
+                                    ForEach(row) { tile in
+                                        statTile(tile)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
 
                 Color.clear.frame(height: PaydaySpacing.p8).id("insights-bottom")
             }
@@ -439,8 +333,15 @@ struct InsightsView: View {
         }
     }
 
-    /// One tile in THE NUMBERS grid: a green uppercase label, a big
-    /// monospaced value, and a caption context line underneath.
+    private func kicker(_ text: String) -> some View {
+        Text(text)
+            .font(PaydayFont.caption2)
+            .tracking(0.8)
+            .foregroundStyle(PaydayColor.primary)
+    }
+
+    /// One tile in BY THE NUMBERS: a green uppercase label, a big
+    /// monospaced value, and a basis line only when the tile names its own.
     private func statTile(_ tile: InsightsNumberTile) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(tile.label)
@@ -453,10 +354,12 @@ struct InsightsView: View {
                 .monospacedDigit()
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
-            Text(tile.context)
-                .font(PaydayFont.caption2)
-                .foregroundStyle(PaydayColor.textSecondary)
-                .lineLimit(2)
+            if let context = tile.context {
+                Text(context)
+                    .font(PaydayFont.caption2)
+                    .foregroundStyle(PaydayColor.textSecondary)
+                    .lineLimit(2)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .combine)
@@ -467,7 +370,7 @@ struct InsightsView: View {
     /// with "Half your …", which read as a form letter and ate the whole
     /// first screen. The qualifier belongs in the subhead, said once.
     ///
-    /// Deliberately the same row shape as THE WEEK AHEAD below (see
+    /// Deliberately the same row shape as NEXT WEEK below (see
     /// planNightRow): label and sample on the left, the number on the
     /// right, monospaced so the column lines up.
     private func reliabilitySection(_ reliability: StatsEngine.ReliabilityFacts) -> some View {
@@ -479,10 +382,7 @@ struct InsightsView: View {
                 // come in under the low number. You can count on a floor;
                 // you cannot count on a middle. This header describes the
                 // range rather than promising something about it.
-                Text("WHAT A SHIFT USUALLY PAYS")
-                    .font(PaydayFont.caption2)
-                    .tracking(0.8)
-                    .foregroundStyle(PaydayColor.primary)
+                kicker("WHAT A SHIFT USUALLY PAYS")
                 // Said once here instead of five times below. One
                 // sentence (Tyler, 2026-11-08: fewer words).
                 Text("Half your shifts land in these ranges.")
@@ -563,10 +463,7 @@ struct InsightsView: View {
     /// together is the exact conflation the stratification prevents.
     private func trendSection(_ trend: StatsEngine.EarningTrend) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("HOW IT'S BEEN RUNNING")
-                .font(PaydayFont.caption2)
-                .tracking(0.8)
-                .foregroundStyle(PaydayColor.primary)
+            kicker("HOW IT'S BEEN RUNNING")
             Text(RevealCopy.trendLine(trend))
                 .font(PaydayFont.bodyRegular)
                 .foregroundStyle(PaydayColor.textPrimary)
@@ -681,8 +578,10 @@ struct InsightsPageFacts: SnapshotFacts {
     /// flagged the same way the whole-history completeness gate is.
     let hourly: InsightsEarnings.HourlyRate?
     let facts: InsightsFacts?
-    let moves: [Move]
-    let followUps: [FollowUp]
+    /// THIS MONTH: this calendar month's figure on the page basis, or the
+    /// previous month's when nothing is logged yet this month. Nil only
+    /// when there is no snapshot.
+    let month: InsightsMonthFigure?
     /// Full history, one engine query per bar. NightlyEarningsChart owns
     /// progressive aggregation, so more history produces fewer, more
     /// meaningful weekly/monthly/yearly bars instead of an ever-denser row
@@ -733,7 +632,6 @@ struct InsightsPageFacts: SnapshotFacts {
     ///     one shift and the pricing map misses.
     init(
         dataset: InsightsEarnings.Dataset,
-        ledger: [String: Date],
         payrollTimeZone: TimeZone,
         calendar: Calendar,
         now: Date = .now
@@ -767,8 +665,12 @@ struct InsightsPageFacts: SnapshotFacts {
                 in: payrollTimeZone
             )
             : nil
-        moves = statsEngine.moves(referenceDate: now)
-        followUps = statsEngine.followUps(ledger: ledger, referenceDate: now)
+        month = InsightsMonthFigure(
+            snapshot: snapshot,
+            today: CivilDay(now, in: payrollTimeZone),
+            timeZone: payrollTimeZone,
+            metric: basis.chartMetric
+        )
         chartFacts = EarningsChartFacts(
             wholeOf: snapshot,
             timeZone: payrollTimeZone,
@@ -794,12 +696,9 @@ struct InsightsPageFacts: SnapshotFacts {
 ///
 /// `day` because every window on this page (the 180-day facts window, the
 /// trend's two eight-week halves, the forecast's twelve weeks, the plan's
-/// coming week) is measured back from today. `ledgerRevision` because which
-/// Moves have already been SHOWN decides which follow-ups exist, and that is
-/// a record of what the person has seen rather than an input to any number.
+/// coming week) is measured back from today.
 private struct InsightsSelection: Hashable {
     let day: Date
-    let ledgerRevision: Int
 }
 
 private struct InsightsCacheIdentity: Hashable {
@@ -837,30 +736,9 @@ private struct InsightsRenderCache {
     let facts: InsightsPageFacts
 }
 
-/// Page-level presentation rules that keep Insights decisive without moving
-/// any arithmetic out of StatsEngine. Internal (rather than private) so the
-/// anti-duplication and caveat filters can be tested directly.
+/// Page-level presentation helpers. Internal (rather than private) so they
+/// can be tested directly.
 enum InsightsPresentation {
-    static func redundantMetricIDs(for moves: [Move]) -> Set<String> {
-        var result: Set<String> = []
-        if moves.contains(where: { $0.id == "startTimeLeader" }) {
-            result.insert("startTimes")
-        }
-        return result
-    }
-
-    /// Supporting signals need the comparison and any honesty hedge, not a
-    /// second annual projection beneath the fully explained primary Move.
-    static func compactBody(for move: Move) -> String {
-        let parts = move.body.components(separatedBy: ". ")
-        guard let first = parts.first, !first.isEmpty else { return move.body }
-        var result = sentence(first)
-        if let hedge = parts.dropFirst().first(where: { $0.hasPrefix("Only ") }) {
-            result += " \(sentence(hedge))"
-        }
-        return result
-    }
-
     static func weekdayName(_ weekday: Int) -> String {
         guard Calendar.current.weekdaySymbols.indices.contains(weekday - 1) else { return "Shift" }
         return Calendar.current.weekdaySymbols[weekday - 1]
@@ -873,10 +751,42 @@ enum InsightsPresentation {
         let name = weekdayName(weekday)
         return count == 1 ? "Based on 1 \(name)" : "Based on \(count) \(name)s"
     }
+}
 
-    private static func sentence(_ text: String) -> String {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let last = trimmed.last, !".!?".contains(last) else { return trimmed }
-        return trimmed + "."
+/// THIS MONTH's one number and its label.
+///
+/// The SAME query the Calendar uses for its month figure,
+/// `snapshot.range(month.range)`, read through the page's chart metric, so
+/// the number is the cents the chart would draw for that month on the same
+/// basis. The month shown is the latest month with a shift on or before
+/// today. "November so far" while that is the open month, clamped to today so
+/// a shift logged ahead for a later day does not count yet. By name
+/// ("October", or "October 2025" when it is not this year's) when nothing is
+/// logged yet this month, so the first days of a month, or a break of a few
+/// months, never lead the page with $0. Nil when no shift is on or before
+/// today.
+struct InsightsMonthFigure: Equatable {
+    let month: YearMonth
+    let figure: EarningsFigure
+    let label: String
+
+    init?(snapshot: EarningsSnapshot?, today: CivilDay, timeZone: TimeZone, metric: EarningsChartMetric) {
+        guard let snapshot,
+              let latestWorkDay = snapshot.shifts.map(\.workDay).filter({ $0 <= today }).max()
+        else { return nil }
+        let current = YearMonth(today)
+        let shown = YearMonth(latestWorkDay)
+        let isOpen = shown == current
+        let firstDay = shown.firstDay.date(in: timeZone)
+        let name = firstDay.formatted(Date.FormatStyle(timeZone: timeZone).month(.wide))
+        month = shown
+        figure = metric.figure(snapshot.range(shown.range, asOf: isOpen ? today : nil))
+        if isOpen {
+            label = "\(name) so far"
+        } else if shown.year == current.year {
+            label = name
+        } else {
+            label = firstDay.formatted(Date.FormatStyle(timeZone: timeZone).month(.wide).year())
+        }
     }
 }

@@ -137,9 +137,6 @@ struct SettingsView: View {
                     Button("Seed sample data") {
                         DebugSeeder.seedSampleData(scheduleStore: scheduleStore, insightsStore: insightsStore)
                     }
-                    Button("Seed follow-up demo") {
-                        DebugSeeder.seedFollowUpDemoData(insightsStore: insightsStore, moveLedgerStore: moveLedgerStore)
-                    }
                     Button("Clear all data", role: .destructive) {
                         DebugSeeder.clearAll(scheduleStore: scheduleStore, insightsStore: insightsStore, moveLedgerStore: moveLedgerStore, policyStore: policyStore)
                     }
