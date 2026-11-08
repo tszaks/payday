@@ -46,6 +46,14 @@ final class PaydayCloudState {
 
     var isSynchronizing: Bool { isSyncing }
 
+    /// Whether a call to our own server can be made now: signed in, past the
+    /// gate, and not the offline UI-test launch. "Connect payroll" reads this
+    /// to disable itself with a reason instead of failing on tap.
+    var canReachServer: Bool {
+        guard case .ready = phase else { return false }
+        return !isOfflineUITest
+    }
+
     init(client: SupabaseClient = PaydaySupabase.client) {
         self.client = client
         self.migrationService = PaydayMigrationService(client: client)
@@ -547,6 +555,7 @@ struct PaydayCloudGate<Content: View>: View {
             // policies; without this the wage line would be missing from
             // every total until the next sync happened to fire.
             adoptPolicyInputs()
+            await importPayrollIfDue()
         }
         .onChange(of: cloudState.phase) { _, newPhase in
             // The quiz answers exist only to reach a session. Once there is
@@ -558,7 +567,10 @@ struct PaydayCloudGate<Content: View>: View {
             // Background launches are precious battery/network time. Local
             // writes remain durable and sync on the next active foreground.
             guard newPhase == .active else { return }
-            Task { await syncIfReady() }
+            Task {
+                await syncIfReady()
+                await importPayrollIfDue()
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: ModelContext.didSave)) { _ in
             // BEFORE the queue call, not inside it: `queueSyncAfterLocalChange`
@@ -590,6 +602,21 @@ struct PaydayCloudGate<Content: View>: View {
             minimumInterval: minimumInterval
         )
         adoptPolicyInputs()
+    }
+
+    /// "Connect payroll"'s app-open import. Spaced six hours apart by
+    /// `PayrollConnection`, and a no-op for anyone who never connected or
+    /// never confirmed a first import. After the sync, so a match against a
+    /// paycheck typed on another device sees that paycheck.
+    private func importPayrollIfDue() async {
+        guard scenePhase == .active, cloudState.canReachServer else { return }
+        let connection = PayrollConnection.shared
+        connection.prepare(userID: PaydaySyncState.registeredUserID)
+        await connection.importIfDue(
+            context: modelContext,
+            scope: PayrollImportScope(policyStore: policyStore, scheduleStore: scheduleStore),
+            onWrite: { PayrollConnection.rescheduleReminders(context: modelContext, preferencesStore: preferencesStore, scheduleStore: scheduleStore) }
+        )
     }
 
     /// Run after every sync, not only at launch.
