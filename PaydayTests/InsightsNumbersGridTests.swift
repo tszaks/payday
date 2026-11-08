@@ -164,16 +164,22 @@ struct InsightsNumbersGridTests {
         #expect(rows[0][1].context == "of sales")
     }
 
-    /// Full coverage has no shortfall to disclose, so the fraction goes and
-    /// the plain count remains. "160 of 160 shifts" is a sentence that adds
-    /// no fact.
-    @Test("hourly states a plain count when the rate speaks for every shift")
+    /// Full coverage has no shortfall to disclose, so the fraction goes.
+    /// The plain count stays only while the sample is thin (under 8, the
+    /// same bar the other tiles use); at 160 it says nothing new (Tyler,
+    /// 2026-11-08).
+    @Test("hourly drops the count at full coverage once the sample clears 8 shifts")
     func hourlyFullCoverageDropsTheFraction() {
         let rows = InsightsNumbersGrid.rows(
             for: baseFacts(),
             hourly: hourlyRate(cents: 4_200, covered: 160, total: 160)
         )
-        #expect(rows[0][0].context == "across 160 shifts")
+        #expect(rows[0][0].context == "")
+        let thin = InsightsNumbersGrid.rows(
+            for: baseFacts(),
+            hourly: hourlyRate(cents: 4_200, covered: 7, total: 7)
+        )
+        #expect(thin[0][0].context == "across 7 shifts")
     }
 
     @Test("hourly alone still renders, with no tip percent tile beside it")

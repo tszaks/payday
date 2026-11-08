@@ -454,7 +454,7 @@ struct LogShiftFactsTests {
             calendars: sundayStartPolicies().calendars
         )
         let facts = draftFacts(policies: assumed)
-        #expect(facts.total.caption == "Wages estimated from your current rate")
+        #expect(facts.total.caption == nil)
     }
 
     @Test("the $/hr line is the engine's hourlyRate, not the view's Double division")

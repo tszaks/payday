@@ -49,9 +49,25 @@ enum TakeHomeCopy {
         guard let caption = net.caption else { return line }
         return line + " · " + caption.prefix(1).lowercased() + caption.dropFirst()
     }
+
+    /// Payday card, under the check figure, until there are enough stubs
+    /// for a take-home line: "Before tax", plus " · " and the gross
+    /// figure's caption when it warns (a partial period's missing wages).
+    /// The card keeps one line (Tyler, 2026-11-08), so the warning rides
+    /// on it rather than taking a second: the card reports the period that
+    /// just closed while the hero above may already describe the new one,
+    /// so nothing else on screen says what this figure is missing (Codex
+    /// on PR #170).
+    static func paydayBeforeTaxLine(_ gross: EarningsFigure) -> String {
+        guard let caption = gross.caption else { return "Before tax" }
+        return "Before tax · " + caption.prefix(1).lowercased() + caption.dropFirst()
+    }
 }
 
 extension DashboardFacts {
     var heroCheckRows: [BreakdownRow] { TakeHomeCopy.checkRows(gross: heroCheckGross, net: heroCheckNet) }
     var paydayNetLine: String? { TakeHomeCopy.paydayNetLine(predictedPaycheckNet) }
+    /// The payday card's one line: the take-home when it exists (it carries
+    /// the gross caption itself), otherwise "Before tax" with that caption.
+    var paydayCardLine: String { paydayNetLine ?? TakeHomeCopy.paydayBeforeTaxLine(predictedPaycheck) }
 }

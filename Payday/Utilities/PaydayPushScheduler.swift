@@ -68,8 +68,8 @@ import UserNotifications
 ///    through payroll. The Dashboard card renders that fallback today (group
 ///    2.1's call, [DB-22]); this refuses to put it on a lock screen.
 ///
-/// `.estimated` DOES speak, because it has a caption that reads as a
-/// sentence, and it carries it.
+/// `.estimated` DOES speak. Since 2026-11-08 it has no caption (the
+/// estimate is disclosed in Settings only), so it reads like `.complete`.
 ///
 /// ## A policy edit is a reschedule trigger, because the figure is policy-dependent
 ///
@@ -403,9 +403,9 @@ enum PaydayPushScheduler {
         // The caption WINS over the basis when there is one: a completeness
         // disclosure outranks restating a formula the person can read in the
         // app, and a lock-screen body that runs to three sentences is a body
-        // nobody finishes. Only `.estimated` reaches here with a caption —
-        // `.partial` was refused above — and its caption already reads as a
-        // sentence. Verbatim, with no terminal period bolted on: the caption
+        // nobody finishes. `.partial` was refused above and `.estimated` has
+        // no caption since 2026-11-08, so today this is the basis line; a
+        // future caption would read as a sentence. Verbatim, with no terminal period bolted on: the caption
         // is `CompletenessCopy`'s copy and this is not the file that owns
         // it. A screen renders the same string as a caption line, so the
         // wording a person reads on the lock screen and the wording under

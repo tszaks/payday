@@ -76,7 +76,7 @@ public enum MetricID: String, CaseIterable, Codable, Sendable {
     /// through payroll, so cash only enters the line when no credit or tip share was logged at all.
     /// **Basis:** pay period.
     /// **Missing data:** none.
-    /// **Labels:** "Your check's tips line".
+    /// **Labels:** "Expected".
     case expectedPaycheckTipsLine
 
     /// **Definition:** expectedPaycheckTipsLine + gratuityFees + regularWages + overtimeWages
@@ -242,7 +242,7 @@ public enum MetricID: String, CaseIterable, Codable, Sendable {
         case .overtimeWages:
             return ["Overtime"]
         case .expectedPaycheckTipsLine:
-            return ["Your check's tips line"]
+            return ["Expected"]
         case .expectedPaycheckGross:
             return ["Expected", "On your check, before tax"]
         case .observedPaidTips:

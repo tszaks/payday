@@ -73,6 +73,14 @@ the rule is being applied wrong. Look at the render.
     Every figure on the card face must reconcile to the hero above it. A closed
     drawer showing gross figures that sum to more than the total they sit under
     is a card arguing with itself.
+13. **One number, one label.** A line under a number only if it warns about
+    THAT number and the person can act on it from that screen. No counts. No
+    formulas. Nothing that the screen behind, or the row below, already says.
+    So "wages missing for 1 shift" stays (log the hours); "Wages estimated
+    from your current rate" lives in Settings only, next to the prompt that
+    clears it; "N shifts" goes once the sample is no longer thin. (Tyler,
+    2026-11-08, after the paycheck sheet stacked a kicker, an explainer, a
+    labelled expectation and a second "Expected" around one field.)
 
 ## Implementation Plan
 

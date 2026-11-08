@@ -418,7 +418,9 @@ enum InsightsEarnings {
         let totalShiftCount: Int
 
         /// "across 4 of 5 shifts", or "across 5 shifts" when the rate speaks
-        /// for all of them.
+        /// for all of them and the sample is still thin. With full coverage
+        /// at `InsightsNumbersGrid.minimumShiftsForFullSample` or more, empty:
+        /// the count is no longer a warning (Tyler, 2026-11-08).
         ///
         /// `docs/METRICS.md`'s presentation rules say `.partial` "makes $/hr
         /// show 'N of M shifts'". With full coverage, "5 of 5 shifts" is a
@@ -427,6 +429,7 @@ enum InsightsEarnings {
         /// `HistoryEarnings.hourlyRateCaption` applies to the same metric.
         var coverage: String {
             guard coveredShiftCount < totalShiftCount else {
+                guard coveredShiftCount < InsightsNumbersGrid.minimumShiftsForFullSample else { return "" }
                 return "across \(CompletenessCopy.shiftCount(coveredShiftCount))"
             }
             return "across \(coveredShiftCount) of \(CompletenessCopy.shiftCount(totalShiftCount))"
@@ -506,10 +509,9 @@ enum InsightsBasis: Equatable {
         switch self {
         case .unavailable:
             return nil
-        case .earnedIncome(let assumed):
-            let base = "Every figure below includes your hourly wages."
-            guard assumed, let caption = CompletenessCopy.caption(.estimated) else { return base }
-            return "\(base) \(caption)."
+        case .earnedIncome:
+            // The "estimated" sentence went to Settings (Tyler, 2026-11-08).
+            return "Every figure below includes your hourly wages."
         case .nonWageEarnings(.wagesOff):
             return "Every figure below is tips only."
         case .nonWageEarnings(.incomplete(let missingHours, let missingRate)):

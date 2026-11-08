@@ -473,10 +473,8 @@ extension PeriodsView {
                         .foregroundStyle(PaydayColor.textSecondary)
                 }
             }
+            // No "N shifts" beside the figure (Tyler, 2026-11-08: no counts).
             Spacer(minLength: 0)
-            Text(facts.yearToDateShiftCountText)
-                .font(PaydayFont.caption)
-                .foregroundStyle(PaydayColor.textSecondary)
         }
         .padding(.vertical, PaydaySpacing.p12)
         .accessibilityElement(children: .combine)

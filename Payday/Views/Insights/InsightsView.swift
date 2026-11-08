@@ -406,12 +406,6 @@ struct InsightsView: View {
                                 .font(PaydayFont.caption)
                                 .foregroundStyle(PaydayColor.textSecondary)
                                 .frame(maxWidth: .infinity, alignment: .leading)
-                            if let biasLine = RevealCopy.forecastBiasLine(accuracy) {
-                                Text(biasLine)
-                                    .font(PaydayFont.caption)
-                                    .foregroundStyle(PaydayColor.textSecondary)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                            }
                         }
                         VStack(spacing: PaydaySpacing.p12) {
                             ForEach(plan.nights, id: \.weekday) { night in
@@ -489,11 +483,9 @@ struct InsightsView: View {
                     .font(PaydayFont.caption2)
                     .tracking(0.8)
                     .foregroundStyle(PaydayColor.primary)
-                // Said once here instead of five times below. The second
-                // sentence exists because the first one raises the obvious
-                // question and leaving it unanswered invites reading the
-                // low number as a guarantee.
-                Text("Half your shifts land in these ranges. A quarter come in under the low end.")
+                // Said once here instead of five times below. One
+                // sentence (Tyler, 2026-11-08: fewer words).
+                Text("Half your shifts land in these ranges.")
                     .font(PaydayFont.subheadline)
                     .foregroundStyle(PaydayColor.textSecondary)
             }
@@ -522,15 +514,17 @@ struct InsightsView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func typicalRangeRow(label: String, basis: String, range: StatsEngine.TypicalRange, isMuted: Bool = false) -> some View {
+    private func typicalRangeRow(label: String, basis: String?, range: StatsEngine.TypicalRange, isMuted: Bool = false) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: PaydaySpacing.p12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(label)
                     .font(PaydayFont.subheadlineSemibold)
                     .foregroundStyle(isMuted ? PaydayColor.textSecondary : PaydayColor.textPrimary)
-                Text(basis)
-                    .font(PaydayFont.caption2)
-                    .foregroundStyle(PaydayColor.textSecondary)
+                if let basis {
+                    Text(basis)
+                        .font(PaydayFont.caption2)
+                        .foregroundStyle(PaydayColor.textSecondary)
+                }
             }
             Spacer(minLength: PaydaySpacing.p12)
             Text("\(Money.wholeDollarString(fromCents: range.lowCents))–\(Money.wholeDollarString(fromCents: range.highCents))")
@@ -539,15 +533,18 @@ struct InsightsView: View {
                 .foregroundStyle(isMuted ? PaydayColor.textSecondary : PaydayColor.textPrimary)
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(label), half land between \(Money.wholeDollarString(fromCents: range.lowCents)) and \(Money.wholeDollarString(fromCents: range.highCents)). \(basis).")
+        .accessibilityLabel("\(label), half land between \(Money.wholeDollarString(fromCents: range.lowCents)) and \(Money.wholeDollarString(fromCents: range.highCents))." + (basis.map { " \($0)." } ?? ""))
     }
 
     /// Just the count. It used to read "Across 13 Sunday lunches" directly
     /// under a row already titled "Sunday lunches", which put the same
     /// words on two adjacent lines of every single row. The sample size is
-    /// an honesty device and stays; the noun was pure repetition.
-    private static func shiftCountBasis(_ count: Int) -> String {
-        count == 1 ? "1 shift" : "\(count) shifts"
+    /// an honesty device while the sample is thin; at
+    /// `InsightsNumbersGrid.minimumShiftsForFullSample` or more it says
+    /// nothing new and goes (Tyler, 2026-11-08).
+    private static func shiftCountBasis(_ count: Int) -> String? {
+        guard count < InsightsNumbersGrid.minimumShiftsForFullSample else { return nil }
+        return count == 1 ? "1 shift" : "\(count) shifts"
     }
 
     /// "Fridays", or "Friday lunches" / "Friday dinners" when the weekday
@@ -590,9 +587,11 @@ struct InsightsView: View {
                 Text(InsightsPresentation.weekdayName(night.weekday))
                     .font(PaydayFont.subheadlineSemibold)
                     .foregroundStyle(PaydayColor.textPrimary)
-                Text(InsightsPresentation.sampleBasis(weekday: night.weekday, count: night.nightCount))
-                    .font(PaydayFont.caption2)
-                    .foregroundStyle(PaydayColor.textSecondary)
+                if let basis = InsightsPresentation.sampleBasis(weekday: night.weekday, count: night.nightCount) {
+                    Text(basis)
+                        .font(PaydayFont.caption2)
+                        .foregroundStyle(PaydayColor.textSecondary)
+                }
             }
             Spacer(minLength: PaydaySpacing.p12)
             Text(Money.wholeDollarString(fromCents: night.averageNetCents))
@@ -867,7 +866,10 @@ enum InsightsPresentation {
         return Calendar.current.weekdaySymbols[weekday - 1]
     }
 
-    static func sampleBasis(weekday: Int, count: Int) -> String {
+    /// Nil at `InsightsNumbersGrid.minimumShiftsForFullSample` or more: the
+    /// count is only a warning while the sample is thin (Tyler, 2026-11-08).
+    static func sampleBasis(weekday: Int, count: Int) -> String? {
+        guard count < InsightsNumbersGrid.minimumShiftsForFullSample else { return nil }
         let name = weekdayName(weekday)
         return count == 1 ? "Based on 1 \(name)" : "Based on \(count) \(name)s"
     }

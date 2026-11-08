@@ -172,14 +172,6 @@ struct PaycheckEntrySheet: View {
         }
     }
 
-    /// One instruction. It used to say "not the check total" and then, in a
-    /// second sentence, "your stub should also show $206.21 in wages for
-    /// 72h 52m; don't include that here" — the same "tips only, no wages" rule
-    /// stated twice, with a wage figure this sheet does not record.
-    private var explainerText: String {
-        "Tips line only"
-    }
-
     /// The stub as entered. Zero-means-nil, same convention as LogTipSheet:
     /// "not entered" and "entered as zero" are different facts, and this
     /// sheet never lets a field record the latter.
@@ -241,10 +233,6 @@ struct PaycheckEntrySheet: View {
                 ScrollView {
                     VStack(spacing: 24) {
                         VStack(spacing: 12) {
-                            Text("PAY STUB")
-                                .font(PaydayFont.caption2)
-                                .tracking(0.8)
-                                .foregroundStyle(PaydayColor.primary)
                             scanPaycheckSlot
                             tipsInput
                             expectedFigureLine(facts.expectedTipsLine)
@@ -254,9 +242,10 @@ struct PaycheckEntrySheet: View {
 
                         jobPicker
 
+                        // No "Expected $X" under the card: the period
+                        // screen behind this sheet already shows it (Tyler,
+                        // 2026-11-08: one number, one label).
                         paycheckDetailsCard
-
-                        expectedFigureLine(facts.expectedGross)
 
                         if !findings.isEmpty {
                             checksSection(findings)
@@ -455,11 +444,6 @@ struct PaycheckEntrySheet: View {
                     .tracking(0.8)
                     .foregroundStyle(PaydayColor.primary)
                 CurrencyAmountField(cents: $amountCents)
-                Text(explainerText)
-                    .font(PaydayFont.footnote)
-                    .foregroundStyle(PaydayColor.textSecondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal)
             }
         } else {
             Button("Enter tips manually") {
@@ -525,8 +509,7 @@ struct PaycheckEntrySheet: View {
     /// unpriced shift is the audit's headline defect under the word
     /// "Expected". `figure.mayBeCalledATotal` is false there by construction.
     ///
-    /// Rendered as a centred footnote, the same treatment as this sheet's
-    /// "Tips line only" explainer, and NOT as a label-left/amount-right row:
+    /// Rendered as a centred footnote, NOT as a label-left/amount-right row:
     /// the raised object on this sheet is the person's own stub, and Payday's
     /// expectation is a quiet second opinion beside the field it belongs to.
     /// One money figure per line (Tyler's money-language law, 2026-07-27).

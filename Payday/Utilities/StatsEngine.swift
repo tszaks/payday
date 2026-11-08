@@ -3121,8 +3121,8 @@ enum RevealCopy {
         return "You also worked about \(NumberWords.spell(count)) \(delta > 0 ? "more" : "fewer") \(shiftWord) a week."
     }
 
-    /// "Over the last eight weeks, this estimate has usually landed within
-    /// about $70 of the week you actually had."
+    /// "Usually within $70 of the week you had." or, when the sign test
+    /// earned a lean, "Usually within $70 · has run low lately."
     ///
     /// Framed as the estimate against the week that happened, never "the
     /// app predicted" — that stays true even where the retrospective
@@ -3130,15 +3130,12 @@ enum RevealCopy {
     /// grade the reader against anything.
     static func forecastAccuracyLine(_ accuracy: StatsEngine.ForecastAccuracy) -> String {
         let error = Money.wholeDollarString(fromCents: roundToNearest(accuracy.medianAbsoluteErrorCents, 1000))
-        return "Over the last \(NumberWords.spell(accuracy.scoredWeekCount)) weeks, this estimate has usually landed within about \(error) of the week you actually had."
-    }
-
-    /// Only when the sign test earned it, and stated as the raw count
-    /// rather than a percentage.
-    static func forecastBiasLine(_ accuracy: StatsEngine.ForecastAccuracy) -> String? {
-        guard let bias = accuracy.bias else { return nil }
-        let direction = bias == .runsLow ? "low" : "high"
-        return "It has run \(direction) in most of the last \(NumberWords.spell(accuracy.scoredWeekCount)) weeks."
+        // One line (Tyler, 2026-11-08): the lean, when the sign test earned
+        // it, joins the accuracy line; the spelled-out week count went.
+        if let bias = accuracy.bias {
+            return "Usually within \(error) · has run \(bias == .runsLow ? "low" : "high") lately."
+        }
+        return "Usually within \(error) of the week you had."
     }
 
     private static func roundToNearest(_ cents: Int, _ granularity: Int) -> Int {

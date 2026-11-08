@@ -237,6 +237,26 @@ struct CalendarSnapshotParityTests {
         #expect(october.daysWorkedCount == 2)
     }
 
+    /// Codex on PR #170: the month line lost its hours for everyone, but a
+    /// tips-only person has no Wages row in the Breakdown to find them
+    /// under. With wages on, the line is the caption alone.
+    @Test("the month line carries the hours only when wages are off")
+    func monthLineCarriesHoursOnlyWithWagesOff() throws {
+        let records = straddlingWeek()
+        let withWages = CalendarMonthFacts(
+            snapshot: try #require(snapshot(records: records, policies: policies(rateCents: 1_000))),
+            displayedMonth: day(2026, 10, 1), calendar: calendarInPayrollZone()
+        )
+        #expect(withWages.monthLine == withWages.monthCaption)
+
+        let tipsOnly = CalendarMonthFacts(
+            snapshot: try #require(snapshot(records: records, policies: policies(rateCents: nil))),
+            displayedMonth: day(2026, 10, 1), calendar: calendarInPayrollZone()
+        )
+        #expect(tipsOnly.monthMinutes == 1_200)
+        #expect(tipsOnly.monthLine == "\(tipsOnly.monthCaption) · \(WorkedMinutes.hoursLabel(minutes: 1_200))")
+    }
+
     @Test("a month with an unpriced shift reads Known so far, never Total, and says what is missing")
     func partialMonthIsNeverCalledATotal() throws {
         // Two shifts, one with hours logged and one without, so the engine can
@@ -275,7 +295,7 @@ struct CalendarSnapshotParityTests {
             displayedMonth: day(2026, 10, 1),
             calendar: calendarInPayrollZone()
         )
-        #expect(facts.monthFigure.caption == "Wages estimated from your current rate")
+        #expect(facts.monthFigure.caption == nil)
         #expect(facts.monthFigure.label == "Total")
         #expect(facts.monthCaption == "this month")
     }

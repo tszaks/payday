@@ -243,7 +243,7 @@ struct PaycheckReconcilerExpectedTests {
 
         // W2 logs no credit tips, so this is the `.unavailable` branch: the
         // label is still the registry's, and there is no currency at all.
-        #expect(expectation.auditableTipsLineFigure.label == "Your check's tips line")
+        #expect(expectation.auditableTipsLineFigure.label == "Expected")
         #expect(MetricID.expectedPaycheckTipsLine.allowedLabels
             .contains(expectation.auditableTipsLineFigure.label))
         #expect(expectation.auditableTipsLineFigure.metric == .expectedPaycheckTipsLine)
@@ -252,7 +252,7 @@ struct PaycheckReconcilerExpectedTests {
         // And the branch that DOES print a figure, so this test is not
         // silently only about the absent one.
         let withCredit = try creditTipsExpectation()
-        #expect(withCredit.auditableTipsLineFigure.label == "Your check's tips line")
+        #expect(withCredit.auditableTipsLineFigure.label == "Expected")
         #expect(MetricID.expectedPaycheckTipsLine.allowedLabels
             .contains(withCredit.auditableTipsLineFigure.label))
         #expect(withCredit.auditableTipsLineFigure.metric == .expectedPaycheckTipsLine)

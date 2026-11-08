@@ -38,7 +38,10 @@ enum InsightsNumbersGrid {
     /// every tile just repeats the same fact and says nothing new. Same
     /// calibration as StatsEngine.MoveThresholds.minimumShiftsForAnnualizedImpact,
     /// applied here to captions instead of Moves' dollar projections.
-    private static let minimumShiftsForFullSample = 8
+    /// Also gates the typical-range rows, the week-ahead rows and the
+    /// HOURLY tile's plain count (Tyler, 2026-11-08: no counts once the
+    /// sample is no longer thin).
+    static let minimumShiftsForFullSample = 8
 
     /// - Parameters:
     ///   - hourly: `MetricID.hourlyRate` as the ENGINE answered it, from

@@ -520,8 +520,10 @@ struct DashboardFacts: SnapshotFacts {
                 period: period,
                 shiftID: latest.shiftID
             )
-            let components = valuation.components
-            tonightRevealText = "\(RevealCopy.headline(cents: revealCents, includesNonTipIncome: components.wagesCents > 0 || components.gratuityFeesCents > 0 || components.tipShareInCents > 0)) \(RevealCopy.comparison(for: result.comparison, period: latest.shiftPeriod))"
+            // Comparison only on the Dashboard (Tyler, 2026-11-08: fewer
+            // words under the numbers). The shift row directly below shows
+            // the amount; LogTipSheet's reveal card keeps the headline.
+            tonightRevealText = RevealCopy.comparison(for: result.comparison, period: latest.shiftPeriod)
         }
         tonightLine = TonightLine.compose(
             tonightRevealText: tonightRevealText,
@@ -1276,53 +1278,22 @@ struct DashboardView: View {
                             ? PaydayColor.textSecondary
                             : PaydayColor.textPrimary
                     )
-                // The arithmetic, stated out loud. This number used to be
-                // gross credit tips with the tip-out silently left in and the
-                // wages added back in a second sentence, which is exactly how
-                // a card ends up with two totals nobody can reconcile. The
-                // payday date is NOT repeated here — the progress bar above
-                // already labels where the period ends.
-                Text(facts.cardTipsPaidAtClose
-                     ? "Gratuity + wages · before tax"
-                     : "Card tips + gratuity + wages − tip-out · before tax")
+                // One number, one line (Tyler, 2026-11-08). The formula
+                // and the cash-already-paid line went: the parts are rows
+                // in the Breakdown drawer. What stays is the predicted
+                // take-home, or "Before tax" until there are enough stubs
+                // to predict it. Either one carries the gross figure's own
+                // warning after a " · " when the period is partial: the
+                // hero above may already describe the NEXT period, so this
+                // line is the only place that says what the check figure
+                // is missing (Codex on PR #170).
+                let netLine = facts.paydayCardLine
+                Text(netLine)
                     .font(PaydayFont.caption2)
                     .foregroundStyle(PaydayColor.textSecondary)
                     .multilineTextAlignment(.center)
-                // Closes the last gap on this card. The hero says what you kept
-                // and this says what the check carries, and the difference
-                // between them is ALWAYS exactly the cash — the only money that
-                // never runs through payroll. Without this line the reader has
-                // to subtract two four-figure numbers to learn that, and Tyler
-                // did exactly that on his own real period before asking "cash?".
-                // Not a repeat under rule 11: it does arithmetic for the reader
-                // rather than restating something already on screen.
-                if let cash = facts.paydayCash.text, (facts.paydayCash.cents ?? 0) > 0 {
-                    Text(facts.cardTipsPaidAtClose
-                         ? "Tips already paid · \(cash)"
-                         : "Cash already paid · \(cash)")
-                        .font(PaydayFont.caption2)
-                        .foregroundStyle(PaydayColor.textSecondary)
-                        .multilineTextAlignment(.center)
-                }
-                // The check figure's own completeness, when it has one: a
-                // period with an unpriced shift cannot present a settled
-                // check total without saying so.
-                if let caption = facts.predictedPaycheck.caption {
-                    Text(caption)
-                        .font(PaydayFont.caption2)
-                        .foregroundStyle(PaydayColor.textSecondary)
-                        .multilineTextAlignment(.center)
-                }
-                // The predicted take-home, learned from the person's own
-                // stubs. Absent under 2 stubs.
-                if let netLine = facts.paydayNetLine {
-                    Text(netLine)
-                        .font(PaydayFont.caption2)
-                        .foregroundStyle(PaydayColor.textSecondary)
-                        .multilineTextAlignment(.center)
-                        .monospacedDigit()
-                        .accessibilityLabel(netLine)
-                }
+                    .monospacedDigit()
+                    .accessibilityLabel(netLine)
             }
             .popoverTip(paydayVerificationTip)
         }
@@ -1450,7 +1421,7 @@ private struct PaydayVerificationTip: Tip {
     }
 
     var message: Text? {
-        Text("Compare this with the tips line on your stub.")
+        Text("Compare this with your stub.")
     }
 
     var image: Image? {
