@@ -80,21 +80,71 @@ struct InsightsMonthFigureTests {
         try check(hours: nil, expectWageInclusive: false)
     }
 
+    private func snapshotAndMetric(_ records: [ShiftRecord]) throws -> (EarningsSnapshot, EarningsChartMetric) {
+        let dataset = InsightsEarnings.build(records: records, policies: policies(), payrollTimeZone: PaydayTestZone.payroll)
+        let snapshot = try #require(dataset.snapshot)
+        return (snapshot, InsightsEarnings.basis(for: snapshot).chartMetric)
+    }
+
     @Test("with nothing logged yet this month it shows last month, by name")
     func fallsBackToLastMonth() throws {
         let zone = PaydayTestZone.payroll
-        let dataset = InsightsEarnings.build(records: history(hours: nil), policies: policies(), payrollTimeZone: zone)
-        let snapshot = try #require(dataset.snapshot)
-        let basis = InsightsEarnings.basis(for: snapshot)
+        let (snapshot, metric) = try snapshotAndMetric(history(hours: nil))
         let month = try #require(InsightsMonthFigure(
             snapshot: snapshot,
             today: CivilDay(year: 2026, month: 12, day: 2),
             timeZone: zone,
-            metric: basis.chartMetric
+            metric: metric
         ))
         #expect(month.month == YearMonth(year: 2026, month: 11))
         #expect(month.label == "November")
-        #expect(month.figure.cents == basis.chartMetric.figure(snapshot.range(YearMonth(year: 2026, month: 11).range)).cents)
+        #expect(month.figure.cents == metric.figure(snapshot.range(YearMonth(year: 2026, month: 11).range)).cents)
+    }
+
+    // Devin on #172: with last month empty too, the fallback led the page
+    // with $0. The month shown is the latest one worked, with its year when
+    // it is not this year's.
+    @Test("after a break of several months it shows the last month worked, never $0")
+    func skipsEmptyMonthsToTheLastWorked() throws {
+        let zone = PaydayTestZone.payroll
+        let (snapshot, metric) = try snapshotAndMetric(history(hours: nil))
+        let month = try #require(InsightsMonthFigure(
+            snapshot: snapshot,
+            today: CivilDay(year: 2027, month: 2, day: 10),
+            timeZone: zone,
+            metric: metric
+        ))
+        #expect(month.month == YearMonth(year: 2026, month: 11))
+        #expect(month.label == "November 2026")
+        #expect((month.figure.cents ?? 0) > 0)
+    }
+
+    // Devin on #172: a shift saved ahead for a later day this month counted
+    // under "so far". The open month is clamped to today.
+    @Test("so far stops at today: a shift logged ahead does not count yet")
+    func soFarStopsAtToday() throws {
+        let zone = PaydayTestZone.payroll
+        var records = history(hours: nil)
+        records.append(ShiftRecord(workDate: day(2026, 11, 20), cashTipsCents: 50_000, hoursWorked: nil))
+        let (snapshot, metric) = try snapshotAndMetric(records)
+        let today = CivilDay(year: 2026, month: 11, day: 8)
+        let month = try #require(InsightsMonthFigure(snapshot: snapshot, today: today, timeZone: zone, metric: metric))
+        #expect(month.label == "November so far")
+        let november = YearMonth(year: 2026, month: 11).range
+        #expect(month.figure.cents == metric.figure(snapshot.range(november, asOf: today)).cents)
+        let wholeMonth = metric.figure(snapshot.range(november)).cents ?? 0
+        #expect((month.figure.cents ?? 0) == wholeMonth - 50_000)
+    }
+
+    @Test("nil when no shift is on or before today")
+    func nilBeforeAnyShift() throws {
+        let (snapshot, metric) = try snapshotAndMetric(history(hours: nil))
+        #expect(InsightsMonthFigure(
+            snapshot: snapshot,
+            today: CivilDay(year: 2026, month: 5, day: 1),
+            timeZone: PaydayTestZone.payroll,
+            metric: metric
+        ) == nil)
     }
 }
 

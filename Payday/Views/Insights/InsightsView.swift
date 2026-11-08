@@ -238,6 +238,7 @@ struct InsightsView: View {
                             Text(text)
                                 .font(PaydayFont.displayLarge)
                                 .monospacedDigit()
+                                .contentTransition(.numericText())
                                 .foregroundStyle(PaydayColor.textPrimary)
                             Text(month.label)
                                 .font(PaydayFont.caption)
@@ -270,6 +271,7 @@ struct InsightsView: View {
                             Text(PlanForwardCopy.headline(for: plan))
                                 .font(PaydayFont.displayLarge)
                                 .monospacedDigit()
+                                .contentTransition(.numericText())
                                 .foregroundStyle(PaydayColor.textPrimary)
                             // The forecast's own track record: the one
                             // warning about this number.
@@ -756,24 +758,35 @@ enum InsightsPresentation {
 /// The SAME query the Calendar uses for its month figure,
 /// `snapshot.range(month.range)`, read through the page's chart metric, so
 /// the number is the cents the chart would draw for that month on the same
-/// basis. "November so far" while the month is open; the previous month by
-/// name ("October") when nothing is logged yet this month, so the first days
-/// of a month do not lead the page with $0.
+/// basis. The month shown is the latest month with a shift on or before
+/// today. "November so far" while that is the open month, clamped to today so
+/// a shift logged ahead for a later day does not count yet. By name
+/// ("October", or "October 2025" when it is not this year's) when nothing is
+/// logged yet this month, so the first days of a month, or a break of a few
+/// months, never lead the page with $0. Nil when no shift is on or before
+/// today.
 struct InsightsMonthFigure: Equatable {
     let month: YearMonth
     let figure: EarningsFigure
     let label: String
 
     init?(snapshot: EarningsSnapshot?, today: CivilDay, timeZone: TimeZone, metric: EarningsChartMetric) {
-        guard let snapshot else { return nil }
+        guard let snapshot,
+              let latestWorkDay = snapshot.shifts.map(\.workDay).filter({ $0 <= today }).max()
+        else { return nil }
         let current = YearMonth(today)
-        let hasShiftThisMonth = snapshot.shifts.contains { current.range.contains($0.workDay) }
-        let shown = hasShiftThisMonth ? current : current.previous
-        let name = shown.firstDay.date(in: timeZone).formatted(
-            Date.FormatStyle(timeZone: timeZone).month(.wide)
-        )
+        let shown = YearMonth(latestWorkDay)
+        let isOpen = shown == current
+        let firstDay = shown.firstDay.date(in: timeZone)
+        let name = firstDay.formatted(Date.FormatStyle(timeZone: timeZone).month(.wide))
         month = shown
-        figure = metric.figure(snapshot.range(shown.range))
-        label = hasShiftThisMonth ? "\(name) so far" : name
+        figure = metric.figure(snapshot.range(shown.range, asOf: isOpen ? today : nil))
+        if isOpen {
+            label = "\(name) so far"
+        } else if shown.year == current.year {
+            label = name
+        } else {
+            label = firstDay.formatted(Date.FormatStyle(timeZone: timeZone).month(.wide).year())
+        }
     }
 }
