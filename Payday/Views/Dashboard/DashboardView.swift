@@ -1278,13 +1278,16 @@ struct DashboardView: View {
                             ? PaydayColor.textSecondary
                             : PaydayColor.textPrimary
                     )
-                // One number, one line (Tyler, 2026-11-08). The formula,
-                // the cash-already-paid line and the completeness caption
-                // went: the parts are rows in the Breakdown drawer, and the
-                // hero above carries the caption. What stays is the
-                // predicted take-home, or "Before tax" until there are
-                // enough stubs to predict it.
-                let netLine = facts.paydayNetLine ?? "Before tax"
+                // One number, one line (Tyler, 2026-11-08). The formula
+                // and the cash-already-paid line went: the parts are rows
+                // in the Breakdown drawer. What stays is the predicted
+                // take-home, or "Before tax" until there are enough stubs
+                // to predict it. Either one carries the gross figure's own
+                // warning after a " · " when the period is partial: the
+                // hero above may already describe the NEXT period, so this
+                // line is the only place that says what the check figure
+                // is missing (Codex on PR #170).
+                let netLine = facts.paydayCardLine
                 Text(netLine)
                     .font(PaydayFont.caption2)
                     .foregroundStyle(PaydayColor.textSecondary)

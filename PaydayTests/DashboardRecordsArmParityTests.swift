@@ -381,6 +381,22 @@ struct DashboardRecordsArmParityTests {
                 == "About $1,235 after tax · outside the checks it has seen")
     }
 
+    /// **"A partial check still says what it is missing."** Codex on PR
+    /// #170: the payday card reports the period that just closed while the
+    /// hero above may already describe the new one, so with no take-home
+    /// line to carry the gross figure's warning, the "Before tax" line
+    /// carries it. Still one line.
+    @Test("paydayBeforeTaxLine carries the gross figure's warning on the one line")
+    func paydayBeforeTaxLineCarriesTheWarning() {
+        func gross(_ caption: String?) -> EarningsFigure {
+            EarningsFigure(metric: .expectedPaycheckGross, amount: .cents(200_000),
+                           label: "Expected", caption: caption, completeness: .empty)
+        }
+        #expect(TakeHomeCopy.paydayBeforeTaxLine(gross(nil)) == "Before tax")
+        #expect(TakeHomeCopy.paydayBeforeTaxLine(gross("wages missing for 1 shift"))
+                == "Before tax · wages missing for 1 shift")
+    }
+
     /// **"A wage-only period still shows its check."** The ledger has no
     /// tip rows for it, so `BreakdownRow.hasBreakdown` says there is nothing
     /// to itemize; but the check rows live in the drawer now, so the drawer

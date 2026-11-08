@@ -153,6 +153,9 @@ struct CalendarMonthFacts: SnapshotFacts {
     /// "Xh Ym" over the month's covered minutes, straight off the engine's
     /// own minute count rather than a second pass over the rows.
     let monthHoursLabel: String
+    /// The same minutes, unformatted, so `monthLine` can tell "no hours"
+    /// from "0h" without parsing its own label.
+    let monthMinutes: Int
     /// The month's best day, which is the heat ramp's normalizer. A `max` is a
     /// selection, not arithmetic: it is one of the tiles' own figures, the
     /// same shape as `EarningsChartFacts.maxCents`.
@@ -220,6 +223,7 @@ struct CalendarMonthFacts: SnapshotFacts {
             let monthResult = snapshot.range(month.range)
             monthFigure = .earnedIncome(monthResult)
             monthHoursLabel = WorkedMinutes.hoursLabel(minutes: monthResult.minutes)
+            monthMinutes = monthResult.minutes
             monthBreakdownRows = BreakdownRow.ledgerRows(monthResult)
             monthBreakdownTotal = BreakdownRow.total(monthResult)
             monthHasBreakdown = BreakdownRow.hasBreakdown(monthResult)
@@ -254,6 +258,7 @@ struct CalendarMonthFacts: SnapshotFacts {
             // amounts at all.
             monthFigure = .unavailable()
             monthHoursLabel = WorkedMinutes.hoursLabel(minutes: 0)
+            monthMinutes = 0
             // A failed read has no breakdown to show. The label still comes
             // from the figure so VoiceOver reads something next to the
             // placeholder, matching Dashboard's unavailable branch.
@@ -366,6 +371,19 @@ struct CalendarMonthFacts: SnapshotFacts {
         // says that.
         if monthFigure.isUnavailable || monthFigure.mayBeCalledATotal { return "this month" }
         return "\(monthFigure.label.lowercased()) this month"
+    }
+
+    /// The line under the month figure: `monthCaption`, plus the month's
+    /// hours ONLY when wages are off. With wages on, the hours already sit
+    /// under Wages in the Breakdown; with wages off there is no Wages row,
+    /// so this is the one place a tips-only person sees the hours they
+    /// logged (Codex on PR #170). No day count (Tyler, 2026-11-08: no
+    /// counts under a number).
+    var monthLine: String {
+        if case .off = monthFigure.completeness.state, monthMinutes > 0 {
+            return "\(monthCaption) · \(monthHoursLabel)"
+        }
+        return monthCaption
     }
 }
 
@@ -645,9 +663,10 @@ struct CalendarView: View {
                         reduceMotion ? nil : PaydayAnimation.premiumSpring,
                         value: facts.monthFigure.cents
                     )
-                // The month caption only (Tyler, 2026-11-08: no counts).
-                // The hours already sit under Wages in the Breakdown.
-                Text(facts.monthCaption)
+                // The month caption only (Tyler, 2026-11-08: no counts);
+                // the hours ride along only when wages are off, because
+                // then no Breakdown row shows them (`monthLine`).
+                Text(facts.monthLine)
                     .font(PaydayFont.caption)
                     .foregroundStyle(PaydayColor.textSecondary)
                     .monospacedDigit()

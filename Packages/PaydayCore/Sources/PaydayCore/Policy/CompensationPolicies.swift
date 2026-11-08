@@ -182,6 +182,15 @@ public struct CompensationPolicies: Hashable, Codable, Sendable {
         !allRolesRates.isEmpty && allRolesRates.allSatisfy { $0.provenance == .assumedFromLegacySetting }
     }
 
+    /// True when ANY rate policy is still a legacy assumption, so some
+    /// shift's wages read as estimated. Wider than `hasOnlyAssumedRates`:
+    /// after "Rate changed on…" the older policy stays assumed while the
+    /// new one is confirmed, and Settings, the one place that discloses the
+    /// estimate since 2026-11-08, must still say so (Codex on PR #170).
+    public var hasAssumedRates: Bool {
+        allRolesRates.contains { $0.provenance == .assumedFromLegacySetting }
+    }
+
     // MARK: Editing
 
     /// Returns a copy with `policy` added (or replaced, by id), renormalized.

@@ -259,8 +259,15 @@ struct PayrollSettingsSection: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Your shifts are dated in the payroll time zone, so travelling never moves one into a different day or week.")
                 Text("Overtime is an estimate: 1.5x after 40 hours in a workweek, and after 8 hours in a day when daily overtime is on. California, Alaska, Nevada and Colorado count it that way. No double time. Your state or employer may count it differently.")
-                if policyStore.policies.hasOnlyAssumedRates, shiftCount > 0 {
+                // Settings is the one place that discloses the estimate
+                // (Tyler, 2026-11-08: no caption under the numbers). So it
+                // must speak for a mixed history too: after "Rate changed
+                // on…" the older shifts keep the assumed rate (Codex on
+                // PR #170).
+                if shiftCount > 0, policyStore.policies.hasOnlyAssumedRates {
                     Text("Wages are estimated from your current rate.")
+                } else if shiftCount > 0, policyStore.policies.hasAssumedRates {
+                    Text("Wages on shifts before your rate change are estimated.")
                 }
             }
         }

@@ -369,6 +369,10 @@ struct PolicyStoreEditTests {
         store.applyRateChange(hourlyRateCents: 500, effectiveFrom: changeDay)
 
         #expect(store.policies.rates.count == 2)
+        // Mixed history: the older policy stays a legacy assumption, so the
+        // estimate is still disclosed in Settings (Codex on PR #170).
+        #expect(store.policies.hasOnlyAssumedRates == false)
+        #expect(store.policies.hasAssumedRates)
         #expect(store.currentHourlyRateCents == 500)
         #expect(store.policies.rate(on: changeDay.adding(days: -1))?.hourlyRateCents == 283)
         #expect(store.policies.rate(on: changeDay)?.hourlyRateCents == 500)
@@ -463,6 +467,7 @@ struct PolicyStoreEditTests {
         #expect(after.totalComponents == before.totalComponents)
         #expect(after.completeness.state == .complete)
         #expect(store.policies.hasOnlyAssumedRates == false)
+        #expect(store.policies.hasAssumedRates == false)
         #expect(store.owesRateHistoryPrompt(shiftCount: 12) == false)
     }
 
