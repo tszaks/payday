@@ -46,14 +46,6 @@ final class PaydayCloudState {
 
     var isSynchronizing: Bool { isSyncing }
 
-    /// Whether a call to our own server can be made now: signed in, past the
-    /// gate, and not the offline UI-test launch. "Connect payroll" reads this
-    /// to disable itself with a reason instead of failing on tap.
-    var canReachServer: Bool {
-        guard case .ready = phase else { return false }
-        return !isOfflineUITest
-    }
-
     init(client: SupabaseClient = PaydaySupabase.client) {
         self.client = client
         self.migrationService = PaydayMigrationService(client: client)
@@ -274,9 +266,6 @@ final class PaydayCloudState {
         // Recorded first, deliberately. If this call throws, or the process is
         // killed mid-flight, the device must still come back signed out.
         PaydayAuthorizationState.markExplicitlySignedOut()
-        // Nothing of this account's payroll (preview, pay stubs, status) may
-        // stay on screen, and in-flight payroll requests must not land.
-        PayrollConnection.shared.reset()
         // The widget renders from the shared store in its own process and
         // would otherwise keep printing the last period total on the Lock
         // Screen of a signed-out device.
@@ -290,6 +279,33 @@ final class PaydayCloudState {
             Self.logger.error("Sign out failed: \(String(describing: error), privacy: .public)")
         }
         phase = .signedOut
+    }
+
+    /// The `forget` action of the retired `payroll-connect` edge function.
+    /// True when the server confirmed it; false on any failure or timeout.
+    private func forgetRetiredPayrollConnection(timeout: Duration = .seconds(5)) async -> Bool {
+        let client = client
+        // Not a task group: a group waits for every child, so a request that
+        // ignores cancellation would hold deletion past the timeout.
+        return await withCheckedContinuation { continuation in
+            let once = RetiredPayrollResumeOnce(continuation)
+            let work = Task {
+                do {
+                    try await client.functions.invoke(
+                        "payroll-connect",
+                        options: FunctionInvokeOptions(method: .post, body: ["action": "forget"])
+                    )
+                    once.resume(true)
+                } catch {
+                    once.resume(false)
+                }
+            }
+            Task {
+                try? await Task.sleep(for: timeout)
+                work.cancel()
+                once.resume(false)
+            }
+        }
     }
 
     /// Deletes the account and everything in it, server and device.
@@ -312,12 +328,13 @@ final class PaydayCloudState {
         moveLedgerStore: MoveLedgerStore,
         policyStore: PolicyStore
     ) async -> String? {
-        // Payroll first: once the account is gone, nobody can prove they own
-        // its Truv connection, so it could never be removed. Best effort,
-        // with a short timeout: a payroll provider being down must never
-        // block someone deleting their account.
-        if await PayrollConnection.shared.forgetRemote() == false {
-            Self.logger.error("Payroll removal before account deletion did not complete; deleting the account anyway")
+        // TestFlight builds of 1.0.5 could connect a payroll account through
+        // Truv. That feature is gone, but someone who used it may still have
+        // a Truv user. Ask the server to delete it while the session can still
+        // prove who they are. Best effort, at most five seconds: a payroll
+        // provider must never block an account deletion.
+        if await forgetRetiredPayrollConnection() == false {
+            Self.logger.error("Retired payroll cleanup before account deletion did not complete; deleting the account anyway")
         }
 
         do {
@@ -566,7 +583,6 @@ struct PaydayCloudGate<Content: View>: View {
             // policies; without this the wage line would be missing from
             // every total until the next sync happened to fire.
             adoptPolicyInputs()
-            await importPayrollIfDue()
         }
         .onChange(of: cloudState.phase) { _, newPhase in
             // The quiz answers exist only to reach a session. Once there is
@@ -578,10 +594,7 @@ struct PaydayCloudGate<Content: View>: View {
             // Background launches are precious battery/network time. Local
             // writes remain durable and sync on the next active foreground.
             guard newPhase == .active else { return }
-            Task {
-                await syncIfReady()
-                await importPayrollIfDue()
-            }
+            Task { await syncIfReady() }
         }
         .onReceive(NotificationCenter.default.publisher(for: ModelContext.didSave)) { _ in
             // BEFORE the queue call, not inside it: `queueSyncAfterLocalChange`
@@ -613,21 +626,6 @@ struct PaydayCloudGate<Content: View>: View {
             minimumInterval: minimumInterval
         )
         adoptPolicyInputs()
-    }
-
-    /// "Connect payroll"'s app-open import. Spaced six hours apart by
-    /// `PayrollConnection`, and a no-op for anyone who never connected or
-    /// never confirmed a first import. After the sync, so a match against a
-    /// paycheck typed on another device sees that paycheck.
-    private func importPayrollIfDue() async {
-        guard scenePhase == .active, cloudState.canReachServer else { return }
-        let connection = PayrollConnection.shared
-        connection.prepare(userID: PaydaySyncState.registeredUserID)
-        await connection.importIfDue(
-            context: modelContext,
-            scope: PayrollImportScope(policyStore: policyStore, scheduleStore: scheduleStore),
-            onWrite: { PayrollConnection.rescheduleReminders(context: modelContext, preferencesStore: preferencesStore, scheduleStore: scheduleStore) }
-        )
     }
 
     /// Run after every sync, not only at launch.
@@ -845,5 +843,24 @@ struct PaydayConversionBannerView: View {
         .paydayCard(padding: PaydaySpacing.p16)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(banner.title). \(banner.detail)")
+    }
+}
+
+/// Resumes a continuation once, whichever of two racing tasks gets there
+/// first (the request or the timeout).
+private final class RetiredPayrollResumeOnce: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Bool, Never>?
+
+    init(_ continuation: CheckedContinuation<Bool, Never>) {
+        self.continuation = continuation
+    }
+
+    func resume(_ value: Bool) {
+        lock.lock()
+        let pending = continuation
+        continuation = nil
+        lock.unlock()
+        pending?.resume(returning: value)
     }
 }
