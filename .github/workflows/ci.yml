@@ -114,6 +114,13 @@ jobs:
       - name: deno test
         working-directory: supabase/functions/payday-api
         run: deno test
+      # A step in this job rather than a job of its own: this job is one of
+      # the five required checks on `production`, so the new function's tests
+      # gate merges the same way payday-api's do without renaming a required
+      # check or adding one branch protection does not know about.
+      - name: deno test (payroll-connect)
+        working-directory: supabase/functions/payroll-connect
+        run: deno test
 
   design-lint:
     name: Design lint

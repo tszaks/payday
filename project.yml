@@ -26,6 +26,13 @@ packages:
   Sentry:
     url: https://github.com/getsentry/sentry-cocoa.git
     exactVersion: 9.29.0
+  # Truv Bridge, the sign-in screen for "Connect payroll". A binary
+  # xcframework with no dependencies of its own and no privacy manifest; it
+  # uses none of Apple's required-reason APIs (checked against the binary's
+  # symbols for 1.9.1). App target only: the widget never connects payroll.
+  TruvSDK:
+    url: https://github.com/truvhq/ios-sdk
+    exactVersion: 1.9.1
 
 targets:
   Payday:
@@ -123,6 +130,7 @@ targets:
       # both render money. Worth doing; not worth bundling into the change
       # that establishes the privacy rules.
       - package: Sentry
+      - package: TruvSDK
 
   PaydayWidget:
     type: app-extension

@@ -167,6 +167,8 @@ struct PeriodsView: View {
     @Environment(PolicyStore.self) private var policyStore
     @Environment(UserPreferencesStore.self) private var preferencesStore
     @Environment(TabRouter.self) private var tabRouter
+    @Environment(\.modelContext) private var modelContext
+    @State private var payrollConnection = PayrollConnection.shared
     /// The other representation. `snapshotBuild` picks one, and it must be
     /// the SAME one `PeriodDetailView` picks: this list pushes into that
     /// detail, so a row total from one source over a detail from the other
@@ -233,6 +235,16 @@ struct PeriodsView: View {
                 .padding(.horizontal, PaydaySpacing.p16)
                 .padding(.top, PaydaySpacing.p8)
             }
+            .modifier(PayrollPullToRefresh(isEnabled: payrollConnection.ledger.importConfirmed && payrollConnection.ledger.hasConnection) {
+                await payrollConnection.importIfDue(
+                    context: modelContext,
+                    scope: PayrollImportScope(policyStore: policyStore, scheduleStore: scheduleStore),
+                    force: true,
+                    onWrite: {
+                        PayrollConnection.rescheduleReminders(context: modelContext, preferencesStore: preferencesStore, scheduleStore: scheduleStore)
+                    }
+                )
+            })
             .navigationTitle("Periods")
             // Must sit inside the NavigationStack. Attached to the stack
             // itself, the destination was never registered, so every row's
@@ -568,5 +580,21 @@ private struct PeriodRow: View {
     private func deltaString(_ deltaCents: Int) -> String {
         let sign = deltaCents > 0 ? "+" : (deltaCents < 0 ? "-" : "")
         return sign + Money.string(fromCents: abs(deltaCents))
+    }
+}
+
+/// Pull-to-refresh on Periods checks a connected payroll for new pay stubs.
+/// Only there when a payroll is connected and its first import was
+/// confirmed: a pull that can do nothing should not spin.
+private struct PayrollPullToRefresh: ViewModifier {
+    let isEnabled: Bool
+    let action: @MainActor () async -> Void
+
+    func body(content: Content) -> some View {
+        if isEnabled {
+            content.refreshable { await action() }
+        } else {
+            content
+        }
     }
 }
