@@ -51,11 +51,7 @@ enum PaydayAccountEraser {
         // their account was deleted.
         try context.delete(model: ShiftRecord.self)
         try context.save()
-        // "Connect payroll"'s map of pay stubs to paychecks, with hours and
-        // deduction lines that exist nowhere else on the device. In-flight
-        // imports are stopped first so none can write the ledger back.
-        PayrollConnection.shared.reset()
-        try PayrollImportLedgerStore.shared.erase()
+        try removeRetiredPayStubLedger()
 
         // A successful save is not proof of an empty store: the deletes and
         // the save can each succeed against a context whose rows were
@@ -109,5 +105,20 @@ enum PaydayAccountEraser {
         // The widget reads the shared app-group store directly, so it has to
         // be told the store is empty or it keeps rendering the last total.
         PaydayWidgetRefresh.request()
+    }
+
+    /// TestFlight builds of 1.0.5 could import pay stubs and kept a map of
+    /// them, with hours and deduction lines found nowhere else, in this file.
+    /// That feature is gone, but a device that used it may still hold the
+    /// file, so account deletion still removes it.
+    static let retiredPayStubLedgerURL = URL.applicationSupportDirectory.appending(path: "PayrollImportLedger.json")
+
+    /// Throws when the file is still there afterwards. No file is success.
+    static func removeRetiredPayStubLedger(at url: URL = retiredPayStubLedgerURL) throws {
+        do {
+            try FileManager.default.removeItem(at: url)
+        } catch let error as CocoaError where error.code == .fileNoSuchFile {
+            return
+        }
     }
 }

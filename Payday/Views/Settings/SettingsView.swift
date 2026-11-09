@@ -98,10 +98,6 @@ struct SettingsView: View {
                 PayrollSettingsSection(shiftCount: shiftRecords.count)
                     .id(Self.payrollSectionID)
 
-                // Next to Payroll: the stubs it imports are the paychecks the
-                // rate above is checked against.
-                PayrollConnectionSettingsSection()
-
                 Section("Data") {
                     Button("Add Past Shifts") { isShowingBackfillSheet = true }
                 }
