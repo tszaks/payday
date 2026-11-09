@@ -281,6 +281,32 @@ final class PaydayCloudState {
         phase = .signedOut
     }
 
+    /// The `forget` action of the retired `payroll-connect` edge function.
+    /// True when the server confirmed it; false on any failure or timeout.
+    private func forgetRetiredPayrollConnection(timeout: Duration = .seconds(5)) async -> Bool {
+        let client = client
+        return await withTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                do {
+                    try await client.functions.invoke(
+                        "payroll-connect",
+                        options: FunctionInvokeOptions(method: .post, body: ["action": "forget"])
+                    )
+                    return true
+                } catch {
+                    return false
+                }
+            }
+            group.addTask {
+                try? await Task.sleep(for: timeout)
+                return false
+            }
+            let first = await group.next() ?? false
+            group.cancelAll()
+            return first
+        }
+    }
+
     /// Deletes the account and everything in it, server and device.
     ///
     /// Required by App Review Guideline 5.1.1(v). The server side is one
@@ -301,6 +327,15 @@ final class PaydayCloudState {
         moveLedgerStore: MoveLedgerStore,
         policyStore: PolicyStore
     ) async -> String? {
+        // TestFlight builds of 1.0.5 could connect a payroll account through
+        // Truv. That feature is gone, but someone who used it may still have
+        // a Truv user. Ask the server to delete it while the session can still
+        // prove who they are. Best effort, at most five seconds: a payroll
+        // provider must never block an account deletion.
+        if await forgetRetiredPayrollConnection() == false {
+            Self.logger.error("Retired payroll cleanup before account deletion did not complete; deleting the account anyway")
+        }
+
         do {
             try await client.rpc("delete_my_account").execute()
         } catch {
