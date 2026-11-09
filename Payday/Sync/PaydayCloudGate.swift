@@ -285,25 +285,26 @@ final class PaydayCloudState {
     /// True when the server confirmed it; false on any failure or timeout.
     private func forgetRetiredPayrollConnection(timeout: Duration = .seconds(5)) async -> Bool {
         let client = client
-        return await withTaskGroup(of: Bool.self) { group in
-            group.addTask {
+        // Not a task group: a group waits for every child, so a request that
+        // ignores cancellation would hold deletion past the timeout.
+        return await withCheckedContinuation { continuation in
+            let once = RetiredPayrollResumeOnce(continuation)
+            let work = Task {
                 do {
                     try await client.functions.invoke(
                         "payroll-connect",
                         options: FunctionInvokeOptions(method: .post, body: ["action": "forget"])
                     )
-                    return true
+                    once.resume(true)
                 } catch {
-                    return false
+                    once.resume(false)
                 }
             }
-            group.addTask {
+            Task {
                 try? await Task.sleep(for: timeout)
-                return false
+                work.cancel()
+                once.resume(false)
             }
-            let first = await group.next() ?? false
-            group.cancelAll()
-            return first
         }
     }
 
@@ -842,5 +843,24 @@ struct PaydayConversionBannerView: View {
         .paydayCard(padding: PaydaySpacing.p16)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(banner.title). \(banner.detail)")
+    }
+}
+
+/// Resumes a continuation once, whichever of two racing tasks gets there
+/// first (the request or the timeout).
+private final class RetiredPayrollResumeOnce: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Bool, Never>?
+
+    init(_ continuation: CheckedContinuation<Bool, Never>) {
+        self.continuation = continuation
+    }
+
+    func resume(_ value: Bool) {
+        lock.lock()
+        let pending = continuation
+        continuation = nil
+        lock.unlock()
+        pending?.resume(returning: value)
     }
 }
