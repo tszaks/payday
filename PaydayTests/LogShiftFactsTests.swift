@@ -607,11 +607,12 @@ struct LogShiftPreviewPerformanceTests {
         #expect(facts.total.cents != nil)
         // 0.05s is deliberately an order of magnitude below the 0.5s the
         // render-once facts get: this path runs per KEYSTROKE, and SwiftUI
-        // evaluates a body more than once per change. What is left is the O(n)
-        // `ShiftInputAdapter` pass over every record, which runs before the
-        // window can be applied because a record's work day is already
-        // resolved. A regression here means the window stopped working, not
-        // that the machine is busy.
+        // evaluates a body more than once per change. What is left is, for
+        // each record, one read of `workDate` (which narrows the history to
+        // the days near the draft's workweek before anything is adapted) and
+        // one check for a receipt payload. A regression here most likely
+        // means that narrowing or the window stopped working, not that the
+        // machine is busy.
         #expect(
             elapsed < 0.05 * Self.budgetScale,
             "Log Shift preview took \(elapsed) seconds over \(records.count) records against a 0.05s budget scaled x\(Self.budgetScale)"
@@ -674,6 +675,51 @@ struct LogShiftPreviewPerformanceTests {
 @Suite("The workweek window changes no figure")
 @MainActor
 struct LogShiftPreviewWindowTests {
+    @Test("the instants read for a window hold every day of it in the farthest time zones")
+    func readInstantsCoverTheWindowInEveryZone() throws {
+        let window = DayRange(
+            start: CivilDay(year: 2026, month: 9, day: 27),
+            end: CivilDay(year: 2026, month: 10, day: 3))
+        let instants = try #require(ShiftDraftPreview.instants(covering: window))
+
+        // UTC+14, UTC-12, a 45-minute offset, and two ordinary zones.
+        for identifier in ["Pacific/Kiritimati", "Etc/GMT+12", "Pacific/Chatham", "America/New_York", "Asia/Kolkata"] {
+            let zone = try #require(TimeZone(identifier: identifier))
+            let firstInstant = window.start.date(in: zone)
+            let lastInstant = window.end.adding(days: 1).date(in: zone).addingTimeInterval(-1)
+            #expect(instants.contains(firstInstant), "the first instant of the window in \(identifier)")
+            #expect(instants.contains(lastInstant), "the last instant of the window in \(identifier)")
+        }
+    }
+
+    @Test("a window before 1600 is not narrowed, because Foundation's calendar names those days differently")
+    func ancientWindowIsNotNarrowed() {
+        // The week of the Julian to Gregorian change: Foundation has no
+        // 1582-10-10, so instants built from these two days could run backwards.
+        let window = DayRange(
+            start: CivilDay(year: 1582, month: 10, day: 10),
+            end: CivilDay(year: 1582, month: 10, day: 16))
+        #expect(ShiftDraftPreview.instants(covering: window) == nil)
+    }
+
+    @Test("a receipt that will not decode is still reported when its shift is outside the window")
+    func unreadableReceiptOutsideTheWindowIsReported() throws {
+        let longAgo = try #require(logCalendar().date(from: DateComponents(year: 2022, month: 3, day: 1)))
+        let broken = ShiftRecord(id: logShiftID(700), workDate: longAgo, creditTipsCents: 5_000)
+        broken.setRawReceiptPayload(Data(#"{"gratuityFeesCents":1234.6,"earningsSchemaVersion":2}"#.utf8))
+        let policies = sundayStartPolicies()
+
+        let snapshot = try #require(ShiftDraftPreview.snapshot(
+            draft: standardDraftInput(policies: policies),
+            records: weekOfFiftyHours() + [broken],
+            policies: policies,
+            payrollTimeZone: PaydayTestZone.payroll
+        ))
+
+        #expect(snapshot.valuation(broken.id) == nil, "the shift itself is outside the draft's workweek")
+        #expect(snapshot.unreadableReceiptShiftIDs == [broken.id])
+    }
+
     /// E2a review (Codex): the ledger buckets each job by its OWN calendars,
     /// so the preview window must be the draft's job's workweek. A Cafe
     /// week starting Sunday, windowed by a Monday-start primary calendar,
