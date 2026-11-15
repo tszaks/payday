@@ -70,7 +70,8 @@ final class PaydayCloudState {
             isOfflineUITest = true
             let previewUserID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
             phase = .ready(
-                (try? PaydaySyncService.cachedReport(context: context, userID: previewUserID))
+                (try? PaydaySyncService.cachedReport(
+                    context: context, userID: previewUserID, calendars: policyStore.policies.calendars))
                     ?? PaydayMigrationReport(
                         localTipEntryCount: 0,
                         localPaycheckCount: 0,
@@ -107,7 +108,8 @@ final class PaydayCloudState {
             // the person did NOT ask to sign out — see the guard above.
             if let cachedUserID = PaydaySyncState.registeredUserID,
                PaydaySyncState.migrationIsVerified(for: cachedUserID),
-               let report = try? PaydaySyncService.cachedReport(context: context, userID: cachedUserID) {
+               let report = try? PaydaySyncService.cachedReport(
+                   context: context, userID: cachedUserID, calendars: policyStore.policies.calendars) {
                 phase = .ready(report)
             } else {
                 phase = .signedOut
@@ -120,7 +122,8 @@ final class PaydayCloudState {
         }
         if PaydaySyncState.migrationIsVerified(for: userID) {
             do {
-                phase = .ready(try PaydaySyncService.cachedReport(context: context, userID: userID))
+                phase = .ready(try PaydaySyncService.cachedReport(
+                    context: context, userID: userID, calendars: policyStore.policies.calendars))
             } catch {
                 phase = .failed("Couldn't open your data.")
                 return
@@ -181,7 +184,8 @@ final class PaydayCloudState {
                 throw PaydayMigrationError.accountMismatch
             }
             if PaydaySyncState.migrationIsVerified(for: userID) {
-                phase = .ready(try PaydaySyncService.cachedReport(context: context, userID: userID))
+                phase = .ready(try PaydaySyncService.cachedReport(
+                    context: context, userID: userID, calendars: policyStore.policies.calendars))
                 await synchronize(
                     context: context,
                     scheduleStore: scheduleStore,

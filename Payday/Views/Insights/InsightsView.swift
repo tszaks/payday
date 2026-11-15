@@ -679,9 +679,12 @@ struct InsightsPageFacts: SnapshotFacts {
         // Use the same rotation PLAN names as "your usual nights."
         unlocks = UnlockProgress.nextUnlocks(
             records: records,
-            usualWeekdays: statsEngine.workRhythm(referenceDate: now).usualWeekdays
+            usualWeekdays: statsEngine.workRhythm(referenceDate: now).usualWeekdays,
+            // The payroll zone's grid, as the engine above reads the same
+            // records: a stored day is a civil day there, not on the phone.
+            calendar: calendar
         )
-        shiftCount = UnlockProgress.shiftCount(records: records)
+        shiftCount = UnlockProgress.shiftCount(records: records, calendar: calendar)
         plan = statsEngine.planForward(referenceDate: now)
         reliability = statsEngine.typicalRanges(referenceDate: now)
         trend = statsEngine.earningTrend(referenceDate: now)

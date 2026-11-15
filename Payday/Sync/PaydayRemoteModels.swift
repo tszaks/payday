@@ -231,12 +231,30 @@ struct RemotePaycheckRecord: Codable, Equatable, Sendable {
         try container.encode(jobName, forKey: .jobName)
     }
 
+    /// Built from a local record, carrying the days the server holds: each
+    /// stored day's own civil day (`StoredDay.wireDay`), which is what a
+    /// phone in its payroll zone has always sent.
     @MainActor
-    init(record: PaycheckRecord, userID: UUID) {
+    init(record: PaycheckRecord, userID: UUID, calendars: [PayrollCalendarPolicy]) {
+        let periodDay = StoredDay(.periodDay, calendars: calendars)
+        self.init(
+            record: record,
+            userID: userID,
+            periodStart: periodDay.wireDay(record.periodStart, job: record.jobName),
+            periodEnd: periodDay.wireDay(record.periodEnd, job: record.jobName)
+        )
+    }
+
+    /// Built from a local record with the days supplied, because the wire
+    /// value and the VERSION value are deliberately different renders of the
+    /// same stored days: `PaydayRowFingerprint` digests `stableDay`. See
+    /// `RemoteTipEntry.businessValue(workDate:)`.
+    @MainActor
+    init(record: PaycheckRecord, userID: UUID, periodStart: String, periodEnd: String) {
         self.id = record.id
         self.userID = userID
-        self.periodStart = PaydayRemoteDate.day(record.periodStart)
-        self.periodEnd = PaydayRemoteDate.day(record.periodEnd)
+        self.periodStart = periodStart
+        self.periodEnd = periodEnd
         self.paidTipsCents = record.paidTipsCents
         self.note = record.note
         self.hourlyRateCents = record.hourlyRateCents
@@ -277,15 +295,9 @@ struct RemotePaycheckRecord: Codable, Equatable, Sendable {
         )
     }
 
-    /// See `RemoteTipEntry.contentFingerprint`.
+    /// See `RemoteShift.contentFingerprint`.
     var contentFingerprint: String {
         get throws { try PaydayMigrationHash.fingerprint(businessValue) }
-    }
-
-    func contentFingerprint(periodStart: String, periodEnd: String) throws -> String {
-        try PaydayMigrationHash.fingerprint(
-            businessValue(periodStart: periodStart, periodEnd: periodEnd)
-        )
     }
 
     /// See `RemoteTipEntry.seedingRow`.
@@ -513,11 +525,12 @@ enum PaydayRowFingerprint {
 
     @MainActor
     static func value(_ record: PaycheckRecord) throws -> String {
-        try RemotePaycheckRecord(record: record, userID: placeholderUserID)
-            .contentFingerprint(
-                periodStart: PaydayRemoteDate.stableDay(record.periodStart),
-                periodEnd: PaydayRemoteDate.stableDay(record.periodEnd)
-            )
+        try RemotePaycheckRecord(
+            record: record,
+            userID: placeholderUserID,
+            periodStart: PaydayRemoteDate.stableDay(record.periodStart),
+            periodEnd: PaydayRemoteDate.stableDay(record.periodEnd)
+        ).contentFingerprint
     }
 
     @MainActor
@@ -532,8 +545,8 @@ enum PaydayRowFingerprint {
 
     @MainActor
     static func value(_ record: ShiftRecord) throws -> String {
-        try RemoteShift(record: record, userID: placeholderUserID)
-            .contentFingerprint(workDate: PaydayRemoteDate.stableDay(record.workDate))
+        try RemoteShift(record: record, userID: placeholderUserID, workDate: PaydayRemoteDate.stableDay(record.workDate))
+            .contentFingerprint
     }
 
     @MainActor
@@ -888,19 +901,28 @@ struct ShiftBusinessValue: Codable, Equatable, Sendable {
 }
 
 extension RemoteShift {
-    /// Built from a local record, for upload.
-    ///
-    /// `workDate` uses the shipped day rendering so no row this build uploads
-    /// carries a date the shipped build would not have written; the VERSION
-    /// uses `stableDay` instead, via `contentFingerprint(workDate:)`. See
-    /// `RemoteTipEntry.businessValue(workDate:)` for why those two are
-    /// deliberately different renders of the same instant.
+    /// Built from a local record, for upload, carrying the day the server
+    /// holds: the stored day's own civil day (`StoredDay.wireDay`), which is
+    /// what a phone in its payroll zone has always sent.
     @MainActor
-    init(record: ShiftRecord, userID: UUID) {
+    init(record: ShiftRecord, userID: UUID, calendars: [PayrollCalendarPolicy]) {
+        self.init(
+            record: record,
+            userID: userID,
+            workDate: StoredDay(.workDay, calendars: calendars).wireDay(record.workDate, job: record.jobName)
+        )
+    }
+
+    /// Built from a local record with the day supplied, because the wire
+    /// value and the VERSION value are deliberately different renders of the
+    /// same instant: `PaydayRowFingerprint` digests `stableDay`. See
+    /// `RemoteTipEntry.businessValue(workDate:)`.
+    @MainActor
+    init(record: ShiftRecord, userID: UUID, workDate: String) {
         self.init(
             id: record.id,
             userID: userID,
-            workDate: PaydayRemoteDate.day(record.workDate),
+            workDate: workDate,
             shiftPeriod: record.shiftPeriod?.rawValue,
             cashTipsCents: record.cashTipsCents,
             creditTipsCents: record.creditTipsCents,
@@ -956,14 +978,10 @@ extension RemoteShift {
 
     var businessValue: ShiftBusinessValue { businessValue(workDate: workDate) }
 
-    /// The right digest for a row decoded FROM the server, whose `workDate` is
-    /// already the day string the server holds.
+    /// The digest of the day string this row carries: the server's for a row
+    /// decoded FROM the server, `stableDay` for `PaydayRowFingerprint`.
     var contentFingerprint: String {
         get throws { try PaydayMigrationHash.fingerprint(businessValue) }
-    }
-
-    func contentFingerprint(workDate: String) throws -> String {
-        try PaydayMigrationHash.fingerprint(businessValue(workDate: workDate))
     }
 }
 

@@ -523,12 +523,16 @@ final class PaydaySyncService {
         self.client = client
     }
 
-    static func cachedReport(context: ModelContext, userID: UUID) throws -> PaydayMigrationReport {
+    static func cachedReport(
+        context: ModelContext,
+        userID: UUID,
+        calendars: [PayrollCalendarPolicy]
+    ) throws -> PaydayMigrationReport {
         let tips = try context.fetch(FetchDescriptor<TipEntry>())
             .map { RemoteTipEntry(entry: $0, userID: userID).businessValue }
             .sorted { $0.id.uuidString < $1.id.uuidString }
         let paychecks = try context.fetch(FetchDescriptor<PaycheckRecord>())
-            .map { RemotePaycheckRecord(record: $0, userID: userID).businessValue }
+            .map { RemotePaycheckRecord(record: $0, userID: userID, calendars: calendars).businessValue }
             .sorted { $0.id.uuidString < $1.id.uuidString }
         return PaydayMigrationReport(
             localTipEntryCount: tips.count,
@@ -589,7 +593,9 @@ final class PaydaySyncService {
         let localTipEntries = try context.fetch(FetchDescriptor<TipEntry>())
         let localPaycheckRecords = try context.fetch(FetchDescriptor<PaycheckRecord>())
         let localTips = localTipEntries.map { RemoteTipEntry(entry: $0, userID: userID) }
-        let localPaychecks = localPaycheckRecords.map { RemotePaycheckRecord(record: $0, userID: userID) }
+        let localPaychecks = localPaycheckRecords.map {
+            RemotePaycheckRecord(record: $0, userID: userID, calendars: policyStore.policies.calendars)
+        }
         let localSettings = RemoteUserSettings(
             userID: userID,
             scheduleStore: scheduleStore,
@@ -672,7 +678,7 @@ final class PaydaySyncService {
         )
         let changedShifts = localShiftRecords
             .filter { changedShiftIDs.contains($0.id) }
-            .map { RemoteShift(record: $0, userID: userID) }
+            .map { RemoteShift(record: $0, userID: userID, calendars: policyStore.policies.calendars) }
         let currentShiftIDs = Set(localShiftRecords.map(\.id))
         var pendingShiftDeletions = PaydaySyncState.pendingShiftDeletions(for: userID)
         let restoredShiftIDs = currentShiftIDs.intersection(pendingShiftDeletions.keys)
@@ -919,6 +925,7 @@ final class PaydaySyncService {
         _ = try Self.reconcilePaychecks(
             remotePaychecks,
             in: context,
+            calendars: policyStore.policies.calendars,
             localVersionsAtStart: localPaycheckVersionsAtStart,
             locallyDeletedDuringSync: Set(localPaycheckVersionsAtStart.keys)
                 .subtracting(paycheckVersionsBeforeReconcile.keys)
@@ -945,6 +952,7 @@ final class PaydaySyncService {
         _ = try Self.reconcileShifts(
             pulledShifts.rows,
             in: context,
+            calendars: policyStore.policies.calendars,
             localVersionsAtStart: localShiftVersionsAtStart,
             locallyDeletedDuringSync: locallyDeletedShifts.union(pendingShiftDeletions.keys),
             locallyChangedBeforeSync: changedShiftIDs,
@@ -953,6 +961,7 @@ final class PaydaySyncService {
         _ = try Self.reconcileShifts(
             readbackShifts,
             in: context,
+            calendars: policyStore.policies.calendars,
             localVersionsAtStart: localShiftVersionsAtStart,
             locallyDeletedDuringSync: locallyDeletedShifts,
             restoringIDs: Set(checkpoint.pendingShiftRestores.keys)
@@ -968,6 +977,12 @@ final class PaydaySyncService {
                     == localSettings.clientUpdatedAt
             )
         }
+        // The rows above were stored under the policies this pass started
+        // with, and the settings can bring others: a new phone downloads its
+        // shifts under its first-launch policy (its own zone) and the
+        // account's zone after them. Before the save, so nothing reads or
+        // fingerprints a row in a zone it is no longer read in.
+        try StoredDayRepair.reanchor(in: context, calendars: policyStore.policies.calendars)
         try context.save()
         if !remoteTips.isEmpty || !remotePaychecks.isEmpty || remoteSettings != nil
             || !pulledShifts.rows.isEmpty || !readbackShifts.isEmpty {
@@ -991,7 +1006,9 @@ final class PaydaySyncService {
         let reconciledTipEntries = try context.fetch(FetchDescriptor<TipEntry>())
         let reconciledPaycheckRecords = try context.fetch(FetchDescriptor<PaycheckRecord>())
         let acknowledgedTips = reconciledTipEntries.map { RemoteTipEntry(entry: $0, userID: userID) }
-        let acknowledgedPaychecks = reconciledPaycheckRecords.map { RemotePaycheckRecord(record: $0, userID: userID) }
+        let acknowledgedPaychecks = reconciledPaycheckRecords.map {
+            RemotePaycheckRecord(record: $0, userID: userID, calendars: policyStore.policies.calendars)
+        }
         let acknowledgedTipFingerprints = try PaydayRowFingerprint.values(reconciledTipEntries)
         let acknowledgedPaycheckFingerprints = try PaydayRowFingerprint.values(reconciledPaycheckRecords)
         let reconciledShiftRecords = try context.fetch(FetchDescriptor<ShiftRecord>())
@@ -1107,7 +1124,7 @@ final class PaydaySyncService {
         // the one place the banner gets a source. `cachedReport` builds from
         // the local store and cannot know it; this is the only code in the
         // app that has both the row and the report in scope.
-        var report = try Self.cachedReport(context: context, userID: userID)
+        var report = try Self.cachedReport(context: context, userID: userID, calendars: policyStore.policies.calendars)
         report.conversionPending = authority.remainingGroupCount
 
         // Computed once and used twice -- as `requiresFollowUpSync` and as the
@@ -1292,7 +1309,8 @@ final class PaydaySyncService {
         forceRemoteSettings: Bool = false
     ) throws -> (tipIDs: Set<UUID>, paycheckIDs: Set<UUID>) {
         let tipIDs = try reconcileTips(snapshot.tips, in: context, forceRemote: forceRemoteRows)
-        let paycheckIDs = try reconcilePaychecks(snapshot.paychecks, in: context, forceRemote: forceRemoteRows)
+        let paycheckIDs = try reconcilePaychecks(
+            snapshot.paychecks, in: context, calendars: policyStore.policies.calendars, forceRemote: forceRemoteRows)
         apply(
             snapshot.settings,
             scheduleStore: scheduleStore,
@@ -1301,6 +1319,9 @@ final class PaydaySyncService {
             policyStore: policyStore,
             force: forceRemoteSettings
         )
+        // As in `synchronize`: the settings can change the zone the rows
+        // above were stored in.
+        try StoredDayRepair.reanchor(in: context, calendars: policyStore.policies.calendars)
         try context.save()
         return (tipIDs, paycheckIDs)
     }
@@ -1450,6 +1471,7 @@ final class PaydaySyncService {
     static func reconcileShifts(
         _ rows: [RemoteShift],
         in context: ModelContext,
+        calendars: [PayrollCalendarPolicy],
         localVersionsAtStart: [UUID: String]? = nil,
         locallyDeletedDuringSync: Set<UUID> = [],
         locallyChangedBeforeSync: Set<UUID> = [],
@@ -1458,6 +1480,7 @@ final class PaydaySyncService {
         let local = try context.fetch(FetchDescriptor<ShiftRecord>())
         var byID = Dictionary(uniqueKeysWithValues: local.map { ($0.id, $0) })
         var activeIDs: Set<UUID> = []
+        let storedDay = StoredDay(.workDay, calendars: calendars)
         for row in rows {
             guard !locallyDeletedDuringSync.contains(row.id) else { continue }
             // Unpushed local edits win over a pull, because the push has not
@@ -1494,7 +1517,7 @@ final class PaydaySyncService {
                 if let record = byID.removeValue(forKey: row.id) { context.delete(record) }
                 continue
             }
-            guard let workDate = PaydayRemoteDate.parseDay(row.workDate) else {
+            guard let workDate = storedDay.stored(wireDay: row.workDate, job: row.jobName) else {
                 throw PaydayMigrationError.invalidRemoteData
             }
             let record: ShiftRecord
@@ -1540,6 +1563,7 @@ final class PaydaySyncService {
     static func reconcilePaychecks(
         _ rows: [RemotePaycheckRecord],
         in context: ModelContext,
+        calendars: [PayrollCalendarPolicy],
         localVersionsAtStart: [UUID: String]? = nil,
         locallyDeletedDuringSync: Set<UUID> = [],
         forceRemote: Bool = false
@@ -1547,6 +1571,7 @@ final class PaydaySyncService {
         let local = try context.fetch(FetchDescriptor<PaycheckRecord>())
         var byID = Dictionary(uniqueKeysWithValues: local.map { ($0.id, $0) })
         var activeIDs: Set<UUID> = []
+        let periodDay = StoredDay(.periodDay, calendars: calendars)
         for row in rows {
             guard !locallyDeletedDuringSync.contains(row.id) else { continue }
             guard let modifiedAt = PaydayRemoteDate.parseInstant(row.clientUpdatedAt) else {
@@ -1576,8 +1601,8 @@ final class PaydaySyncService {
                 activeIDs.insert(row.id)
                 continue
             }
-            guard let start = PaydayRemoteDate.parseDay(row.periodStart),
-                  let end = PaydayRemoteDate.parseDay(row.periodEnd)
+            guard let start = periodDay.stored(wireDay: row.periodStart, job: row.jobName),
+                  let end = periodDay.stored(wireDay: row.periodEnd, job: row.jobName)
             else { throw PaydayMigrationError.invalidRemoteData }
             let record: PaycheckRecord
             if let existing = byID[row.id] {

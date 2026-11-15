@@ -29,31 +29,14 @@ enum ShiftInputAdapter {
     /// One input per record.
     ///
     /// `calendars` supplies the FROZEN payroll time zone each work day is a
-    /// civil day in. The zone lives on the calendar policy in effect on that
-    /// day, and picking the policy needs the day, so this resolves in two
-    /// steps: read the day in the latest policy's zone, then re-read it in
-    /// the zone of the policy in effect on that day. A zone change moves a
-    /// timestamp by hours, never by more than a day, so the second read is
-    /// the answer. With no policies at all (a first launch before the
-    /// migration) it falls back to the device zone, the single moment the
-    /// app is allowed to consult it.
-    ///
-    /// Each shift reads its zone from its OWN job's calendars (E2b; the
-    /// `CompensationPolicies.policies(forJob:)` partition), so two jobs in two
-    /// zones each get their own work day. A job with no calendar of its own
-    /// reads the primary's; with one job every calendar is the primary's and
-    /// this is exactly the single-list rule above.
-    static func adapt(_ records: [ShiftRecord], calendars allCalendars: [PayrollCalendarPolicy]) -> Output {
-        let primaryCalendars = allCalendars.filter { $0.jobName == nil }
-        var byJob: [String: [PayrollCalendarPolicy]] = [:]
-        for calendar in allCalendars {
-            guard let key = ShiftRole.key(calendar.jobName) else { continue }
-            byJob[key, default: []].append(calendar)
-        }
-        func calendars(for job: String?) -> [PayrollCalendarPolicy] {
-            if let key = ShiftRole.key(job), let own = byJob[key] { return own }
-            return primaryCalendars.isEmpty ? allCalendars : primaryCalendars
-        }
+    /// civil day in, and `StoredDay.civilDay` is the one reading of it: the
+    /// zone of the calendar policy in effect on that day for the shift's OWN
+    /// job (E2b; the `CompensationPolicies.policies(forJob:)` partition), so
+    /// two jobs in two zones each get their own work day. With no policies at
+    /// all (a first launch before the migration) it falls back to the device
+    /// zone, the single moment the app is allowed to consult it.
+    static func adapt(_ records: [ShiftRecord], calendars: [PayrollCalendarPolicy]) -> Output {
+        let storedDay = StoredDay(.workDay, calendars: calendars)
         var inputs: [ShiftInput] = []
         var unreadable: [UUID] = []
         inputs.reserveCapacity(records.count)
@@ -66,15 +49,9 @@ enum ShiftInputAdapter {
                 unreadable.append(record.id)
             }
 
-            let calendars = calendars(for: record.jobName)
-            let latestZone = calendars.last?.payrollTimeZone ?? .current
-            let provisional = CivilDay(record.workDate, in: latestZone)
-            let zone = policy(in: calendars, onOrBefore: provisional)?.payrollTimeZone ?? latestZone
-            let workDay = zone == latestZone ? provisional : CivilDay(record.workDate, in: zone)
-
             inputs.append(ShiftInput(
                 id: record.id,
-                workDay: workDay,
+                workDay: storedDay.civilDay(record.workDate, job: record.jobName),
                 period: tag(for: record.shiftPeriod),
                 recordedAt: record.recordedAt,
                 // Voluntary by construction: `ShiftRecord` stores v2
@@ -107,18 +84,6 @@ enum ShiftInputAdapter {
     /// One record's input, for a sheet previewing a single draft.
     static func input(from record: ShiftRecord, calendars: [PayrollCalendarPolicy]) -> ShiftInput {
         adapt([record], calendars: calendars).inputs[0]
-    }
-
-    /// The last calendar policy effective on or before `day`. Same rule as
-    /// `CompensationPolicies.calendar(on:)`, which takes a whole
-    /// `CompensationPolicies`; this one takes the array the adapter is given.
-    private static func policy(
-        in calendars: [PayrollCalendarPolicy],
-        onOrBefore day: CivilDay
-    ) -> PayrollCalendarPolicy? {
-        calendars
-            .sorted { ($0.effectiveFrom, $0.id.uuidString) < ($1.effectiveFrom, $1.id.uuidString) }
-            .last { $0.effectiveFrom <= day }
     }
 
     private static func tag(for period: ShiftPeriod?) -> ShiftPeriodTag? {

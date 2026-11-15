@@ -182,6 +182,8 @@ targets:
       # file"), so it compiles the adapter and EarningsStore.buildOnce. Both
       # are extension-safe: neither touches UIApplication.
       - path: Payday/Earnings/ShiftInputAdapter.swift
+      # The adapter reads every work day through StoredDay's one rule.
+      - path: Payday/Earnings/StoredDay.swift
       - path: Payday/Earnings/EarningsStore.swift
       # The ONE path the widget and Siri both take to a pay-period figure.
       # Compiled into this target precisely so the widget cannot drift onto a

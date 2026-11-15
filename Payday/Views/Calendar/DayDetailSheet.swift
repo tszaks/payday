@@ -39,6 +39,8 @@ struct DayDetailFacts: SnapshotFacts {
     /// holding a shift with no hours logged reads "Known so far", never
     /// "Total", and a failed read renders no currency at all.
     let total: EarningsFigure
+    /// For a row's label: its stored day as the phone's calendar shows it.
+    private let storedDay: StoredDay
 
     /// The day, from the shift representation — the only stored shape since
     /// the flip.
@@ -53,6 +55,7 @@ struct DayDetailFacts: SnapshotFacts {
     init(shiftRecords records: [ShiftRecord], date: Date, policies: CompensationPolicies, payrollTimeZone: TimeZone) {
         let calendar = CalendarEarnings.groupingCalendar(payrollTimeZone: payrollTimeZone)
         let civilDay = CivilDay(date, in: payrollTimeZone)
+        storedDay = StoredDay(.workDay, calendars: policies.calendars)
 
         let adapted = ShiftInputAdapter.adapt(records, calendars: policies.calendars)
         let resolvedSnapshot = try? EarningsSnapshot.build(EarningsInputs(
@@ -135,7 +138,7 @@ struct DayDetailFacts: SnapshotFacts {
     ) -> ShiftDayRowFacts {
         rowFacts(
             shiftID: record.id,
-            day: record.workDate,
+            day: storedDay.shown(record.workDate, job: record.jobName),
             period: record.shiftPeriod,
             shiftCount: shiftCount,
             note: note

@@ -219,7 +219,7 @@ enum DebugSeeder {
         let hours = ShiftTimes.hours(clockIn: inDate, clockOut: outDate)
 
         context.insert(ShiftRecord(
-            workDate: day,
+            workDate: StoredDay(.workDay, calendars: PolicyStore.storedPolicies().calendars).stored(picked: day, job: nil),
             shiftPeriod: period,
             cashTipsCents: cashCents,
             creditTipsCents: creditCents,
@@ -260,10 +260,11 @@ enum DebugSeeder {
             firstWeekday: 2
         )
 
+        let storedDay = StoredDay(.workDay, calendars: PolicyStore.storedPolicies().calendars)
         for (daysAgo, cents) in [(1, 14200), (3, 9800), (6, 11600)] {
             guard let day = calendar.date(byAdding: .day, value: -daysAgo, to: today) else { continue }
             let at = calendar.date(bySettingHour: 21, minute: 30, second: 0, of: day) ?? day
-            context.insert(ShiftRecord(workDate: day, creditTipsCents: cents, recordedAt: at))
+            context.insert(ShiftRecord(workDate: storedDay.stored(picked: day, job: nil), creditTipsCents: cents, recordedAt: at))
         }
 
         try? context.save()
@@ -294,6 +295,7 @@ enum DebugSeeder {
         )
         scheduleStore.schedule = schedule
         let calculator = PayPeriodCalculator(payrollTimeZone: PolicyStore.storedPayrollTimeZone(), schedule: schedule)
+        let storedDay = StoredDay(.workDay, calendars: PolicyStore.storedPolicies().calendars)
 
         // hour = when the tip was recorded; dinner shifts (higher hours) tend
         // to earn more than lunch here so the time-of-day analysis has a signal.
@@ -369,7 +371,7 @@ enum DebugSeeder {
         }
         for (index, shift) in currentShifts {
             context.insert(ShiftRecord(
-                workDate: shift.day,
+                workDate: storedDay.stored(picked: shift.day, job: nil),
                 shiftPeriod: shift.shiftPeriod,
                 cashTipsCents: shift.cashCents,
                 creditTipsCents: shift.creditCents,
@@ -417,7 +419,7 @@ enum DebugSeeder {
             }
             for shift in priorShifts.values {
                 context.insert(ShiftRecord(
-                    workDate: shift.day,
+                    workDate: storedDay.stored(picked: shift.day, job: nil),
                     shiftPeriod: shift.shiftPeriod,
                     cashTipsCents: shift.cashCents,
                     creditTipsCents: shift.creditCents,

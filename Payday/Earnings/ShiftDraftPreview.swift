@@ -83,7 +83,7 @@ enum ShiftDraftPreview {
 
         let record = ShiftRecord(
             id: shiftID,
-            workDate: Calendar.current.startOfDay(for: min(date, .now)),
+            workDate: StoredDay(.workDay, calendars: policies.calendars).stored(picked: min(date, .now), job: jobName),
             shiftPeriod: shiftPeriod,
             cashTipsCents: cashCents,
             creditTipsCents: creditCents,

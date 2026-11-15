@@ -5,6 +5,8 @@ import SwiftData
 struct RootView: View {
     @Environment(PayScheduleStore.self) private var scheduleStore
     @Environment(UserPreferencesStore.self) private var preferencesStore
+    @Environment(PolicyStore.self) private var policyStore
+    @Environment(\.modelContext) private var modelContext
     @Environment(\.scenePhase) private var scenePhase
     @State private var lockController = AppLockController()
     @State private var hasEvaluatedInitialLock = false
@@ -85,9 +87,14 @@ struct RootView: View {
         // `LogTipSheet` and `BackfillSheet` hand `reschedule` `shiftRecords +
         // newRecords` by hand. Subscribing to the save here would race those
         // two call sites and could overwrite a correct decision with one
-        // computed from the pre-save record list. A policy edit changes no
-        // shift, so `shiftRecords` is already current for this trigger.
+        // computed from the pre-save record list. A policy edit adds or
+        // removes no shift (the repair below moves stored days in place, on
+        // these same objects), so `shiftRecords` is already current for this
+        // trigger.
         .onReceive(NotificationCenter.default.publisher(for: PolicyStore.didChange)) { _ in
+            // First: a zone change can move the zone stored days are read in,
+            // and the reschedule below matches recorded paychecks by day.
+            StoredDayRepair.run(in: modelContext, calendars: policyStore.policies.calendars)
             PaydayPushScheduler.reschedule(preferencesStore: preferencesStore, schedule: scheduleStore.schedule, shiftRecords: shiftRecords, paycheckRecords: paycheckRecords)
         }
         // Where card tips are paid changes the expected check, and the

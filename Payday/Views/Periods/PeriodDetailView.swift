@@ -475,7 +475,7 @@ struct PeriodDetailView: View {
             ShiftDayRow(facts: ShiftDayRowFacts(
                 snapshot: facts.snapshot,
                 shiftID: record.id,
-                day: record.workDate,
+                day: StoredDay(.workDay, calendars: policyStore.policies.calendars).shown(record.workDate, job: record.jobName),
                 period: record.shiftPeriod,
                 dayHasMultipleShifts: facts.multiShiftDays.contains(record.workDate)
             ))
@@ -483,7 +483,9 @@ struct PeriodDetailView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .shiftContextMenu(record: record, sheetTarget: $sheetTarget, undoState: undoState, context: modelContext)
+        .shiftContextMenu(
+            record: record, sheetTarget: $sheetTarget, undoState: undoState, context: modelContext,
+            calendars: policyStore.policies.calendars)
     }
 
     /// A tapped payday push asked for this period's stub sheet with the

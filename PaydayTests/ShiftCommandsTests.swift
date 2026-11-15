@@ -41,7 +41,7 @@ struct ShiftCommandsTests {
         let context = try context()
 
         let record = try ShiftCommands.create(
-            in: context, workDate: Self.day, hoursWorked: 5
+            in: context, workDate: Self.day, calendars: [], hoursWorked: 5
         )
 
         #expect(record.hoursWorked == 5)
@@ -57,6 +57,7 @@ struct ShiftCommandsTests {
         let record = try ShiftCommands.create(
             in: context,
             workDate: Self.day,
+            calendars: [],
             receiptMetrics: ShiftReceiptMetrics(earningsSchemaVersion: 2, gratuityFeesCents: 4_200)
         )
 
@@ -69,7 +70,7 @@ struct ShiftCommandsTests {
         let context = try context()
 
         #expect(throws: ShiftCommands.Failure.nothingToSave) {
-            try ShiftCommands.create(in: context, workDate: Self.day)
+            try ShiftCommands.create(in: context, workDate: Self.day, calendars: [])
         }
         #expect(try shiftCount(in: context) == 0)
         #expect(ShiftCommands.Failure.nothingToSave.message
@@ -92,7 +93,7 @@ struct ShiftCommandsTests {
     func editThatThrowsChangesNothing() throws {
         let context = try context()
         let record = try ShiftCommands.create(
-            in: context, workDate: Self.day, cashTipsCents: 5_000)
+            in: context, workDate: Self.day, calendars: [], cashTipsCents: 5_000)
         let before = record.cashTipsCents
 
         struct Boom: Error {}
@@ -114,7 +115,7 @@ struct ShiftCommandsTests {
     func editPersists() throws {
         let context = try context()
         let record = try ShiftCommands.create(
-            in: context, workDate: Self.day, cashTipsCents: 5_000)
+            in: context, workDate: Self.day, calendars: [], cashTipsCents: 5_000)
         let originalModified = record.modifiedAt
 
         try ShiftCommands.update(record, in: context) { $0.cashTipsCents = 6_000 }
@@ -134,6 +135,7 @@ struct ShiftCommandsTests {
         let record = try ShiftCommands.create(
             in: context,
             workDate: Self.day,
+            calendars: [],
             shiftPeriod: .dinner,
             cashTipsCents: 5_000,
             creditTipsCents: 2_000,
@@ -164,6 +166,7 @@ struct ShiftCommandsTests {
         let record = try ShiftCommands.create(
             in: context,
             workDate: Self.day,
+            calendars: [],
             cashTipsCents: 5_000,
             tipOutCents: 1_000,
             hoursWorked: 6.5,
@@ -234,7 +237,7 @@ struct ShiftCommandsTests {
         #expect(!PaydaySyncState.shiftsAreAuthoritative(for: userID))
 
         let record = try ShiftCommands.create(
-            in: context, workDate: Self.day, cashTipsCents: 5_000)
+            in: context, workDate: Self.day, calendars: [], cashTipsCents: 5_000)
         #expect(ShiftCommands.mayMutate(record))
         try ShiftCommands.update(record, in: context) { $0.cashTipsCents = 6_000 }
         #expect(record.cashTipsCents == 6_000)
@@ -315,6 +318,7 @@ struct ShiftCommandsTests {
         let record = try ShiftCommands.create(
             in: context,
             workDate: Date.now.addingTimeInterval(86_400 * 7),
+            calendars: [],
             cashTipsCents: 100
         )
         #expect(record.workDate <= Calendar.current.startOfDay(for: .now))

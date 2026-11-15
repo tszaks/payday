@@ -1,3 +1,4 @@
+import SwiftData
 import Testing
 import Foundation
 @testable import Payday
@@ -640,20 +641,45 @@ struct PaydayPushTwoZoneTests {
         #expect(!pending.contains { $0.identifier == PaydayPushScheduler.stubNudgeIdentifier })
     }
 
-    /// A paycheck downloaded on a phone east of the payroll zone is stored
-    /// at that phone's midnights, which are the previous evening in the
-    /// payroll zone. It is still this period's check.
+    /// A paycheck an earlier build downloaded on a phone east of the payroll
+    /// zone is stored at that phone's midnights, which are the previous
+    /// evening in the payroll zone. The launch repair moves it to the payroll
+    /// zone's days (`StoredDay.repaired`), and it is still this period's
+    /// check.
     @Test("a paycheck stored at another zone's midnights is matched to its period")
     func paycheckFromAnotherZoneIsMatched() throws {
         let check = PaycheckRecord(
             periodStart: at(2026, 7, 13, in: PaydayTestZone.tokyo),
             periodEnd: at(2026, 7, 19, in: PaydayTestZone.tokyo),
             paidTipsCents: 15_000)
+        let periodDay = StoredDay(.periodDay, calendars: policies(payroll: Self.losAngeles).calendars)
+        check.periodStart = periodDay.repaired(check.periodStart, job: nil, phoneTimeZone: PaydayTestZone.tokyo)
+        check.periodEnd = periodDay.repaired(check.periodEnd, job: nil, phoneTimeZone: PaydayTestZone.tokyo)
         let pending = requests(payroll: Self.losAngeles, phone: PaydayTestZone.tokyo, paycheckRecords: [check])
 
         let moment = try #require(pending.first { $0.identifier == PaydayPushScheduler.notificationIdentifier })
         #expect(moment.periodEnd == at(2026, 7, 26, in: Self.losAngeles))
         #expect(!pending.contains { $0.identifier == PaydayPushScheduler.stubNudgeIdentifier })
+    }
+
+    /// A paycheck downloaded now is stored at the payroll zone's midnights
+    /// (`StoredDay`), whatever zone the phone is in, so it matches its
+    /// period by the payroll zone's days alone.
+    @Test("a downloaded paycheck is matched to its period on a phone east of the payroll zone")
+    func downloadedPaycheckIsMatched() throws {
+        let context = ModelContext(try ModelContainer(
+            for: SharedModelContainer.schema, configurations: ModelConfiguration(isStoredInMemoryOnly: true)))
+        let wire = RemotePaycheckRecord(
+            record: PaycheckRecord(periodStart: .now, periodEnd: .now, paidTipsCents: 15_000),
+            userID: UUID(), periodStart: "2026-07-13", periodEnd: "2026-07-19")
+        _ = try PaydaySyncService.reconcilePaychecks(
+            [wire], in: context, calendars: policies(payroll: Self.losAngeles).calendars)
+        let downloaded = try context.fetch(FetchDescriptor<PaycheckRecord>())
+        #expect(downloaded.map(\.periodStart) == [at(2026, 7, 13, in: Self.losAngeles)])
+        let pending = requests(payroll: Self.losAngeles, phone: PaydayTestZone.tokyo, paycheckRecords: downloaded)
+
+        let moment = try #require(pending.first { $0.identifier == PaydayPushScheduler.notificationIdentifier })
+        #expect(moment.periodEnd == at(2026, 7, 26, in: Self.losAngeles))
     }
 
     @Test("no pay schedule means no payday alert, never one on an invented schedule")

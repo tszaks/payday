@@ -230,6 +230,7 @@ struct LogShiftPreSaveParityTests {
         let saved = try ShiftCommands.create(
             in: context,
             workDate: Draft.date,
+            calendars: policies.calendars,
             shiftPeriod: .dinner,
             cashTipsCents: Draft.cashCents,
             creditTipsCents: Draft.creditCents,
@@ -284,6 +285,7 @@ struct LogShiftPreSaveParityTests {
         let saved = try ShiftCommands.create(
             in: context,
             workDate: Draft.date,
+            calendars: policies.calendars,
             shiftPeriod: .dinner,
             cashTipsCents: Draft.cashCents,
             creditTipsCents: Draft.creditCents,

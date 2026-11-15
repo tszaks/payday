@@ -122,12 +122,17 @@ struct LogTipsIntent: AppIntent {
         }
 
         let context = SharedModelContainer.shared.mainContext
-        let today = Calendar.current.startOfDay(for: .now)
 
         // Siri is the surface where a write hurt most mid-transition: the
         // user says "log my tips", hears a confirmation, and sees nothing
         // until the server folds the row. Writes are records-only now.
-        let completedIntoExistingShift = try logToRecords(in: context, today: today, cents: cents, tipOutCents: tipOutCents)
+        let completedIntoExistingShift = try logToRecords(
+            in: context,
+            now: .now,
+            calendars: PolicyStore.storedPolicies().calendars,
+            cents: cents,
+            tipOutCents: tipOutCents
+        )
 
         let shiftRecords = try context.fetch(FetchDescriptor<ShiftRecord>())
         let paycheckRecords = try context.fetch(FetchDescriptor<PaycheckRecord>())
@@ -153,7 +158,15 @@ struct LogTipsIntent: AppIntent {
     /// rather than mutated and allowed to throw, so Siri starts a fresh
     /// shift instead of failing outright on a `conversionPending` row.
     @MainActor
-    private func logToRecords(in context: ModelContext, today: Date, cents: Int, tipOutCents: Int?) throws -> Bool {
+    private func logToRecords(
+        in context: ModelContext,
+        now: Date,
+        calendars: [PayrollCalendarPolicy],
+        cents: Int,
+        tipOutCents: Int?
+    ) throws -> Bool {
+        // Today on the phone's calendar, as the primary job's stored day.
+        let today = StoredDay(.workDay, calendars: calendars).stored(picked: now, job: nil)
         let todaysRecords = try context.fetch(FetchDescriptor<ShiftRecord>(predicate: #Predicate { $0.workDate == today }))
         let target = todaysRecords
             .filter { ShiftCommands.mayMutate($0) }
@@ -180,7 +193,8 @@ struct LogTipsIntent: AppIntent {
 
         _ = try ShiftCommands.create(
             in: context,
-            workDate: today,
+            workDate: now,
+            calendars: calendars,
             cashTipsCents: kind.tipKind == .cash ? cents : 0,
             creditTipsCents: kind.tipKind == .credit ? cents : 0,
             tipOutCents: tipOutCents

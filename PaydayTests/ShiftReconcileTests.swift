@@ -72,6 +72,7 @@ struct ShiftReconcileTests {
         _ = try PaydaySyncService.reconcileShifts(
             [Self.remote(cash: 4_200, source: "migration", legacyEntryIDs: [UUID()])],
             in: context,
+            calendars: [],
             locallyChangedBeforeSync: [Self.id]
         )
 
@@ -99,6 +100,7 @@ struct ShiftReconcileTests {
         _ = try PaydaySyncService.reconcileShifts(
             [Self.remote(cash: 7_777, clientUpdatedAt: "2026-09-02T00:00:00.000Z")],
             in: context,
+            calendars: [],
             locallyChangedBeforeSync: []
         )
 
@@ -121,6 +123,7 @@ struct ShiftReconcileTests {
         _ = try PaydaySyncService.reconcileShifts(
             [Self.remote(cash: 5_000, deletedAt: "2026-09-02T00:00:00.000Z")],
             in: context,
+            calendars: [],
             restoringIDs: [Self.id]
         )
 
@@ -138,7 +141,8 @@ struct ShiftReconcileTests {
 
         _ = try PaydaySyncService.reconcileShifts(
             [Self.remote(cash: 5_000, deletedAt: "2026-09-02T00:00:00.000Z")],
-            in: context
+            in: context,
+            calendars: []
         )
 
         #expect(try context.fetch(FetchDescriptor<ShiftRecord>()).isEmpty)
@@ -153,6 +157,7 @@ struct ShiftReconcileTests {
         _ = try PaydaySyncService.reconcileShifts(
             [Self.remote(cash: 5_000)],
             in: context,
+            calendars: [],
             locallyDeletedDuringSync: [Self.id]
         )
 
@@ -166,7 +171,7 @@ struct ShiftReconcileTests {
         let context = try context()
 
         let active = try PaydaySyncService.reconcileShifts(
-            [Self.remote(cash: 5_000, credit: 2_000)], in: context)
+            [Self.remote(cash: 5_000, credit: 2_000)], in: context, calendars: [])
 
         #expect(active == [Self.id])
         let stored = try #require(try context.fetch(FetchDescriptor<ShiftRecord>()).first)
@@ -184,7 +189,7 @@ struct ShiftReconcileTests {
 
         _ = try PaydaySyncService.reconcileShifts(
             [Self.remote(cash: 4_200, source: "migration", legacyEntryIDs: [legacy])],
-            in: context)
+            in: context, calendars: [])
 
         let stored = try #require(try context.fetch(FetchDescriptor<ShiftRecord>()).first)
         #expect(stored.source == .migration)
@@ -205,7 +210,7 @@ struct ShiftReconcileTests {
         try context.save()
 
         _ = try PaydaySyncService.reconcileShifts(
-            [Self.remote(cash: 4_200)], in: context)
+            [Self.remote(cash: 4_200)], in: context, calendars: [])
 
         #expect(local.source == .migration)
         #expect(local.legacyEntryIDs == [legacy])
@@ -227,7 +232,7 @@ struct ShiftReconcileTests {
             nonWageEarningsCents: nil, version: nil, serverUpdatedAt: nil)
 
         #expect(throws: PaydayMigrationError.invalidRemoteData) {
-            _ = try PaydaySyncService.reconcileShifts([row], in: context)
+            _ = try PaydaySyncService.reconcileShifts([row], in: context, calendars: [])
         }
     }
 
