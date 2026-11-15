@@ -94,7 +94,7 @@ struct RootView: View {
         .onReceive(NotificationCenter.default.publisher(for: PolicyStore.didChange)) { _ in
             // First: a zone change can move the zone stored days are read in,
             // and the reschedule below matches recorded paychecks by day.
-            StoredDayRepair.run(in: modelContext, calendars: policyStore.policies.calendars)
+            StoredDayRepair.run(in: modelContext, policyStore: policyStore)
             PaydayPushScheduler.reschedule(preferencesStore: preferencesStore, schedule: scheduleStore.schedule, shiftRecords: shiftRecords, paycheckRecords: paycheckRecords)
         }
         // Where card tips are paid changes the expected check, and the

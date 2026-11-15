@@ -340,6 +340,54 @@ struct StoredDayTests {
         #expect(try PaydayRowFingerprint.value(record) == version)
     }
 
+    /// The previous calendars name each stored day exactly, so a change away
+    /// from a zone outside `stableDay`'s window keeps every day. The phone is
+    /// in a third zone, so neither its calendar nor `stableDay` could.
+    @Test("H: a zone change away from the edge of the clock keeps every shift and paycheck day",
+          arguments: [("Pacific/Kiritimati", "America/New_York"), ("Pacific/Pago_Pago", "Asia/Tokyo")])
+    func changeAwayFromTheEdgeOfTheClock(_ before: String, _ phone: String) throws {
+        let edge = TimeZone(identifier: before)!
+        let phoneZone = TimeZone(identifier: phone)!
+        let previous = [Self.calendarPolicy(edge, id: "h/edge")]
+        let losAngeles = [Self.calendarPolicy(Self.losAngeles, id: "h/edge/losangeles")]
+        let context = try Self.context()
+        let shift = try Self.save(
+            picked: Self.at(2026, 7, 19, hour: 9, in: edge), calendars: previous, phone: edge, in: context)
+        let paycheck = PaycheckRecord(
+            periodStart: Self.at(2026, 7, 13, in: edge), periodEnd: Self.at(2026, 7, 19, in: edge), paidTipsCents: 15_000)
+        context.insert(paycheck)
+
+        #expect(try StoredDayRepair.reanchor(in: context, from: previous, calendars: losAngeles, phoneTimeZone: phoneZone))
+        #expect(shift.workDate == Self.at(2026, 7, 19, in: Self.losAngeles))
+        #expect(paycheck.periodStart == Self.at(2026, 7, 13, in: Self.losAngeles))
+        #expect(paycheck.periodEnd == Self.at(2026, 7, 19, in: Self.losAngeles))
+        #expect(try !StoredDayRepair.reanchor(in: context, from: losAngeles, calendars: losAngeles, phoneTimeZone: phoneZone))
+    }
+
+    /// The app's own path: the policy store remembers the calendars the
+    /// stored days follow, and each pass re-anchors from them.
+    @Test("H: the repair re-anchors from the calendars the policy store last repaired under")
+    func repairsFromTheCalendarsTheStoreRemembers() throws {
+        let kiritimati = TimeZone(identifier: "Pacific/Kiritimati")!
+        let suite = "com.szakacsmedia.payday.storedday.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let policyStore = PolicyStore(defaults: defaults)
+        policyStore.replaceFromSupabase(CompensationPolicies(rates: [], calendars: [Self.calendarPolicy(kiritimati, id: "h/store/edge")]))
+        let context = try Self.context()
+        let shift = try Self.save(
+            picked: Self.at(2026, 7, 19, hour: 9, in: kiritimati),
+            calendars: policyStore.policies.calendars, phone: kiritimati, in: context)
+
+        StoredDayRepair.run(in: context, policyStore: policyStore)
+        #expect(shift.workDate == Self.at(2026, 7, 19, in: kiritimati))
+
+        policyStore.replaceFromSupabase(CompensationPolicies(rates: [], calendars: [Self.calendarPolicy(Self.losAngeles, id: "h/store/losangeles")]))
+        StoredDayRepair.run(in: context, policyStore: policyStore)
+        #expect(shift.workDate == Self.at(2026, 7, 19, in: Self.losAngeles))
+        #expect(Self.workDay(shift, policyStore.policies.calendars) == Self.july19)
+    }
+
     /// A second job in its own zone is stored and read in that zone.
     @Test("H: a job with its own zone stores its days in that zone")
     func jobInItsOwnZone() throws {

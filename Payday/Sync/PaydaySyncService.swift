@@ -982,7 +982,7 @@ final class PaydaySyncService {
         // shifts under its first-launch policy (its own zone) and the
         // account's zone after them. Before the save, so nothing reads or
         // fingerprints a row in a zone it is no longer read in.
-        try StoredDayRepair.reanchor(in: context, calendars: policyStore.policies.calendars)
+        try StoredDayRepair.reanchor(in: context, policyStore: policyStore)
         try context.save()
         if !remoteTips.isEmpty || !remotePaychecks.isEmpty || remoteSettings != nil
             || !pulledShifts.rows.isEmpty || !readbackShifts.isEmpty {
@@ -1321,7 +1321,7 @@ final class PaydaySyncService {
         )
         // As in `synchronize`: the settings can change the zone the rows
         // above were stored in.
-        try StoredDayRepair.reanchor(in: context, calendars: policyStore.policies.calendars)
+        try StoredDayRepair.reanchor(in: context, policyStore: policyStore)
         try context.save()
         return (tipIDs, paycheckIDs)
     }

@@ -143,28 +143,29 @@ struct StoredDay {
     /// calendar, and a zone change in the policies can leave a row in a zone
     /// it is no longer read in. In this order:
     ///
-    /// 1. Already the start of its day in the zone it is read in: kept.
-    /// 2. The start of a day on the phone's calendar now: most likely this
+    /// 1. It followed the rule under `before`, the calendars it was stored
+    ///    under: those name its day exactly, whatever the zones.
+    /// 2. Already the start of its day in the zone it is read in: kept.
+    /// 3. The start of a day on the phone's calendar now: most likely this
     ///    phone wrote it, so that is the day.
-    /// 3. Otherwise the day `PaydayRemoteDate.stableDay` names, the same day
+    /// 4. Otherwise the day `PaydayRemoteDate.stableDay` names, the same day
     ///    the upload fingerprint has always digested.
     ///
     /// The day then moves across to its start in the zone it is read in.
-    /// Idempotent: the result is always kept by step 1 on the next run.
-    /// Cheap on its common path: when the job's calendars hold one zone,
-    /// step 1 is an offset check with no calendar arithmetic.
+    /// Idempotent: the result is always kept by step 2 on the next run.
+    /// Cheap on its common path: with no `before`, when the job's calendars
+    /// hold one zone, step 2 is an offset check with no calendar arithmetic.
     ///
-    /// The limit is the instant itself, which does not say which zone wrote
-    /// it. A row written in a third zone, neither the phone's current zone
-    /// nor the payroll zone, is recovered only when that zone lies in
-    /// `stableDay`'s window (UTC-10:30, UTC+13:30]. The same holds after a
-    /// payroll zone change AWAY from a zone outside that window (UTC-11,
-    /// UTC+14): a row stored at that zone's midnight is not this phone's
-    /// midnight, so `stableDay` names its day, and that can be the day next
-    /// to the one it was. The row then moves to that adjacent day and its
-    /// upload fingerprint, which digests the same `stableDay`, does not
-    /// change, so nothing uploads to correct it.
-    func repaired(_ stored: Date, job: String?, phoneTimeZone: TimeZone = .current) -> Date {
+    /// Steps 3 and 4 are for rows an earlier build wrote, where no calendars
+    /// say which zone that was. Their limit is the instant itself: a row
+    /// written in a third zone, neither the phone's current zone nor the
+    /// payroll zone, is recovered only when that zone lies in `stableDay`'s
+    /// window (UTC-10:30, UTC+13:30].
+    func repaired(_ stored: Date, job: String?, before: StoredDay? = nil, phoneTimeZone: TimeZone = .current) -> Date {
+        if let before {
+            let day = before.civilDay(stored, job: job)
+            if before.stored(day, job: job) == stored { return self.stored(day, job: job) }
+        }
         if let zone = singleZone(for: job), Self.isMidnight(stored, in: zone) { return stored }
         let day = civilDay(stored, job: job)
         if self.stored(day, job: job) == stored { return stored }
