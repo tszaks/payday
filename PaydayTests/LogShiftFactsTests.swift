@@ -614,11 +614,12 @@ struct LogShiftPreviewPerformanceTests {
         #expect(facts?.total.cents != nil)
         // 0.05s is deliberately an order of magnitude below the 0.5s the
         // render-once facts get: this path runs per KEYSTROKE, and SwiftUI
-        // evaluates a body more than once per change. What is left is one
-        // read of each record's `workDate`, which narrows the history to the
-        // days near the draft's workweek before anything is adapted. A
-        // regression here means that narrowing or the window stopped working,
-        // not that the machine is busy.
+        // evaluates a body more than once per change. What is left is, for
+        // each record, one read of `workDate` (which narrows the history to
+        // the days near the draft's workweek before anything is adapted) and
+        // one check for a receipt payload. A regression here most likely
+        // means that narrowing or the window stopped working, not that the
+        // machine is busy.
         #expect(
             elapsed < 0.05 * Self.budgetScale,
             "Log Shift preview took \(elapsed) seconds over \(records.count) records against a 0.05s budget scaled x\(Self.budgetScale)"
@@ -686,7 +687,7 @@ struct LogShiftPreviewWindowTests {
         let window = DayRange(
             start: CivilDay(year: 2026, month: 9, day: 27),
             end: CivilDay(year: 2026, month: 10, day: 3))
-        let instants = ShiftDraftPreview.instants(covering: window)
+        let instants = try #require(ShiftDraftPreview.instants(covering: window))
 
         // UTC+14, UTC-12, a 45-minute offset, and two ordinary zones.
         for identifier in ["Pacific/Kiritimati", "Etc/GMT+12", "Pacific/Chatham", "America/New_York", "Asia/Kolkata"] {
@@ -696,6 +697,16 @@ struct LogShiftPreviewWindowTests {
             #expect(instants.contains(firstInstant), "the first instant of the window in \(identifier)")
             #expect(instants.contains(lastInstant), "the last instant of the window in \(identifier)")
         }
+    }
+
+    @Test("a window before 1600 is not narrowed, because Foundation's calendar names those days differently")
+    func ancientWindowIsNotNarrowed() {
+        // The week of the Julian to Gregorian change: Foundation has no
+        // 1582-10-10, so instants built from these two days could run backwards.
+        let window = DayRange(
+            start: CivilDay(year: 1582, month: 10, day: 10),
+            end: CivilDay(year: 1582, month: 10, day: 16))
+        #expect(ShiftDraftPreview.instants(covering: window) == nil)
     }
 
     @Test("a receipt that will not decode is still reported when its shift is outside the window")
