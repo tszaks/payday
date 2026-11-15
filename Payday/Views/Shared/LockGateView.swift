@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Shown in place of the signed-in content whenever
-/// AppLockController.isLocked is true. Triggers Face ID/Touch ID
+/// Shown by AppLockWindow, in a window above the signed-in content,
+/// whenever AppLockController.isLocked is true. Triggers Face ID/Touch ID
 /// automatically once each time the app comes to the front; the button is
 /// a manual retry, not the primary path. Composed like Apple's own locked
 /// surfaces (a locked note, a hidden album): the app's mark carrying
@@ -10,8 +10,10 @@ import SwiftUI
 /// calm entrance, no loops.
 struct LockGateView: View {
     let lockController: AppLockController
+    /// From the lock window's scene rather than `scenePhase`, which does not
+    /// follow the scene in a window of the lock's own (see AppLockWindow).
+    let sceneIsActive: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.scenePhase) private var scenePhase
     @State private var hasAppeared = false
 
     var body: some View {
@@ -60,9 +62,9 @@ struct LockGateView: View {
         }
         // Both: the gate can go up while the scene is already active (a cold
         // launch), or while it is in the background and only later active.
-        .task { await unlockAutomatically(sceneIsActive: scenePhase == .active) }
-        .onChange(of: scenePhase) { _, newPhase in
-            Task { await unlockAutomatically(sceneIsActive: newPhase == .active) }
+        .task { await unlockAutomatically(sceneIsActive: sceneIsActive) }
+        .onChange(of: sceneIsActive) { _, isActive in
+            Task { await unlockAutomatically(sceneIsActive: isActive) }
         }
     }
 

@@ -1,4 +1,5 @@
 import Foundation
+import LocalAuthentication
 import Testing
 @testable import Payday
 
@@ -10,7 +11,7 @@ struct AppLockControllerTests {
     @MainActor
     final class Prompt {
         var count = 0
-        var answer = false
+        var answer = AppLockController.PromptOutcome.refused
     }
 
     private func controller(_ prompt: Prompt) -> AppLockController {
@@ -55,7 +56,7 @@ struct AppLockControllerTests {
         #expect(prompt.count == 0)
         #expect(lock.failedAttempts == 0)
 
-        prompt.answer = true
+        prompt.answer = .unlocked
         await lock.unlockAutomatically(sceneIsActive: true)
         #expect(prompt.count == 1)
         #expect(!lock.isLocked)
@@ -96,5 +97,70 @@ struct AppLockControllerTests {
         let lock = controller(prompt)
         await lock.unlockAutomatically(sceneIsActive: true)
         #expect(prompt.count == 0)
+    }
+
+    @Test("a prompt the system took away does not use up the automatic offer or count as a failure")
+    func systemCancelOffersAgain() async throws {
+        let prompt = Prompt()
+        let lock = controller(prompt)
+        lock.armIfEnabled(try preferences(lockEnabled: true))
+        prompt.answer = .cancelledBySystem
+
+        await lock.unlockAutomatically(sceneIsActive: true)
+        #expect(prompt.count == 1)
+        #expect(lock.isLocked)
+        #expect(lock.failedAttempts == 0)
+
+        // The next activation offers again; the system cancelling once more
+        // costs nothing either.
+        await lock.unlockAutomatically(sceneIsActive: false)
+        #expect(prompt.count == 1)
+        await lock.unlockAutomatically(sceneIsActive: true)
+        #expect(prompt.count == 2)
+        #expect(lock.failedAttempts == 0)
+
+        prompt.answer = .unlocked
+        await lock.unlockAutomatically(sceneIsActive: true)
+        #expect(prompt.count == 3)
+        #expect(!lock.isLocked)
+    }
+
+    @Test("a system-cancelled Unlock tap is not a failure; the person's own cancel is, and is not offered again")
+    func onlyThePersonsAnswerCounts() async throws {
+        let prompt = Prompt()
+        let lock = controller(prompt)
+        lock.armIfEnabled(try preferences(lockEnabled: true))
+
+        prompt.answer = .cancelledBySystem
+        await lock.unlock()
+        #expect(lock.failedAttempts == 0)
+
+        prompt.answer = .refused
+        await lock.unlockAutomatically(sceneIsActive: true)
+        #expect(prompt.count == 2)
+        #expect(lock.failedAttempts == 1)
+        await lock.unlockAutomatically(sceneIsActive: false)
+        await lock.unlockAutomatically(sceneIsActive: true)
+        #expect(prompt.count == 2)
+    }
+
+    @Test("only the system's own cancels count as a prompt the person never saw",
+          arguments: [
+            (LAError.Code.systemCancel, AppLockController.PromptOutcome.cancelledBySystem),
+            (.appCancel, .cancelledBySystem),
+            (.notInteractive, .cancelledBySystem),
+            (.userCancel, .refused),
+            (.userFallback, .refused),
+            (.authenticationFailed, .refused),
+            (.biometryLockout, .refused),
+            (.passcodeNotSet, .refused),
+          ])
+    func classifiesTheSystemsAnswer(_ code: LAError.Code, _ expected: AppLockController.PromptOutcome) {
+        #expect(AppLockController.outcome(of: LAError(code)) == expected)
+    }
+
+    @Test("an error that is not LocalAuthentication's keeps the person out")
+    func unknownErrorIsRefused() {
+        #expect(AppLockController.outcome(of: CocoaError(.featureUnsupported)) == .refused)
     }
 }

@@ -269,7 +269,9 @@ One set of App Intents, five surfaces. In priority order:
   ModelConfiguration passes `cloudKitDatabase: .none` in every process (app,
   widget, intents), all opening the same App-Group-shared file, and
   Supabase owns the account's data. Face ID lock is `AppLockController` +
-  `LockGateView`, off by default, toggled in Settings, `.deviceOwnerAuthentication`
+  `LockGateView`, shown by `AppLockWindow` in a window of its own above the
+  app so it covers open sheets without closing them, off by default,
+  toggled in Settings, `.deviceOwnerAuthentication`
   (passcode fallback, like Notes) rather than biometrics-only, and fails
   open with no enrolled passcode at all rather than stranding someone
   outside their own tips.
