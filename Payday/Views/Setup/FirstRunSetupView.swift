@@ -25,6 +25,7 @@ import SwiftUI
 struct FirstRunSetupView: View {
     @Environment(PayScheduleStore.self) private var scheduleStore
     @Environment(OnboardingStateStore.self) private var onboardingStore
+    @Environment(PolicyStore.self) private var policyStore
 
     @State private var frequency: PayFrequency = .biweekly
     @State private var mostRecentPayday: Date = .now
@@ -189,7 +190,9 @@ struct FirstRunSetupView: View {
 
         scheduleStore.schedule = PaySchedule(
             frequency: frequency,
-            anchorPeriodEnd: normalizedPeriodEnd,
+            // Before the launch migration has frozen a payroll zone this is
+            // the phone's zone, which is the one the migration freezes.
+            anchorPeriodEnd: PayScheduleAnchor.stored(picked: normalizedPeriodEnd, payrollTimeZone: policyStore.payrollTimeZone),
             payDelayDays: delayDays
         )
         // The schedule is now the source of truth; drop the carried answer so

@@ -229,6 +229,15 @@ struct LogTipSheet: View {
     /// flush (and a debounced live save still in flight) does not write to
     /// the record that was just removed.
     @State private var didDelete = false
+    /// Edit only: the draft known to be on the record, so `commitLiveEdit`
+    /// writes only what the person changed. Taken once the sheet has seeded
+    /// its fields, then after each successful write.
+    ///
+    /// It is the SEEDED draft, deliberately not the record as it stands at
+    /// close: a sync pass can update the record while the sheet is open, and
+    /// an untouched sheet must not write its older seeded values over that
+    /// newer record.
+    @State private var committedDraft: LogShiftEditDraft?
 
     /// New-entry only: the details group opens collapsed behind a one-line
     /// belief sentence (ShiftBeliefLine) instead of every row at full volume.
@@ -314,22 +323,23 @@ struct LogTipSheet: View {
         case .editShift(let record):
             // No anchor, and no upgrade. A `ShiftRecord` is the whole shift,
             // so every value here is already the shift-level truth.
-            _cashCents = State(initialValue: record.cashTipsCents)
-            _creditCents = State(initialValue: record.creditTipsCents)
-            _date = State(initialValue: record.workDate)
-            _note = State(initialValue: record.note ?? "")
-            _hoursWorked = State(initialValue: record.hoursWorked)
-            _tipOutCents = State(initialValue: record.tipOutCents ?? 0)
-            _tipShareInCents = State(initialValue: record.tipShareInCents ?? 0)
-            _roleName = State(initialValue: record.roleName)
-            _jobName = State(initialValue: record.jobName)
-            _salesCents = State(initialValue: record.salesCents ?? 0)
-            _shiftPeriod = State(initialValue: record.shiftPeriod)
+            let fields = LogShiftEditDraft.Fields(record: record)
+            _cashCents = State(initialValue: fields.cashCents)
+            _creditCents = State(initialValue: fields.creditCents)
+            _date = State(initialValue: fields.date)
+            _note = State(initialValue: fields.note)
+            _hoursWorked = State(initialValue: fields.hoursWorked)
+            _tipOutCents = State(initialValue: fields.tipOutCents)
+            _tipShareInCents = State(initialValue: fields.tipShareInCents)
+            _roleName = State(initialValue: fields.roleName)
+            _jobName = State(initialValue: fields.jobName)
+            _salesCents = State(initialValue: fields.salesCents)
+            _shiftPeriod = State(initialValue: fields.shiftPeriod)
             _hasManuallySelectedShiftPeriod = State(initialValue: record.shiftPeriod != nil)
-            _clockIn = State(initialValue: record.clockIn)
-            _clockOut = State(initialValue: record.clockOut)
-            _serverCount = State(initialValue: record.serverCount)
-            _receiptMetrics = State(initialValue: record.receiptMetrics)
+            _clockIn = State(initialValue: fields.clockIn)
+            _clockOut = State(initialValue: fields.clockOut)
+            _serverCount = State(initialValue: fields.serverCount)
+            _receiptMetrics = State(initialValue: fields.receiptMetrics)
             // The record's own id, never a fresh one: substituting a draft id
             // here would make the save append a second shift instead of
             // editing this one.
@@ -350,6 +360,28 @@ struct LogTipSheet: View {
     private var editingRecord: ShiftRecord? {
         if case .editShift(let record) = target { return record }
         return nil
+    }
+
+    /// What `commitLiveEdit` writes onto the record, built from the fields in
+    /// this one place so that every value written is also compared.
+    private var editDraft: LogShiftEditDraft {
+        LogShiftEditDraft(LogShiftEditDraft.Fields(
+            cashCents: cashCents,
+            creditCents: creditCents,
+            receiptMetrics: receiptMetrics,
+            date: date,
+            note: note,
+            hoursWorked: hoursWorked,
+            tipOutCents: tipOutCents,
+            tipShareInCents: tipShareInCents,
+            roleName: roleName,
+            jobName: jobName,
+            salesCents: salesCents,
+            shiftPeriod: shiftPeriod,
+            clockIn: clockIn,
+            clockOut: clockOut,
+            serverCount: serverCount
+        ))
     }
 
     private var canSave: Bool {
@@ -496,6 +528,12 @@ struct LogTipSheet: View {
     private func handleSheetAppear() {
         prefersCreditFirstCache = computePrefersCreditFirst()
         applyLiveShiftEndModeIfNeeded()
+        // After every seeding step, so it is exactly what an untouched sheet
+        // would write. Only the first appearance: a later one must not take
+        // an edit that is still waiting on the debounce as already written.
+        if isEditing, committedDraft == nil {
+            committedDraft = editDraft
+        }
     }
 
     /// Top to bottom, this sheet is ordered by a deliberate hierarchy:
@@ -1876,11 +1914,6 @@ struct LogTipSheet: View {
 
     /// Edit flow: every field change writes straight through to the shift.
     /// Routine, reversible edits stay silent — no haptic on every keystroke.
-    /// Cash and credit are now each their own row across the whole shift
-    /// (not one entry's amount+kind), so this reconciles the shift's actual
-    /// rows against the two on-screen totals: an existing row gets its
-    /// amount updated (or zeroed, or deleted if it's not the anchor), and a
-    /// kind with no existing row yet gets a fresh one inserted.
     private func liveSaveEdit() {
         guard isEditing else { return }
         liveSaveTask?.cancel()
@@ -1893,63 +1926,27 @@ struct LogTipSheet: View {
 
     /// Coalesce keypad and text-field edits into one SwiftData mutation and
     /// one WidgetKit refresh after the user pauses, then flush on dismissal.
+    ///
+    /// Writes nothing when the draft equals `committedDraft`, so opening a
+    /// shift and closing it untouched does not save, reload the widget or
+    /// upload a copy that could replace a newer edit from another device.
     private func commitLiveEdit() {
-        guard !didDelete else { return }
-        // The record branch is a straight field update, where the legacy one
-        // below has to reconcile two rows and re-derive which of them owns
-        // the shift-level facts. That reconciliation is the two-row model's
-        // cost, and it has nothing to do here.
-        if let record = editingRecord {
-            let normalizedDate = Calendar.current.startOfDay(for: min(date, .now))
-            let trimmedNote = note.isEmpty ? nil : note
-            do {
-                try ShiftCommands.update(record, in: modelContext) { edited in
-                    // `applyEarnings`, not three assignments, and the lint
-                    // caught me doing it the naive way. Cash, credit and the
-                    // payload have to move in ONE step because a v1 receipt's
-                    // gratuity is folded into one of the two amounts, so
-                    // setting them independently bypasses the v1 -> v2
-                    // normalisation and moves real money: on the N4 shape
-                    // (cash 5000, credit 2000, gratuity 4200) the two owners
-                    // differ by cash 800 versus cash 5000.
-                    //
-                    // `.credit` is the owner, matching the legacy
-                    // credit-owns-metadata convention. Measured: it is INERT
-                    // for anything a record actually carries, because
-                    // `normalizedToV2` returns its inputs unchanged once
-                    // `earningsSchemaVersion >= 2`, and a `ShiftRecord`'s
-                    // payload is normalised once at migration while new scans
-                    // already write v2. It is still the right choice if a v1
-                    // payload ever reaches here, which is why it is not just
-                    // left to chance.
-                    edited.applyEarnings(
-                        cashCents: cashCents,
-                        creditCents: creditCents,
-                        metrics: receiptMetrics,
-                        metricsOwner: .credit
-                    )
-                    edited.workDate = normalizedDate
-                    edited.note = trimmedNote
-                    edited.hoursWorked = hoursWorked
-                    edited.tipOutCents = tipOutCents > 0 ? tipOutCents : nil
-                    edited.tipShareInCents = tipShareInCents > 0 ? tipShareInCents : nil
-                    edited.roleName = ShiftRole.normalized(roleName)
-                    edited.jobName = ShiftRole.normalized(jobName)
-                    edited.salesCents = salesCents > 0 ? salesCents : nil
-                    edited.shiftPeriod = shiftPeriod
-                    edited.clockIn = clockIn
-                    edited.clockOut = clockOut
-                    edited.serverCount = serverCount
-                }
-            } catch {
-                // Rolled back, so the shift is left exactly as it was rather
-                // than half-edited. The known gap tracked in issue #26: this
-                // also runs as the `.onDisappear` flush, where an alert
-                // cannot be seen.
-                saveFailure = error as? ShiftCommands.Failure
-                saveFailed = true
+        guard !didDelete, let record = editingRecord else { return }
+        let draft = editDraft
+        guard draft != committedDraft else { return }
+        do {
+            try ShiftCommands.update(record, in: modelContext) { edited in
+                draft.apply(to: edited)
             }
-            return
+            committedDraft = draft
+        } catch {
+            // Rolled back, so the shift is left exactly as it was rather
+            // than half-edited, and `committedDraft` is kept so the next
+            // attempt still writes. The known gap tracked in issue #26: this
+            // also runs as the `.onDisappear` flush, where an alert cannot be
+            // seen.
+            saveFailure = error as? ShiftCommands.Failure
+            saveFailed = true
         }
     }
 
@@ -1982,12 +1979,14 @@ struct LogTipSheet: View {
     }
 
     private func delete() {
-        // The record branch must exist: an `.editShift` target that fell
-        // through to `dismiss()` would close the sheet having deleted
-        // nothing. A delete that silently
+        // Through `deleteRoute`, the value the tests pin, so the routing they
+        // assert is the routing that runs. The record arm must exist: an
+        // `.editShift` target that fell through to `dismiss()` would close
+        // the sheet having deleted nothing. A delete that silently
         // does nothing is worse than one that fails loudly, because the user
         // watches the sheet close and believes it worked.
-        if let record = editingRecord {
+        switch deleteRoute {
+        case .record(let record):
             do {
                 // `ShiftCommands.delete` owns the ordering: it removes the
                 // row, saves, and only then writes the deletion queue and the
@@ -2015,10 +2014,9 @@ struct LogTipSheet: View {
             }
             didDelete = true
             dismiss()
-            return
+        case .none:
+            dismiss()
         }
-
-        dismiss()
     }
 }
 

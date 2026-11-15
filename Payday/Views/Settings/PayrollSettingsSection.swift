@@ -21,8 +21,14 @@ struct PayrollSettingsSection: View {
     /// with no history has nothing to be asked about.
     let shiftCount: Int
 
+    /// The wage field's draft. Typing changes only this; `commitWageDraft`
+    /// writes it once, when editing ends.
     @State private var wageDigitsText = ""
+    /// What the draft was seeded with when the field got focus. A draft
+    /// still equal to it is no edit, whatever the store holds by then.
+    @State private var wageDraftSeed = ""
     @FocusState private var isWageFieldFocused: Bool
+    @State private var isConfirmingWageRemoval = false
     @State private var workweekStartWeekday = 1
     @State private var isShowingRateChange = false
     @State private var isShowingZoneChange = false
@@ -33,12 +39,18 @@ struct PayrollSettingsSection: View {
     /// has a role, before any role has a rate.
     @Query private var shiftRecords: [ShiftRecord]
 
-    /// The account's roles: on shifts (most recent first), then any that
-    /// only a rate policy names. Empty means no roles, and then the section
-    /// does not exist.
-    private var roleNames: [String] {
-        var names = ShiftRoleList.byRecency(ShiftRoleList.entries(shiftRecords))
-        for name in policyStore.policies.roleNames where !names.contains(where: { ShiftRoleList.matches($0, name) }) {
+    /// The primary job's roles: on its shifts (most recent first), then any
+    /// that only one of its rate policies names. Empty means no roles, and
+    /// then the section does not exist.
+    ///
+    /// The primary's only, because the rates this section writes have no
+    /// `jobName` and the ledger prices each job with that job's rates alone:
+    /// a role that is only on another job's shifts would be listed with a
+    /// rate that never pays it.
+    static func listedRoles(shifts: [ShiftRecord], policies: CompensationPolicies) -> [String] {
+        let primaryShifts = shifts.filter { ShiftRole.key($0.jobName) == nil }
+        var names = ShiftRoleList.byRecency(ShiftRoleList.entries(primaryShifts))
+        for name in policies.roleNames where !names.contains(where: { ShiftRoleList.matches($0, name) }) {
             names.append(name)
         }
         return names
@@ -73,6 +85,14 @@ struct PayrollSettingsSection: View {
     /// `SettingsWageRowTests` pins both halves of that.
     private var currentRateCents: Int? { policyStore.currentHourlyRateCents }
 
+    private var storedWageDigits: String { currentRateCents.map(String.init) ?? "" }
+
+    /// What the wage row shows: the draft while the field has focus, so the
+    /// person sees what they type, and the stored rate otherwise.
+    private var wageRowCents: Int? {
+        isWageFieldFocused ? Self.rateCents(fromDigits: wageDigitsText) : currentRateCents
+    }
+
     private var isRateHistoryPromptOwed: Bool {
         policyStore.owesRateHistoryPrompt(shiftCount: shiftCount)
     }
@@ -89,21 +109,6 @@ struct PayrollSettingsSection: View {
         .onChange(of: wageDigitsText) { _, newValue in
             let filtered = String(newValue.filter(\.isNumber).prefix(Self.maxWageDigits))
             if filtered != newValue { wageDigitsText = filtered }
-            let cents = Self.rateCents(fromDigits: filtered)
-            // MEASURED on the simulator: without this guard, `load()` writing
-            // the current rate into `wageDigitsText` on appear fired this
-            // handler, which called `applyRateEdit` and marked the policy
-            // `.confirmed`. Merely OPENING Settings answered the rate-history
-            // prompt — the "estimated" caption vanished and the question was
-            // never asked. A no-op edit is not an edit.
-            guard cents != policyStore.currentHourlyRateCents else { return }
-            // `baseHourlyWageCents` is a read-only VIEW of the rate policy
-            // from here on (PR 6 removes its last readers), but it is still
-            // what the shipped 1.0 build, the widget and the Siri intent
-            // read, so the policy and the mirror move together or a Lock
-            // Screen would quote a rate the app no longer uses.
-            policyStore.applyRateEdit(hourlyRateCents: cents)
-            preferencesStore.baseHourlyWageCents = cents
         }
         .onChange(of: workweekStartWeekday) { oldValue, newValue in
             guard oldValue != newValue else { return }
@@ -118,7 +123,10 @@ struct PayrollSettingsSection: View {
                 guard let day else { return }
                 policyStore.applyRateChange(hourlyRateCents: cents, effectiveFrom: day)
                 preferencesStore.baseHourlyWageCents = policyStore.currentHourlyRateCents
-                load()
+                // A wage field that kept focus behind the sheet now holds
+                // the new rate, so ending that edit writes nothing over it.
+                wageDigitsText = storedWageDigits
+                wageDraftSeed = storedWageDigits
             }
             .paydayAppearance()
         }
@@ -141,13 +149,13 @@ struct PayrollSettingsSection: View {
     // MARK: Sections
 
     /// "Roles and rates": one rate per role. Appears only once a role exists,
-    /// on a shift or in a rate, so an account without roles sees today's
-    /// Settings. The existing rate is "All roles" and stays the default: a
-    /// role with no rate of its own is paid at it, and removing a role's rate
-    /// falls back to it rather than to zero.
+    /// on a primary-job shift or in a rate, so an account without roles sees
+    /// today's Settings. The existing rate is "All roles" and stays the
+    /// default: a role with no rate of its own is paid at it, and removing a
+    /// role's rate falls back to it rather than to zero.
     @ViewBuilder
     private var rolesSection: some View {
-        let roles = roleNames
+        let roles = Self.listedRoles(shifts: shiftRecords, policies: policyStore.policies)
         if !roles.isEmpty {
             Section {
                 HStack {
@@ -184,7 +192,9 @@ struct PayrollSettingsSection: View {
             } header: {
                 Text("Roles and rates")
             } footer: {
-                Text("A shift with a role is paid at that role's rate. A role without its own rate is paid at the All roles rate (the hourly wage above).")
+                // With jobs, these rates pay the primary job's shifts only.
+                let primaryJob = policyStore.policies.jobs.first(where: \.isPrimary)?.name
+                Text("\(primaryJob.map { "On \($0), a shift" } ?? "A shift") with a role is paid at that role's rate. A role without its own rate is paid at the All roles rate (the hourly wage above).")
             }
             .listRowBackground(PaydayColor.fieldBackground)
         }
@@ -316,8 +326,8 @@ struct PayrollSettingsSection: View {
                 .foregroundStyle(PaydayColor.textPrimary)
             Spacer()
             ZStack(alignment: .trailing) {
-                Text(Self.rateDisplay(currentRateCents))
-                    .foregroundStyle(currentRateCents == nil ? PaydayColor.textSecondary : PaydayColor.textPrimary)
+                Text(Self.rateDisplay(wageRowCents))
+                    .foregroundStyle(wageRowCents == nil ? PaydayColor.textSecondary : PaydayColor.textPrimary)
                     .monospacedDigit()
                     .accessibilityHidden(true)
                 TextField("", text: $wageDigitsText)
@@ -327,11 +337,52 @@ struct PayrollSettingsSection: View {
                     .opacity(0.01)
                     .frame(maxWidth: 90)
                     .accessibilityLabel("Hourly wage")
-                    .accessibilityValue(Self.rateDisplay(currentRateCents))
+                    .accessibilityValue(Self.rateDisplay(wageRowCents))
             }
         }
         .contentShape(Rectangle())
         .onTapGesture { isWageFieldFocused = true }
+        .onChange(of: isWageFieldFocused) { _, isFocused in
+            // Each edit starts from the stored rate as it is now: sync may
+            // have moved it, and Keep in the confirmation leaves the draft
+            // empty.
+            if isFocused {
+                wageDigitsText = storedWageDigits
+                wageDraftSeed = storedWageDigits
+            } else {
+                commitWageDraft(canAsk: true)
+            }
+        }
+        .onDisappear {
+            if isWageFieldFocused { commitWageDraft(canAsk: false) }
+        }
+        .wageRemovalConfirmation(isPresented: $isConfirmingWageRemoval, storedCents: currentRateCents) {
+            policyStore.applyRateEdit(hourlyRateCents: nil)
+            preferencesStore.baseHourlyWageCents = nil
+        }
+    }
+
+    /// The wage field's one write, when editing ends: the field loses focus,
+    /// or the row goes away with the field still focused (Settings closed or
+    /// another screen pushed). A screen that is going away (`canAsk` false)
+    /// cannot show the confirmation, so an emptied field keeps the stored
+    /// rate there, and the draft goes back to it so a late focus change
+    /// asks nothing.
+    private func commitWageDraft(canAsk: Bool) {
+        switch Self.wageCommit(draftDigits: wageDigitsText, seedDigits: wageDraftSeed, storedCents: currentRateCents) {
+        case .nothing:
+            break
+        case .apply(let cents):
+            // `baseHourlyWageCents` is a read-only VIEW of the rate policy
+            // from here on (PR 6 removes its last readers), but it is still
+            // what the shipped 1.0 build, the widget and the Siri intent
+            // read, so the policy and the mirror move together or a Lock
+            // Screen would quote a rate the app no longer uses.
+            policyStore.applyRateEdit(hourlyRateCents: cents)
+            preferencesStore.baseHourlyWageCents = cents
+        case .confirmRemoval:
+            if canAsk { isConfirmingWageRemoval = true } else { wageDigitsText = storedWageDigits }
+        }
     }
 
     @ViewBuilder
@@ -397,8 +448,44 @@ struct PayrollSettingsSection: View {
         return parsed
     }
 
+    /// What a wage field writes when editing ends. One rule for the "Hourly
+    /// wage" row here and a job's wage in `JobDetailView`.
+    enum WageCommit: Equatable {
+        case nothing
+        case apply(Int)
+        /// An empty or zero draft over a stored rate: ask before removing it.
+        case confirmRemoval
+    }
+
+    /// The commit rule for a wage draft against the stored rate.
+    ///
+    /// A draft equal to its seed, the stored rate when the field got focus,
+    /// is not an edit: the person changed nothing. Sync can move the stored
+    /// rate while the field has focus, and comparing the untouched draft
+    /// with the new rate would write the old rate over it and upload it.
+    /// Only a changed draft is compared with the stored rate.
+    ///
+    /// A draft equal to the stored rate is not an edit either. `applyRateEdit`
+    /// marks the policy `.confirmed`, and MEASURED on the simulator, writing
+    /// the unchanged rate back merely because Settings was OPENED answered
+    /// the rate-history prompt: the "estimated" caption vanished and the
+    /// question was never asked. So opening the screen, or focusing the
+    /// field and leaving it, writes nothing.
+    ///
+    /// An empty or zero draft never removes a rate silently. The field
+    /// holds four digits, so changing $15.00 to $20.00 empties it on the
+    /// way, and removing the rate removes its "Rate changed on…" history
+    /// with it.
+    static func wageCommit(draftDigits: String, seedDigits: String, storedCents: Int?) -> WageCommit {
+        let draftCents = rateCents(fromDigits: draftDigits)
+        if draftCents == rateCents(fromDigits: seedDigits) { return .nothing }
+        guard let cents = draftCents else {
+            return storedCents == nil ? .nothing : .confirmRemoval
+        }
+        return cents == storedCents ? .nothing : .apply(cents)
+    }
+
     private func load() {
-        wageDigitsText = policyStore.currentHourlyRateCents.map(String.init) ?? ""
         workweekStartWeekday = policyStore.policies.latestCalendar?.workweekStartWeekday
             ?? Calendar.current.firstWeekday
     }
@@ -536,4 +623,18 @@ private struct RateChangeSheet: View {
 private struct RoleRateEdit: Identifiable {
     let role: String
     var id: String { role }
+}
+
+extension View {
+    /// "Turn off hourly wage?": asked when a wage field ends empty or zero
+    /// over a stored rate, because removing the rate removes its history
+    /// too. Keep, or closing the dialog any other way, writes nothing.
+    func wageRemovalConfirmation(isPresented: Binding<Bool>, storedCents: Int?, turnOff: @escaping () -> Void) -> some View {
+        confirmationDialog("Turn off hourly wage?", isPresented: isPresented, titleVisibility: .visible) {
+            Button("Turn Off Wage", role: .destructive, action: turnOff)
+            Button("Keep \(PayrollSettingsSection.rateDisplay(storedCents))", role: .cancel) {}
+        } message: {
+            Text("This removes your hourly rate and its history. Your tips stay.")
+        }
+    }
 }

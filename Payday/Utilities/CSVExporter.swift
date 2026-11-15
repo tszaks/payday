@@ -207,7 +207,14 @@ enum CSVExporter {
         let shiftField = shift.shiftPeriod?.displayName ?? ""
         let note = shift.note
 
-        let period = calculator.period(containing: day)
+        // The row's work day: the engine's own when it valued the shift (it
+        // reads the day in the payroll zone in effect FOR that shift, which
+        // the latest zone is not after a payroll zone change), else the
+        // stored day in the latest zone. The period is the one that holds
+        // that day, so the Date cell always lies inside the Period cell.
+        let zone = calculator.payrollTimeZone
+        let workDay = valuation?.workDay ?? CivilDay(day, in: zone)
+        let period = calculator.period(containing: workDay.date(in: zone))
         // The check for THIS shift's job (PR E1): same period and the same job
         // tag, nil meaning the primary on both sides. Two jobs paid in the
         // same period have two checks, and a Cafe shift must not show the
@@ -238,13 +245,12 @@ enum CSVExporter {
         let salesField: String = shiftDetails.salesCents.map(dollars) ?? ""
         let serversField: String = shiftDetails.serverCount.map(String.init) ?? ""
         let paycheckField: String = paycheck.map { dollars($0.paidTipsCents) } ?? ""
-        // The payroll zone, for all three dates: the engine reads a shift's
-        // work day there, and the period's boundaries are midnights there.
-        let zone = calculator.payrollTimeZone
+        // The period's boundaries are midnights in the payroll zone.
         let periodField = "\(isoDate(period.start, in: zone)) to \(isoDate(period.end, in: zone))"
+        let dateField = workDay.iso
 
         var fields = [
-            isoDate(day, in: zone),
+            dateField,
             shiftField,
             dollars(cashCents),
             dollars(creditCents),

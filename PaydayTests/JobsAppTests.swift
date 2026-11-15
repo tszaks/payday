@@ -142,6 +142,22 @@ struct JobCommandsTests {
         #expect(!JobsSettingsView.nameIsTaken("   ", existing: ["Bistro"], primaryName: "Main job"))
     }
 
+    @Test("rename Save is off for a blank name or another job's name; the job's own name in any case is allowed")
+    func renameIsAllowed() throws {
+        let jobs = twoJobs().jobs
+        let bistro = try #require(jobs.first { $0.id == bistroID })
+        let cafe = try #require(jobs.first { $0.id == cafeID })
+
+        #expect(!JobsSettingsView.renameIsAllowed("", for: cafe, among: jobs))
+        #expect(!JobsSettingsView.renameIsAllowed("   ", for: cafe, among: jobs))
+        #expect(!JobsSettingsView.renameIsAllowed(" bistro ", for: cafe, among: jobs))
+        #expect(!JobsSettingsView.renameIsAllowed("CAFE", for: bistro, among: jobs))
+        #expect(JobsSettingsView.renameIsAllowed("Cafe", for: cafe, among: jobs))
+        #expect(JobsSettingsView.renameIsAllowed("cafe", for: cafe, among: jobs))
+        #expect(JobsSettingsView.renameIsAllowed("Bistro", for: bistro, among: jobs))
+        #expect(JobsSettingsView.renameIsAllowed("Diner", for: cafe, among: jobs))
+    }
+
     @Test("a job schedule keeps the civil date that was picked, whatever the payroll zone")
     func scheduleKeepsPickedDay() {
         var newYork = Calendar(identifier: .gregorian)

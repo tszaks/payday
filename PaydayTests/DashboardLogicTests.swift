@@ -199,6 +199,54 @@ struct PaydayMomentTests {
     }
 }
 
+/// The payday card when the phone is not in the payroll zone: payday is the
+/// payroll zone's civil day, and "today" is the day it is where the phone is.
+@Suite("Payday moment across two zones")
+struct PaydayMomentTwoZoneTests {
+    private static let losAngeles = TimeZone(identifier: "America/Los_Angeles")!
+    /// (payroll, phone): payroll east of the phone, then west of it.
+    private static let payrollZones = [PaydayTestZone.newYork, losAngeles]
+    private static let phoneZones = [losAngeles, PaydayTestZone.tokyo]
+
+    private func at(_ year: Int, _ month: Int, _ day: Int, hour: Int = 0, in zone: TimeZone) -> Date {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = zone
+        return calendar.date(from: DateComponents(year: year, month: month, day: day, hour: hour))!
+    }
+
+    /// Weekly, last day Sunday Jul 19 in the payroll zone, paid Friday Jul 24 there.
+    private func moment(payroll: TimeZone, phone: TimeZone, phoneDay day: Int, hour: Int) -> PaydayMoment.Moment? {
+        var phoneCalendar = Calendar(identifier: .gregorian)
+        phoneCalendar.timeZone = phone
+        let calculator = PayPeriodCalculator(
+            payrollTimeZone: payroll,
+            schedule: PaySchedule(frequency: .weekly, anchorPeriodEnd: at(2026, 7, 19, in: payroll), payDelayDays: 5, firstWeekday: nil)
+        )
+        return PaydayMoment.moment(now: at(2026, 7, day, hour: hour, in: phone), calculator: calculator, calendar: phoneCalendar)
+    }
+
+    @Test("check day is the payroll payday on the phone's calendar, morning and night",
+          arguments: zip(payrollZones, phoneZones))
+    func checkDayIsThePayrollPayday(payroll: TimeZone, phone: TimeZone) {
+        for hour in [1, 9, 23] {
+            let onPayday = moment(payroll: payroll, phone: phone, phoneDay: 24, hour: hour)
+            #expect(onPayday?.phase == .checkDay, "hour \(hour)")
+            #expect(onPayday?.period.end == at(2026, 7, 19, in: payroll), "hour \(hour)")
+            #expect(moment(payroll: payroll, phone: phone, phoneDay: 23, hour: hour)?.phase != .checkDay, "hour \(hour)")
+            #expect(moment(payroll: payroll, phone: phone, phoneDay: 25, hour: hour)?.phase != .checkDay, "hour \(hour)")
+        }
+    }
+
+    @Test("the close summary shows the two payroll days after the last shift",
+          arguments: zip(payrollZones, phoneZones))
+    func closeWindowIsPayrollDays(payroll: TimeZone, phone: TimeZone) {
+        #expect(moment(payroll: payroll, phone: phone, phoneDay: 19, hour: 12) == nil)
+        #expect(moment(payroll: payroll, phone: phone, phoneDay: 20, hour: 12)?.phase == .periodClosed)
+        #expect(moment(payroll: payroll, phone: phone, phoneDay: 21, hour: 12)?.phase == .periodClosed)
+        #expect(moment(payroll: payroll, phone: phone, phoneDay: 22, hour: 12) == nil)
+    }
+}
+
 @Suite("Tonight line")
 struct TonightLineTests {
     @Test("payday moment silences the line entirely")

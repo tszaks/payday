@@ -239,4 +239,33 @@ struct ShiftRolesDataTests {
         let valued = CompensationLedger.value([shift], rates: removed.rates, calendars: removed.calendars)
         #expect(valued.first?.components.regularWagesCents == 800)
     }
+
+    /// Settings > Payroll's role rates are the primary job's (no `jobName`),
+    /// and the ledger prices each job with its own rates only, so a role
+    /// that is only on another job's shifts would be listed with a rate that
+    /// never pays it.
+    @Test("Settings lists the primary job's roles: shifts on the primary, then roles with a primary rate")
+    func settingsListsPrimaryRoles() {
+        let base = rolePolicies()
+        let policies = CompensationPolicies(
+            rates: base.rates + [PayRatePolicy(
+                id: PolicyMigration.deterministicID("roles/cafe/grill"), effectiveFrom: .distantPast,
+                hourlyRateCents: 900, provenance: .confirmed, roleName: "Grill", jobName: "Cafe")],
+            calendars: base.calendars,
+            jobs: [
+                JobPolicy(id: UUID(), name: "Bistro", schedule: nil, isPrimary: true),
+                JobPolicy(id: UUID(), name: "Cafe", schedule: nil, isPrimary: false),
+            ]
+        )
+        let shifts = [
+            ShiftRecord(workDate: day(2026, 10, 6), cashTipsCents: 1_000, roleName: "Host"),
+            ShiftRecord(workDate: day(2026, 10, 5), cashTipsCents: 1_000, roleName: "Bar"),
+            ShiftRecord(workDate: day(2026, 10, 7), cashTipsCents: 1_000, roleName: "Barista", jobName: "Cafe"),
+            ShiftRecord(workDate: day(2026, 10, 7), cashTipsCents: 1_000, roleName: "Grill", jobName: "Cafe"),
+        ]
+        // Host and Bar are on primary shifts; Floor has a primary rate and
+        // no shift, so its rate can still be seen and removed. Barista and
+        // Grill are only on Cafe, and Grill's rate is Cafe's.
+        #expect(PayrollSettingsSection.listedRoles(shifts: shifts, policies: policies) == ["Host", "Bar", "Floor"])
+    }
 }

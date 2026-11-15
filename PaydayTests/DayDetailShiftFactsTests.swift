@@ -67,11 +67,12 @@ struct DayDetailShiftFactsTests {
         #expect(cents > 0)
         #expect(facts.stamp?.digest != nil)
 
-        // The same shifts, in the engine's own order for that day.
-        let engineOrder = facts.snapshot?.day(
+        // Exactly the shifts the engine selected for that day, lunch first.
+        let engineSelection = try #require(facts.snapshot?.day(
             CivilDay(Self.day(0), in: Self.zone)
-        ).shiftIDs
-        #expect(facts.shiftRecords.map(\.id) == engineOrder)
+        ).shiftIDs)
+        #expect(Set(facts.shiftRecords.map(\.id)) == Set(engineSelection))
+        #expect(facts.shiftRecords.map(\.id) == records.map(\.id))
         #expect(Set(facts.shiftRecords.map(\.id)) == Set(records.map(\.id)))
         #expect(facts.shiftRecords.count == 2)
     }
@@ -97,6 +98,31 @@ struct DayDetailShiftFactsTests {
             .map { facts.rowFacts(for: $0, shiftCount: 2, note: nil).amount.cents ?? 0 }
             .reduce(0, +)
         #expect(rowSum == facts.total.cents)
+    }
+
+    /// The rows are listed in the order the ledger allocates a day in, not in
+    /// id order: these ids sort untagged, dinner, lunch.
+    @Test("a double day lists lunch, then dinner, then an untagged shift")
+    func doubleDayListsLunchFirst() {
+        let untagged = ShiftRecord(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+            workDate: Self.day(0), creditTipsCents: 1_000, recordedAt: Self.day(0)
+        )
+        let dinner = ShiftRecord(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!,
+            workDate: Self.day(0), shiftPeriod: .dinner, creditTipsCents: 6_000,
+            recordedAt: Self.day(0)
+        )
+        let lunch = ShiftRecord(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000003")!,
+            workDate: Self.day(0), shiftPeriod: .lunch, creditTipsCents: 4_000,
+            recordedAt: Self.day(0).addingTimeInterval(3_600)
+        )
+        let facts = DayDetailFacts(
+            shiftRecords: [untagged, dinner, lunch], date: Self.day(0),
+            policies: Self.policies(), payrollTimeZone: Self.zone
+        )
+        #expect(facts.shiftRecords.map(\.id) == [lunch.id, dinner.id, untagged.id])
     }
 
     /// A day with no shifts is an empty day, not a failed read.

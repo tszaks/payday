@@ -551,3 +551,132 @@ struct PaydayNotificationParityTests {
         #expect(facts.predictedPaycheck.caption == "wages missing for 1 shift")
     }
 }
+
+/// The payday alert when the phone is not in the payroll zone. The DAY is
+/// the payroll zone's civil payday; the HOUR is 9 AM where the phone is.
+/// Every pair here is two different zones, pinned, so the suite does not
+/// depend on the simulator's zone.
+@Suite("Payday push across two zones")
+@MainActor
+struct PaydayPushTwoZoneTests {
+    private nonisolated static let losAngeles = TimeZone(identifier: "America/Los_Angeles")!
+    /// (payroll, phone): payroll east of the phone, then west of it.
+    private nonisolated static let payrollZones = [PaydayTestZone.newYork, losAngeles]
+    private nonisolated static let phoneZones = [losAngeles, PaydayTestZone.tokyo]
+
+    private func at(_ year: Int, _ month: Int, _ day: Int, hour: Int = 0, in zone: TimeZone) -> Date {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = zone
+        return calendar.date(from: DateComponents(year: year, month: month, day: day, hour: hour))!
+    }
+
+    private func phoneCalendar(_ zone: TimeZone) -> Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = zone
+        return calendar
+    }
+
+    private func policies(payroll: TimeZone, jobs: [JobPolicy] = []) -> CompensationPolicies {
+        CompensationPolicies(
+            rates: [],
+            calendars: [PayrollCalendarPolicy(
+                id: PolicyMigration.deterministicID("push/twozone/calendar"),
+                effectiveFrom: .distantPast, workweekStartWeekday: 1, payrollTimeZone: payroll)],
+            jobs: jobs)
+    }
+
+    /// Weekly, last day Sunday Jul 19 in the payroll zone, paid five days
+    /// later: payday is Friday Jul 24 there.
+    private func schedule(payroll: TimeZone) -> PaySchedule {
+        PaySchedule(frequency: .weekly, anchorPeriodEnd: at(2026, 7, 19, in: payroll), payDelayDays: 5, firstWeekday: nil)
+    }
+
+    private func requests(
+        payroll: TimeZone,
+        phone: TimeZone,
+        hasPrimarySchedule: Bool = true,
+        jobs: [JobPolicy] = [],
+        paycheckRecords: [PaycheckRecord] = []
+    ) -> [PaydayPushScheduler.PendingRequest] {
+        let compensation = policies(payroll: payroll, jobs: jobs)
+        let records = [ShiftRecord(workDate: at(2026, 7, 15, hour: 12, in: payroll), creditTipsCents: 15_000)]
+        return PaydayPushScheduler.pendingRequests(
+            now: at(2026, 7, 20, hour: 12, in: payroll),
+            policies: compensation,
+            primarySchedule: hasPrimarySchedule ? schedule(payroll: payroll) : nil,
+            shiftInputs: ShiftInputAdapter.adapt(records, calendars: compensation.calendars),
+            paycheckRecords: paycheckRecords,
+            isReminderEnabled: true,
+            calendar: phoneCalendar(phone))
+    }
+
+    @Test("the alert fires at 9 AM on the payroll payday, on the phone's clock",
+          arguments: zip(payrollZones, phoneZones))
+    func firesOnThePayrollPaydayAtNineOnThePhone(payroll: TimeZone, phone: TimeZone) throws {
+        let pending = requests(payroll: payroll, phone: phone)
+        let calendar = phoneCalendar(phone)
+
+        let moment = try #require(pending.first { $0.identifier == PaydayPushScheduler.notificationIdentifier })
+        #expect(CivilDay(moment.fireDate, in: phone) == CivilDay(year: 2026, month: 7, day: 24))
+        #expect(calendar.component(.hour, from: moment.fireDate) == 9)
+        #expect(calendar.component(.minute, from: moment.fireDate) == 0)
+
+        let nudge = try #require(pending.first { $0.identifier == PaydayPushScheduler.stubNudgeIdentifier })
+        #expect(CivilDay(nudge.fireDate, in: phone) == CivilDay(year: 2026, month: 7, day: 26))
+        #expect(calendar.component(.hour, from: nudge.fireDate) == 9)
+    }
+
+    @Test("a paycheck recorded for the period is matched, so the next payday is announced",
+          arguments: zip(payrollZones, phoneZones))
+    func recordedPaycheckIsMatched(payroll: TimeZone, phone: TimeZone) throws {
+        let check = PaycheckRecord(
+            periodStart: at(2026, 7, 13, in: payroll), periodEnd: at(2026, 7, 19, in: payroll), paidTipsCents: 15_000)
+        let pending = requests(payroll: payroll, phone: phone, paycheckRecords: [check])
+
+        let moment = try #require(pending.first { $0.identifier == PaydayPushScheduler.notificationIdentifier })
+        #expect(moment.periodEnd == at(2026, 7, 26, in: payroll))
+        #expect(CivilDay(moment.fireDate, in: phone) == CivilDay(year: 2026, month: 7, day: 31))
+        // The stub nudge needs a shift in its period, and the open period has none.
+        #expect(!pending.contains { $0.identifier == PaydayPushScheduler.stubNudgeIdentifier })
+    }
+
+    /// A paycheck downloaded on a phone east of the payroll zone is stored
+    /// at that phone's midnights, which are the previous evening in the
+    /// payroll zone. It is still this period's check.
+    @Test("a paycheck stored at another zone's midnights is matched to its period")
+    func paycheckFromAnotherZoneIsMatched() throws {
+        let check = PaycheckRecord(
+            periodStart: at(2026, 7, 13, in: PaydayTestZone.tokyo),
+            periodEnd: at(2026, 7, 19, in: PaydayTestZone.tokyo),
+            paidTipsCents: 15_000)
+        let pending = requests(payroll: Self.losAngeles, phone: PaydayTestZone.tokyo, paycheckRecords: [check])
+
+        let moment = try #require(pending.first { $0.identifier == PaydayPushScheduler.notificationIdentifier })
+        #expect(moment.periodEnd == at(2026, 7, 26, in: Self.losAngeles))
+        #expect(!pending.contains { $0.identifier == PaydayPushScheduler.stubNudgeIdentifier })
+    }
+
+    @Test("no pay schedule means no payday alert, never one on an invented schedule")
+    func noScheduleNoRequests() {
+        #expect(requests(payroll: Self.losAngeles, phone: Self.losAngeles, hasPrimarySchedule: false).isEmpty)
+    }
+
+    @Test("with no primary schedule, a job with its own schedule keeps its alert and a job on the primary's gets none")
+    func noPrimaryScheduleJobs() {
+        let primary = JobPolicy(id: UUID(), name: "Bistro", schedule: nil, isPrimary: true)
+        let ownID = UUID()
+        let own = JobPolicy(
+            id: ownID, name: "Cafe",
+            schedule: PayScheduleInput(frequency: "weekly", anchorPeriodEnd: CivilDay(year: 2026, month: 7, day: 19), payDelayDays: 5),
+            isPrimary: false)
+        let inherits = JobPolicy(id: UUID(), name: "Bar", schedule: nil, isPrimary: false)
+
+        let pending = requests(
+            payroll: Self.losAngeles, phone: Self.losAngeles, hasPrimarySchedule: false,
+            jobs: [primary, own, inherits])
+        #expect(pending.map(\.identifier) == [
+            PaydayPushScheduler.notificationIdentifier + "-\(ownID.uuidString)",
+        ])
+        #expect(pending.allSatisfy { $0.job == "Cafe" })
+    }
+}

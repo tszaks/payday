@@ -719,6 +719,52 @@ Deno.test("a shift with no tip share reports null, not zero", () => {
   assertEquals(shift.tip_share_in_cents, null);
 });
 
+Deno.test("the summary passes the shift totals through, tip share included", async () => {
+  // The totals are summed in SQL from the stored shift rows; this layer only
+  // forwards them, so a new key must reach the caller unchanged.
+  const shifts = {
+    count: 1,
+    tip_entry_count: 0,
+    cash_voluntary_tips_cents: 0,
+    credit_voluntary_tips_cents: 0,
+    gratuity_cents: 0,
+    tip_share_in_cents: 18000,
+    gross_tip_earnings_cents: 18000,
+    tip_out_cents: 4000,
+    net_tip_earnings_cents: 14000,
+    sales_cents: 0,
+    hours_worked: 6,
+  };
+  const paychecks = {
+    count: 0,
+    paid_tips_cents: 0,
+    gross_pay_cents: 0,
+    net_pay_cents: 0,
+    taxes_cents: 0,
+  };
+  const calls: unknown[] = [];
+  const ctx = {
+    ...stubCtx(null, null),
+    key: { user_id: "u1", scopes: ["read"] },
+  };
+  ctx.admin.rpc = (name: string, args: unknown) => {
+    calls.push({ name, args });
+    return Promise.resolve({ data: { shifts, paychecks }, error: null });
+  };
+  const url = new URL(
+    "https://example.test/functions/v1/payday-api/v1/summary?start_date=2026-09-01&end_date=2026-09-30",
+  );
+  const result = await testing.handleREST(new Request(url), url, "/v1/summary", ctx, undefined);
+  const data = result.body.data as JsonRecord;
+  assertEquals(calls, [{
+    name: "payday_agent_summary",
+    args: { p_user_id: "u1", p_start_date: "2026-09-01", p_end_date: "2026-09-30" },
+  }]);
+  assertEquals(data.shifts, shifts);
+  assertEquals((data.shifts as JsonRecord).tip_share_in_cents, 18000);
+  assertEquals(data.paychecks, paychecks);
+});
+
 Deno.test("a shift row carries its role, and null without one", () => {
   const base = {
     id: "66666666-6666-4666-8666-666666666666",

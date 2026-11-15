@@ -1,4 +1,5 @@
 import Foundation
+import PaydayCore
 
 /// Decides whether the Dashboard's payday card should show right now, for
 /// which finished period, and in which of its two moments. Pure and stateless
@@ -49,6 +50,7 @@ enum PaydayMoment {
     ///   - lingerDays: how many days past the last shift the close summary
     ///     stays (capped at payday). Two days ≈ "shows Monday and Tuesday" for
     ///     a Sunday close.
+    ///   - calendar: the phone's calendar; its zone decides which day "today" is.
     static func moment(
         now: Date,
         calculator: PayPeriodCalculator,
@@ -57,35 +59,34 @@ enum PaydayMoment {
         lingerDays: Int = 2,
         calendar: Calendar = .current
     ) -> Moment? {
-        var cal = calendar
-        cal.timeZone = .current
-        let today = cal.startOfDay(for: now)
+        // Period ends and paydays are civil days in the payroll zone; "today"
+        // is the day it is where the phone is.
+        let zone = calculator.payrollTimeZone
+        let today = CivilDay(now, in: calendar.timeZone)
         let current = calculator.period(containing: now)
-        let dayBefore = cal.date(byAdding: .day, value: -1, to: current.start) ?? current.start
-        let prior = calculator.period(containing: dayBefore)
+        let prior = calculator.priorPeriods(before: current, count: 1).first ?? current
         let hasDelay = calculator.schedule.resolvedPayDelayDays > 0
 
         /// The single day the check for this period lands.
         func isCheckDay(_ period: PayPeriod) -> Bool {
-            cal.isDate(cal.startOfDay(for: calculator.payDate(for: period)), inSameDayAs: today)
+            CivilDay(calculator.payDate(for: period), in: zone) == today
         }
 
         /// The days the close summary is allowed to show. With a lag: the day
         /// after the last shift, up to `lingerDays` later but never past
         /// payday. With no lag: the last shift day only.
-        func closeWindow(_ period: PayPeriod) -> ClosedRange<Date> {
-            let end = cal.startOfDay(for: period.end)
+        func closeWindow(_ period: PayPeriod) -> ClosedRange<CivilDay> {
+            let end = CivilDay(period.end, in: zone)
             guard hasDelay else { return end...end }
-            let lower = cal.date(byAdding: .day, value: 1, to: end) ?? end
-            let payDate = cal.startOfDay(for: calculator.payDate(for: period))
-            let cap = cal.date(byAdding: .day, value: lingerDays, to: end) ?? end
-            let upper = min(payDate, cap)
+            let lower = end.adding(days: 1)
+            let payDay = CivilDay(calculator.payDate(for: period), in: zone)
+            let upper = min(payDay, end.adding(days: lingerDays))
             return lower...max(lower, upper)
         }
 
         func isDismissed(_ date: Date?, _ period: PayPeriod) -> Bool {
             guard let date else { return false }
-            return cal.isDate(date, inSameDayAs: period.end)
+            return CivilDay(date, in: zone) == CivilDay(period.end, in: zone)
         }
 
         // Check day is tested first so a no-lag schedule (where both moments

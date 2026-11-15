@@ -26,7 +26,7 @@ struct SyncPassOrderTests {
     private static let user = UUID(uuidString: "90000000-0000-4000-8000-000000000001")!
     private static let shift = UUID(uuidString: "90000000-0000-4000-8000-0000000000a1")!
 
-    private func client() -> SupabaseClient {
+    func client() -> SupabaseClient {
         RoutingStub.reset()
         // The deletion queues live in App Group UserDefaults keyed by user id,
         // so they survive BOTH the test and the whole test run. Without this
@@ -61,7 +61,7 @@ struct SyncPassOrderTests {
         )
     }
 
-    private func context() throws -> ModelContext {
+    func context() throws -> ModelContext {
         let config = ModelConfiguration(isStoredInMemoryOnly: true)
         return ModelContext(try ModelContainer(
             for: TipEntry.self, PaycheckRecord.self, ShiftRecord.self,
@@ -550,11 +550,12 @@ struct SyncPassOrderTests {
 /// every request cannot drive a pass that makes nine different calls.
 final class RoutingStub: URLProtocol, @unchecked Sendable {
     nonisolated(unsafe) private static var paths: [String] = []
+    nonisolated(unsafe) private static var bodies: [(path: String, body: Data)] = []
     nonisolated(unsafe) private static var routes: [(String, String)] = []
     private static let lock = NSLock()
 
     static func reset() {
-        lock.lock(); paths = []
+        lock.lock(); paths = []; bodies = []
         routes = [
             // A VALID settings row, not "{}". With "{}" the pass threw
             // `keyNotFound: user_id` at the settings decode -- so every test
@@ -609,14 +610,22 @@ final class RoutingStub: URLProtocol, @unchecked Sendable {
         return paths
     }
 
+    /// The request bodies sent to every path containing `fragment`, in order.
+    static func recordedBodies(_ fragment: String) -> [Data] {
+        lock.lock(); defer { lock.unlock() }
+        return bodies.filter { $0.path.contains(fragment) }.map(\.body)
+    }
+
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
     override func startLoading() {
         let path = request.url?.path ?? "?"
         let method = request.httpMethod ?? "?"
+        let sent = Self.body(of: request)
         Self.lock.lock()
         Self.paths.append("\(method) \(path)")
+        if let sent { Self.bodies.append((path, sent)) }
         var body = Self.routes.first { path.contains($0.0) }?.1 ?? "[]"
         Self.lock.unlock()
 
@@ -625,9 +634,11 @@ final class RoutingStub: URLProtocol, @unchecked Sendable {
         // one. Same URL, so the only honest discriminator is the header
         // PostgREST itself uses for `.single()`. Getting this wrong threw
         // `typeMismatch` mid-pass and silently truncated every test here.
-        if path.contains("user_settings"), !path.contains("/rpc/"),
-           request.value(forHTTPHeaderField: "Accept")?.contains("pgrst.object") != true {
-            body = "[\(body)]"
+        if path.contains("user_settings"), !path.contains("/rpc/") {
+            body = Self.selecting(columnsIn: request.url, from: body)
+            if request.value(forHTTPHeaderField: "Accept")?.contains("pgrst.object") != true {
+                body = "[\(body)]"
+            }
         }
 
         let response = HTTPURLResponse(
@@ -639,4 +650,38 @@ final class RoutingStub: URLProtocol, @unchecked Sendable {
     }
 
     override func stopLoading() {}
+
+    /// PostgREST answers a read with only the columns its `select` names, so
+    /// the stub does too. Returning the whole canned row would hand the
+    /// client a column it never asked for, and a column missing from the
+    /// client's list would pass every test while never arriving in the app.
+    private static func selecting(columnsIn url: URL?, from body: String) -> String {
+        guard let url,
+              let select = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+                  .queryItems?.first(where: { $0.name == "select" })?.value,
+              let row = try? JSONSerialization.jsonObject(with: Data(body.utf8)) as? [String: Any]
+        else { return body }
+        let columns = Set(select.split(separator: ",").map(String.init))
+        guard let data = try? JSONSerialization.data(withJSONObject: row.filter { columns.contains($0.key) })
+        else { return body }
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    /// URLSession hands a protocol the body as a stream, never as `httpBody`.
+    private static func body(of request: URLRequest) -> Data? {
+        if let body = request.httpBody { return body }
+        guard let stream = request.httpBodyStream else { return nil }
+        stream.open()
+        defer { stream.close() }
+        var collected = Data()
+        let size = 4_096
+        let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: size)
+        defer { buffer.deallocate() }
+        while stream.hasBytesAvailable {
+            let read = stream.read(buffer, maxLength: size)
+            if read <= 0 { break }
+            collected.append(buffer, count: read)
+        }
+        return collected
+    }
 }

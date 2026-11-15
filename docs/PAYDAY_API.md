@@ -42,9 +42,18 @@ rate-limited, revocable, and audited.
 > the snapshot's `as_of` are left out, as the app leaves them out.
 > `available: false` with `reason: "no_snapshot"` means no device has
 > published yet; `stale: true` means the data changed after the snapshot was
-> made and stays true until a device publishes again. `data.shifts` is the
-> older tips-only total: it includes no wage and is not comparable with
-> `data.earnings` or with the app.
+> made and stays true until a device publishes again.
+>
+> **`data.shifts` of the summary** sums the stored tip-side figures of the
+> same shifts `GET /v1/shifts` lists for the range (live shifts, by
+> `work_date`, both ends inclusive). It includes no wage, so it is not the
+> figure the app shows; `data.earnings` is. `net_tip_earnings_cents` is cash +
+> credit + gratuity + tip share received − tip-out, and
+> `gross_tip_earnings_cents` is that net plus the tip-out, as on one shift.
+> `tip_share_in_cents` is the tip share received. `tip_entry_count` is kept for
+> compatibility: it counts the legacy tip entries those shifts were converted
+> from, and is 0 for a shift logged in the current app. `data.paychecks` sums
+> paycheck records whose `period_end` is in the range.
 
 REST resources include summaries, grouped shifts, raw tip entries, paychecks,
 settings, incremental changes, agent keys, and the audit log. The MCP endpoint

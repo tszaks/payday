@@ -497,11 +497,12 @@ public enum CompensationLedger {
 
     // MARK: Canonical orders
 
-    /// Order within a workweek, and the order of the whole result: work day,
-    /// then period rank (lunch, dinner, untagged), then `recordedAt` (a nil
-    /// recording time sorts first, as the earliest thing known), then id.
-    /// Total and deterministic, which is what makes the ledger
-    /// order-independent (Design 1, step 3).
+    /// Order within a workweek: work day, then period rank (lunch, dinner,
+    /// untagged), then `recordedAt` (a nil recording time sorts first, as the
+    /// earliest thing known), then id. Total and deterministic, which is what
+    /// makes the ledger order-independent (Design 1, step 3). The result
+    /// itself is ordered by work day, then id (the overload below): a
+    /// valuation carries no period.
     static func canonicalOrder(_ lhs: ShiftInput, _ rhs: ShiftInput) -> Bool {
         canonicalKey(lhs) < canonicalKey(rhs)
     }

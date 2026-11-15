@@ -607,11 +607,13 @@ struct PaycheckComparisonView: View {
         return checked.isShort ? "\(amount) short." : "\(amount) over."
     }
 
-    private var comparisonCaption: String {
+    /// Internal rather than private so a test can read the exact sentence.
+    var comparisonCaption: String {
         let logged = Money.string(fromCents: checked.expectedTipsAndGratuityCents)
         let paid = Money.string(fromCents: checked.paidTipEarningsCents)
-        if checked.usesCreditOnly {
-            return "Logged \(logged) in card tips and gratuity · check paid \(paid)"
+        if checked.hasCreditTips {
+            let lines = checked.cardTipsOnCheck ? "card tips and gratuity" : "gratuity"
+            return "Logged \(logged) in \(lines) · check paid \(paid)"
         }
         return "Logged \(logged) · check paid \(paid)"
     }
