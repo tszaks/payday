@@ -291,6 +291,8 @@ struct JobDetailView: View {
     /// The wage field's draft, written once when editing ends, by the same
     /// rule as Settings > Payroll's "Hourly wage" row.
     @State private var wageDigitsText = ""
+    /// What the draft was seeded with when the field got focus.
+    @State private var wageDraftSeed = ""
     @FocusState private var isWageFieldFocused: Bool
     @State private var isConfirmingWageRemoval = false
     @State private var workweekStartWeekday = 1
@@ -336,7 +338,12 @@ struct JobDetailView: View {
                 .onTapGesture { isWageFieldFocused = true }
                 .onChange(of: isWageFieldFocused) { _, isFocused in
                     // Each edit starts from the stored wage as it is now.
-                    if isFocused { wageDigitsText = storedWageDigits } else { commitWageDraft(canAsk: true) }
+                    if isFocused {
+                        wageDigitsText = storedWageDigits
+                        wageDraftSeed = storedWageDigits
+                    } else {
+                        commitWageDraft(canAsk: true)
+                    }
                 }
                 .onDisappear {
                     if isWageFieldFocused { commitWageDraft(canAsk: false) }
@@ -449,7 +456,7 @@ struct JobDetailView: View {
     /// to it so a late focus change asks nothing.
     private func commitWageDraft(canAsk: Bool) {
         guard tag != nil else { return }
-        switch PayrollSettingsSection.wageCommit(draftDigits: wageDigitsText, storedCents: rateCents) {
+        switch PayrollSettingsSection.wageCommit(draftDigits: wageDigitsText, seedDigits: wageDraftSeed, storedCents: rateCents) {
         case .nothing:
             break
         case .apply(let cents):

@@ -98,16 +98,32 @@ struct SettingsWageRowTests {
     @Test("the wage field's commit: a new rate applies once, an unchanged one writes nothing, emptying a rate asks first")
     @MainActor
     func wageCommitRule() {
-        #expect(PayrollSettingsSection.wageCommit(draftDigits: "2000", storedCents: 1_500) == .apply(2_000))
-        #expect(PayrollSettingsSection.wageCommit(draftDigits: "1500", storedCents: nil) == .apply(1_500))
+        #expect(PayrollSettingsSection.wageCommit(draftDigits: "2000", seedDigits: "1500", storedCents: 1_500) == .apply(2_000))
+        #expect(PayrollSettingsSection.wageCommit(draftDigits: "1500", seedDigits: "", storedCents: nil) == .apply(1_500))
 
-        #expect(PayrollSettingsSection.wageCommit(draftDigits: "1500", storedCents: 1_500) == .nothing)
-        #expect(PayrollSettingsSection.wageCommit(draftDigits: "0020", storedCents: 20) == .nothing)
+        #expect(PayrollSettingsSection.wageCommit(draftDigits: "1500", seedDigits: "1500", storedCents: 1_500) == .nothing)
+        #expect(PayrollSettingsSection.wageCommit(draftDigits: "0020", seedDigits: "20", storedCents: 20) == .nothing)
 
         for empty in ["", "0", "0000"] {
-            #expect(PayrollSettingsSection.wageCommit(draftDigits: empty, storedCents: 1_500) == .confirmRemoval)
-            #expect(PayrollSettingsSection.wageCommit(draftDigits: empty, storedCents: nil) == .nothing)
+            #expect(PayrollSettingsSection.wageCommit(draftDigits: empty, seedDigits: "1500", storedCents: 1_500) == .confirmRemoval)
+            #expect(PayrollSettingsSection.wageCommit(draftDigits: empty, seedDigits: "", storedCents: nil) == .nothing)
         }
+    }
+
+    /// A sync that moves the stored rate while the field has focus must not
+    /// be undone by the draft the field was seeded with: the person typed
+    /// nothing, so nothing is written.
+    @Test("an untouched draft writes nothing over a rate sync changed while the field had focus")
+    @MainActor
+    func untouchedDraftKeepsASyncedRate() {
+        // Seeded with $15.00; sync moved the store to $20.00; nothing typed.
+        #expect(PayrollSettingsSection.wageCommit(draftDigits: "1500", seedDigits: "1500", storedCents: 2_000) == .nothing)
+        #expect(PayrollSettingsSection.wageCommit(draftDigits: "", seedDigits: "", storedCents: 2_000) == .nothing)
+        // A typed rate is still an edit, compared with the store as it is now.
+        #expect(PayrollSettingsSection.wageCommit(draftDigits: "1800", seedDigits: "1500", storedCents: 2_000) == .apply(1_800))
+        #expect(PayrollSettingsSection.wageCommit(draftDigits: "2000", seedDigits: "1500", storedCents: 2_000) == .nothing)
+        // Emptying a seeded rate still asks first.
+        #expect(PayrollSettingsSection.wageCommit(draftDigits: "", seedDigits: "1500", storedCents: 2_000) == .confirmRemoval)
     }
 
     /// The damage the one commit prevents, at the store: a rate history made
@@ -122,7 +138,8 @@ struct SettingsWageRowTests {
         store.applyRateChange(hourlyRateCents: 1_500, effectiveFrom: day(2026, 6, 1))
         let original = try #require(store.policies.rates.first { $0.effectiveFrom == .distantPast })
 
-        let commit = PayrollSettingsSection.wageCommit(draftDigits: "2000", storedCents: store.currentHourlyRateCents)
+        let commit = PayrollSettingsSection.wageCommit(
+            draftDigits: "2000", seedDigits: "1500", storedCents: store.currentHourlyRateCents)
         guard case .apply(let cents) = commit else {
             Issue.record("expected one rate to apply, got \(commit)")
             return

@@ -128,8 +128,11 @@ struct PeriodsPageFacts: SnapshotFacts {
         year = currentYear
         // To date means to today: the snapshot itself is built with no cutoff,
         // so a shift logged ahead for a later day would otherwise count now.
+        // Today is the day the person sees on the phone, so it is read on the
+        // phone's calendar. The screen passes that calendar's start of day,
+        // which a payroll zone further west still reads as the day before.
         let yearResult = snapshot?.yearToDate(
-            year: currentYear, asOf: CivilDay(now, in: payrollTimeZone), job: job)
+            year: currentYear, asOf: CivilDay(now, in: calendar.timeZone), job: job)
         yearToDate = yearResult.map(EarningsFigure.earnedIncome) ?? .unavailable()
         hasYearToDate = (yearResult?.completeness.totalShifts ?? 0) > 0
         yearToDateShiftCountText = CompletenessCopy.shiftCount(yearResult?.completeness.totalShifts ?? 0)

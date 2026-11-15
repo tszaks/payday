@@ -24,6 +24,9 @@ struct PayrollSettingsSection: View {
     /// The wage field's draft. Typing changes only this; `commitWageDraft`
     /// writes it once, when editing ends.
     @State private var wageDigitsText = ""
+    /// What the draft was seeded with when the field got focus. A draft
+    /// still equal to it is no edit, whatever the store holds by then.
+    @State private var wageDraftSeed = ""
     @FocusState private var isWageFieldFocused: Bool
     @State private var isConfirmingWageRemoval = false
     @State private var workweekStartWeekday = 1
@@ -123,6 +126,7 @@ struct PayrollSettingsSection: View {
                 // A wage field that kept focus behind the sheet now holds
                 // the new rate, so ending that edit writes nothing over it.
                 wageDigitsText = storedWageDigits
+                wageDraftSeed = storedWageDigits
             }
             .paydayAppearance()
         }
@@ -342,7 +346,12 @@ struct PayrollSettingsSection: View {
             // Each edit starts from the stored rate as it is now: sync may
             // have moved it, and Keep in the confirmation leaves the draft
             // empty.
-            if isFocused { wageDigitsText = storedWageDigits } else { commitWageDraft(canAsk: true) }
+            if isFocused {
+                wageDigitsText = storedWageDigits
+                wageDraftSeed = storedWageDigits
+            } else {
+                commitWageDraft(canAsk: true)
+            }
         }
         .onDisappear {
             if isWageFieldFocused { commitWageDraft(canAsk: false) }
@@ -360,7 +369,7 @@ struct PayrollSettingsSection: View {
     /// rate there, and the draft goes back to it so a late focus change
     /// asks nothing.
     private func commitWageDraft(canAsk: Bool) {
-        switch Self.wageCommit(draftDigits: wageDigitsText, storedCents: currentRateCents) {
+        switch Self.wageCommit(draftDigits: wageDigitsText, seedDigits: wageDraftSeed, storedCents: currentRateCents) {
         case .nothing:
             break
         case .apply(let cents):
@@ -450,7 +459,13 @@ struct PayrollSettingsSection: View {
 
     /// The commit rule for a wage draft against the stored rate.
     ///
-    /// A draft equal to the stored rate is not an edit. `applyRateEdit`
+    /// A draft equal to its seed, the stored rate when the field got focus,
+    /// is not an edit: the person changed nothing. Sync can move the stored
+    /// rate while the field has focus, and comparing the untouched draft
+    /// with the new rate would write the old rate over it and upload it.
+    /// Only a changed draft is compared with the stored rate.
+    ///
+    /// A draft equal to the stored rate is not an edit either. `applyRateEdit`
     /// marks the policy `.confirmed`, and MEASURED on the simulator, writing
     /// the unchanged rate back merely because Settings was OPENED answered
     /// the rate-history prompt: the "estimated" caption vanished and the
@@ -461,8 +476,10 @@ struct PayrollSettingsSection: View {
     /// holds four digits, so changing $15.00 to $20.00 empties it on the
     /// way, and removing the rate removes its "Rate changed on…" history
     /// with it.
-    static func wageCommit(draftDigits: String, storedCents: Int?) -> WageCommit {
-        guard let cents = rateCents(fromDigits: draftDigits) else {
+    static func wageCommit(draftDigits: String, seedDigits: String, storedCents: Int?) -> WageCommit {
+        let draftCents = rateCents(fromDigits: draftDigits)
+        if draftCents == rateCents(fromDigits: seedDigits) { return .nothing }
+        guard let cents = draftCents else {
             return storedCents == nil ? .nothing : .confirmRemoval
         }
         return cents == storedCents ? .nothing : .apply(cents)

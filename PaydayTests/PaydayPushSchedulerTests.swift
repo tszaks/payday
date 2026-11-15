@@ -640,6 +640,22 @@ struct PaydayPushTwoZoneTests {
         #expect(!pending.contains { $0.identifier == PaydayPushScheduler.stubNudgeIdentifier })
     }
 
+    /// A paycheck downloaded on a phone east of the payroll zone is stored
+    /// at that phone's midnights, which are the previous evening in the
+    /// payroll zone. It is still this period's check.
+    @Test("a paycheck stored at another zone's midnights is matched to its period")
+    func paycheckFromAnotherZoneIsMatched() throws {
+        let check = PaycheckRecord(
+            periodStart: at(2026, 7, 13, in: PaydayTestZone.tokyo),
+            periodEnd: at(2026, 7, 19, in: PaydayTestZone.tokyo),
+            paidTipsCents: 15_000)
+        let pending = requests(payroll: Self.losAngeles, phone: PaydayTestZone.tokyo, paycheckRecords: [check])
+
+        let moment = try #require(pending.first { $0.identifier == PaydayPushScheduler.notificationIdentifier })
+        #expect(moment.periodEnd == at(2026, 7, 26, in: Self.losAngeles))
+        #expect(!pending.contains { $0.identifier == PaydayPushScheduler.stubNudgeIdentifier })
+    }
+
     @Test("no pay schedule means no payday alert, never one on an invented schedule")
     func noScheduleNoRequests() {
         #expect(requests(payroll: Self.losAngeles, phone: Self.losAngeles, hasPrimarySchedule: false).isEmpty)

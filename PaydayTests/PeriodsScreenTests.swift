@@ -52,6 +52,45 @@ struct PeriodsYearToDateTests {
         #expect(both.yearToDateShiftCountText == CompletenessCopy.shiftCount(1))
         #expect(both.hasYearToDate)
     }
+
+    /// The cutoff is the day the person sees as today on the phone. At 1 AM
+    /// in New York it is still the evening before in Los Angeles, the payroll
+    /// zone, but a shift the person logged for today is in the figure.
+    @Test("to date means the phone's today, not that instant read in the payroll zone")
+    func cutoffIsThePhonesToday() throws {
+        let losAngeles = TimeZone(identifier: "America/Los_Angeles")!
+        var phone = Calendar(identifier: .gregorian)
+        phone.timeZone = PaydayTestZone.newYork
+        func midnight(_ day: Int, in zone: TimeZone) -> Date {
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = zone
+            return calendar.date(from: DateComponents(year: 2026, month: 10, day: day))!
+        }
+        let policies = CompensationPolicies(
+            rates: [PayRatePolicy(
+                id: PolicyMigration.deterministicID("periodsscreen/phonetoday/rate"),
+                effectiveFrom: .distantPast, hourlyRateCents: 1_000, provenance: .confirmed)],
+            calendars: [PayrollCalendarPolicy(
+                id: PolicyMigration.deterministicID("periodsscreen/phonetoday/calendar"),
+                effectiveFrom: .distantPast, workweekStartWeekday: 1, payrollTimeZone: losAngeles)]
+        )
+        let today = ShiftRecord(workDate: midnight(6, in: losAngeles), creditTipsCents: 10_000, hoursWorked: 5)
+        let tomorrow = ShiftRecord(workDate: midnight(7, in: losAngeles), creditTipsCents: 20_000, hoursWorked: 6)
+        let now = phone.date(from: DateComponents(year: 2026, month: 10, day: 6, hour: 1))!
+        func facts(_ records: [ShiftRecord]) -> PeriodsPageFacts {
+            let snapshot = HistoryEarnings.build(records: records, policies: policies, payrollTimeZone: losAngeles).snapshot
+            return PeriodsPageFacts(
+                snapshot: snapshot, paycheckRecords: [],
+                schedule: PaySchedule(frequency: .biweekly, anchorPeriodEnd: midnight(11, in: losAngeles), payDelayDays: 5, firstWeekday: nil),
+                payrollTimeZone: losAngeles, now: now, calendar: phone)
+        }
+
+        let both = facts([today, tomorrow])
+        let cents = try #require(both.yearToDate.cents)
+        #expect(cents > 0)
+        #expect(cents == facts([today]).yearToDate.cents)
+        #expect(both.yearToDateShiftCountText == CompletenessCopy.shiftCount(1))
+    }
 }
 
 @Suite("Period detail: the check comparison names what was logged")
