@@ -6,7 +6,7 @@ Drafted 2026-09-17 for autonomous sessions. This file is the contract. Read it b
 
 Every number Payday shows, speaks, exports, or serves comes from one engine, and no two surfaces can disagree about the same fact.
 
-Concretely: **PRs 0 through 8 of `~/.claude/plans/option-b-b-full-effervescent-kite.md` are merged to `production` with CI green, and the release gate in PR 8 passes.**
+Concretely: **PRs 0 through 8 of the plan (`docs/design/PAYDAYCORE_PLAN.md`; the session copy this line first named, `~/.claude/plans/option-b-b-full-effervescent-kite.md`, no longer exists) are merged to `production` with CI green, and the release gate in PR 8 passes.**
 
 **Status, measured 2026-09-18 rather than estimated.** This sentence has been
 stale in both directions before, so it names what is merged rather than
@@ -22,7 +22,8 @@ Open: PR 2's writer flip and the reader swaps it gates, S10 and S12; PR 6's
 group 2.14 (the device-published snapshot, which is the only thing that can
 give the `/v1` API a wage concept at all); PR 7 entirely; and PR 8's
 deletions, which cannot begin until the flip lands because the screens still
-read through the old paths.
+read through the old paths. (Open as of 2026-09-18; the 2026-09-21 status
+below records what merged since.)
 
 Criteria 2, 3, 4 and 5 are green as of this date, each measured by running it
 and recorded in `docs/RELEASE_GATE.md`. Criterion 6 is half done: the lint
@@ -61,7 +62,7 @@ Done is not "the code is written." Done is all of:
 
 ## Authority granted (Tyler, 2026-09-17)
 
-Work autonomously. Do not stop to ask permission for any of this:
+For the PaydayCore PRs, sessions were to work autonomously and not stop to ask permission for any of this:
 
 - Build, review, gate, push, and **merge** each PR to `production` as its CI goes green.
 - Create and delete your own git worktrees and branches.
@@ -72,7 +73,7 @@ Work autonomously. Do not stop to ask permission for any of this:
 ## Hard stops (ask, and wait)
 
 - Anything that would **delete or overwrite** Tyler's real earnings data beyond a reversible migration, including any destructive repair, truncate, or history rewrite.
-- Submitting a build to App Store review, or changing anything about the 1.0 submission currently in review.
+- Submitting a build to App Store review, or changing anything about the 1.0 submission, which was in review at the time.
 - Rotating, revoking, or publishing a credential.
 - Changing `~/.codex/AGENTS.md`.
 - Spending money.
@@ -101,7 +102,7 @@ So: take PR 8 as far as it goes, leave the device-and-soak checklist in `docs/RE
 
 ## Order of work, and what can run in parallel
 
-- **PR 2** (13 slices; S1-S9, S11 and S13 merged as of 2026-09-18, leaving the writer flip, S10 and S12): S3 the deriver, S4 the trigger, S5 the one-shot and rollback were serial. The rest, sync, ShiftCommands, the agent API, the views, the parity test, can overlap once S5 lands. Design: `docs/design/PR2-design-final.md`.
+- **PR 2** (13 slices; S1-S9, S11 and S13 merged as of 2026-09-18, leaving the writer flip, S10 and S12; since then S12 merged in #63, S10's premise expired in #62, and the PR 8 deletions (#137) left no writer flip to take): S3 the deriver, S4 the trigger, S5 the one-shot and rollback were serial. The rest, sync, ShiftCommands, the agent API, the views, the parity test, can overlap once S5 lands. Design: `docs/design/PR2-design-final.md`.
 - **PR 3** (policies and the CompensationLedger) is pure Swift over fixtures already merged. It does **not** depend on PR 2 and should run in parallel from the start.
 - **PR 4** (the snapshot and its store) needs the ledger and `ShiftRecord`.
 - **PR 5** (every consumer) is the largest surface: 280 inventory rows in `docs/METRICS.md`. Migrate in the plan's order, screen by screen, re-running the completeness critic per screen, because the inventory is a floor and not a proven ceiling.

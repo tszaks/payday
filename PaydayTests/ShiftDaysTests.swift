@@ -15,8 +15,8 @@ struct ShiftDaysTests {
         let lunch = UUID()
         let dinner = UUID()
         let records = [
-            TipRecord(date: day(2026, 7, 1), amountCents: 5000, kind: .cash, isDouble: false, shiftPeriod: .dinner, shiftID: dinner),
-            TipRecord(date: day(2026, 7, 1), amountCents: 4000, kind: .cash, isDouble: false, shiftPeriod: .lunch, shiftID: lunch)
+            TipRecord(date: day(2026, 7, 1), amountCents: 5000, kind: .cash, shiftPeriod: .dinner, shiftID: dinner),
+            TipRecord(date: day(2026, 7, 1), amountCents: 4000, kind: .cash, shiftPeriod: .lunch, shiftID: lunch)
         ]
         let groups = ShiftDays.groupedByShift(records, shiftID: \.shiftID, date: \.date, period: \.shiftPeriod)
         #expect(groups.count == 2)
@@ -28,8 +28,8 @@ struct ShiftDaysTests {
     func oneShiftKeepsCashAndCreditTogether() {
         let shift = UUID()
         let records = [
-            TipRecord(date: day(2026, 7, 1), amountCents: 5000, kind: .cash, isDouble: false, shiftID: shift),
-            TipRecord(date: day(2026, 7, 1), amountCents: 3000, kind: .credit, isDouble: false, shiftID: shift)
+            TipRecord(date: day(2026, 7, 1), amountCents: 5000, kind: .cash, shiftID: shift),
+            TipRecord(date: day(2026, 7, 1), amountCents: 3000, kind: .credit, shiftID: shift)
         ]
         let groups = ShiftDays.groupedByShift(records, shiftID: \.shiftID, date: \.date, period: \.shiftPeriod)
         #expect(groups.count == 1)
@@ -39,8 +39,8 @@ struct ShiftDaysTests {
     @Test("records with a nil shiftID fall back to one shift per day")
     func nilShiftIDFallsBackToDay() {
         let records = [
-            TipRecord(date: day(2026, 7, 1), amountCents: 5000, kind: .cash, isDouble: false),
-            TipRecord(date: day(2026, 7, 1), amountCents: 3000, kind: .credit, isDouble: false)
+            TipRecord(date: day(2026, 7, 1), amountCents: 5000, kind: .cash),
+            TipRecord(date: day(2026, 7, 1), amountCents: 3000, kind: .credit)
         ]
         let groups = ShiftDays.groupedByShift(records, shiftID: \.shiftID, date: \.date, period: \.shiftPeriod)
         #expect(groups.count == 1)
@@ -48,38 +48,37 @@ struct ShiftDaysTests {
 
     @Test("a single-shift day always shows its exact date and period")
     func singleShiftLabelIsComplete() {
-        let label = ShiftDays.shiftLabel(day: day(2026, 7, 1), period: .lunch, dayHasMultipleShifts: false, relativeTo: day(2026, 7, 1))
+        let label = ShiftDays.shiftLabel(day: day(2026, 7, 1), period: .lunch, dayHasMultipleShifts: false)
         #expect(label == "Wednesday, Jul 1 · Lunch")
     }
 
     @Test("a double day uses the same exact-date shape for each period")
     func doubleDayLabelsByPeriod() {
-        let lunch = ShiftDays.shiftLabel(day: day(2026, 7, 1), period: .lunch, dayHasMultipleShifts: true, relativeTo: day(2026, 7, 1))
-        let dinner = ShiftDays.shiftLabel(day: day(2026, 7, 1), period: .dinner, dayHasMultipleShifts: true, relativeTo: day(2026, 7, 1))
+        let lunch = ShiftDays.shiftLabel(day: day(2026, 7, 1), period: .lunch, dayHasMultipleShifts: true)
+        let dinner = ShiftDays.shiftLabel(day: day(2026, 7, 1), period: .dinner, dayHasMultipleShifts: true)
         #expect(lunch == "Wednesday, Jul 1 · Lunch")
         #expect(dinner == "Wednesday, Jul 1 · Dinner")
     }
 
     @Test("shift labels do not change as a record ages")
     func shiftLabelsIgnoreRecency() {
-        let date = day(2026, 7, 1)
-        let recent = ShiftDays.shiftLabel(day: date, period: .dinner, dayHasMultipleShifts: false, relativeTo: date)
-        let older = ShiftDays.shiftLabel(day: date, period: .dinner, dayHasMultipleShifts: false, relativeTo: day(2026, 7, 20))
+        let today = Calendar.current.startOfDay(for: .now)
+        let label = ShiftDays.shiftLabel(day: today, period: .dinner, dayHasMultipleShifts: false)
 
-        #expect(recent == "Wednesday, Jul 1 · Dinner")
-        #expect(older == recent)
+        #expect(!label.contains("Today"))
+        #expect(label == "\(today.formatted(.dateTime.weekday(.wide).month(.abbreviated).day())) · Dinner")
     }
 
     @Test("5 worked days with 2 doubles count as 7 shifts, not 5 days — the YTD card's counting rule")
     func fiveDaysTwoDoublesCountSevenShifts() {
         let records = [
-            TipRecord(date: day(2026, 1, 5), amountCents: 5000, kind: .cash, isDouble: false, shiftID: UUID()),
-            TipRecord(date: day(2026, 1, 6), amountCents: 5000, kind: .cash, isDouble: true, shiftPeriod: .lunch, shiftID: UUID()),
-            TipRecord(date: day(2026, 1, 6), amountCents: 5000, kind: .cash, isDouble: true, shiftPeriod: .dinner, shiftID: UUID()),
-            TipRecord(date: day(2026, 1, 7), amountCents: 5000, kind: .cash, isDouble: false, shiftID: UUID()),
-            TipRecord(date: day(2026, 1, 8), amountCents: 5000, kind: .cash, isDouble: true, shiftPeriod: .lunch, shiftID: UUID()),
-            TipRecord(date: day(2026, 1, 8), amountCents: 5000, kind: .cash, isDouble: true, shiftPeriod: .dinner, shiftID: UUID()),
-            TipRecord(date: day(2026, 1, 9), amountCents: 5000, kind: .cash, isDouble: false, shiftID: UUID())
+            TipRecord(date: day(2026, 1, 5), amountCents: 5000, kind: .cash, shiftID: UUID()),
+            TipRecord(date: day(2026, 1, 6), amountCents: 5000, kind: .cash, shiftPeriod: .lunch, shiftID: UUID()),
+            TipRecord(date: day(2026, 1, 6), amountCents: 5000, kind: .cash, shiftPeriod: .dinner, shiftID: UUID()),
+            TipRecord(date: day(2026, 1, 7), amountCents: 5000, kind: .cash, shiftID: UUID()),
+            TipRecord(date: day(2026, 1, 8), amountCents: 5000, kind: .cash, shiftPeriod: .lunch, shiftID: UUID()),
+            TipRecord(date: day(2026, 1, 8), amountCents: 5000, kind: .cash, shiftPeriod: .dinner, shiftID: UUID()),
+            TipRecord(date: day(2026, 1, 9), amountCents: 5000, kind: .cash, shiftID: UUID())
         ]
         let groups = ShiftDays.groupedByShift(records, shiftID: \.shiftID, date: \.date, period: \.shiftPeriod)
         #expect(groups.count == 7)

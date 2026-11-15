@@ -6,7 +6,6 @@ import SwiftData
 /// entries live everywhere else in the app. Entries themselves never change.
 struct SettingsView: View {
     @Environment(PayScheduleStore.self) private var scheduleStore
-    @Environment(InsightsStore.self) private var insightsStore
     @Environment(UserPreferencesStore.self) private var preferencesStore
     @Environment(MoveLedgerStore.self) private var moveLedgerStore
     @Environment(PolicyStore.self) private var policyStore
@@ -134,10 +133,10 @@ struct SettingsView: View {
                 #if DEBUG
                 Section("Developer") {
                     Button("Seed sample data") {
-                        DebugSeeder.seedSampleData(scheduleStore: scheduleStore, insightsStore: insightsStore)
+                        DebugSeeder.seedSampleData(scheduleStore: scheduleStore)
                     }
                     Button("Clear all data", role: .destructive) {
-                        DebugSeeder.clearAll(scheduleStore: scheduleStore, insightsStore: insightsStore, moveLedgerStore: moveLedgerStore, policyStore: policyStore)
+                        DebugSeeder.clearAll(scheduleStore: scheduleStore, moveLedgerStore: moveLedgerStore, policyStore: policyStore)
                     }
                 }
                 .listRowBackground(PaydayColor.fieldBackground)

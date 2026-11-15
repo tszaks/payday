@@ -40,7 +40,7 @@ final class PaycheckRecord {
     var netPayCents: Int?
 
     /// Base pay for the period, as printed on the stub — the audit's
-    /// ground truth is PeriodIncome's computed wages, this is what the
+    /// ground truth is the engine's computed wages, this is what the
     /// employer actually paid.
     var regularWagesCents: Int?
 

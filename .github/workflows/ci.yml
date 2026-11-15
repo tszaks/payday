@@ -36,6 +36,7 @@ jobs:
   core-tests:
     name: PaydayCore (swift test)
     runs-on: macos-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - name: swift test --package-path Packages/PaydayCore
@@ -44,16 +45,17 @@ jobs:
   ios-tests:
     name: Payday app + widget (xcodebuild test)
     runs-on: macos-latest
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - name: Install xcodegen
         run: brew install xcodegen
       - name: Provide a secret-free Debug xcconfig
         # Secrets.local.xcconfig is gitignored (it holds a local-only OpenAI key
-        # for Insights narration), so xcodegen cannot find the Debug config file
+        # for the pay stub reader), so xcodegen cannot find the Debug config file
         # on a clean checkout. CI resolves OPENAI_API_KEY to empty, exactly like
-        # Secrets.release.xcconfig does for archives, so InsightsService.isConfigured
-        # is false and the suite exercises the deterministic fallback path.
+        # Secrets.release.xcconfig does for archives, so PaycheckAIParser.isConfigured
+        # is false and the suite never makes a live model call.
         run: |
           printf '// Generated on CI. Secret-free; mirrors Secrets.release.xcconfig.\nOPENAI_API_KEY =\n' > Secrets.local.xcconfig
       - name: Toolchain diagnostics
@@ -106,6 +108,7 @@ jobs:
   edge-tests:
     name: payday-api (deno test)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: denoland/setup-deno@v2
@@ -125,6 +128,7 @@ jobs:
   design-lint:
     name: Design lint
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - name: scripts/design-lint.sh
@@ -133,6 +137,7 @@ jobs:
   db-migrations:
     name: Supabase migrations (db reset)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: supabase/setup-cli@v1

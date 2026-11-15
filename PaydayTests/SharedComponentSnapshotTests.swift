@@ -196,9 +196,11 @@ struct ShiftDayRowSnapshotTests {
         #expect(dinner.amount.cents == 6000 + 1556)
 
         // The assertion that fails if the row ever computes its own wage:
-        // 5.5h at 283c rounded ALONE is 1557, and the app still has that
-        // function, so this is a live comparison and not a historical note.
-        #expect(WageEstimate.cents(wageCentsPerHour: 283, hours: 5.5) == 1557)
+        // 5.5h at 283c rounded ALONE, by the ledger's own straight-time
+        // arithmetic, is 1557.
+        #expect(CompensationLedger.roundCents(CompensationLedger.wageUnits(
+            rateCents: 283, minutes: WorkedMinutes.minutes(fromHours: 5.5), multiplierHundredths: 100
+        )) == 1557)
         #expect(dinner.amount.cents != 6000 + 1557)
 
         // And the rows telescope to the week the ledger valued.
@@ -834,54 +836,19 @@ struct UndoDeleteInverseTests {
         return try #require(snapshot.valuation(id))
     }
 
-    /// The exact value round trip `ShiftCommands.delete` captures and
-    /// `ShiftCommands.restore` rebuilds -- mirrored at the value level so the
-    /// claim does not need a store.
-    private func restored(_ deleted: ShiftCommands.DeletedShift) -> ShiftRecord {
-        ShiftRecord(
-            id: deleted.id,
-            workDate: deleted.workDate,
-            shiftPeriod: deleted.shiftPeriod,
-            cashTipsCents: deleted.cashTipsCents,
-            creditTipsCents: deleted.creditTipsCents,
-            tipOutCents: deleted.tipOutCents,
-            salesCents: deleted.salesCents,
-            hoursWorked: deleted.hoursWorked,
-            clockIn: deleted.clockIn,
-            clockOut: deleted.clockOut,
-            serverCount: deleted.serverCount,
-            receiptMetrics: deleted.receiptMetrics,
-            note: deleted.note,
-            recordedAt: deleted.recordedAt,
-            source: deleted.source,
-            legacyEntryIDs: deleted.legacyEntryIDs
-        )
-    }
-
-    private func capture(_ record: ShiftRecord) -> ShiftCommands.DeletedShift {
-        ShiftCommands.DeletedShift(
-            id: record.id,
-            workDate: record.workDate,
-            shiftPeriod: record.shiftPeriod,
-            cashTipsCents: record.cashTipsCents,
-            creditTipsCents: record.creditTipsCents,
-            tipOutCents: record.tipOutCents,
-            salesCents: record.salesCents,
-            hoursWorked: record.hoursWorked,
-            clockIn: record.clockIn,
-            clockOut: record.clockOut,
-            serverCount: record.serverCount,
-            receiptMetrics: record.receiptMetrics,
-            note: record.note,
-            recordedAt: record.recordedAt,
-            source: record.source,
-            legacyEntryIDs: record.legacyEntryIDs,
-            deletedAt: .now
-        )
-    }
-
     @Test("undoIsAnExactInverseThroughTheEngine: the restored shift values to the same cents and minutes")
     func undoIsAnExactInverseThroughTheEngine() throws {
+        // Delete and restore write the sync queues of whichever account the
+        // simulator has registered; this shift exists only in memory.
+        let savedAccount = SavedAccountRegistration()
+        defer { savedAccount.restore(forgetting: []) }
+        let container = try ModelContainer(
+            for: SharedModelContainer.schema,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+        )
+        let context = ModelContext(container)
+        context.autosaveEnabled = false
+
         // One shift, logged as the two closeout rows the fold combines.
         let record = shifts([
             TipEntry(date: at(2026, 9, 28), amountCents: 5000, kind: .credit, hoursWorked: 6.5,
@@ -889,48 +856,19 @@ struct UndoDeleteInverseTests {
                      serverCount: 4),
             TipEntry(date: at(2026, 9, 28), amountCents: 2000, kind: .cash, shiftID: shiftID(1))
         ])[0]
+        // A shift with no legacy rows may change whatever the account's
+        // conversion state, so the round trip does not depend on it. The
+        // engine does not read these ids.
+        record.legacyEntryIDs = []
+        context.insert(record)
+        try context.save()
         let before = try valuation(of: [record], id: shiftID(1))
 
-        let after = try valuation(of: [restored(capture(record))], id: shiftID(1))
+        let captured = try ShiftCommands.delete(record, in: context)
+        let restored = try ShiftCommands.restore(captured, in: context)
+        let after = try valuation(of: [restored], id: shiftID(1))
 
         #expect(after == before)
-    }
-
-    @Test("the round trip preserves every stored field the engine reads, named one by one")
-    func everyEngineRelevantFieldSurvives() throws {
-        let record = ShiftRecord(
-            id: shiftID(1),
-            workDate: at(2026, 9, 28),
-            shiftPeriod: .dinner,
-            cashTipsCents: 2_000,
-            creditTipsCents: 5_000,
-            tipOutCents: 800,
-            salesCents: 120_000,
-            hoursWorked: 6.5,
-            clockIn: at(2026, 9, 28, hour: 16),
-            clockOut: at(2026, 9, 28, hour: 22),
-            serverCount: 4,
-            note: "slammed",
-            recordedAt: at(2026, 9, 28, hour: 23)
-        )
-        let restored = restored(capture(record))
-
-        #expect(restored.id == record.id)
-        #expect(restored.workDate == record.workDate)
-        #expect(restored.cashTipsCents == record.cashTipsCents)
-        #expect(restored.creditTipsCents == record.creditTipsCents)
-        #expect(restored.note == record.note)
-        #expect(restored.recordedAt == record.recordedAt)
-        #expect(restored.hoursWorked == record.hoursWorked)
-        #expect(restored.tipOutCents == record.tipOutCents)
-        #expect(restored.salesCents == record.salesCents)
-        #expect(restored.shiftPeriod == record.shiftPeriod)
-        #expect(restored.clockIn == record.clockIn)
-        #expect(restored.clockOut == record.clockOut)
-        #expect(restored.serverCount == record.serverCount)
-        #expect(restored.receiptMetrics == record.receiptMetrics)
-        #expect(restored.legacyEntryIDs == record.legacyEntryIDs)
-        #expect(restored.source == record.source)
     }
 
     @Test("a deleted shift is absent from the snapshot, and its row renders no currency rather than $0")
@@ -965,25 +903,6 @@ struct UndoDeleteInverseTests {
 @Suite("The fixture snapshot is the same engine over the stored table")
 @MainActor
 struct FixtureSnapshotEngineTests {
-    @Test("the bridge's wages are exactly WageEstimate.centsByShiftID's, which is the ledger's")
-    func bridgeWagesMatchTheExistingPath() throws {
-        let entries = w1Entries()
-        let shifts = groups(entries)
-        let existing = WageEstimate.centsByShiftID(
-            payrollTimeZone: PaydayTestZone.payroll,
-            workweekStartWeekday: 2,
-            shifts: shifts,
-            wageCentsPerHour: 283
-        )
-        let snapshot = try w1Snapshot()
-        for shift in shifts {
-            #expect(
-                snapshot.valuation(shift.shiftID)?.components.wagesCents == existing[shift.shiftID],
-                "shift \(shift.shiftID) disagreed"
-            )
-        }
-    }
-
     @Test("the snapshot's tips are exactly the records', per shift and in total")
     func snapshotTipsMatchTheRecords() throws {
         let records = shifts(w1Entries())
@@ -1003,8 +922,7 @@ struct FixtureSnapshotEngineTests {
     @Test("a group's own shiftID is the snapshot's key, so a row can never miss its own valuation")
     func theCallersIDIsTheKey() throws {
         // A legacy row with NO shiftID: `ShiftDays.groupedByShift` invents a
-        // deterministic day-derived id, and `LegacyLedgerBridge.shiftInput`
-        // invents a DIFFERENT one. The bridge uses the caller's, so the
+        // deterministic day-derived id. The bridge uses the caller's, so the
         // lookup hits.
         let entries = [TipEntry(date: at(2026, 9, 28), amountCents: 5000, kind: .credit, hoursWorked: 5)]
         let shifts = groups(entries)
@@ -1031,9 +949,8 @@ struct FixtureSnapshotEngineTests {
 
     /// The defect the `policies:` parameter exists to close.
     ///
-    /// The first cut of the bridge took one scalar `rateCents` and
-    /// `LegacyLedgerBridge.policies` turned it into a single `PayRatePolicy`
-    /// at `effectiveFrom: .distantPast`, so every shift ever worked was
+    /// The first cut of the bridge took one scalar `rateCents` and turned it
+    /// into a single `PayRatePolicy` at `effectiveFrom: .distantPast`, so every shift ever worked was
     /// repriced at today's rate on every migrated surface. `PolicyStore`
     /// holds real dated history — `PayrollSettingsSection` ships a "Rate
     /// changed on…" control that writes it — and now the bridge reads it.

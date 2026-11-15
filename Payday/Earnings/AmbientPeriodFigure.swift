@@ -121,7 +121,13 @@ enum AmbientPeriodFigure {
     /// honest sentence names what is known, because a spoken number carries
     /// no caption to qualify it and is the one surface a user cannot re-read.
     static func spokenAnswer(now: Date = .now) -> String {
-        switch current(now: now) {
+        spokenAnswer(for: current(now: now))
+    }
+
+    /// The sentence for a result: each absence has its own sentence, and an
+    /// amount is announced as made so far only when it is a complete total.
+    static func spokenAnswer(for result: Result<Answer, Absence>) -> String {
+        switch result {
         case .failure(.notAuthorized):
             return "Sign in to Payday first."
         case .failure(.noSchedule):

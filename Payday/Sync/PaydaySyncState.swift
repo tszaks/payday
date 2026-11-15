@@ -378,14 +378,6 @@ enum PaydaySyncState {
         savePending(pending, for: userID)
     }
 
-    static func knownTipEntryIDs(for userID: UUID) -> Set<UUID> {
-        load(for: userID).tipEntryIDs
-    }
-
-    static func knownPaycheckIDs(for userID: UUID) -> Set<UUID> {
-        load(for: userID).paycheckIDs
-    }
-
     static func migrationIsVerified(for userID: UUID) -> Bool {
         load(for: userID).migrationVerified
     }
@@ -883,10 +875,6 @@ enum PaydaySyncState {
     static func recordShiftRestore(_ id: UUID, at date: Date = .now, for userID: UUID? = nil) {
         guard let userID = userID ?? currentUserID else { return }
         mutate(userID: userID) { $0.pendingShiftRestores[id] = date }
-    }
-
-    static func pendingShiftRestores(for userID: UUID) -> [UUID: Date] {
-        load(for: userID).pendingShiftRestores
     }
 
     /// Cleared right after the `restore_shifts` call returns, whatever

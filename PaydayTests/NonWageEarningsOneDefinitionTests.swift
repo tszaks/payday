@@ -105,18 +105,13 @@ struct NonWageEarningsOneDefinitionTests {
             date: Date(timeIntervalSince1970: 1_758_000_000),
             amountCents: voluntary,
             kind: .cash,
-            isDouble: false,
             recordedAt: nil,
             hoursWorked: 5,
             tipOutCents: tipOut,
             salesCents: nil,
             shiftPeriod: nil,
             shiftID: UUID(),
-            clockIn: nil,
-            clockOut: nil,
-            serverCount: nil,
-            receiptMetrics: metrics,
-            note: nil
+            receiptMetrics: metrics
         )
         // The formula as it stood before the delegation, verbatim.
         let shipped = voluntary + gratuity - tipOut

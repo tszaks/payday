@@ -177,13 +177,13 @@ struct PaycheckEntrySheet: View {
     /// sheet never lets a field record the latter.
     private var observation: PaycheckReconciler.Observation {
         PaycheckReconciler.Observation(
-            paidTipsCents: amountCents > 0 ? amountCents : nil,
-            regularWagesCents: regularWagesCents > 0 ? regularWagesCents : nil,
-            overtimeWagesCents: overtimeWagesCents > 0 ? overtimeWagesCents : nil,
-            gratuityCents: gratuityCents > 0 ? gratuityCents : nil,
-            grossCents: grossPayCents > 0 ? grossPayCents : nil,
-            taxesCents: taxesCents > 0 ? taxesCents : nil,
-            netCents: netPayCents > 0 ? netPayCents : nil
+            paidTipsCents: PaycheckEntryFacts.enteredCents(amountCents),
+            regularWagesCents: PaycheckEntryFacts.enteredCents(regularWagesCents),
+            overtimeWagesCents: PaycheckEntryFacts.enteredCents(overtimeWagesCents),
+            gratuityCents: PaycheckEntryFacts.enteredCents(gratuityCents),
+            grossCents: PaycheckEntryFacts.enteredCents(grossPayCents),
+            taxesCents: PaycheckEntryFacts.enteredCents(taxesCents),
+            netCents: PaycheckEntryFacts.enteredCents(netPayCents)
         )
     }
 
@@ -826,12 +826,12 @@ struct PaycheckEntrySheet: View {
     }
 
     private func save() {
-        let effectiveRegularWagesCents = regularWagesCents > 0 ? regularWagesCents : nil
-        let effectiveOvertimeWagesCents = overtimeWagesCents > 0 ? overtimeWagesCents : nil
-        let effectiveGratuityCents = gratuityCents > 0 ? gratuityCents : nil
-        let effectiveGrossPayCents = grossPayCents > 0 ? grossPayCents : nil
-        let effectiveTaxesCents = taxesCents > 0 ? taxesCents : nil
-        let effectiveNetPayCents = netPayCents > 0 ? netPayCents : nil
+        let effectiveRegularWagesCents = PaycheckEntryFacts.enteredCents(regularWagesCents)
+        let effectiveOvertimeWagesCents = PaycheckEntryFacts.enteredCents(overtimeWagesCents)
+        let effectiveGratuityCents = PaycheckEntryFacts.enteredCents(gratuityCents)
+        let effectiveGrossPayCents = PaycheckEntryFacts.enteredCents(grossPayCents)
+        let effectiveTaxesCents = PaycheckEntryFacts.enteredCents(taxesCents)
+        let effectiveNetPayCents = PaycheckEntryFacts.enteredCents(netPayCents)
 
         // Explicit and atomic. This path used to persist only through
         // autosave, so with autosave off it would have silently stopped

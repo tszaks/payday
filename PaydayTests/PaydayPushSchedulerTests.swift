@@ -268,7 +268,7 @@ struct PaydayPushSchedulerTests {
         #expect(!decision.body.contains("$"))
     }
 
-    /// `PredictedPaycheck.tipsLineCents` falls back to ALL voluntary tips
+    /// `MetricID.expectedPaycheckTipsLine` falls back to ALL voluntary tips
     /// when no credit was logged, so an all-cash period yields a check
     /// expectation made of cash — and cash never runs through payroll. The
     /// gate this file has always had, restated on the engine's own

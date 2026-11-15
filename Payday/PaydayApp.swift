@@ -13,7 +13,6 @@ struct PaydayApp: App {
     // inline, because `earningsStore` reads both and a property's inline
     // default cannot be handed to another property's default.
     @State private var scheduleStore: PayScheduleStore
-    @State private var insightsStore = InsightsStore()
     @State private var preferencesStore = UserPreferencesStore()
     @State private var moveLedgerStore = MoveLedgerStore()
     @State private var policyStore: PolicyStore
@@ -34,6 +33,8 @@ struct PaydayApp: App {
         // Before any view can reach the context. See the function's comment
         // for why the flag lives here and not inside `shared`.
         SharedModelContainer.disableMainContextAutosave()
+
+        PaydayAccountEraser.removeRetiredInsightsNarration()
 
         // The stores this one reads must exist before it does, so they are
         // built here rather than relying on property initialization order.
@@ -91,7 +92,6 @@ struct PaydayApp: App {
                 }
             }
                 .environment(scheduleStore)
-                .environment(insightsStore)
                 .environment(preferencesStore)
                 .environment(moveLedgerStore)
                 .environment(policyStore)

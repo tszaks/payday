@@ -156,9 +156,8 @@ struct DayDetailSheet: View {
     @State private var sheetTarget: TipEntrySheetTarget?
     @State private var undoState = UndoDeleteToastState()
 
-    /// Always "Wed, Jul 15" — weekday abbrev, month, day. ShiftDays.humanLabel
-    /// (which this sheet used to show) collapses recent days to "Today" /
-    /// bare "Wednesday", which reads fine in a list of shifts but not as a
+    /// Always "Wed, Jul 15" — weekday abbrev, month, day. Never collapsed
+    /// to "Today" / bare "Wednesday", which reads fine in a list of shifts but not as a
     /// sheet title naming one specific day.
     private var titleText: String {
         date.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day())

@@ -2,7 +2,7 @@ use strict; use warnings; use File::Find;
 
 # The earnings path: money is computed here, so a device zone reaching it
 # would reprice history the moment the user travels.
-my @roots = ("Payday/Earnings", "Payday/Utilities/LegacyLedgerBridge.swift");
+my @roots = ("Payday/Earnings");
 
 # The device zone is legitimately consulted at exactly these sites, each to
 # FREEZE it into a policy or as the documented first-launch fallback before

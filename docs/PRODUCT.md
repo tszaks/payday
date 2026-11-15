@@ -31,8 +31,9 @@ beat (~2s, tappable to dismiss instantly, fully skippable via Reduce Motion):
 Then it flows into the dashboard where the period total rolls up. Rules:
 
 - Computed 100% on-device, instantly (see Pillar 3 stats engine).
-- The comparison line varies by what is true: vs weekday average, vs period
-  pace, personal records, first-shift-of-period, slowest-in-a-while. One line,
+- The comparison line varies by what is true: vs weekday average (with its
+  rank this period), personal records, first-shift-of-period, first night of
+  a weekday, slowest-in-a-while. One line,
   the most interesting true thing. Never two lines.
 - Record nights get the one earned flourish: a single green sweep on the
   amount + distinct success haptic. No confetti, no looping animation.
@@ -59,15 +60,29 @@ The app is named after a moment; honor it. When `daysRemaining == 0`:
 
 A small pure module (like `PayPeriodCalculator`: testable, no I/O) computing:
 
-- Pace: total so far vs same point last period; projected period total.
+- Pace: tips so far (no wages) vs the median of the same point in up to six
+  recent periods that have shifts ("usual pace"; "last period" when only one
+  does). No projected period total.
 - Records: best night, best [weekday], best period, best month, lifetime total.
 - Baselines: average per shift, per weekday, doubles vs singles, cash/credit ratio.
 - Anomalies: slowest/best [weekday] in N weeks, streak of shifts logged.
 
 Surfaces: the reveal (Pillar 1), a single pace line under the dashboard hero
-("$120 ahead of last period at this point"), the payday moment, and Insights.
+and on the widget ("$120 ahead of your usual pace"), the payday moment, and
+Insights.
 
 ## Pillar 4: Insights narration — REVERSED back to OpenAI (2026-07-14)
+
+**Status: narration REMOVED (PR 5 group 2.7).** Insights is deterministic:
+every number and sentence on the page is computed on the device from local
+records, with no model and no network (see "The Insights page" below). What
+still reaches a model is scanning. A receipt scan runs Apple Vision on the
+device, then sends the receipt JPEG and transcript to the account-bound
+proxy (`app/api/receipt-analyze`). The pay-stub AI reader calls OpenAI only
+with a key in the app's build settings; Release builds (every App Store and
+TestFlight build) carry an empty key, so a shipped pay-stub scan uses
+on-device text recognition only. The narration text below is kept as the
+record of what was built.
 
 Originally built on Apple's on-device Foundation Models framework, then
 reversed: Apple Intelligence's hardware floor (iPhone 15 Pro+, opt-in
@@ -148,10 +163,11 @@ this app will actually run on can't use it. Insights narration now calls
   refused by PostgREST (`PGRST301`). Both surface as `401`. **The proxy holds
   no service-role key**; its only credentials are the project URL and the
   publishable key that already ships inside the app binary.
-  Ceilings live in `payday_ai_quota_limits` — 40 receipt scans and 20
-  narrations per account per day, with global daily counters as a circuit
-  breaker — so they change with one `UPDATE` and no redeploy. The counters
-  record `(user_id, day, kind, count)` and nothing else, which keeps the
+  Ceilings live in `payday_ai_quota_limits` — the migration seeds 15
+  receipt scans and 10 narrations per account per day, with global daily
+  counters (60 and 30) as a circuit breaker — so they change with one
+  `UPDATE` and no redeploy. The app no longer calls the narration route.
+  The counters record `(user_id, day, kind, count)` and nothing else, which keeps the
   privacy policy's "we do not store receipt text or images" claim true.
   `PAYDAY_PROXY_AUTH_MODE=observe` temporarily allows unauthenticated callers
   so the proxy can ship before the client that authenticates to it; unset
@@ -230,8 +246,7 @@ One set of App Intents, five surfaces. In priority order:
   (The old ≥2x-average "double toggle" auto-enable was removed with the
   shift-model rework below — a double is now emergent, not a toggle.)
 
-7/7 items complete. See the final summary for commit hashes and every
-deviation across the whole roadmap.
+7/7 items complete.
 
 ## Pillar 7: Native Behaviors (act like Apple)
 
@@ -244,26 +259,25 @@ deviation across the whole roadmap.
   only, per design law.
 - TipKit for the teachable concept: paycheck verification.
 - `.sensoryFeedback` for haptics (route through PaydayHaptics).
-- iCloud sync via SwiftData + CloudKit and a Face ID lock (LocalAuthentication),
-  like Notes. DONE: schema pass gave `TipEntry.id/date/amountCents` and
+- Sync through a Supabase account (Sign in with Apple) and a Face ID lock
+  (LocalAuthentication), like Notes. This bullet first said iCloud sync via
+  SwiftData + CloudKit; that changed. DONE: schema pass gave
+  `TipEntry.id/date/amountCents` and
   `PaycheckRecord.id/periodStart/periodEnd/paidTipsCents` defaults (tested
   against an existing on-device store first — opened clean, no data loss).
-  `SharedModelContainer`'s ModelConfiguration now passes
-  `cloudKitDatabase: .private("iCloud.com.szakacsmedia.payday")` in the app
-  process and `.none` in the widget extension (`WIDGET_EXTENSION` compile
-  flag) — only one process should stand up CloudKit's sync engine against
-  the same App-Group-shared file. Face ID lock is `AppLockController` +
+  SwiftData is now the on-device cache only: `SharedModelContainer`'s
+  ModelConfiguration passes `cloudKitDatabase: .none` in every process (app,
+  widget, intents), all opening the same App-Group-shared file, and
+  Supabase owns the account's data. Face ID lock is `AppLockController` +
   `LockGateView`, off by default, toggled in Settings, `.deviceOwnerAuthentication`
   (passcode fallback, like Notes) rather than biometrics-only, and fails
   open with no enrolled passcode at all rather than stranding someone
   outside their own tips.
-  **Deviation / blocked on a portal click:** the iCloud and App Groups
-  (from item 4) capabilities aren't registered on the App ID yet. Simulator
-  builds succeed (they don't enforce provisioning-profile capabilities),
-  but a real-device build fails signing with "doesn't include the iCloud
-  capability" / "doesn't include the App Groups capability." This needs an
-  interactive Xcode signing session or Developer Portal visit — see the
-  final summary for exactly what to click.
+  **Deviation / blocked on a portal click — no longer blocked:** the iCloud
+  and App Groups (from item 4) capabilities were not registered on the App
+  ID at first, so a real-device build failed signing. App Groups is
+  registered now (`Payday.entitlements` carries it, with Sign in with
+  Apple), and iCloud is not used, so the app carries no iCloud capability.
 - Full pass: Dynamic Type (hero amounts get scale factors already; verify at
   AX sizes), VoiceOver labels on day cells/tiles, Reduce Motion on every
   animation including the reveal.
@@ -323,15 +337,19 @@ page, or advancing a cursor past records it never received.
 Serves, measured rather than asserted: `/v1/summary` reads
 `earnings_snapshots` — the device-published, `dataset_revision`-fenced
 snapshot — through `engineEarnings`, and a deno test exercises it. The
-deployed function (v5, 2026-09-19 16:31 UTC) postdates the last source
-change. The legacy tips-only `shifts`/`paychecks` fields still ride
-alongside — additive on purpose — so an agent reading those fields still
-gets a wageless number.
+deployed function was v5 (2026-09-19 16:31 UTC) when measured; the source
+has changed since (#154 onward), and the deployed version has not been
+read again. The `shifts`/`paychecks` fields still ride alongside —
+additive on purpose. Since `20261115120000_agent_summary_reads_shifts.sql`
+the `shifts` block sums the stored tip-side columns of the same
+`public.shifts` rows `/v1/shifts` lists, so it restates no money rule; it
+still has no wage, so an agent reading those fields gets a wageless number.
 
 Not true yet, and a reader should not assume otherwise:
 
 - **Two answers still coexist in one API response.** `earnings` is the
-  engine's; `shifts`/`paychecks` are tips-only. A consumer has to be moved
+  engine's; `shifts` has no wage and `paychecks` sums recorded stubs. A
+  consumer has to be moved
   off the old fields, and nothing forces that today.
 - **The human lines of the release gate are still open** — device checks,
   the paycheck reconcile, the October soak. Machine lines are green; the
@@ -378,7 +396,9 @@ SURFACE STILL DISAGREES BY CONSTRUCTION: the API.** Measured today:
 
 - `/v1/summary` still calls `payday_agent_summary`, which does its own
   arithmetic and has no wage concept at all. Its `shifts` and `paychecks`
-  fields answer "how much this period" with tips only. **Still true.**
+  fields answer "how much this period" with tips only. **Half true now:**
+  since `20261115120000` the `shifts` block sums the stored columns of
+  `public.shifts` and restates no money rule; it still has no wage.
 - ~~Nothing in `supabase/functions/` reads `earnings_snapshots`.~~
   **FALSE, corrected 2026-09-19.** `engineEarnings` reads that table
   (`payday-api/index.ts:1513`) and is called from the summary route
@@ -405,7 +425,8 @@ summary route reads the stored snapshot back. What is genuinely open:
   and `paychecks`. An agent reading those fields still gets a number that
   differs from the Dashboard by wages. Additive was the right call for
   compatibility, and it means two answers coexist in one response until a
-  consumer is moved.
+  consumer is moved. (The `shifts` block reads `public.shifts` since
+  `20261115120000`; the wage gap stands.)
 - **The deployed edge function is whatever was last deployed**, which the
   bullet below already warns about and which no one has checked today.
 
@@ -785,7 +806,9 @@ into a defaulted non-optional.
   still uses voluntary tips only and compares Gratuity separately. Legacy
   scans are interpreted as having gratuity folded into their stored credit
   amount, then normalized on read, so upgrading cannot double-count old data.
-- **Moves.** `StatsEngine.moves(referenceDate:)` — a deterministic, pure,
+- **Moves. REMOVED 2026-11-08** (the Moves engine is deleted, see Pillar 10
+  Phase B); kept as the record. `StatsEngine.moves(referenceDate:)` — a
+  deterministic, pure,
   fully-tested function (no model, no network) emitting up to 3
   dollar-quantified, annualized observations, ranked by impact and gated by
   materiality (silence beats weak advice): weekday swap (net $/night, ≥3
@@ -797,7 +820,8 @@ into a defaulted non-optional.
   always fresh, never narrated. The single best move is fed into the
   gpt-5.6-terra prompt as a fact block so the model's closing suggestion can
   reference it, but the cards themselves never touch the model.
-- **Projection.** `StatsEngine.projectedPeriodTotal(period:asOf:rhythm:)` —
+- **Projection. Not in the app:** no screen renders the "On pace for" line; kept
+  as the record. `StatsEngine.projectedPeriodTotal(period:asOf:rhythm:)` —
   current net total plus one estimated night (at that weekday's own
   historical average) for every remaining calendar day that lands on a
   usual weekday. One quiet line under the Dashboard's pace line ("On pace
@@ -812,9 +836,19 @@ into a defaulted non-optional.
   new dependencies; the file is written to a stable temp path so repeat
   exports overwrite instead of accumulating.
 
-## Pillar 9: Multiple Jobs — DESIGN ONLY, implementation gated (2026-07-14)
+## Pillar 9: Multiple Jobs — SHIPPED in part (designed 2026-07-14; E1-E3 shipped 2026-11-07)
 
-**2026-11-07: E1 shipped as a name tag** ([#160](https://github.com/tszaks/payday/pull/160)): `job_name` on shifts and paychecks (nil = the primary job), the job list inside `compensation_policies`, Settings > Jobs, and a Job row on the log and paycheck sheets with two or more jobs. There is no Job table, and no Make Primary: the first job holds every untagged shift, and moving that needs a stable job id and one atomic server rewrite (E2). Periods still follow the one schedule in Settings (not per job) until E2.
+**Status.** Shipped: the jobs foundation (E1), per-job pricing and overtime
+(E2a), per-job pay periods, wage, workweek and payday reminder (E2b), and a
+card per job on the Dashboard, with a job filter in Insights and on the CSV
+share (E3, [#164](https://github.com/tszaks/payday/pull/164)). Not shipped:
+Make Primary (it needs a stable job id and one atomic server rewrite), the
+cross-job comparison, and a per-job widget or Siri answer (both show the
+primary job). The design text further down is the 2026-07-14 plan: the
+shipped build has no `Job` model, and the Dashboard took option (b), a card
+per job.
+
+**2026-11-07: E1 shipped as a name tag** ([#160](https://github.com/tszaks/payday/pull/160)): `job_name` on shifts and paychecks (nil = the primary job), the job list inside `compensation_policies`, Settings > Payroll > Jobs, and a Job row on the log and paycheck sheets with two or more jobs. There is no Job table, and no Make Primary: the first job holds every untagged shift, and moving that needs a stable job id and one atomic server rewrite (E2). Periods still follow the one schedule in Settings (not per job) until E2.
 
 **2026-11-07: E2a, the engine per job** ([#162](https://github.com/tszaks/payday/pull/162)): each job is priced by its own rates and calendars and runs its own weekly and daily overtime (two employers' hours never make one workweek); snapshot reads take an optional job scope and a paycheck reconciles against its own job's shifts; engine 3; the server keeps the job list when an older build writes settings without it. Screens still show all jobs.
 
@@ -882,6 +916,9 @@ close that gap; each ships as its own commit series.
 
 ### Phase A: Data Honesty (+6) — DONE
 
+Moves and the narration prompt this phase fed were removed later (Phase B
+below, and Pillar 4); the record below is kept as written.
+
 - **Lunch/dinner is a captured fact now, not just inferred.** New optional
   `shiftPeriod` (`ShiftPeriod?`, `lunch`/`dinner`) on `TipEntry` — same
   CloudKit-safe raw-string-to-enum split as `kind`, but WITHOUT a
@@ -920,7 +957,7 @@ close that gap; each ships as its own commit series.
 ### Phase B: Close the Loop (+8) — DONE
 
 - **Move ledger.** `MoveLedgerStore` (Models/) persists `[moveID: firstShownAt]`
-  to UserDefaults, same Codable-snapshot pattern as `InsightsStore`. One
+  to UserDefaults. One
   entry per move id, set once and never overwritten — a move that stops
   firing and later re-fires doesn't reset its clock. `InsightsView` records
   every currently-showing move id the first time it's ever seen, via a
@@ -933,7 +970,7 @@ close that gap; each ships as its own commit series.
   engine, and `-SeedFollowUpDemo` are deleted. `MoveLedgerStore` and its
   sync stay as they are; nothing writes to the ledger now.
 
-### Phase C: Multiple Jobs (+8) — not started (design already committed, d01e7de)
+### Phase C: Multiple Jobs (+8) — partly shipped, see Pillar 9 (design committed d01e7de)
 ### Phase D: Plan Forward (+6) — not started
 
 ### Explicitly deferred (out of scope)
@@ -982,12 +1019,38 @@ It reports what happened, never what "would have" happened (DESIGN.md
 rule 14). QA: `-SeedShowcase` for the full page, `-SeedTipsOnlyShowcase`
 for the same shifts with no sales, hours or clock times.
 
+## Shipped, and not described above
+
+- **Roles, and a rate per role.** A Role row on the log sheet, "Roles and
+  rates" in Settings > Payroll, and the role picker in Insights
+  (`public.shifts.role_name`, `ShiftRoleList`, `PayrollSettingsSection`).
+- **Tip share received.** A per-shift amount on the log sheet that joins the
+  shift's earnings, and a "Tip share received" row in the breakdown drawer
+  (`public.shifts.tip_share_in_cents`, `HeroBreakdownDrawer`).
+- **"Card tips are paid: At the end of my shift."** A Settings > Payroll
+  choice; with it the expected check has no tips line, only gratuity and
+  wages (`user_settings.card_tips_paid_at_close`, `PaycheckReconciler`).
+- **Daily overtime.** "Daily overtime after 8 hours" in Settings > Payroll,
+  on top of the 40-hour workweek (`dailyOvertimeThresholdMinutes`,
+  `CompensationLedger`).
+- **Home Screen quick actions.** Long-press the icon for Log Shift and Start
+  Shift (`project.yml`, `ShiftQuickActions` in `AppDelegate.swift`).
+- **Controls and the shift Live Activity.** Log Tips, Start Shift and End
+  Shift controls for Control Center, the Lock Screen and the Action Button,
+  and a Lock Screen and Dynamic Island timer for the running shift
+  (`PaydayLogControl`, `PaydayShiftControl.swift`, `ShiftLiveActivity`).
+- **The after-tax estimate.** "After tax, about $N" under "On your check,
+  before tax" in the breakdown drawer, on the payday card and in Period
+  detail, learned as Pillar 2 says (`TakeHomeCopy`, `WithholdingModel`).
+
 ## What NOT to build (the restraint is the product)
 
 - No goals, budgets, or guilt-mechanic streaks. Records replace streaks.
 - No social anything, no leaderboards, no sharing cards (for now).
 - No chat. Ask Vero exists; Payday is a tool, not an assistant.
-- No accounts, ever. iCloud is the sync story.
+- Accounts are Sign in with Apple only, and Supabase is the sync story.
+  (This rule read "No accounts, ever. iCloud is the sync story." and was
+  changed when the app moved to accounts and Supabase sync.)
 - No confetti, no mascots, no gamification currency. Fun comes from meaning:
   reveals, records, pace, the payday moment.
 
@@ -995,13 +1058,15 @@ for the same shifts with no sales, hours or clock times.
 
 1. Stats engine + post-log reveal + dashboard pace line (the habit loop core).
 2. On-device Foundation Models swap for Insights narration — REVERSED
-   2026-07-14, see Pillar 4. Now OpenAI gpt-5.6-terra over the network,
+   2026-07-14, see Pillar 4. Then OpenAI gpt-5.6-terra over the network,
    autonomous ~twice-weekly refresh, amend-not-rewrite, with a hard
-   release gate on moving the key behind a proxy and rotating it.
+   release gate on moving the key behind a proxy and rotating it. Narration
+   was later removed; Insights is deterministic.
 3. Payday moment + predicted paycheck (+ TipKit explainer).
 4. App Intents + widgets (+ Smart Stack relevance).
 5. Undo-over-confirm, context menus, keyboard next, Swift Charts.
-6. CloudKit schema pass + sync + Face ID lock.
+6. CloudKit schema pass + sync + Face ID lock (sync is now Supabase, not
+   CloudKit; see Pillar 7).
 7. Smart nudge + smart defaults.
 
 Each numbered item should be a separate PR-sized commit series with tests for

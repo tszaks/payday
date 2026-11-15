@@ -24,7 +24,7 @@ import UserNotifications
 /// stub's TIPS line, deliberately wage-EXCLUSIVE, with mandatory gratuity
 /// split off into a second clause ("about $X in tips and $Y in gratuity").
 /// Wave 1 moved the Dashboard's payday card onto
-/// `MetricID.expectedPaycheckGross` (`PredictedPaycheck.figure(from:)`),
+/// `MetricID.expectedPaycheckGross` (`PaycheckReconciler.Expectation.grossFigure`),
 /// which is tips line **plus gratuity plus wages**, under the sentence "Your
 /// check should show". MEASURED on the fixture in
 /// `PaydayPushSchedulerTests.notificationFigureEqualsTheDashboardCard`
@@ -38,12 +38,12 @@ import UserNotifications
 /// speaks the Dashboard's figure, not a second metric.** It builds the
 /// Dashboard's dataset with the Dashboard's builder
 /// (`DashboardEarnings.build`) and formats the Dashboard's figure with the
-/// Dashboard's formatter (`PredictedPaycheck.figure(from:)`), so parity is
+/// Dashboard's formatter (`PaycheckReconciler.Expectation.grossFigure`), so parity is
 /// structural: one snapshot, one stamp, one `EarningsResult`, one
 /// `EarningsFigure`. There is no second formula here that has to be kept in
 /// step, which is why the old "in tips and in gratuity" split is DELETED
 /// rather than relabelled — splitting the check back into its lines is the
-/// thing `PredictedPaycheck`'s header and the payday card both refuse to do
+/// thing the payday card refuses to do
 /// ("One number, so no surface leaves the person adding it up").
 ///
 /// ## When it speaks, and when it stays silent instead
@@ -62,7 +62,7 @@ import UserNotifications
 /// 3. **No credit tips logged** — numberless, which is the gate this file has
 ///    always had, now restated on the engine's own components
 ///    (`voluntaryCreditCents > 0`) rather than on `TipBreakdown`. It matters
-///    more than it used to: `PredictedPaycheck.tipsLineCents` falls back to
+///    more than it used to: `MetricID.expectedPaycheckTipsLine` falls back to
 ///    ALL voluntary tips when no credit was logged, so an all-cash period
 ///    produces a check expectation containing cash, and cash never runs
 ///    through payroll. The Dashboard card renders that fallback today (group
@@ -438,7 +438,7 @@ enum PaydayPushScheduler {
     /// snapshot is `DashboardEarnings.build`'s (unclamped, `asOf:
     /// .distantFuture`, whole history so a workweek straddling the period
     /// boundary keeps its overtime), the query is one `range(_:)` over the
-    /// period's civil days, and the figure is `PredictedPaycheck.figure`.
+    /// period's civil days, and the figure is `PaycheckReconciler.Expectation.grossFigure`.
     ///
     /// No `asOf` argument at the query site, and that is not an omission: the
     /// period being announced is the one whose CHECK lands, so by the time

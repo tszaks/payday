@@ -11,20 +11,14 @@ private func date(_ year: Int, _ month: Int, _ day: Int) -> Date {
     return calendar.date(from: DateComponents(year: year, month: month, day: day))!
 }
 
-private func record(_ year: Int, _ month: Int, _ day: Int, cents: Int, kind: TipKind = .cash, isDouble: Bool = false, recordedHour: Int? = nil, hoursWorked: Double? = nil, tipOutCents: Int? = nil, salesCents: Int? = nil, shiftPeriod: ShiftPeriod? = nil, shiftID: UUID? = nil, clockInHour: Int? = nil, clockOutHour: Int? = nil, receiptMetrics: ShiftReceiptMetrics? = nil, note: String? = nil) -> TipRecord {
+private func record(_ year: Int, _ month: Int, _ day: Int, cents: Int, kind: TipKind = .cash, recordedHour: Int? = nil, hoursWorked: Double? = nil, tipOutCents: Int? = nil, salesCents: Int? = nil, shiftPeriod: ShiftPeriod? = nil, shiftID: UUID? = nil, receiptMetrics: ShiftReceiptMetrics? = nil) -> TipRecord {
     let shiftDate = date(year, month, day)
     var calendar = Calendar(identifier: .gregorian)
     calendar.timeZone = TimeZone.current
     let recordedAt = recordedHour.flatMap { hour in
         calendar.date(bySettingHour: hour, minute: 0, second: 0, of: shiftDate)
     }
-    let clockIn = clockInHour.flatMap { hour in
-        calendar.date(bySettingHour: hour, minute: 0, second: 0, of: shiftDate)
-    }
-    let clockOut = clockOutHour.flatMap { hour in
-        calendar.date(bySettingHour: hour, minute: 0, second: 0, of: shiftDate)
-    }
-    return TipRecord(date: shiftDate, amountCents: cents, kind: kind, isDouble: isDouble, recordedAt: recordedAt, hoursWorked: hoursWorked, tipOutCents: tipOutCents, salesCents: salesCents, shiftPeriod: shiftPeriod, shiftID: shiftID, clockIn: clockIn, clockOut: clockOut, receiptMetrics: receiptMetrics, note: note)
+    return TipRecord(date: shiftDate, amountCents: cents, kind: kind, recordedAt: recordedAt, hoursWorked: hoursWorked, tipOutCents: tipOutCents, salesCents: salesCents, shiftPeriod: shiftPeriod, shiftID: shiftID, receiptMetrics: receiptMetrics)
 }
 
 /// Two distinct shift ids for building emergent "double" days in tests — a
@@ -111,26 +105,6 @@ struct RecordsTests {
         #expect(engine.bestNightEver() == nil)
     }
 
-    @Test("best night in a period only considers nights inside it")
-    func bestNightInPeriod() {
-        let period = PayPeriod(start: date(2026, 7, 6), end: date(2026, 7, 19))
-        let records = [
-            record(2026, 7, 8, cents: 5000),
-            record(2026, 7, 12, cents: 9000),
-            record(2026, 6, 30, cents: 20000) // outside the period, must not win
-        ]
-        let engine = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: records)
-        let best = engine.bestNight(in: period)
-        #expect(best?.cents == 9000)
-    }
-
-    @Test("best night in a period is nil when nothing was logged in it")
-    func bestNightInPeriodNilWhenEmpty() {
-        let period = PayPeriod(start: date(2026, 7, 6), end: date(2026, 7, 19))
-        let engine = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: [record(2026, 6, 30, cents: 20000)])
-        #expect(engine.bestNight(in: period) == nil)
-    }
-
     @Test("best night for a weekday only considers that weekday")
     func bestForWeekday() {
         // July 1 2026 is a Wednesday, July 8 is also a Wednesday, July 3 is a Friday.
@@ -192,39 +166,6 @@ struct PaceTests {
         let records = [record(2026, 7, 6, cents: 5000, tipOutCents: 1000), record(2026, 7, 15, cents: 6000)]
         let engine = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: records)
         #expect(engine.periodToDateTotal(period: period, asOf: date(2026, 7, 15)) == 10000)
-    }
-
-    @Test("prior period comparable total matches the same elapsed-day offset")
-    func priorPeriodComparable() {
-        let currentPeriod = PayPeriod(start: date(2026, 7, 6), end: date(2026, 7, 19))
-        let priorPeriod = PayPeriod(start: date(2026, 6, 22), end: date(2026, 7, 5))
-        let records = [
-            record(2026, 6, 22, cents: 5000), // day 0 of prior period
-            record(2026, 6, 24, cents: 6000), // day 2 of prior period
-            record(2026, 7, 1, cents: 9000)   // day 9, after the comparable cutoff
-        ]
-        let engine = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: records)
-        // "asOf" is 2 days into the current period, so the comparable window
-        // is priorPeriod.start through priorPeriod.start + 2 days.
-        let total = engine.priorPeriodComparableTotal(currentPeriod: currentPeriod, priorPeriod: priorPeriod, asOf: date(2026, 7, 8))
-        #expect(total == 11000)
-    }
-
-    @Test("pace delta is nil with no prior period")
-    func paceDeltaNilWithoutPrior() {
-        let period = PayPeriod(start: date(2026, 7, 6), end: date(2026, 7, 19))
-        let engine = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: [])
-        #expect(engine.paceDelta(currentPeriod: period, priorPeriod: nil, asOf: date(2026, 7, 8)) == nil)
-    }
-
-    @Test("pace delta is positive when ahead of the prior period")
-    func paceDeltaAhead() {
-        let currentPeriod = PayPeriod(start: date(2026, 7, 6), end: date(2026, 7, 19))
-        let priorPeriod = PayPeriod(start: date(2026, 6, 22), end: date(2026, 7, 5))
-        let records = [record(2026, 7, 6, cents: 10000), record(2026, 6, 22, cents: 4000)]
-        let engine = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: records)
-        let delta = engine.paceDelta(currentPeriod: currentPeriod, priorPeriod: priorPeriod, asOf: date(2026, 7, 6))
-        #expect(delta == 6000)
     }
 }
 
@@ -310,8 +251,8 @@ struct UsualPaceTests {
         let records = [record(2026, 7, 6, cents: 10000), record(2026, 6, 22, cents: 4000)]
         let engine = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: records)
         let comparison = engine.paceComparison(currentPeriod: current, priorPeriods: [prior], asOf: date(2026, 7, 6))
-        let legacy = engine.paceDelta(currentPeriod: current, priorPeriod: prior, asOf: date(2026, 7, 6))
-        #expect(comparison?.deltaCents == legacy)
+        // Day 0 of each period: 10000 now against 4000 at the same point last period.
+        #expect(comparison?.deltaCents == 6000)
         #expect(comparison?.periodCount == 1)
     }
 
@@ -609,135 +550,31 @@ struct PaceCopyTests {
     }
 }
 
-@Suite("Rate ($/hr)")
-struct RateTests {
-    @Test("dollars per hour for a specific night divides that night's total by its hours")
-    func dollarsPerHourForNight() {
-        let engine = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: [record(2026, 7, 1, cents: 20000, hoursWorked: 5)])
-        #expect(engine.dollarsPerHour(forNightAt: date(2026, 7, 1)) == 40)
-    }
-
-    @Test("dollars per hour is nil for a night with no hours logged")
-    func dollarsPerHourNilWithoutHours() {
-        let engine = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: [record(2026, 7, 1, cents: 20000)])
-        #expect(engine.dollarsPerHour(forNightAt: date(2026, 7, 1)) == nil)
-    }
-
-    @Test("average dollars per hour blends total dollars over total hours, not an average of nightly rates")
-    func averageDollarsPerHourIsBlended() {
-        // One 10-hour night at $10/hr, one 2-hour night at $50/hr. A naive
-        // average of the two rates would say $30/hr; blended by totals it's
-        // $200 over 12 hours = $16.67/hr.
-        let engine = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: [
-            record(2026, 7, 1, cents: 10000, hoursWorked: 10),
-            record(2026, 7, 2, cents: 10000, hoursWorked: 2)
-        ])
-        let rate = engine.averageDollarsPerHour()
-        #expect(rate != nil)
-        #expect(abs(rate! - 16.666666) < 0.001)
-    }
-
-    @Test("average dollars per hour ignores nights with no hours logged")
-    func averageDollarsPerHourIgnoresUnloggedNights() {
-        let engine = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: [
-            record(2026, 7, 1, cents: 10000, hoursWorked: 5),
-            record(2026, 7, 2, cents: 99999) // no hours — must not distort the rate
-        ])
-        #expect(engine.averageDollarsPerHour() == 20)
-    }
-
-    @Test("average dollars per hour is nil with no rate history at all")
-    func averageDollarsPerHourNilWithoutHistory() {
-        let engine = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: [record(2026, 7, 1, cents: 10000)])
-        #expect(engine.averageDollarsPerHour() == nil)
-    }
-
-    @Test("average dollars per hour for a weekday only blends that weekday's rate nights")
-    func averageDollarsPerHourForWeekday() {
-        // July 1 and July 8 2026 are both Wednesdays.
-        let engine = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: [
-            record(2026, 7, 1, cents: 10000, hoursWorked: 5),  // $20/hr
-            record(2026, 7, 8, cents: 6000, hoursWorked: 2),   // $30/hr
-            record(2026, 7, 3, cents: 100, hoursWorked: 10)    // a Friday — must not count
-        ])
-        let wednesday = Calendar.current.component(.weekday, from: date(2026, 7, 1))
-        // Blended: $160 over 7 hours.
-        let rate = engine.averageDollarsPerHour(forWeekday: wednesday)
-        #expect(rate != nil)
-        #expect(abs(rate! - (160.0 / 7)) < 0.001)
-    }
-
-    @Test("best dollars-per-hour weekday requires at least two weekdays of rate history")
-    func bestWeekdayNeedsTwoWeekdays() {
-        let engine = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: [
-            record(2026, 7, 1, cents: 10000, hoursWorked: 5),
-            record(2026, 7, 8, cents: 6000, hoursWorked: 2) // same weekday (Wednesday) as above
-        ])
-        #expect(engine.bestDollarsPerHourWeekday() == nil)
-    }
-
-    @Test("hours on the 'wrong' entry (cash, when a credit entry also exists) still resolve correctly")
-    func dollarsPerHourReadsHoursFromWrongEntry() {
-        let records = [
-            record(2026, 7, 1, cents: 8600, kind: .credit),
-            record(2026, 7, 1, cents: 3200, kind: .cash, hoursWorked: 5)
-        ]
-        let engine = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: records)
-        // (8600 + 3200) / 100 / 5 = $23.60/hr, not nil.
-        #expect(engine.dollarsPerHour(forNightAt: date(2026, 7, 1)) == 23.6)
-    }
-
-    @Test("hours set on BOTH entries (corruption) are never summed into double the real hours")
-    func dollarsPerHourNeverSumsHours() {
-        let records = [
-            record(2026, 7, 1, cents: 8600, kind: .credit, hoursWorked: 5),
-            record(2026, 7, 1, cents: 3200, kind: .cash, hoursWorked: 5)
-        ]
-        let engine = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: records)
-        // If this summed to 10 hours the rate would be $11.80/hr instead.
-        #expect(engine.dollarsPerHour(forNightAt: date(2026, 7, 1)) == 23.6)
-    }
-
-    @Test("best dollars-per-hour weekday picks the highest-blended-rate weekday")
-    func bestWeekdayPicksHighestRate() {
-        let engine = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: [
-            record(2026, 7, 1, cents: 10000, hoursWorked: 5),  // Wednesday, $20/hr
-            record(2026, 7, 3, cents: 30000, hoursWorked: 5)   // Friday, $60/hr
-        ])
-        let friday = Calendar.current.component(.weekday, from: date(2026, 7, 3))
-        let best = engine.bestDollarsPerHourWeekday()
-        #expect(best?.weekday == friday)
-        #expect(best?.rate == 60)
-    }
-}
-
 @Suite("Tip percent")
 struct TipPercentTests {
-    @Test("tip percent for a night divides gross tips by sales, not net")
-    func tipPercentForNightIsGross() {
-        let engine = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: [
-            record(2026, 7, 1, cents: 10000, kind: .credit, tipOutCents: 1500, salesCents: 50000)
-        ])
+    /// The tip-percent tile's own number, `insightsFacts().sales`, which needs
+    /// five shifts and three nights with sales. `night` builds one shift's
+    /// records on the given day of August 2026. It is logged on three days, so
+    /// the blend over them is that one night's percent, and two shifts with no
+    /// sales make up the five.
+    private func tilePercent(_ night: (Int) -> [TipRecord]) -> Double? {
+        let records = (1...3).flatMap(night) + [record(2026, 8, 4, cents: 1000), record(2026, 8, 5, cents: 1000)]
+        let engine = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: records)
+        return engine.insightsFacts(referenceDate: date(2026, 8, 10))?.sales?.overallTipPercent
+    }
+
+    @Test("tip percent divides gross tips by sales, not net")
+    func tipPercentIsGross() {
         // 10000 gross / 50000 sales = 20%, ignoring the tip-out entirely.
-        #expect(engine.tipPercent(forNightAt: date(2026, 7, 1)) == 20)
+        #expect(tilePercent { [record(2026, 8, $0, cents: 10000, kind: .credit, tipOutCents: 1500, salesCents: 50000)] } == 20)
     }
 
     @Test("receipt total never replaces the pre-tip sales denominator")
     func receiptTotalIsNotSalesBasis() {
         let metrics = ShiftReceiptMetrics(totalAmountCents: 98_049)
-        let engine = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: [
-            record(
-                2026,
-                8,
-                23,
-                cents: 12_136,
-                kind: .credit,
-                salesCents: 81_863,
-                receiptMetrics: metrics
-            )
-        ])
-
-        let percent = engine.tipPercent(forNightAt: date(2026, 8, 23))
+        let percent = tilePercent { day in
+            [record(2026, 8, day, cents: 12_136, kind: .credit, salesCents: 81_863, receiptMetrics: metrics)]
+        }
         #expect(percent != nil)
         #expect(abs(percent! - (12_136.0 / 81_863.0 * 100)) < 0.001)
         #expect(abs(percent! - (12_136.0 / 98_049.0 * 100)) > 1)
@@ -750,21 +587,12 @@ struct TipPercentTests {
             gratuityFeesCents: 4_050,
             totalAmountCents: 98_049
         )
-        let engine = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: [
-            record(
-                2026,
-                8,
-                23,
-                cents: 12_136,
-                kind: .credit,
-                tipOutCents: 2_243,
-                salesCents: 81_863,
-                receiptMetrics: metrics
-            )
-        ])
-
+        let night = { (day: Int) in
+            [record(2026, 8, day, cents: 12_136, kind: .credit, tipOutCents: 2_243, salesCents: 81_863, receiptMetrics: metrics)]
+        }
+        let engine = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: night(23))
         #expect(engine.nightlyTotals().first?.cents == 13_943)
-        let percent = engine.tipPercent(forNightAt: date(2026, 8, 23))
+        let percent = tilePercent(night)
         #expect(percent != nil)
         #expect(abs(percent! - ((12_136.0 + 4_050.0) / 81_863.0 * 100)) < 0.001)
         #expect(abs(percent! - ((12_136.0 + 4_050.0) / 98_049.0 * 100)) > 1)
@@ -772,37 +600,9 @@ struct TipPercentTests {
 
     @Test("a discretionary 20% auto-grat and an optional extra tip combine")
     func autoGratAndExtraTipCombine() {
-        let autoGratOnly = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: [
-            record(
-                2026,
-                8,
-                23,
-                cents: 0,
-                kind: .credit,
-                salesCents: 40_000,
-                receiptMetrics: ShiftReceiptMetrics(
-                    earningsSchemaVersion: 2,
-                    gratuityFeesCents: 8_000
-                )
-            )
-        ])
-        #expect(autoGratOnly.tipPercent(forNightAt: date(2026, 8, 23)) == 20)
-
-        let withExtraTip = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: [
-            record(
-                2026,
-                8,
-                24,
-                cents: 2_000,
-                kind: .credit,
-                salesCents: 40_000,
-                receiptMetrics: ShiftReceiptMetrics(
-                    earningsSchemaVersion: 2,
-                    gratuityFeesCents: 8_000
-                )
-            )
-        ])
-        #expect(withExtraTip.tipPercent(forNightAt: date(2026, 8, 24)) == 25)
+        let autoGrat = ShiftReceiptMetrics(earningsSchemaVersion: 2, gratuityFeesCents: 8_000)
+        #expect(tilePercent { [record(2026, 8, $0, cents: 0, kind: .credit, salesCents: 40_000, receiptMetrics: autoGrat)] } == 20)
+        #expect(tilePercent { [record(2026, 8, $0, cents: 2_000, kind: .credit, salesCents: 40_000, receiptMetrics: autoGrat)] } == 25)
     }
 
     @Test("legacy combined receipt amounts do not double-count captured gratuity")
@@ -826,58 +626,42 @@ struct TipPercentTests {
         #expect(engine.nightlyTotals().first?.cents == 13_943)
     }
 
-    @Test("tip percent is nil for a night with no sales logged")
-    func tipPercentNilWithoutSales() {
-        let engine = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: [record(2026, 7, 1, cents: 10000)])
-        #expect(engine.tipPercent(forNightAt: date(2026, 7, 1)) == nil)
-    }
-
-    @Test("average tip percent blends total gross tips over total sales")
-    func averageTipPercentIsBlended() {
-        let engine = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: [
-            record(2026, 7, 1, cents: 10000, salesCents: 50000), // 20%
-            record(2026, 7, 2, cents: 3000, salesCents: 10000)   // 30%
-        ])
-        // Blended: 13000 / 60000 = 21.67%, not a naive 25% average.
-        let percent = engine.averageTipPercent()
-        #expect(percent != nil)
-        #expect(abs(percent! - (13000.0 / 60000.0 * 100)) < 0.001)
-    }
-
     @Test("sales on the 'wrong' entry (cash, when a credit entry also exists) still resolve correctly")
     func tipPercentReadsSalesFromWrongEntry() {
-        let records = [
-            record(2026, 7, 1, cents: 8600, kind: .credit),
-            record(2026, 7, 1, cents: 3200, kind: .cash, salesCents: 50000)
-        ]
-        let engine = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: records)
+        let percent = tilePercent { day in [
+            record(2026, 8, day, cents: 8600, kind: .credit),
+            record(2026, 8, day, cents: 3200, kind: .cash, salesCents: 50000)
+        ] }
         // (8600 + 3200) / 50000 * 100 = 23.6%, not nil.
-        #expect(abs(engine.tipPercent(forNightAt: date(2026, 7, 1))! - 23.6) < 0.001)
+        #expect(abs(percent! - 23.6) < 0.001)
     }
 
     @Test("sales set on BOTH entries (corruption) are never summed into double the real sales")
     func tipPercentNeverSumsSales() {
-        let records = [
-            record(2026, 7, 1, cents: 8600, kind: .credit, salesCents: 50000),
-            record(2026, 7, 1, cents: 3200, kind: .cash, salesCents: 20000)
-        ]
-        let engine = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: records)
+        let percent = tilePercent { day in [
+            record(2026, 8, day, cents: 8600, kind: .credit, salesCents: 50000),
+            record(2026, 8, day, cents: 3200, kind: .cash, salesCents: 20000)
+        ] }
         // If this summed to $700 sales the percent would be ~16.9% instead.
-        #expect(abs(engine.tipPercent(forNightAt: date(2026, 7, 1))! - 23.6) < 0.001)
+        #expect(abs(percent! - 23.6) < 0.001)
     }
 
-    @Test("average tip percent for a weekday only blends that weekday's sales nights")
-    func averageTipPercentForWeekday() {
-        // July 1 and July 8 2026 are both Wednesdays.
+    @Test("a weekday's tip percent only blends that weekday's sales nights")
+    func weekdayTipPercentBlendsOnlyThatWeekday() {
+        // July 1, 8 and 15 2026 are Wednesdays; July 3, 10 and 17 are Fridays.
         let engine = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: [
-            record(2026, 7, 1, cents: 10000, salesCents: 50000), // Wednesday
-            record(2026, 7, 8, cents: 3000, salesCents: 10000),  // Wednesday
-            record(2026, 7, 3, cents: 999999, salesCents: 1)     // Friday, must not count
+            record(2026, 7, 1, cents: 10000, salesCents: 50000),
+            record(2026, 7, 8, cents: 3000, salesCents: 10000),
+            record(2026, 7, 15, cents: 5000, salesCents: 25000),
+            record(2026, 7, 3, cents: 1000, salesCents: 50000),
+            record(2026, 7, 10, cents: 1000, salesCents: 50000),
+            record(2026, 7, 17, cents: 1000, salesCents: 50000)
         ])
         let wednesday = Calendar.current.component(.weekday, from: date(2026, 7, 1))
-        let percent = engine.averageTipPercent(forWeekday: wednesday)
-        #expect(percent != nil)
-        #expect(abs(percent! - (13000.0 / 60000.0 * 100)) < 0.001)
+        let sales = engine.insightsFacts(referenceDate: date(2026, 7, 20))?.sales
+        #expect(sales?.bestWeekday == wednesday)
+        #expect(sales?.bestWeekdayNightCount == 3)
+        #expect(sales.map { abs($0.bestWeekdayTipPercent! - (18000.0 / 85000.0 * 100)) < 0.001 } == true)
     }
 }
 
@@ -940,7 +724,6 @@ struct WorkRhythmTests {
             date: date(2026, 7, 1),
             amountCents: 5000,
             kind: .cash,
-            isDouble: false,
             recordedAt: calendar.date(bySettingHour: 12, minute: 0, second: 0, of: date(2026, 7, 5))
         )
         let records = [
@@ -959,45 +742,6 @@ struct WorkRhythmTests {
         let rhythm = engine.workRhythm(referenceDate: date(2026, 7, 3))
         #expect(rhythm.usualWeekdays.isEmpty)
         #expect(rhythm.typicalLogHour == nil)
-    }
-}
-
-@Suite("Projection")
-struct ProjectionTests {
-    @Test("projection adds one estimated night per remaining usual weekday, at that weekday's average")
-    func midPeriodProjection() {
-        let period = PayPeriod(start: date(2026, 7, 6), end: date(2026, 7, 19))
-        // Monday average $50, Wednesday average $80. Both usual.
-        let engine = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: [
-            record(2026, 7, 6, cents: 5000),  // Monday, inside the period
-            record(2026, 6, 22, cents: 5000), // Monday, prior history
-            record(2026, 7, 1, cents: 8000),  // Wednesday, prior history
-        ])
-        let rhythm = WorkRhythm(usualWeekdays: [
-            Calendar.current.component(.weekday, from: date(2026, 7, 6)),
-            Calendar.current.component(.weekday, from: date(2026, 7, 1))
-        ], typicalLogHour: nil)
-        // As of July 6 (day 1), remaining usual nights through July 19:
-        // Wednesdays July 8 & 15 ($80 each) and Mondays July 13 ($50).
-        let projected = engine.projectedPeriodTotal(period: period, asOf: date(2026, 7, 6), rhythm: rhythm)
-        #expect(projected == 5000 + 8000 + 8000 + 5000)
-    }
-
-    @Test("projection on the last day of the period adds nothing further")
-    func lastDayProjection() {
-        let period = PayPeriod(start: date(2026, 7, 6), end: date(2026, 7, 19))
-        let engine = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: [record(2026, 7, 6, cents: 5000)])
-        let rhythm = WorkRhythm(usualWeekdays: [Calendar.current.component(.weekday, from: date(2026, 7, 6))], typicalLogHour: nil)
-        let projected = engine.projectedPeriodTotal(period: period, asOf: date(2026, 7, 19), rhythm: rhythm)
-        #expect(projected == engine.periodToDateTotal(period: period, asOf: date(2026, 7, 19)))
-    }
-
-    @Test("projection is nil without any usual weekdays yet")
-    func noRhythmProjectionIsNil() {
-        let period = PayPeriod(start: date(2026, 7, 6), end: date(2026, 7, 19))
-        let engine = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: [])
-        let projected = engine.projectedPeriodTotal(period: period, asOf: date(2026, 7, 6), rhythm: WorkRhythm(usualWeekdays: [], typicalLogHour: nil))
-        #expect(projected == nil)
     }
 }
 
@@ -1160,19 +904,26 @@ struct RevealTests {
 
 /// Tyler's ruling (2026-07-27): a shift speaks ONE number. These fixtures
 /// are built so tips-basis and income-basis DISAGREE about the same
-/// night — proving revealComparison actually switches basis when a wage
-/// is set, rather than happening to agree by coincidence.
+/// night — proving revealComparison actually switches basis when the engine
+/// holds the ledger's valued cents, rather than happening to agree by
+/// coincidence. Each map values every shift; the worked shift carries its
+/// wage on top of its tips.
 @Suite("Reveal wage basis")
 struct RevealWageBasisTests {
+    private let first = UUID()
+    private let second = UUID()
+    private let third = UUID()
+    private let fourth = UUID()
+
     @Test("an all-time record on tips-only history is no longer a record once a wage lifts a prior night above it")
     func allTimeRecordFlipsWithWage() {
         let period = PayPeriod(start: date(2026, 7, 1), end: date(2026, 7, 31))
         // Tips-basis all-time best is 9000 (no hours). Income-basis
-        // all-time best is 12000, once the $5/hr wage lands on the 10-hour
-        // shift below.
+        // all-time best is 12000: 7000 tips plus the ledger's $50 of wages
+        // on the 10-hour shift below.
         let records = [
-            record(2026, 7, 1, cents: 9000),
-            record(2026, 7, 2, cents: 7000, hoursWorked: 10)
+            record(2026, 7, 1, cents: 9000, shiftID: first),
+            record(2026, 7, 2, cents: 7000, hoursWorked: 10, shiftID: second)
         ]
         // Tips-only: tonight's 9500 beats the 9000 tips-basis best.
         let tipsOnly = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: records)
@@ -1181,8 +932,8 @@ struct RevealWageBasisTests {
         #expect(tipsResult.isRecord)
 
         // Income-aware, same records, same tonight: 9500 no longer beats
-        // the 12000 income-basis best (7000 tips + $50 wage on 10 hours).
-        let incomeAware = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: records, wageCentsPerHour: 500)
+        // the 12000 income-basis best.
+        let incomeAware = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: records, valuedShiftCents: [first: 9000, second: 12000])
         let incomeResult = incomeAware.reveal(forNightAt: date(2026, 7, 3), cents: 9500, period: period)
         #expect(incomeResult.comparison != .allTimeRecord(previousBestCents: 9000))
         #expect(!incomeResult.isRecord)
@@ -1193,16 +944,16 @@ struct RevealWageBasisTests {
         let period = PayPeriod(start: date(2026, 6, 1), end: date(2026, 7, 31))
         let monday = Calendar.current.component(.weekday, from: date(2026, 7, 6))
         let records = [
-            record(2026, 7, 3, cents: 50000),                    // dominant all-time best (a Friday), blocks allTimeRecord in both bases
-            record(2026, 6, 22, cents: 9000),                     // best Monday, tips-basis: 9000
-            record(2026, 6, 29, cents: 7000, hoursWorked: 10)     // tips 7000, income 7000 + $50 wage = 12000
+            record(2026, 7, 3, cents: 50000, shiftID: first),                     // dominant all-time best (a Friday), blocks allTimeRecord in both bases
+            record(2026, 6, 22, cents: 9000, shiftID: second),                     // best Monday, tips-basis: 9000
+            record(2026, 6, 29, cents: 7000, hoursWorked: 10, shiftID: third)      // tips 7000, income 7000 + $50 wage = 12000
         ]
         let tipsOnly = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: records)
         let tipsResult = tipsOnly.reveal(forNightAt: date(2026, 7, 6), cents: 9500, period: period)
         #expect(tipsResult.comparison == .weekdayRecord(weekday: monday, previousBestCents: 9000))
         #expect(tipsResult.isRecord)
 
-        let incomeAware = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: records, wageCentsPerHour: 500)
+        let incomeAware = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: records, valuedShiftCents: [first: 50000, second: 9000, third: 12000])
         let incomeResult = incomeAware.reveal(forNightAt: date(2026, 7, 6), cents: 9500, period: period)
         #expect(incomeResult.comparison != .weekdayRecord(weekday: monday, previousBestCents: 9000))
         #expect(!incomeResult.isRecord)
@@ -1212,9 +963,9 @@ struct RevealWageBasisTests {
     func weekdayAverageDeltaFlipsWithWage() {
         let period = PayPeriod(start: date(2026, 6, 1), end: date(2026, 7, 31))
         let records = [
-            record(2026, 7, 3, cents: 50000),                    // dominant all-time best (a Friday)
-            record(2026, 6, 22, cents: 6000),                     // Monday, no hours
-            record(2026, 6, 29, cents: 4000, hoursWorked: 10)     // Monday, tips 4000, income 4000 + $50 wage = 9000
+            record(2026, 7, 3, cents: 50000, shiftID: first),                     // dominant all-time best (a Friday)
+            record(2026, 6, 22, cents: 6000, shiftID: second),                     // Monday, no hours
+            record(2026, 6, 29, cents: 4000, hoursWorked: 10, shiftID: third)      // Monday, tips 4000, income 4000 + $50 wage = 9000
         ]
         // Tips-basis Monday average: (6000 + 4000) / 2 = 5000. Tonight's
         // 5500 sits $500 ABOVE it.
@@ -1228,7 +979,7 @@ struct RevealWageBasisTests {
 
         // Income-basis Monday average: (6000 + 9000) / 2 = 7500. The SAME
         // tonight now sits $2000 BELOW it — the sign flips.
-        let incomeAware = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: records, wageCentsPerHour: 500)
+        let incomeAware = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: records, valuedShiftCents: [first: 50000, second: 6000, third: 9000])
         let incomeResult = incomeAware.reveal(forNightAt: date(2026, 7, 6), cents: 5500, period: period)
         guard case .weekdayAverage(_, let incomeDelta, _, _, _) = incomeResult.comparison else {
             Issue.record("expected weekdayAverage case, got \(incomeResult.comparison)")
@@ -1244,57 +995,18 @@ struct RevealWageBasisTests {
         // lifts that same shift to 7000 with a $50 wage, so the
         // income-basis floor becomes 6000 instead.
         let records = [
-            record(2026, 7, 1, cents: 2000, hoursWorked: 10),
-            record(2026, 7, 2, cents: 6000),
-            record(2026, 7, 3, cents: 6000),
-            record(2026, 7, 4, cents: 6000)
+            record(2026, 7, 1, cents: 2000, hoursWorked: 10, shiftID: first),
+            record(2026, 7, 2, cents: 6000, shiftID: second),
+            record(2026, 7, 3, cents: 6000, shiftID: third),
+            record(2026, 7, 4, cents: 6000, shiftID: fourth)
         ]
         let tipsOnly = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: records)
         let tipsResult = tipsOnly.reveal(forNightAt: date(2026, 7, 6), cents: 5000, period: period)
         #expect(tipsResult.comparison != .slowestRecently)
 
-        let incomeAware = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: records, wageCentsPerHour: 500)
+        let incomeAware = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: records, valuedShiftCents: [first: 7000, second: 6000, third: 6000, fourth: 6000])
         let incomeResult = incomeAware.reveal(forNightAt: date(2026, 7, 6), cents: 5000, period: period)
         #expect(incomeResult.comparison == .slowestRecently)
-    }
-
-    @Test("nil wage (the default) reproduces tips-only reveal behavior exactly")
-    func nilWageMatchesTipsOnlyReveal() {
-        let period = PayPeriod(start: date(2026, 7, 6), end: date(2026, 7, 19))
-        // Same fixture and expectations as weekdayRecordFires above,
-        // constructed with an explicit wageCentsPerHour: nil.
-        let engine = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: [
-            record(2026, 6, 26, cents: 20000),
-            record(2026, 6, 22, cents: 3000),
-            record(2026, 7, 8, cents: 4000)
-        ], wageCentsPerHour: nil)
-        let result = engine.reveal(forNightAt: date(2026, 7, 13), cents: 5000, period: period)
-        #expect(result.comparison == .weekdayRecord(weekday: Calendar.current.component(.weekday, from: date(2026, 7, 13)), previousBestCents: 3000))
-        #expect(result.isRecord)
-    }
-
-    @Test("pace and charts never read wageCentsPerHour — the boundary that doesn't move")
-    func paceAndChartsIgnoreWage() {
-        let records = [
-            record(2026, 7, 1, cents: 5000, hoursWorked: 8),
-            record(2026, 7, 2, cents: 7000, hoursWorked: 6),
-            record(2026, 7, 3, cents: 6000)
-        ]
-        let tipsOnly = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: records)
-        let wageAware = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: records, wageCentsPerHour: 500)
-
-        #expect(tipsOnly.nightlyTotals().map(\.cents) == wageAware.nightlyTotals().map(\.cents))
-
-        let current = PayPeriod(start: date(2026, 7, 1), end: date(2026, 7, 14))
-        let prior = PayPeriod(start: date(2026, 6, 17), end: date(2026, 6, 30))
-        #expect(
-            tipsOnly.paceDelta(currentPeriod: current, priorPeriod: prior, asOf: date(2026, 7, 3))
-            == wageAware.paceDelta(currentPeriod: current, priorPeriod: prior, asOf: date(2026, 7, 3))
-        )
-        #expect(
-            tipsOnly.projectedPeriodTotal(period: current, asOf: date(2026, 7, 3), rhythm: tipsOnly.workRhythm(referenceDate: date(2026, 7, 3)))
-            == wageAware.projectedPeriodTotal(period: current, asOf: date(2026, 7, 3), rhythm: wageAware.workRhythm(referenceDate: date(2026, 7, 3)))
-        )
     }
 }
 
@@ -1380,9 +1092,9 @@ struct RevealCopyTests {
 
     @Test("pace line reads ahead, behind, and even correctly")
     func paceLineWording() {
-        #expect(RevealCopy.paceLine(deltaCents: 12000).contains("ahead of"))
-        #expect(RevealCopy.paceLine(deltaCents: -5000).contains("behind"))
-        #expect(RevealCopy.paceLine(deltaCents: 0) == "Even with last period at this point.")
+        #expect(RevealCopy.paceLine(deltaCents: 12000, periodCount: 1).contains("ahead of"))
+        #expect(RevealCopy.paceLine(deltaCents: -5000, periodCount: 1).contains("behind"))
+        #expect(RevealCopy.paceLine(deltaCents: 0, periodCount: 1) == "Even with last period at this point.")
     }
 
     // Three deleted formatters, three deleted tests (`docs/METRICS.md`
@@ -1445,23 +1157,23 @@ struct InsightsFactsTests {
     // ([ID-12] onward), and a shift note has never been rendered on a Payday
     // screen. Nothing sends a note off-device any more.
 
-    @Test("a single hot night never crowns a best-paying weekday")
+    @Test("a single hot night never crowns a best-tipping weekday")
     func weekdayBestNeedsRealSample() {
         // Jun 29 + Jul 6/13/20 2026 are Mondays, Jul 7 is a Tuesday.
         // Four ordinary Mondays vs one spectacular Tuesday: with the >= 3
         // nights floor, Tuesday (n=1) may not win — and with only one
         // qualifying weekday there is no runner-up, so no claim at all.
         let records = [
-            record(2026, 6, 29, cents: 9500, hoursWorked: 5),
-            record(2026, 7, 6, cents: 10000, hoursWorked: 5),
-            record(2026, 7, 13, cents: 11000, hoursWorked: 5),
-            record(2026, 7, 20, cents: 10500, hoursWorked: 5),
-            record(2026, 7, 7, cents: 25000, hoursWorked: 5)
+            record(2026, 6, 29, cents: 9500, salesCents: 50000),
+            record(2026, 7, 6, cents: 10000, salesCents: 50000),
+            record(2026, 7, 13, cents: 11000, salesCents: 50000),
+            record(2026, 7, 20, cents: 10500, salesCents: 50000),
+            record(2026, 7, 7, cents: 25000, salesCents: 50000)
         ]
         let engine = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: records)
-        let rate = engine.insightsFacts(referenceDate: date(2026, 7, 21))?.rate
-        #expect(rate != nil)
-        #expect(rate?.bestWeekday == nil)
+        let sales = engine.insightsFacts(referenceDate: date(2026, 7, 21))?.sales
+        #expect(sales != nil)
+        #expect(sales?.bestWeekday == nil)
     }
 
     @Test("doubles facts include the per-shift number that makes the comparison fair")
@@ -1566,55 +1278,6 @@ struct InsightsFactsTests {
         // 18000 gross / 85000 sales.
         #expect(sales.map { abs($0.overallTipPercent - (18000.0 / 85000.0 * 100)) < 0.001 } == true)
     }
-
-    @Test("rate facts are nil below the minimum nights with hours logged")
-    func rateFactsNilBelowMinimum() {
-        let records = [
-            record(2026, 7, 1, cents: 1000, hoursWorked: 5),
-            record(2026, 7, 2, cents: 1000, hoursWorked: 5),
-            record(2026, 7, 3, cents: 1000), // no hours
-            record(2026, 7, 4, cents: 1000),
-            record(2026, 7, 5, cents: 1000)
-        ]
-        let engine = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: records)
-        #expect(engine.insightsFacts(referenceDate: date(2026, 7, 10))?.rate == nil)
-    }
-
-    @Test("rate facts compute the blended overall rate once enough nights have hours")
-    func rateFactsOverall() {
-        let records = [
-            record(2026, 7, 1, cents: 10000, hoursWorked: 5), // $20/hr
-            record(2026, 7, 2, cents: 6000, hoursWorked: 2),  // $30/hr
-            record(2026, 7, 3, cents: 4000, hoursWorked: 2),  // $20/hr
-            record(2026, 7, 4, cents: 1000),
-            record(2026, 7, 5, cents: 1000)
-        ]
-        let engine = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: records)
-        let rate = engine.insightsFacts(referenceDate: date(2026, 7, 10))?.rate
-        #expect(rate?.nightsWithHours == 3)
-        // $200 over 9 hours.
-        #expect(rate.map { abs($0.overallDollarsPerHour - (200.0 / 9)) < 0.001 } == true)
-    }
-
-    @Test("rate facts split lunch vs dinner and doubles vs solo only over rate nights")
-    func rateFactsSplits() {
-        let records = [
-            // Day 1 is a double: two dinner closeouts, $100 over 9 hours total ($11.11/hr).
-            record(2026, 7, 1, cents: 5000, recordedHour: 20, hoursWorked: 4.5, shiftID: UUID()),
-            record(2026, 7, 1, cents: 5000, recordedHour: 20, hoursWorked: 4.5, shiftID: UUID()),
-            record(2026, 7, 2, cents: 4000, recordedHour: 13, hoursWorked: 4),                  // lunch, solo: $10/hr
-            record(2026, 7, 3, cents: 5000, recordedHour: 19, hoursWorked: 5),                  // dinner, solo: $10/hr
-            record(2026, 7, 4, cents: 1000),
-            record(2026, 7, 5, cents: 1000)
-        ]
-        let engine = StatsEngine(payrollTimeZone: PaydayTestZone.payroll, records: records)
-        let rate = engine.insightsFacts(referenceDate: date(2026, 7, 10))?.rate
-        #expect(rate?.doubleDollarsPerHour != nil)
-        #expect(rate?.soloDollarsPerHour != nil)
-        #expect(rate?.lunchDollarsPerHour == 10)
-        #expect(rate.map { abs($0.dinnerDollarsPerHour! - (150.0 / 14)) < 0.001 } == true)
-    }
-
 }
 
 // `InsightsFactsCopyTests` is gone with `InsightsFactsCopy` itself.
@@ -1628,3 +1291,276 @@ struct InsightsFactsTests {
 // with its own division (`lunchCents / lunchShiftCount`, twice), so it was a
 // second money formula for a figure that already had one. Deleting it now is
 // cheaper than migrating it onto the snapshot only for PR 8 to delete it.
+
+/// What the live entry points of `StatsEngine` return on one fixed history,
+/// written down as literals. Every screen, widget and notification that reads
+/// this engine reads one of these members: the reveal (the Dashboard's echo
+/// and the log sheet's card), `paceComparison` (the Dashboard hero and the
+/// widget), the Insights facts, ranges, trend, plan and forecast accuracy, and
+/// the work rhythm (Insights and the smart nudge). A change that removes code
+/// the app never runs leaves every line here as it is.
+@Suite("Live engine outputs on a fixed history")
+struct LiveEngineOutputPinTests {
+    private static let zone = TimeZone(identifier: "America/Chicago")!
+
+    private static let calendar: Calendar = {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = zone
+        return calendar
+    }()
+
+    /// Day `offset` of the history. Day 0 is Monday 2026-03-02.
+    private static func day(_ offset: Int) -> Date {
+        calendar.date(byAdding: .day, value: offset, to: calendar.date(from: DateComponents(year: 2026, month: 3, day: 2))!)!
+    }
+
+    private static func offset(of date: Date) -> Int {
+        calendar.dateComponents([.day], from: day(0), to: date).day!
+    }
+
+    /// A fixed-seed linear congruential generator: the history is varied, and
+    /// the same on every run.
+    private struct Generator {
+        var state: UInt64 = 20_261_115
+        mutating func next(_ upperBound: Int) -> Int {
+            state = state &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+            return Int((state >> 33) % UInt64(upperBound))
+        }
+    }
+
+    private struct History {
+        var records: [TipRecord] = []
+        /// The shifts that carry an id, in the order they were worked.
+        var shifts: [(id: UUID, date: Date)] = []
+        /// The ledger's answer for every second shift, as a caller holding a
+        /// snapshot would pass it. The other half fall back to tips.
+        var valued: [UUID: Int] = [:]
+    }
+
+    /// Sixty shifts over sixteen weeks: mostly Tuesday, Thursday, Friday
+    /// and Saturday, a rare Sunday, some Saturday doubles, cash and card rows,
+    /// tip-outs, tip shares, hours, sales, a few legacy shifts with no id, and
+    /// a level that rises in the last eight weeks.
+    private static let history: History = {
+        var random = Generator()
+        var history = History()
+        var count = 0
+        for offset in 0..<140 where count < 60 {
+            let date = day(offset)
+            let weekday = calendar.component(.weekday, from: date)
+            let works = [3, 5, 6, 7].contains(weekday) ? random.next(10) < 8 : random.next(10) < 1
+            guard works else { continue }
+            let isDouble = weekday == 7 && random.next(3) == 0
+            let periods: [ShiftPeriod?] = isDouble ? [.lunch, .dinner] : [random.next(4) == 0 ? nil : .dinner]
+            for period in periods where count < 60 {
+                count += 1
+                let id: UUID? = !isDouble && random.next(10) == 0
+                    ? nil
+                    : UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", count))!
+                let cash = 1000 + random.next(7000) + (offset >= 57 ? 3000 : 0)
+                let credit = random.next(4) == 0 ? 0 : 2000 + random.next(11000)
+                let tipOut: Int? = random.next(2) == 0 ? random.next(2500) : nil
+                let share: Int? = random.next(5) == 0 ? 1000 + random.next(3000) : nil
+                let hours: Double? = random.next(4) == 0 ? nil : Double(4 + random.next(17)) / 2
+                let sales: Int? = random.next(3) == 0 ? nil : 30000 + random.next(70000)
+                let recordedAt = calendar.date(bySettingHour: period == .lunch ? 15 : 22, minute: 0, second: 0, of: date)
+                history.records.append(TipRecord(
+                    date: date, amountCents: cash, kind: .cash, recordedAt: recordedAt,
+                    hoursWorked: hours, tipOutCents: tipOut, salesCents: sales, shiftPeriod: period,
+                    shiftID: id, tipShareInCents: share
+                ))
+                if credit > 0 {
+                    history.records.append(TipRecord(
+                        date: date, amountCents: credit, kind: .credit, recordedAt: recordedAt, shiftID: id
+                    ))
+                }
+                if let id {
+                    history.shifts.append((id, date))
+                    if count % 2 == 0 { history.valued[id] = 4000 + random.next(25000) }
+                }
+            }
+        }
+        return history
+    }()
+
+    private static let reference = day(113)
+
+    /// Biweekly periods: index 0 is the current one (days 100 to 113), each
+    /// next index the period before it.
+    private static func period(_ index: Int) -> PayPeriod {
+        PayPeriod(start: day(100 - 14 * index), end: day(113 - 14 * index))
+    }
+
+    private static func periodIndex(containing date: Date) -> Int {
+        (113 - offset(of: date)) / 14
+    }
+
+    private static func text(_ comparison: RevealComparison) -> String {
+        switch comparison {
+        case .firstNightLogged: "firstNightLogged"
+        case .allTimeRecord(let best): "allTimeRecord \(best)"
+        case .firstShiftOfPeriod: "firstShiftOfPeriod"
+        case .weekdayRecord(let weekday, let best): "weekdayRecord \(weekday) \(best)"
+        case .firstWeekdayLogged(let weekday): "firstWeekdayLogged \(weekday)"
+        case .slowestRecently: "slowestRecently"
+        case .weekdayAverage(let weekday, let delta, let rank, let count, let sample):
+            "weekdayAverage \(weekday) \(delta) rank \(rank.map(String.init) ?? "nil") of \(count) sample \(sample)"
+        }
+    }
+
+    /// One line per answer, so a difference names the answer that moved.
+    private static func lines(_ engine: StatsEngine) -> [String] {
+        var lines: [String] = []
+        lines.append("nightly " + engine.nightlyTotals().map { "\(offset(of: $0.date)):\($0.cents)" }.joined(separator: " "))
+        for index in [3, 21, 37, history.shifts.count - 1] {
+            let shift = history.shifts[index]
+            let period = period(periodIndex(containing: shift.date))
+            for cents in [500, 12000, 20000, 60000] {
+                for shiftID in [shift.id, nil] {
+                    let result = engine.reveal(forNightAt: shift.date, cents: cents, period: period, shiftID: shiftID)
+                    lines.append("reveal \(offset(of: shift.date)) \(cents) \(shiftID == nil ? "day" : "shift") \(result.cents) \(text(result.comparison)) \(result.isRecord)")
+                }
+            }
+        }
+        // A Monday, which this history never works.
+        let monday = engine.reveal(forNightAt: day(105), cents: 12000, period: period(0), shiftID: UUID(uuidString: "00000000-0000-0000-0000-000000009999")!)
+        lines.append("reveal 105 12000 shift \(monday.cents) \(text(monday.comparison)) \(monday.isRecord)")
+        let current = period(0)
+        for asOf in [100, 106, 113] {
+            let usual = engine.paceComparison(currentPeriod: current, priorPeriods: (1...6).map(period), asOf: day(asOf))
+            let single = engine.paceComparison(currentPeriod: current, priorPeriods: [period(1)], asOf: day(asOf))
+            lines.append("pace \(asOf) \(String(describing: usual)) \(String(describing: single))")
+        }
+        let facts = engine.insightsFacts(referenceDate: reference)
+        lines.append("facts \(String(describing: facts?.shiftCount)) \(String(describing: facts?.doublesSolo)) \(String(describing: facts?.sales))")
+        lines.append("ranges \(String(describing: engine.typicalRanges(referenceDate: reference)))")
+        lines.append("trend \(String(describing: engine.earningTrend(referenceDate: reference)))")
+        let plan = engine.planForward(referenceDate: reference)
+        lines.append("plan \(String(describing: plan?.nights)) \(String(describing: plan?.projectedTotalCents))")
+        lines.append("accuracy \(String(describing: engine.forecastAccuracy(referenceDate: reference)))")
+        let rhythm = engine.workRhythm(referenceDate: reference)
+        lines.append("rhythm \(rhythm.usualWeekdays.sorted()) \(String(describing: rhythm.typicalLogHour))")
+        return lines
+    }
+
+    private static func assertLines(_ actual: [String], _ expected: [String]) {
+        #expect(actual.count == expected.count)
+        for (actualLine, expectedLine) in zip(actual, expected) {
+            #expect(actualLine == expectedLine)
+        }
+    }
+
+    @Test("tips basis: every live answer is unchanged")
+    func tipsBasis() {
+        Self.assertLines(
+            Self.lines(StatsEngine(payrollTimeZone: Self.zone, records: Self.history.records, calendar: Self.calendar)),
+            Self.expectedTipsBasis
+        )
+    }
+
+    @Test("valued basis, half the shifts priced by the ledger: every live answer is unchanged")
+    func valuedBasis() {
+        #expect(Self.history.valued.count == 29)
+        Self.assertLines(
+            Self.lines(StatsEngine(
+                payrollTimeZone: Self.zone,
+                records: Self.history.records,
+                calendar: Self.calendar,
+                valuedShiftCents: Self.history.valued
+            )),
+            Self.expectedValuedBasis
+        )
+    }
+
+    private static let expectedTipsBasis: [String] = [
+        "nightly 1:6715 3:13756 4:1767 5:29788 8:9023 10:11089 12:11611 15:12941 17:13495 18:9644 19:7696 21:12072 22:18639 24:8504 29:12626 32:9572 33:19333 36:17399 38:13522 40:12875 41:10704 43:12011 45:1300 46:14400 47:18049 52:13246 53:2902 60:14744 61:38962 64:17364 66:17677 67:22091 68:7905 69:10276 71:9847 73:17388 74:20651 78:11968 80:14073 81:8257 82:22438 85:6469 88:21989 89:18121 92:15116 95:8055 96:37404 99:15388 101:15557 102:17016 103:14731 106:9788 108:8523 109:12260",
+        "reveal 5 500 shift 500 slowestRecently false",
+        "reveal 5 500 day 500 slowestRecently false",
+        "reveal 5 12000 shift 12000 weekdayAverage 7 -1457 rank nil of 7 sample 17 false",
+        "reveal 5 12000 day 12000 weekdayAverage 7 -1070 rank 3 of 6 sample 16 false",
+        "reveal 5 20000 shift 20000 weekdayRecord 7 19883 true",
+        "reveal 5 20000 day 20000 weekdayRecord 7 19883 true",
+        "reveal 5 60000 shift 60000 allTimeRecord 22091 true",
+        "reveal 5 60000 day 60000 allTimeRecord 22091 true",
+        "reveal 43 500 shift 500 slowestRecently false",
+        "reveal 43 500 day 500 slowestRecently false",
+        "reveal 43 12000 shift 12000 weekdayAverage 3 -560 rank nil of 7 sample 13 false",
+        "reveal 43 12000 day 12000 weekdayAverage 3 -560 rank nil of 7 sample 13 false",
+        "reveal 43 20000 shift 20000 weekdayRecord 3 18639 true",
+        "reveal 43 20000 day 20000 weekdayRecord 3 18639 true",
+        "reveal 43 60000 shift 60000 allTimeRecord 22091 true",
+        "reveal 43 60000 day 60000 allTimeRecord 22091 true",
+        "reveal 73 500 shift 500 firstShiftOfPeriod false",
+        "reveal 73 500 day 500 firstShiftOfPeriod false",
+        "reveal 73 12000 shift 12000 firstShiftOfPeriod false",
+        "reveal 73 12000 day 12000 firstShiftOfPeriod false",
+        "reveal 73 20000 shift 20000 firstShiftOfPeriod false",
+        "reveal 73 20000 day 20000 firstShiftOfPeriod false",
+        "reveal 73 60000 shift 60000 allTimeRecord 22091 true",
+        "reveal 73 60000 day 60000 allTimeRecord 22091 true",
+        "reveal 109 500 shift 500 slowestRecently false",
+        "reveal 109 500 day 500 slowestRecently false",
+        "reveal 109 12000 shift 12000 weekdayAverage 6 -591 rank nil of 5 sample 12 false",
+        "reveal 109 12000 day 12000 weekdayAverage 6 -591 rank nil of 5 sample 12 false",
+        "reveal 109 20000 shift 20000 weekdayAverage 6 7409 rank 1 of 5 sample 12 false",
+        "reveal 109 20000 day 20000 weekdayAverage 6 7409 rank 1 of 5 sample 12 false",
+        "reveal 109 60000 shift 60000 allTimeRecord 22091 true",
+        "reveal 109 60000 day 60000 allTimeRecord 22091 true",
+        "reveal 105 12000 shift 12000 weekdayAverage 2 -72 rank nil of 6 sample 1 false",
+        "pace 100 Optional(Payday.StatsEngine.PaceComparison(deltaCents: 0, baselineCents: 0, periodCount: 6)) Optional(Payday.StatsEngine.PaceComparison(deltaCents: 0, baselineCents: 0, periodCount: 1))",
+        "pace 106 Optional(Payday.StatsEngine.PaceComparison(deltaCents: 4476, baselineCents: 52616, periodCount: 6)) Optional(Payday.StatsEngine.PaceComparison(deltaCents: 1866, baselineCents: 55226, periodCount: 1))",
+        "pace 113 Optional(Payday.StatsEngine.PaceComparison(deltaCents: -20455, baselineCents: 98330, periodCount: 6)) Optional(Payday.StatsEngine.PaceComparison(deltaCents: -38198, baselineCents: 116073, periodCount: 1))",
+        "facts Optional(60) Optional(Payday.DoublesSoloFacts(doubleAverageCents: 27662, doubleCount: 6, soloAverageCents: 12349, soloCount: 48, doublePerShiftCents: 13831)) Optional(Payday.SalesFacts(overallTipPercent: 19.528174377009268, nightsWithSales: 44, bestWeekday: Optional(6), bestWeekdayTipPercent: Optional(27.932418563581034), bestWeekdayNightCount: Optional(11)))",
+        "ranges Optional(Payday.StatsEngine.ReliabilityFacts(overall: Optional(Payday.StatsEngine.TypicalRange(lowCents: 9500, highCents: 17000, medianCents: 12750, shiftCount: 60)), byWeekday: [Payday.StatsEngine.WeekdayTypicalRange(weekday: 3, shiftPeriod: nil, range: Payday.StatsEngine.TypicalRange(lowCents: 9500, highCents: 15500, medianCents: 12318, shiftCount: 14)), Payday.StatsEngine.WeekdayTypicalRange(weekday: 5, shiftPeriod: nil, range: Payday.StatsEngine.TypicalRange(lowCents: 10000, highCents: 14500, medianCents: 13508, shiftCount: 12)), Payday.StatsEngine.WeekdayTypicalRange(weekday: 6, shiftPeriod: nil, range: Payday.StatsEngine.TypicalRange(lowCents: 8000, highCents: 17500, medianCents: 12260, shiftCount: 13)), Payday.StatsEngine.WeekdayTypicalRange(weekday: 7, shiftPeriod: nil, range: Payday.StatsEngine.TypicalRange(lowCents: 10000, highCents: 18000, medianCents: 13404, shiftCount: 18))], mixedShapeWeekdays: []))",
+        "trend Optional(Payday.StatsEngine.EarningTrend(direction: Payday.StatsEngine.EarningTrend.Direction.higher, deltaCents: 3630, marginOfErrorCents: 3360, recentLevelCents: 15369, priorLevelCents: 11739, recentShiftCount: 29, priorShiftCount: 28, recentShiftsPerWeek: 3.75, priorShiftsPerWeek: 3.75, weekdays: [3, 5, 6, 7]))",
+        "plan Optional([Payday.PlanForward.Night(weekday: 5, averageNetCents: 12344, nightCount: 12), Payday.PlanForward.Night(weekday: 6, averageNetCents: 12565, nightCount: 13), Payday.PlanForward.Night(weekday: 7, averageNetCents: 13273, nightCount: 18), Payday.PlanForward.Night(weekday: 3, averageNetCents: 12521, nightCount: 14)]) Optional(50703)",
+        "accuracy Optional(Payday.StatsEngine.ForecastAccuracy(lastWeek: Payday.StatsEngine.ForecastAccuracy.Week(weekStart: 2026-06-16 05:00:00 +0000, projectedCents: 51287, actualCents: 30571, priceDeltaCents: -7443, scheduleDeltaCents: -13273, plannedDayCount: 4, workedShiftCount: 3), scoredWeekCount: 12, skippedWeekCount: 0, medianAbsoluteErrorCents: 11193, medianProjectedCents: 47380, bias: nil))",
+        "rhythm [3, 5, 6, 7] Optional(22)",
+    ]
+
+    private static let expectedValuedBasis: [String] = [
+        "nightly 1:6715 3:18324 4:1767 5:26850 8:16452 10:11089 12:22031 15:12941 17:13019 18:9644 19:4560 21:12072 22:18639 24:8504 29:5106 32:9572 33:22231 36:5037 38:13522 40:13743 41:10704 43:24609 45:1300 46:18246 47:37552 52:13246 53:17590 60:14744 61:31001 64:7006 66:17677 67:4344 68:7905 69:24795 71:9847 73:4357 74:20651 78:9485 80:14073 81:17066 82:34858 85:6469 88:24259 89:18121 92:9454 95:8055 96:33425 99:18968 101:15557 102:6862 103:14731 106:20758 108:8523 109:17761",
+        "reveal 5 500 shift 500 slowestRecently false",
+        "reveal 5 500 day 500 slowestRecently false",
+        "reveal 5 12000 shift 12000 weekdayAverage 7 -3110 rank nil of 7 sample 17 false",
+        "reveal 5 12000 day 12000 weekdayAverage 7 -3010 rank nil of 6 sample 16 false",
+        "reveal 5 20000 shift 20000 weekdayAverage 7 4890 rank 2 of 7 sample 17 false",
+        "reveal 5 20000 day 20000 weekdayAverage 7 4990 rank 2 of 6 sample 16 false",
+        "reveal 5 60000 shift 60000 allTimeRecord 24795 true",
+        "reveal 5 60000 day 60000 allTimeRecord 24795 true",
+        "reveal 43 500 shift 500 slowestRecently false",
+        "reveal 43 500 day 500 slowestRecently false",
+        "reveal 43 12000 shift 12000 weekdayAverage 3 702 rank nil of 7 sample 13 false",
+        "reveal 43 12000 day 12000 weekdayAverage 3 702 rank nil of 7 sample 13 false",
+        "reveal 43 20000 shift 20000 weekdayAverage 3 8702 rank 1 of 7 sample 13 false",
+        "reveal 43 20000 day 20000 weekdayAverage 3 8702 rank 1 of 7 sample 13 false",
+        "reveal 43 60000 shift 60000 allTimeRecord 24795 true",
+        "reveal 43 60000 day 60000 allTimeRecord 24795 true",
+        "reveal 73 500 shift 500 firstShiftOfPeriod false",
+        "reveal 73 500 day 500 firstShiftOfPeriod false",
+        "reveal 73 12000 shift 12000 firstShiftOfPeriod false",
+        "reveal 73 12000 day 12000 firstShiftOfPeriod false",
+        "reveal 73 20000 shift 20000 firstShiftOfPeriod false",
+        "reveal 73 20000 day 20000 firstShiftOfPeriod false",
+        "reveal 73 60000 shift 60000 allTimeRecord 24795 true",
+        "reveal 73 60000 day 60000 allTimeRecord 24795 true",
+        "reveal 109 500 shift 500 slowestRecently false",
+        "reveal 109 500 day 500 slowestRecently false",
+        "reveal 109 12000 shift 12000 weekdayAverage 6 -733 rank nil of 5 sample 12 false",
+        "reveal 109 12000 day 12000 weekdayAverage 6 -733 rank nil of 5 sample 12 false",
+        "reveal 109 20000 shift 20000 weekdayAverage 6 7267 rank 2 of 5 sample 12 false",
+        "reveal 109 20000 day 20000 weekdayAverage 6 7267 rank 2 of 5 sample 12 false",
+        "reveal 109 60000 shift 60000 allTimeRecord 24795 true",
+        "reveal 109 60000 day 60000 allTimeRecord 24795 true",
+        "reveal 105 12000 shift 12000 weekdayAverage 2 -72 rank nil of 6 sample 1 false",
+        "pace 100 Optional(Payday.StatsEngine.PaceComparison(deltaCents: 0, baselineCents: 0, periodCount: 6)) Optional(Payday.StatsEngine.PaceComparison(deltaCents: 0, baselineCents: 0, periodCount: 1))",
+        "pace 106 Optional(Payday.StatsEngine.PaceComparison(deltaCents: 5616, baselineCents: 52292, periodCount: 6)) Optional(Payday.StatsEngine.PaceComparison(deltaCents: 6074, baselineCents: 51834, periodCount: 1))",
+        "pace 113 Optional(Payday.StatsEngine.PaceComparison(deltaCents: -18996, baselineCents: 103188, periodCount: 6)) Optional(Payday.StatsEngine.PaceComparison(deltaCents: -28090, baselineCents: 112282, periodCount: 1))",
+        "facts Optional(60) Optional(Payday.DoublesSoloFacts(doubleAverageCents: 30986, doubleCount: 6, soloAverageCents: 12706, soloCount: 48, doublePerShiftCents: 15493)) Optional(Payday.SalesFacts(overallTipPercent: 19.528174377009268, nightsWithSales: 44, bestWeekday: Optional(6), bestWeekdayTipPercent: Optional(27.932418563581034), bestWeekdayNightCount: Optional(11)))",
+        "ranges Optional(Payday.StatsEngine.ReliabilityFacts(overall: Optional(Payday.StatsEngine.TypicalRange(lowCents: 8500, highCents: 18000, medianCents: 13384, shiftCount: 60)), byWeekday: [Payday.StatsEngine.WeekdayTypicalRange(weekday: 3, shiftPeriod: nil, range: Payday.StatsEngine.TypicalRange(lowCents: 6500, highCents: 18500, medianCents: 9666, shiftCount: 14)), Payday.StatsEngine.WeekdayTypicalRange(weekday: 5, shiftPeriod: nil, range: Payday.StatsEngine.TypicalRange(lowCents: 8500, highCents: 14500, medianCents: 13132, shiftCount: 12)), Payday.StatsEngine.WeekdayTypicalRange(weekday: 6, shiftPeriod: nil, range: Payday.StatsEngine.TypicalRange(lowCents: 8000, highCents: 18000, medianCents: 14744, shiftCount: 13)), Payday.StatsEngine.WeekdayTypicalRange(weekday: 7, shiftPeriod: nil, range: Payday.StatsEngine.TypicalRange(lowCents: 10500, highCents: 19500, medianCents: 14332, shiftCount: 18))], mixedShapeWeekdays: []))",
+        "trend nil",
+        "plan Optional([Payday.PlanForward.Night(weekday: 5, averageNetCents: 11599, nightCount: 12), Payday.PlanForward.Night(weekday: 6, averageNetCents: 13120, nightCount: 13), Payday.PlanForward.Night(weekday: 7, averageNetCents: 14834, nightCount: 18), Payday.PlanForward.Night(weekday: 3, averageNetCents: 12249, nightCount: 14)]) Optional(51802)",
+        "accuracy Optional(Payday.StatsEngine.ForecastAccuracy(lastWeek: Payday.StatsEngine.ForecastAccuracy.Week(weekStart: 2026-06-16 05:00:00 +0000, projectedCents: 51287, actualCents: 47042, priceDeltaCents: 9028, scheduleDeltaCents: -13273, plannedDayCount: 4, workedShiftCount: 3), scoredWeekCount: 12, skippedWeekCount: 0, medianAbsoluteErrorCents: 7925, medianProjectedCents: 47380, bias: nil))",
+        "rhythm [3, 5, 6, 7] Optional(22)",
+    ]
+}

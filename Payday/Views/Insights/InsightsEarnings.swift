@@ -358,7 +358,7 @@ enum InsightsEarnings {
     /// snapshot — never a fabricated `$0/hr`, which is the registry's "nil
     /// without coverage".
     ///
-    /// **Why this replaces `RateFacts.overallDollarsPerHour` on the tile.**
+    /// **Why this replaced the engine's old per-shift rate on the tile.**
     /// [IL-13] records the old tile as "nonWage/hour" against a registry
     /// `hourlyRate` that is `earnedIncome`-based, and the old denominator was
     /// `nightsWithHours` — a COUNT of shifts, used only to hedge the caption,

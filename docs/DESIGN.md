@@ -15,20 +15,23 @@ the rule is being applied wrong. Look at the render.
 
 ## The Family Contract (what makes it feel like one company)
 
-1. **One green.** `#00B83F`. It is the only color that acts: every button,
-   active state, selection, and interactive accent is this green or neutral.
+1. **One green.** `#00B83F` in dark, `#00852F` in light (the same hue,
+   deeper so it clears contrast on alabaster and white). It is the only
+   color that acts: every button, active state, selection, and interactive
+   accent is this green or neutral.
    Payday's current accent (`#30D158`, Apple system green) is retired. Blue,
    purple, and every other hue do not exist.
 2. **White and black build structure.** Light mode is alabaster and ink:
    `#FAFAFA` background, pure white cards that lift off it with a physical
    shadow, true black text. Dark mode is obsidian: `#050505` background,
    `#121212` cards, darkness itself is the shadow. Light and dark are co-equal
-   designs, not one design and its inversion. (This replaces Payday's current
-   pure-white/pure-black `paydaySurface`.)
+   designs, not one design and its inversion. (This replaced Payday's old
+   pure-white/pure-black `paydaySurface`, which is deleted.)
 3. **Two warning signals, both semantic.** Caution (orange in light
-   `#E8590C`, amber in dark `#FF9F0A`) means watch out. Error red (`#FF3B30`)
-   means problem. In Payday, a paycheck that shorted you is error red; that is
-   a real signal, keep it. Nothing else gets a warning color.
+   `#B44400`, amber in dark `#FF9F0A`) means watch out. Error red (`#C81D18`
+   in light, `#FF453A` in dark) means problem. In Payday, a paycheck that
+   shorted you is error red; that is a real signal, keep it. Nothing else
+   gets a warning color.
 4. **One font family.** SF Pro everywhere. Money is SF Pro Rounded, heavy
    weight, fixed display sizes, exactly like Vero (and Apple Wallet). Every
    financial number carries `.monospacedDigit()` so layout never shifts, and
@@ -90,6 +93,8 @@ the rule is being applied wrong. Look at the render.
     baseline of three Fridays.)
 
 ## Implementation Plan
+
+This plan is complete; it is kept as a record and is not updated.
 
 ### Phase 1: Port the token file (the foundation, ~1 hour)
 

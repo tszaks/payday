@@ -153,7 +153,7 @@ struct PlanForwardCopyTests {
     /// The amount only: the NEXT WEEK kicker already names the week.
     @Test("the headline is the amount alone")
     func amountOnly() {
-        let plan = PlanForward(nights: [], projectedTotalCents: 102_800, pickup: nil)
+        let plan = PlanForward(nights: [], projectedTotalCents: 102_800)
         #expect(PlanForwardCopy.headline(for: plan) == "About $1,028")
     }
 }

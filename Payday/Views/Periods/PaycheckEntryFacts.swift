@@ -179,4 +179,10 @@ extension PaycheckEntryFacts {
         guard ShiftRole.key(picked) != ShiftRole.key(screenJob) else { return screenPeriod }
         return calculator(picked).period(containing: min(screenPeriod.end, now))
     }
+
+    /// A stub field as entered: zero means the field was left empty, so it is
+    /// nil, never an entered zero.
+    static func enteredCents(_ value: Int) -> Int? {
+        value > 0 ? value : nil
+    }
 }

@@ -13,9 +13,9 @@ import Foundation
 //
 //  Line two is `RevealCopy.comparison`, and it PRINTS ITS OWN CENTS out loud:
 //  "topping your previous record of $X", "$Y above your Friday average". It
-//  came from `StatsEngine`, whose history prices every shift
-//  `netCents + WageEstimate.cents(scalar rate, hours)` — base rate only, per
-//  shift, no workweek, today's rate applied to every shift ever worked.
+//  came from `StatsEngine`, whose history priced every shift `netCents` plus
+//  a scalar rate × its hours — base rate only, per shift, no workweek,
+//  today's rate applied to every shift ever worked.
 //
 //  Two directions, opposite signs:
 //
@@ -81,13 +81,16 @@ private func ledgerBasisEngine(records: [ShiftRecord], snapshot: EarningsSnapsho
     )
 }
 
-/// What shipped before this change: a scalar rate on both sides.
-private func scalarBasisEngine(records: [ShiftRecord], rateCents: Int) -> StatsEngine {
+/// What shipped before this change, written down: every history shift
+/// priced at its tips plus its hours × one scalar rate, on its own. The
+/// figures are literals each test works out from its fixture; the engine is
+/// the live one, so only the basis differs from `ledgerBasisEngine`.
+private func scalarBasisEngine(records: [ShiftRecord], scalarCents: [UUID: Int]) -> StatsEngine {
     StatsEngine(
         payrollTimeZone: PaydayTestZone.payroll,
         records: records.flatMap { ShiftProjection.rows(for: $0).map(TipRecord.init) },
         calendar: revealCalendar(),
-        wageCentsPerHour: rateCents
+        valuedShiftCents: scalarCents
     )
 }
 
@@ -102,7 +105,7 @@ private func wholeFixturePeriod() -> PayPeriod {
 ///
 /// The raise is what makes the scalar basis wrong in the OTHER direction: a
 /// shift worked in March is priced at March's rate by the ledger and at
-/// today's rate by `WageEstimate.cents`.
+/// today's rate by a scalar.
 private func raisePolicies() -> CompensationPolicies {
     CompensationPolicies(
         rates: [
@@ -244,9 +247,10 @@ struct LogShiftRevealBasisTests {
         // What shipped: the same draft, priced by the scalar at today's rate,
         // handed to a scalar-priced history. MEASURED — the card rendered
         // "$250.00 this shift." directly above a claim to have beaten $260.00.
-        let brokenCents = 15_000 + (WageEstimate.cents(wageCentsPerHour: 3_000, hours: 10) ?? 0)
-        #expect(brokenCents == 45_000)
-        let broken = scalarBasisEngine(records: history, rateCents: 3_000).reveal(
+        // $150.00 of credit + 10h × today's $30.00 = $450.00. The previous
+        // best has no hours, so the scalar leaves it at $260.00.
+        let brokenCents = 45_000
+        let broken = scalarBasisEngine(records: history, scalarCents: [revealShiftID(1): 26_000]).reveal(
             forNightAt: revealCalendar().startOfDay(for: Self.draftDate),
             cents: brokenCents,
             period: wholeFixturePeriod(),
@@ -306,7 +310,8 @@ struct LogShiftRevealBasisTests {
         // stops being a record and becomes a shift below average. One shift,
         // one evening, two opposite verdicts, decided entirely by which basis
         // the history was priced on. Both MEASURED.
-        let scalarResult = scalarBasisEngine(records: history, rateCents: 3_000).reveal(
+        // $0 of tips + 10h × $30.00 = $300.00.
+        let scalarResult = scalarBasisEngine(records: history, scalarCents: [revealShiftID(3): 30_000]).reveal(
             forNightAt: revealCalendar().startOfDay(for: Self.draftDate),
             cents: 25_000,
             period: wholeFixturePeriod(),
@@ -430,9 +435,10 @@ struct RevealComparisonParityTests {
         #expect(friday.components.earnedIncomeCents == 20_000)
 
         // The scalar basis the comparison used to read: base rate, per shift,
-        // no workweek. $150.00, and $50.00 of overtime simply absent.
-        let scalar = 5_000 + (WageEstimate.cents(wageCentsPerHour: 1_000, hours: 10) ?? 0)
-        #expect(scalar == 15_000)
+        // no workweek. $50.00 of credit + 10h × $10.00 = $150.00, and $50.00
+        // of overtime simply absent.
+        let scalar = 15_000
+        #expect(friday.components.earnedIncomeCents - scalar == 5_000)
     }
 
     @Test("the log sheet's comparison copy is byte-identical to Dashboard's echo for the same shift")
@@ -513,9 +519,14 @@ struct RevealComparisonParityTests {
 
         // What the log sheet said before: the same shift, the same evening,
         // a different verdict.
-        let brokenCents = 5_000 + (WageEstimate.cents(wageCentsPerHour: 1_000, hours: 10) ?? 0)
+        // Every shift at its credit + 10h × $10.00: tonight and the prior
+        // Friday $150.00, Monday to Thursday $110.00 each.
+        let brokenCents = 15_000
+        let scalarHistory = Dictionary(uniqueKeysWithValues: (17...21).map {
+            (revealShiftID($0), $0 == 21 ? 15_000 : 11_000)
+        })
         let brokenCopy = RevealCopy.comparison(
-            for: scalarBasisEngine(records: history, rateCents: 1_000).reveal(
+            for: scalarBasisEngine(records: history, scalarCents: scalarHistory).reveal(
                 forNightAt: night,
                 cents: brokenCents,
                 period: period,

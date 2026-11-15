@@ -28,3 +28,20 @@ struct RetiredPayStubLedgerTests {
             == URL.applicationSupportDirectory.appending(path: "PayrollImportLedger.json"))
     }
 }
+
+/// Builds that rendered an Insights narration cached it, prose quoting the
+/// person's earnings, in standard defaults. Launch and account deletion both
+/// call this removal, so the key the narrated builds wrote must end up empty.
+@Suite("The retired Insights narration is removed")
+@MainActor
+struct RetiredInsightsNarrationTests {
+    @Test("a stored narration is removed, under the key the narrated builds wrote")
+    func removesStoredNarration() {
+        let key = "com.szakacsmedia.payday.insightsSnapshot"
+        let defaults = UserDefaults(suiteName: "payday.tests.retiredNarration.\(UUID().uuidString)")!
+        defaults.set(Data(#"{"sections":[{"title":"Overall","body":"$1,240 across 9 shifts."}],"generatedAt":0}"#.utf8), forKey: key)
+
+        PaydayAccountEraser.removeRetiredInsightsNarration(from: defaults)
+        #expect(defaults.object(forKey: key) == nil)
+    }
+}

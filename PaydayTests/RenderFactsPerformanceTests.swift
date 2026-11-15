@@ -316,7 +316,6 @@ struct RenderFactsPerformanceTests {
                     date: day,
                     amountCents: 15_000 + (week % 7) * 300,
                     kind: .credit,
-                    isDouble: false,
                     hoursWorked: 6,
                     shiftID: UUID()
                 ))

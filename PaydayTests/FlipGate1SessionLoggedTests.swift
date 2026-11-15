@@ -16,13 +16,17 @@ import Testing
 /// a check on the call site rather than on the mechanism.
 @Suite("Flip gate 1: logged this session", .serialized)
 @MainActor
-struct FlipGate1SessionLoggedTests {
+final class FlipGate1SessionLoggedTests {
+    private let savedAccount = SavedAccountRegistration()
+    private var registered: [UUID] = []
+    isolated deinit { savedAccount.restore(forgetting: registered) }
 
     private func authoritativeAccount() -> UUID {
         if let existing = PaydaySyncState.registeredUserID {
             PaydaySyncState.forget(userID: existing)
         }
         let id = UUID()
+        registered.append(id)
         PaydaySyncState.forget(userID: id)
         _ = PaydaySyncState.registerCurrentUser(id)
         PaydaySyncState.mutate(userID: id) {

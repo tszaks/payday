@@ -108,10 +108,12 @@ struct ConversionPendingAlertTests {
     @MainActor
     @Test("mayMutate refuses a record with legacy sources until the account is authoritative")
     func mayMutateRefusesAConvertingRecord() {
+        let savedAccount = SavedAccountRegistration()
         if let existing = PaydaySyncState.registeredUserID {
             PaydaySyncState.forget(userID: existing)
         }
         let id = UUID()
+        defer { savedAccount.restore(forgetting: [id]) }
         PaydaySyncState.forget(userID: id)
         _ = PaydaySyncState.registerCurrentUser(id)
 

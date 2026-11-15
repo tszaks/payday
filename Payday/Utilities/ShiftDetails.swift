@@ -5,11 +5,11 @@ import Foundation
 /// (resolve) and on write (write). Callers pass a SINGLE shift's entries
 /// (the rows sharing one shiftID), not a whole day — a double day has two
 /// independent shifts, each with its own canonical entry. This is a product
-/// ruling, not a UI convenience: StatsEngine, CSVExporter, WageEstimate,
-/// PeriodIncome, LogTipsIntent and every shift row resolve through here too,
-/// so a corrupted shift (a value stray on the "wrong" entry, or set on both
-/// at once) reads as one number everywhere in the app, never a
-/// double-counted one.
+/// ruling, not a UI convenience. No production code calls it now: it is
+/// kept as the Swift mirror of the server's fold rule (the server-fold
+/// agreement target) and is exercised by tests, so a corrupted shift (a
+/// value stray on the "wrong" entry, or set on both at once) folds to one
+/// number here as it does on the server, never a double-counted one.
 ///
 /// ## Ranking, not `first(where:)`
 ///
@@ -97,8 +97,8 @@ enum ShiftDetails {
 
     /// The ONE row of a shift that owns the receipt, and therefore the one
     /// row a v1 payload's gratuity is subtracted from. Nil when no row in the
-    /// group carries a decodable payload. `TipBreakdown` must resolve the
-    /// owner through here and nowhere else: a duplicated payload on a second
+    /// group carries a decodable payload. The owner must be resolved
+    /// through here and nowhere else: a duplicated payload on a second
     /// row must not subtract gratuity twice.
     static func metricsOwner<Row: LegacyShiftRow>(of entries: [Row]) -> Row? {
         metricsRanked(entries).first { $0.receiptMetrics != nil }
@@ -135,10 +135,8 @@ enum ShiftDetails {
     /// existing call sites (and tests) that only care about the earlier
     /// fields keep compiling.
     ///
-    /// Every entry written here is `touch()`ed, because this is the shared
-    /// write path for every shift-level edit in the app (LogTipSheet's live
-    /// edit, ShiftWriter's insert, BackfillSheet, LogTipsIntent, the receipt
-    /// apply path, DebugSeeder) and a shift edit that does not advance
+    /// Every entry written here is `touch()`ed, because a shift edit
+    /// that does not advance
     /// `modifiedAt` uploads a stale `client_updated_at`. Touching an entry
     /// whose values happen to be unchanged is free — the upload set is chosen
     /// by content fingerprint, not by the clock.

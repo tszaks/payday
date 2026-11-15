@@ -208,8 +208,7 @@ private func savedSnapshot(
 /// before saving is the number the shift's own row shows after saving.**
 ///
 /// The header used to be
-/// `WageEstimate.shiftTotalCents(...) + separatedGratuityFeesCents`, which is
-/// `cash + credit − tipOut + roundCents(rate × hours)`. Wave 0 had already
+/// `cash + credit − tipOut + roundCents(rate × hours) + separatedGratuityFeesCents`. Wave 0 had already
 /// moved `ShiftDayRow` onto the ledger, so the disagreement below was live:
 /// the header quoted straight time and the row an hour later quoted the
 /// workweek allocation, on a week the person had already taken over forty
@@ -272,14 +271,8 @@ struct LogShiftPreSaveParityTests {
         // STRAIGHT time, $63.83. $11.92 short, on a real shift, in the largest
         // type on the screen, a second before the row underneath it said
         // $240.75.
-        let legacyHeaderCents = WageEstimate.shiftTotalCents(
-            cashCents: Draft.cashCents,
-            creditCents: Draft.creditCents,
-            tipOutCents: Draft.tipOutCents,
-            wageCentsPerHour: 1_000,
-            hoursWorked: Draft.hoursWorked
-        )
-        #expect(legacyHeaderCents == 22_883)
+        // 10000 + 8000 − 1500 = 16500, plus 383 min × 1000c / 60 = 6383.3 → 6383.
+        let legacyHeaderCents = 22_883
         #expect(rowCents - legacyHeaderCents == 1_192)
         #expect(legacyHeaderCents != rowCents, "the superseded straight-time header")
     }
@@ -467,13 +460,8 @@ struct LogShiftFactsTests {
         // What the view used to print: Double(total) / hours, over the
         // straight-time total it also held. A different number from a
         // different basis, rounded a different way.
-        let legacyTotal = WageEstimate.shiftTotalCents(
-            cashCents: Draft.cashCents,
-            creditCents: Draft.creditCents,
-            tipOutCents: Draft.tipOutCents,
-            wageCentsPerHour: 1_000,
-            hoursWorked: Draft.hoursWorked
-        )
+        // The straight-time total above: 16500 + 6383 = 22883.
+        let legacyTotal = 22_883
         let legacyRate = Int((Double(legacyTotal) / Draft.hoursWorked).rounded())
         #expect(legacyRate == 3_585)
         #expect(Money.wholeDollarString(fromCents: legacyRate) == "$36")

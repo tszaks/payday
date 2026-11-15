@@ -660,7 +660,7 @@ struct FrozenPayrollTimeZoneTests {
     @Test("StatsEngine uses the zone it is given, not the process zone")
     func engineHonoursTheGivenZone() throws {
         let instant = ISO8601DateFormatter().date(from: "2026-10-05T02:30:00Z")!
-        let records = [TipRecord(date: instant, amountCents: 5000, kind: .credit, isDouble: false, hoursWorked: 5)]
+        let records = [TipRecord(date: instant, amountCents: 5000, kind: .credit, hoursWorked: 5)]
 
         let newYork = StatsEngine(payrollTimeZone: PaydayTestZone.newYork, records: records)
         let tokyo = StatsEngine(payrollTimeZone: PaydayTestZone.tokyo, records: records)
@@ -670,37 +670,5 @@ struct FrozenPayrollTimeZoneTests {
         let tokyoNight = try #require(tokyo.nightlyTotals().first)
         #expect(newYorkNight.cents == tokyoNight.cents, "the money is the same money")
         #expect(newYorkNight.date != tokyoNight.date, "but the civil day it lands on is not")
-    }
-
-    @Test("the same shift is worth the same cents whatever zone the device is in")
-    func wagesDoNotMoveWithTheDevice() {
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = PaydayTestZone.newYork
-        let day = calendar.date(from: DateComponents(year: 2026, month: 9, day: 28, hour: 17))!
-        let entries = [TipEntry(
-            date: day, amountCents: 5000, kind: .credit, isDouble: false,
-            hoursWorked: 9.75, shiftID: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
-        )]
-
-        let fromNewYork = PeriodIncome.wages(
-            payrollTimeZone: PaydayTestZone.newYork, entries: entries, wageCentsPerHour: 283, firstWeekday: 2
-        )
-        // The payroll zone is frozen at New York; the DEVICE being in Tokyo
-        // must not reach this call at all, which is what "required
-        // parameter" buys. Passing New York from a Tokyo device is the real
-        // behaviour, and it is identical.
-        let fromTokyoDevice = PeriodIncome.wages(
-            payrollTimeZone: PaydayTestZone.newYork, entries: entries, wageCentsPerHour: 283, firstWeekday: 2,
-            calendar: {
-                var c = Calendar(identifier: .gregorian)
-                c.timeZone = PaydayTestZone.tokyo
-                return c
-            }()
-        )
-
-        #expect(fromNewYork?.totalCents == 2759, "W1's number")
-        #expect(fromNewYork?.totalCents == fromTokyoDevice?.totalCents)
-        #expect(fromNewYork?.regularCents == fromTokyoDevice?.regularCents)
-        #expect(fromNewYork?.overtimeCents == 0)
     }
 }

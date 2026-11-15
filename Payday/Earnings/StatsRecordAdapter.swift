@@ -120,22 +120,14 @@ enum StatsRecordAdapter {
                 date: record.workDate,
                 amountCents: pair.1,
                 kind: pair.0,
-                // Vestigial in `TipRecord` and never read for logic: a
-                // "double" is a day with 2+ distinct shiftIDs, which the
-                // engine derives itself.
-                isDouble: false,
                 recordedAt: record.recordedAt,
                 hoursWorked: ownsShiftLevelValues ? record.hoursWorked : nil,
                 tipOutCents: ownsShiftLevelValues ? record.tipOutCents : nil,
                 salesCents: ownsShiftLevelValues ? record.salesCents : nil,
                 shiftPeriod: ownsShiftLevelValues ? record.shiftPeriod : nil,
                 shiftID: record.id,
-                clockIn: ownsShiftLevelValues ? record.clockIn : nil,
-                clockOut: ownsShiftLevelValues ? record.clockOut : nil,
-                serverCount: ownsShiftLevelValues ? record.serverCount : nil,
                 tipShareInCents: ownsShiftLevelValues ? record.tipShareInCents : nil,
-                receiptMetrics: ownsShiftLevelValues ? metrics : nil,
-                note: ownsShiftLevelValues ? record.note : nil
+                receiptMetrics: ownsShiftLevelValues ? metrics : nil
             ))
         }
         return rows

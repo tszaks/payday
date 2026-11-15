@@ -32,6 +32,12 @@ final class PaydayCloudState {
     /// see `PaydayMigrationReport.conversionPending` for why making it one
     /// takes the whole account offline.
     var conversionBanner: PaydayConversionBanner? {
+        Self.conversionBanner(for: phase)
+    }
+
+    /// The banner for a phase: only a `.ready` phase whose report says a
+    /// conversion is still pending has one.
+    static func conversionBanner(for phase: Phase) -> PaydayConversionBanner? {
         guard case .ready(let report) = phase, report.isConversionPending else { return nil }
         return PaydayConversionBanner(remainingGroupCount: report.conversionPending ?? 0)
     }
@@ -323,7 +329,6 @@ final class PaydayCloudState {
     func deleteAccount(
         context: ModelContext,
         scheduleStore: PayScheduleStore,
-        insightsStore: InsightsStore,
         preferencesStore: UserPreferencesStore,
         moveLedgerStore: MoveLedgerStore,
         policyStore: PolicyStore
@@ -352,7 +357,6 @@ final class PaydayCloudState {
             try PaydayAccountEraser.eraseLocalData(
                 context: context,
                 scheduleStore: scheduleStore,
-                insightsStore: insightsStore,
                 preferencesStore: preferencesStore,
                 moveLedgerStore: moveLedgerStore,
                 policyStore: policyStore
@@ -490,7 +494,6 @@ enum PaydayDeviceIdentity {
 
 struct PaydayCloudGate<Content: View>: View {
     @Environment(PayScheduleStore.self) private var scheduleStore
-    @Environment(InsightsStore.self) private var insightsStore
     @Environment(UserPreferencesStore.self) private var preferencesStore
     @Environment(MoveLedgerStore.self) private var moveLedgerStore
     @Environment(PolicyStore.self) private var policyStore
@@ -553,7 +556,6 @@ struct PaydayCloudGate<Content: View>: View {
             #if DEBUG || targetEnvironment(simulator)
             DebugSeeder.seedIfRequested(
                 scheduleStore: scheduleStore,
-                insightsStore: insightsStore,
                 preferencesStore: preferencesStore
             )
             #endif

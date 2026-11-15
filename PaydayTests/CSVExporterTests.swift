@@ -242,25 +242,25 @@ struct PaycheckRecordStubDetailsTests {
         #expect(fetched?.netPayCents == nil)
     }
 
-    // Mirrors PaycheckEntrySheet.save()'s effective-cents conversion — the
-    // same "value > 0 ? value : nil" rule LogTipSheet applies to tip-out.
-    private func effectiveCents(_ value: Int) -> Int? { value > 0 ? value : nil }
-
     @Test("zero-valued entry fields save as nil")
     func zeroEntrySavesAsNil() {
         let record = PaycheckRecord(
             periodStart: date(2026, 7, 1),
             periodEnd: date(2026, 7, 15),
             paidTipsCents: 10000,
-            hourlyRateCents: effectiveCents(0),
-            owedTipsCents: effectiveCents(0),
-            grossPayCents: effectiveCents(0),
-            netPayCents: effectiveCents(0)
+            grossPayCents: PaycheckEntryFacts.enteredCents(0),
+            netPayCents: PaycheckEntryFacts.enteredCents(0),
+            regularWagesCents: PaycheckEntryFacts.enteredCents(0),
+            overtimeWagesCents: PaycheckEntryFacts.enteredCents(0),
+            gratuityCents: PaycheckEntryFacts.enteredCents(0),
+            taxesCents: PaycheckEntryFacts.enteredCents(0)
         )
-        #expect(record.hourlyRateCents == nil)
-        #expect(record.owedTipsCents == nil)
         #expect(record.grossPayCents == nil)
         #expect(record.netPayCents == nil)
+        #expect(record.regularWagesCents == nil)
+        #expect(record.overtimeWagesCents == nil)
+        #expect(record.gratuityCents == nil)
+        #expect(record.taxesCents == nil)
     }
 
     @Test("non-zero entry fields save as exact cents")
@@ -269,15 +269,19 @@ struct PaycheckRecordStubDetailsTests {
             periodStart: date(2026, 7, 1),
             periodEnd: date(2026, 7, 15),
             paidTipsCents: 10000,
-            hourlyRateCents: effectiveCents(1275),
-            owedTipsCents: effectiveCents(2200),
-            grossPayCents: effectiveCents(150000),
-            netPayCents: effectiveCents(110000)
+            grossPayCents: PaycheckEntryFacts.enteredCents(150000),
+            netPayCents: PaycheckEntryFacts.enteredCents(110000),
+            regularWagesCents: PaycheckEntryFacts.enteredCents(56600),
+            overtimeWagesCents: PaycheckEntryFacts.enteredCents(4245),
+            gratuityCents: PaycheckEntryFacts.enteredCents(1),
+            taxesCents: PaycheckEntryFacts.enteredCents(40000)
         )
-        #expect(record.hourlyRateCents == 1275)
-        #expect(record.owedTipsCents == 2200)
         #expect(record.grossPayCents == 150000)
         #expect(record.netPayCents == 110000)
+        #expect(record.regularWagesCents == 56600)
+        #expect(record.overtimeWagesCents == 4245)
+        #expect(record.gratuityCents == 1)
+        #expect(record.taxesCents == 40000)
     }
 }
 

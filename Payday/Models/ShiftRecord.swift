@@ -15,7 +15,7 @@ enum ShiftRecordSource: String, Codable, Sendable {
 /// The legacy representation splits a single closeout across a cash `TipEntry`
 /// and a credit `TipEntry`, with the shift-level facts (hours, tip-out, sales,
 /// receipt) living on whichever of the two `ShiftDetails` picked as canonical.
-/// That shape is what `TipBreakdown`, `ShiftDays` and `ShiftDetails` exist to
+/// That shape is what `ShiftDays` and `ShiftDetails` exist to
 /// reassemble on every read, and it is why a wage-only shift cannot be saved
 /// at all (the legacy writer appended a row only for a non-zero amount,
 /// so hours with no tips produce zero rows and the hours are dropped).
@@ -301,7 +301,7 @@ final class ShiftRecord {
     ///
     /// `metricsOwner` says which of the two amounts a v1 receipt's gratuity is
     /// folded into, because in the legacy shape the receipt lived on exactly
-    /// one row and `TipBreakdown` normalises only that row. Passing the wrong
+    /// one row. Passing the wrong
     /// owner moves real money: on the N4 shape (cash 5000, credit 2000,
     /// gratuity 4200) the credit owner gives cash 5000 / credit 0 and the cash
     /// owner gives cash 800 / credit 2000.

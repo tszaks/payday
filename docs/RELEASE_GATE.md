@@ -1,5 +1,7 @@
 # PaydayCore release gate
 
+> This document records the gate for the September 2026 "PR 8" release candidate, the first PaydayCore-complete build. It is kept as a record and is not the gate for the current version; the current release process is in `docs/CI.md` and `AGENTS.md`.
+
 Pass/fail, not a score. No line is satisfied by an argument; each names the command or the act that produces it. Tied to a specific release-candidate commit, not to "the branch".
 
 Two kinds of line. **Machine lines** a session can run and must keep green. **Human lines** that physically need Tyler's phone, his pay period, or a professional's judgement, and that no session may mark done. A goal that reports complete with an open human line is lying.
@@ -17,6 +19,9 @@ enforcement, for every merge in this project to date. On 2026-09-18 that cost
 a merge: #65 landed while its checks were still `in_progress`, because
 `gh pr merge --auto` means "do not block on a human", not "wait for green",
 and with no required checks those requirements are met vacuously.
+**RE-MEASURED 2026-11-15: no longer true.** The same call now returns the
+five required checks listed below, so `production` is protected. The rest of
+this section is the record of how it got there.
 
 **This was scoped inside PR 8 and that is a sequencing error.** PR 8 is
 blocked behind its entry condition (the records arm must reach legacy's
@@ -237,7 +242,7 @@ editing `N2.json`'s gratuity now fails a test.
 |---|---|
 | calendar day == day detail == that day's rows == chart point | `CalendarSnapshotParityTests` (10) |
 | month == sum of its days | `CalendarSnapshotParityTests`, `EarningsParityTests` (9) |
-| Dashboard period == History row == period detail | `DashboardParityTests` (22), `HistoryParityTests` (27) |
+| Dashboard period == History row == period detail | `DashboardParityTests` (removed) (22), `HistoryParityTests` (removed) (27) |
 | Siri == widget == app | `AmbientParityTests` (6) |
 
 **NOT green, stated plainly rather than left ambiguous.**
@@ -341,7 +346,7 @@ the commit and date in this heading in the same edit.**
 | 14 fixtures vs the real engine | mutation sweep: **14/14 money-gated** (was 8/14). Gates call `CompensationLedger.evaluate`, `PaycheckReconciler.proposal`, `HoursFormatting.*`; grep for test-local cents arithmetic returns nothing |
 | Release gate armed | `PAYDAYCORE_RELEASE_GATE=1` green, `knownIssueCountIsZero` passed, `KnownIssues.json` = `[]`. Proven BOTH ways: planting `["W1"]` fails with `Release blocked` |
 | Dashboard == History == period detail | per-arm mutation; records 2 suites/14 tests, legacy 5/32 |
-| Calendar day == detail == Σ shifts == chart point | four-way identity on records, `ScreenNumberParityTests` + `FlipGates3And4Tests` |
+| Calendar day == detail == Σ shifts == chart point | four-way identity on records, `ScreenNumberParityTests` + `FlipGates3And4Tests` (removed) |
 | Month == Σ its days; YTD clips | snapshot-level and arm-independent: `EarningsSnapshotTests` "range equals the sum of its days", "month plus month equals the containing range", "year to date clips a pay period that crosses the year boundary" |
 | Siri == widget == app | ambient `asOf` mutation fails the records arm, the legacy arm AND `AmbientParityTests` |
 | Money-boundary lint green and PROVEN to fire | `design-lint.sh` 30 PASS / 0 FAIL; a planted probe fires 3 representative rules and leaves prose alone |
@@ -430,7 +435,7 @@ genuinely needs the hardware.** Measured 2026-09-19.
 - [ ] A failed read is never rendered as `$0`. Verified by breaking the
       widget's store access in a debug build and seeing "Couldn't load".
       *Machine half:* `unavailableRendersNoCurrency`
-      (`DashboardParityTests`) and `unavailableCarriesNoAmount`
+      (`DashboardParityTests`, removed) and `unavailableCarriesNoAmount`
       (`AmbientParityTests`) both assert that an unavailable state emits no
       currency at all. What they cannot do is prove the widget PROCESS
       fails the way the debug break makes it fail.
@@ -625,7 +630,7 @@ into permanent permission.
       5. `shiftsAreAuthoritative` returns true and the readers switch
 
       17 test references across `ShiftAuthorityLegTests`,
-      `FlipGates3And4Tests` and `FlipStraddleDeferralTests` cover it.
+      `FlipGates3And4Tests` (removed) and `FlipStraddleDeferralTests` (removed) cover it.
 
       **CORRECTED 2026-09-19, and it makes the blocker LARGER rather than
       smaller: one sync is necessary and NOT sufficient.** A brand-new
@@ -1111,21 +1116,6 @@ what happens when a tombstone lands before its legacy rows do. PR 2's shape
 died twice from answering questions like that quickly. This is recorded as a
 blocking condition on the flip, not patched at the end of a long session.
 
-## UNTRIAGED-LEGACY-ACCESSORS
-
-`lint-syncstate-wired.sh` found two `PaydaySyncState` accessors with no
-production reader that are NOT part of the deletion-flush gap:
-`knownTipEntryIDs` and `knownPaycheckIDs`.
-
-They are allowlisted under this marker rather than under the flip blocker,
-because I have not established whether they are dead code from the 1.0 sync
-or are wanted by something unbuilt, and filing them under a condition they
-have nothing to do with would make that condition look bigger than it is.
-
-**This section exists to be deleted.** Whoever triages them either wires
-them, removes them, or splits them into a condition with a real reason --
-and deleting this heading without doing one of those fails the lint.
-
 ### A 0-byte backup is indistinguishable from a real one
 
 `supabase db dump` requires Docker, which is unavailable on this machine.
@@ -1434,7 +1424,7 @@ catching tests and leaves 12 -- stripping most of the project's cross-surface
 protection at the exact moment every account depends on the records arm.
 
 **The failure mode this guards is not a broken gate.**
-`DashboardPeriodParityTests` is correctly named, correctly written and
+`DashboardPeriodParityTests` (removed) is correctly named, correctly written and
 correctly passing; it catches exactly what it was built to catch. It simply
 stopped pointing at the dangerous thing. Nobody erred when those 22 tests
 were written, because the second representation did not exist yet. The RISK
