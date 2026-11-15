@@ -279,6 +279,22 @@ struct PaydayCrashReportingTests {
         #expect(options.maxBreadcrumbs == 50)
     }
 
+    /// The SDK's own App Hang Tracking V2 reads a gap in rendered frames as a
+    /// fully blocked main thread, so a still screen or a suspend reports a
+    /// ~50 s "hang" whose main thread is the idle run loop (PAYDAY-3,
+    /// getsentry/sentry-cocoa#8317). MetricKit reports hangs the system
+    /// itself measured. The raw payload stays off: it is an attachment, and
+    /// `beforeSend` scrubs events, not attachments.
+    @Test("hangs come from MetricKit, not the SDK's frame-gap watchdog")
+    func hangsComeFromMetricKit() {
+        let options = Options()
+        PaydayCrashReporting.configure(options, dsn: "https://abc@o1.ingest.sentry.io/1")
+
+        #expect(options.enableAppHangTracking == false)
+        #expect(options.enableMetricKit == true)
+        #expect(options.enableMetricKitRawPayload == false)
+    }
+
     /// The options' own scrubbers must be the shared ones, or the tests above
     /// would be asserting rules that nothing actually applies.
     @Test("the configured scrubbers are the ones the tests above assert")

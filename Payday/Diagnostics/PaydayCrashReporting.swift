@@ -80,6 +80,22 @@ enum PaydayCrashReporting {
         options.tracesSampleRate = 0
         options.enableCaptureFailedRequests = false
 
+        // --- Hangs ------------------------------------------------------
+        // The SDK's App Hang Tracking V2 infers "fully blocked" from a gap in
+        // rendered frames, so a screen that stops drawing while the app is
+        // still active, or a suspend and resume, reports a ~50 s hang whose
+        // main thread is the idle run loop. That is PAYDAY-3, and upstream
+        // closed it as not planned: getsentry/sentry-cocoa#8317. MetricKit
+        // reports the hangs the system itself measured, and its events go
+        // through `SentrySDK.capture`, so `beforeSend` below scrubs them too.
+        // The setter is deprecated (the watchdog goes away in v10); the
+        // warning is the price of turning it off before then.
+        options.enableAppHangTracking = false
+        options.enableMetricKit = true
+        // The raw diagnostic is an attachment, and `beforeSend` scrubs events,
+        // not attachments. Off is the default; it is stated for that reason.
+        options.enableMetricKitRawPayload = false
+
         // --- The scrubbers ----------------------------------------------
         options.beforeBreadcrumb = { crumb in PaydayCrashScrubber.scrub(crumb) }
         options.beforeSend = { event in PaydayCrashScrubber.scrub(event) }
