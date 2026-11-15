@@ -10,13 +10,11 @@ import Foundation
 /// declaration, and `PaycheckAudit` reads
 /// `reconciliation.expectation.regularWagesCents` off the engine instead.
 ///
-/// It is NOT deleted, because six parity suites use it as the reference for
-/// the number the engine must NOT return -- `DashboardParityTests` asserts
-/// `gridAllocation.totalCents != facts.hero.cents` to prove the grid weekday
-/// can no longer move a Dashboard figure, and `EarningsParityTests` pins the
-/// month-first answer the engine supersedes. Deleting the oracle would delete
-/// the demonstration that those bugs are fixed, which is most of what the
-/// parity suites are worth.
+/// It is NOT deleted, because tests still call it: `PeriodIncomeTests` and
+/// one test in `PolicyStoreTests` value shifts through it, and
+/// `PaycheckAuditTests` uses its `Wages` struct as a plain value. Deleting
+/// the oracle would delete the demonstration that the old interpretation
+/// and the engine's answer differ.
 ///
 /// Living in the test target is what makes this safe: nothing shippable can
 /// route money through it, so it is no longer a path anything can bypass the

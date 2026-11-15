@@ -1,7 +1,7 @@
 import Foundation
 
 /// Day-grouping and human labels for the Dashboard's Shifts list. A shift is
-/// a day worked, not a row — one night is often two TipEntry rows (cash +
+/// a day worked, not a row — one night is often two rows (cash +
 /// credit), and showing it as two events doubles the visual noise. Pure and
 /// generic so it's testable without SwiftData.
 enum ShiftDays {

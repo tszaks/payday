@@ -31,6 +31,7 @@ private func twoJobs() -> CompensationPolicies {
 }
 
 @Suite("Jobs: the Job row and the one-job rule")
+@MainActor
 struct LogShiftJobFactsTests {
     @Test("zero jobs or one job: no Job row on the log sheet or the paycheck sheet")
     func hiddenWithOneJob() {
@@ -204,7 +205,7 @@ struct JobsWireTests {
     func csv() {
         let plain = CSVExporter.export(
             records: [ShiftRecord(workDate: jobDay(8), cashTipsCents: 5_000)],
-            paycheckRecords: [], calculator: Self.calculator)
+            paycheckRecords: [], calculator: Self.calculator, valuations: [:])
         #expect(plain.split(separator: "\n").first.map(String.init) == CSVExporter.header)
 
         let tagged = CSVExporter.export(
@@ -212,7 +213,7 @@ struct JobsWireTests {
                 ShiftRecord(workDate: jobDay(8), cashTipsCents: 5_000, roleName: "Bar", jobName: "Cafe"),
                 ShiftRecord(workDate: jobDay(9), cashTipsCents: 5_000),
             ],
-            paycheckRecords: [], calculator: Self.calculator)
+            paycheckRecords: [], calculator: Self.calculator, valuations: [:])
         let lines = tagged.split(separator: "\n").map(String.init)
         #expect(lines[0] == CSVExporter.header + ",Role,Job")
         #expect(lines[1].hasSuffix(",Bar,Cafe"))
@@ -231,7 +232,7 @@ struct JobsWireTests {
             ShiftRecord(workDate: jobDay(9), cashTipsCents: 5_000),
         ]
         for checks in [[bistroCheck, cafeCheck], [cafeCheck, bistroCheck]] {
-            let lines = CSVExporter.export(records: records, paycheckRecords: checks, calculator: Self.calculator)
+            let lines = CSVExporter.export(records: records, paycheckRecords: checks, calculator: Self.calculator, valuations: [:])
                 .split(separator: "\n").map(String.init)
             #expect(lines[1].contains("200.00") && !lines[1].contains("100.00"))
             #expect(lines[2].contains("100.00") && !lines[2].contains("200.00"))

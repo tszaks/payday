@@ -7,7 +7,7 @@ import SwiftData
 /// or on demand from the Settings > Developer section.
 enum DebugSeeder {
     @MainActor
-    static func seedIfRequested(scheduleStore: PayScheduleStore, insightsStore: InsightsStore, moveLedgerStore: MoveLedgerStore, policyStore: PolicyStore, preferencesStore: UserPreferencesStore) {
+    static func seedIfRequested(scheduleStore: PayScheduleStore, insightsStore: InsightsStore, preferencesStore: UserPreferencesStore) {
         let arguments = ProcessInfo.processInfo.arguments
         if let index = arguments.firstIndex(of: "-Appearance"),
            arguments.count > index + 1,

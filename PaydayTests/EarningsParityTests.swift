@@ -382,10 +382,10 @@ struct MonthEqualsSumOfItsDaysTests {
 /// write each other:
 ///
 /// - Settings > "First day" writes `PaySchedule.firstWeekday`, the pay-period
-///   GRID's weekday (SettingsView.swift:249).
+///   GRID's weekday (SettingsView.swift:257).
 /// - Settings > Payroll > "Workweek starts" writes
 ///   `PayrollCalendarPolicy.workweekStartWeekday`, which is what actually owns
-///   overtime (PayrollSettingsSection.swift:96). PR 3 severed the two on
+///   overtime (PayrollSettingsSection.swift:202). PR 3 severed the two on
 ///   purpose.
 ///
 /// Wave 0 moved the shift ROWS onto `EarningsSnapshot`, which buckets by the
@@ -451,9 +451,7 @@ struct OneWorkweekPerScreenTests {
         // PR 5 group 2.4, wave 1: the screen's whole money side is the
         // snapshot now, so the hero and the rows are the SAME valuations
         // rather than two halves that have to be kept on one scalar. The
-        // numbers below are unchanged, and `HistoryGridWeekdayCannotMoveMoneyTests`
-        // adds the stronger form — the grid weekday can no longer move any
-        // figure on either History surface at all.
+        // numbers below are unchanged.
         let build = HistoryEarnings.build(
             records: records(),
             policies: sundayStartPolicies(),

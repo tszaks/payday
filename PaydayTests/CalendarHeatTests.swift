@@ -56,7 +56,7 @@ struct CalendarHeatTests {
                 == CalendarHeat.fillOpacity(fraction: 104 / monthMax))
     }
 
-    @Test("a day with nothing on it sits at no step of the ramp at all")
+    @Test("a fraction outside 0...1 clamps into the ramp")
     func zeroIsNotAStep() {
         // The grid never asks for this — `hasTips` gates the fill — but a
         // fraction outside 0...1 must not index off the end of `steps`.
@@ -67,8 +67,9 @@ struct CalendarHeatTests {
     }
 
     /// Asserting WHICH colour came back proves nothing: a step can pick the
-    /// better of two illegible options. This asserts the chosen one clears
-    /// WCAG AA for the tile's bold small text, at every step, in both modes.
+    /// better of two illegible options. This asserts the better of black and
+    /// white clears WCAG AA for the tile's bold small text, at every step, in
+    /// both modes. It reads `contrastRatios`; it does not call `textColor`.
     @Test("every step stays legible in both modes, not merely better than the alternative")
     func everyStepIsLegible() {
         for (index, _) in CalendarHeat.steps.enumerated() {

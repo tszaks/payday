@@ -221,7 +221,7 @@ struct JobsInsightsScopeTests {
 
     @Test("a job and a role together report the shifts matching both")
     func jobAndRole() {
-        var records = week()
+        let records = week()
         records[0].roleName = "Bar"
         records[3].roleName = "Bar"
         let dataset = InsightsEarnings.build(
@@ -231,7 +231,7 @@ struct JobsInsightsScopeTests {
 
     @Test("under a picked job the role switch lists that job's roles only")
     func rolesFollowTheJob() {
-        var records = week()
+        let records = week()
         records[0].roleName = "Floor"
         records[1].roleName = "Floor"
         records[2].roleName = "Bar"
@@ -282,17 +282,17 @@ struct JobsCSVFilterTests {
     func filter() {
         let records = shifts()
         let cafe = CSVExporter.export(
-            records: records, paycheckRecords: [], calculatorForJob: calculatorForJob, job: .job("Cafe"))
+            records: records, paycheckRecords: [], calculatorForJob: calculatorForJob, job: .job("Cafe"), valuations: [:])
             .split(separator: "\n").map(String.init)
         #expect(cafe.count == 2)
         #expect(cafe[1].hasPrefix("2026-10-06,"))
         #expect(cafe[1].hasSuffix(",Cafe"))
         let bistro = CSVExporter.export(
-            records: records, paycheckRecords: [], calculatorForJob: calculatorForJob, job: .job(nil))
+            records: records, paycheckRecords: [], calculatorForJob: calculatorForJob, job: .job(nil), valuations: [:])
             .split(separator: "\n").map(String.init)
         #expect(bistro.count == 2)
         #expect(bistro[1].hasPrefix("2026-10-05,"))
-        let all = CSVExporter.export(records: records, paycheckRecords: [], calculatorForJob: calculatorForJob)
+        let all = CSVExporter.export(records: records, paycheckRecords: [], calculatorForJob: calculatorForJob, valuations: [:])
         #expect(all.split(separator: "\n").count == 3)
     }
 
@@ -301,7 +301,7 @@ struct JobsCSVFilterTests {
         let check = PaycheckRecord(periodStart: at(2026, 10, 1, hour: 0), periodEnd: at(2026, 10, 7, hour: 0), paidTipsCents: 4_321)
         check.jobName = "Cafe"
         let lines = CSVExporter.export(
-            records: shifts(), paycheckRecords: [check], calculatorForJob: calculatorForJob)
+            records: shifts(), paycheckRecords: [check], calculatorForJob: calculatorForJob, valuations: [:])
             .split(separator: "\n").map(String.init)
         // Bistro: biweekly Sep 28 – Oct 11. Cafe: weekly Oct 1 – Oct 7.
         #expect(lines[1].contains("2026-09-28 to 2026-10-11"))
@@ -315,8 +315,8 @@ struct JobsCSVFilterTests {
         let calculator = PayPeriodCalculator(payrollTimeZone: zone, schedule: primarySchedule)
         let records = [shifts()[0], ShiftRecord(workDate: at(2026, 10, 9), cashTipsCents: 2_500)]
         let check = PaycheckRecord(periodStart: at(2026, 9, 28, hour: 0), periodEnd: at(2026, 10, 11, hour: 0), paidTipsCents: 9_000)
-        let before = CSVExporter.export(records: records, paycheckRecords: [check], calculator: calculator)
-        let after = CSVExporter.export(records: records, paycheckRecords: [check], calculatorForJob: { _ in calculator })
+        let before = CSVExporter.export(records: records, paycheckRecords: [check], calculator: calculator, valuations: [:])
+        let after = CSVExporter.export(records: records, paycheckRecords: [check], calculatorForJob: { _ in calculator }, valuations: [:])
         #expect(before == after)
     }
 }

@@ -58,7 +58,7 @@ enum CSVExporter {
         paycheckRecords: [PaycheckRecord],
         calculator: PayPeriodCalculator,
         calendar: Calendar = .current,
-        valuations: [UUID: ShiftValuation] = [:]
+        valuations: [UUID: ShiftValuation]
     ) -> String {
         export(records: records, paycheckRecords: paycheckRecords, calculatorForJob: { _ in calculator }, calendar: calendar, valuations: valuations)
     }
@@ -75,10 +75,23 @@ enum CSVExporter {
         calculatorForJob: (String?) -> PayPeriodCalculator,
         job: JobScope = .all,
         calendar: Calendar = .current,
-        valuations: [UUID: ShiftValuation] = [:]
+        valuations: [UUID: ShiftValuation]
     ) -> String {
         let kept = records.filter { job.includes($0.jobName) }
         return export(shifts: kept.map(RowShift.init(record:)), paycheckRecords: paycheckRecords, calculatorForJob: calculatorForJob, calendar: calendar, valuations: valuations)
+    }
+
+    /// `export`'s `valuations`, from the snapshot the calling screen already
+    /// builds over the WHOLE history, so the overtime split of a workweek
+    /// that straddles a period boundary is the engine's.
+    ///
+    /// A nil snapshot (the build refused its inputs) gives no valuations, and
+    /// the file still exports with the five engine columns blank. Blocking
+    /// the export instead would take away the "export before delete" safety
+    /// net at the moment it is needed.
+    static func valuations(from snapshot: EarningsSnapshot?) -> [UUID: ShiftValuation] {
+        guard let snapshot else { return [:] }
+        return Dictionary(snapshot.shifts.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
     }
 
     private static func export(
@@ -225,10 +238,13 @@ enum CSVExporter {
         let salesField: String = shiftDetails.salesCents.map(dollars) ?? ""
         let serversField: String = shiftDetails.serverCount.map(String.init) ?? ""
         let paycheckField: String = paycheck.map { dollars($0.paidTipsCents) } ?? ""
-        let periodField = "\(isoDate(period.start)) to \(isoDate(period.end))"
+        // The payroll zone, for all three dates: the engine reads a shift's
+        // work day there, and the period's boundaries are midnights there.
+        let zone = calculator.payrollTimeZone
+        let periodField = "\(isoDate(period.start, in: zone)) to \(isoDate(period.end, in: zone))"
 
         var fields = [
-            isoDate(day),
+            isoDate(day, in: zone),
             shiftField,
             dollars(cashCents),
             dollars(creditCents),
@@ -266,8 +282,11 @@ enum CSVExporter {
         return fields.joined(separator: ",")
     }
 
-    private static func isoDate(_ date: Date) -> String {
-        date.formatted(.iso8601.year().month().day())
+    /// The civil day `date` falls on in `zone`. The ISO 8601 style reads GMT
+    /// unless told otherwise, which is the previous day for a midnight east
+    /// of GMT.
+    private static func isoDate(_ date: Date, in zone: TimeZone) -> String {
+        date.formatted(Date.ISO8601FormatStyle(timeZone: zone).year().month().day())
     }
 
     private static func dollars(_ cents: Int) -> String {
@@ -317,7 +336,7 @@ enum CSVExporter {
     /// security review).
     private static func escape(_ field: String) -> String {
         let neutralized = neutralizingFormula(field)
-        guard neutralized.contains(",") || neutralized.contains("\"") || neutralized.contains("\n") else {
+        guard neutralized.contains(",") || neutralized.contains("\"") || neutralized.contains("\n") || neutralized.contains("\r") else {
             return neutralized
         }
         return "\"\(neutralized.replacingOccurrences(of: "\"", with: "\"\""))\""

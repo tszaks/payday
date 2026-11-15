@@ -753,25 +753,14 @@ enum PaydaySyncState {
     /// place the flip can happen for an account.
     ///
     /// It takes the server-read conversion state and applies
-    /// `ShiftReadAuthority.resolve`, which decides three things this function
-    /// deliberately does not: whether the account is ready, whether a
-    /// promotion must wait for an open legacy-edit sheet, and the asymmetry
-    /// that a DEMOTION never waits. Read that function's header before
+    /// `ShiftReadAuthority.resolve`, which decides what this function
+    /// deliberately does not: whether the account is ready, and so whether to
+    /// promote, demote or leave it alone. Read that function's header before
     /// changing anything here.
     ///
-    /// Returns the outcome so the caller can act on `.deferPromotion` --
-    /// which is not an error and not a no-op, but "ask again on the next
-    /// pass". Swallowing it would turn a few-seconds delay into a permanent
-    /// one, since nothing else would ever reconsider.
+    /// Returns the outcome it applied.
     ///
     /// Main actor because the callers are.
-    /// is a fact about what is on screen.
-    /// NOT `@discardableResult`, deliberately. The header above warns that
-    /// swallowing `.deferPromotion` "would turn a few-seconds delay into a
-    /// permanent one, since nothing else would ever reconsider" -- and an
-    /// attribute letting a caller ignore the result sat one line above that
-    /// warning. A comment asking a reader to notice an obligation is the
-    /// thing the compiler should be enforcing instead.
     @MainActor
     static func applyShiftAuthority(
         _ state: ShiftReadAuthority.State,
@@ -900,7 +889,9 @@ enum PaydaySyncState {
         load(for: userID).pendingShiftRestores
     }
 
-    /// Cleared only after a confirmation read shows the shift is live again.
+    /// Cleared right after the `restore_shifts` call returns, whatever
+    /// outcome it reported for each id: the caller does not wait for a
+    /// confirmation read.
     static func clearShiftRestores(_ ids: some Sequence<UUID>, for userID: UUID) {
         mutate(userID: userID) { snapshot in
             for id in ids { snapshot.pendingShiftRestores.removeValue(forKey: id) }
@@ -938,15 +929,14 @@ enum PaydaySyncState {
         loadPending(for: userID).legacyEntries
     }
 
-    /// Cleared against the RPC's RETURN SET, never unconditionally.
+    /// Cleared for every id the caller sends, whatever the RPC returns.
     ///
-    /// `soft_delete_tip_entries` only writes rows where
-    /// `p_deleted_at >= client_updated_at`, and `client_updated_at` was
-    /// clamped to the server's clock while `p_deleted_at` is the device's. A
-    /// device running behind the server therefore tombstones NOTHING and gets
-    /// no error, and the shipped client clears its whole queue regardless. So
-    /// the caller passes only the ids the server said it wrote; the rest stay
-    /// queued and retry, and the skew is bounded so it converges.
+    /// `soft_delete_tip_entries` has no clock predicate: it tombstones every
+    /// row of the caller's whose id is in `p_ids`, stamping
+    /// `least(p_deleted_at, statement_timestamp())`. So a call that returned
+    /// without throwing wrote every row that exists, and the caller clears
+    /// the whole queue it sent. A throw never reaches this call, which is
+    /// what keeps a failed write queued for the next pass.
     static func clearLegacyEntryDeletions(_ ids: some Sequence<UUID>, for userID: UUID) {
         var pending = loadPending(for: userID)
         for id in ids { pending.legacyEntries.removeValue(forKey: id) }

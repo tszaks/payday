@@ -351,7 +351,7 @@ produced flat contradictions about the same facts, a hundred lines apart:
 
 | Said above | Said below | Which is true |
 |---|---|---|
-| "the money-boundary lint is in place and ratchets" | "There is no money-boundary lint yet" | **Above.** `design-lint.sh` rule 4 exists and fires; it caught a `.netCents` in the CSV exporter on 2026-09-18. |
+| "the money-boundary lint is in place and ratchets" | "There is no money-boundary lint yet" | **Above.** `design-lint.sh` rule 15c exists and fires; it caught a `.netCents` in the CSV exporter on 2026-09-18. |
 | "the widget and Siri read the engine through one shared function" | "The widget, Siri and the CSV export still compute their own figures" | **Above.** Both reach `AmbientPeriodFigure`, which calls `EarningsStore.buildOnce`. |
 
 A reader asking "is my overtime right?" got opposite answers depending on
@@ -381,14 +381,14 @@ SURFACE STILL DISAGREES BY CONSTRUCTION: the API.** Measured today:
   fields answer "how much this period" with tips only. **Still true.**
 - ~~Nothing in `supabase/functions/` reads `earnings_snapshots`.~~
   **FALSE, corrected 2026-09-19.** `engineEarnings` reads that table
-  (`payday-api/index.ts:1491`) and is called from the summary route
-  (`:1407`), adding an `earnings` field beside the legacy two. Its own
+  (`payday-api/index.ts:1513`) and is called from the summary route
+  (`:1428`), adding an `earnings` field beside the legacy two. Its own
   comment says why: "ADDITIVE ON PURPOSE ... so no existing consumer
   breaks."
 - ~~`SnapshotUploader` has no production caller; its only mention outside
   its own file is a doc comment.~~ **MISLEADING, corrected 2026-09-19.**
   True of the SYMBOL and false of the behaviour: `SnapshotPublisher` owns
-  the uploader and `PaydayApp.swift:72` calls
+  the uploader and `PaydayApp.swift:77` calls
   `SnapshotPublisher.shared.publish(snapshot)` from `EarningsStore`'s
   `onPublish` sink. `SnapshotUploaderTests.swift` covers it with nine cases.
 
@@ -572,7 +572,7 @@ What is still NOT true, precisely:
   `PaycheckAudit`, `TipRecord` and `ShiftWriter` still exist, several as
   wrappers over the engine rather than as rival arithmetic, but they exist.
 - ~~**There is no money-boundary lint yet**~~ **FALSE as of 2026-09-18.**
-  `scripts/design-lint.sh` rule 4 bans money arithmetic outside the engine
+  `scripts/design-lint.sh` rule 15c bans money arithmetic outside the engine
   and ratchets; it caught a `.netCents` in `CSVExporter` on 2026-09-18, which
   is the rule working on the person who wrote it. Original text follows:
 - **(historical)** There is no money-boundary lint yet, so nothing structurally prevents a

@@ -7,9 +7,11 @@ import Testing
 /// ## How these six were found
 ///
 /// Criterion 3 is "all 14 golden fixtures pass against the real production
-/// engine, never a test helper". `FixtureGateTests` closed that for N1, N2,
-/// N3 and E1, whose expected values had been asserted from literals in the
-/// language where the engine lives rather than read out of the `.json`.
+/// engine, never a test helper". `FixtureGateTests` closed that for N1, N2
+/// and N3, and for E1's hour strings, whose expected values had been asserted
+/// from literals in the language where the engine lives rather than read out
+/// of the `.json`. It checks E1's money only against itself (the parts add up
+/// to the total), so E1's money is gated here, against the ledger.
 ///
 /// Nobody had measured the other ten. MEASURED on 2026-09-18 by mutation:
 /// bump EVERY `*Cents` value under a fixture's `expected` block and re-run
@@ -247,6 +249,39 @@ struct FixtureMoneyGateTests {
                     "H1/\(shiftID) minutesWorked")
         }
         #expect(checked > 0, "H1: no money value was actually compared")
+    }
+
+    /// E1 is the export fixture. `FixtureGateTests` gates its hour strings;
+    /// this gates its money. It declares one shift's money twice, once at the
+    /// top of `expected` and once as the CSV row's cells, and both must be
+    /// what the real ledger computes for `expected.shiftID`.
+    @Test("E1's money and minutes, and its CSV row's money cells, are the real ledger's")
+    func e1MoneyIsLedgerTruth() throws {
+        let fixture = try FixtureLoader.load("E1")
+        let byID = try valuations(fixture)
+        let shiftID = try #require(
+            fixture.expected["shiftID"]?.stringValue.flatMap(UUID.init(uuidString:)),
+            "E1.json must declare expected.shiftID"
+        )
+        let valuation = try #require(byID[shiftID], "E1: no valuation for \(shiftID)")
+
+        let declared = Declared(fixture.expected)
+        declared.check(against: valuation.components, "E1/expected")
+        let csvRow = try #require(fixture.expected["csvRow"]?.objectValue, "E1.json must declare csvRow")
+        let declaredCells = Declared(csvRow)
+        declaredCells.check(against: valuation.components, "E1/csvRow")
+
+        #expect(valuation.minutesWorked == fixture.expected["minutesWorked"]?.intValue,
+                "E1 minutesWorked")
+        #expect(valuation.regularMinutes == fixture.expected["regularMinutes"]?.intValue,
+                "E1 regularMinutes")
+        #expect(valuation.overtimeMinutes == fixture.expected["overtimeMinutes"]?.intValue,
+                "E1 overtimeMinutes")
+
+        // Each block declares all four money figures; fewer means a key was
+        // renamed or dropped and the gate would be checking less than it says.
+        #expect(declared.count == 4, "E1/expected: \(declared.count) money values compared, not 4")
+        #expect(declaredCells.count == 4, "E1/csvRow: \(declaredCells.count) money values compared, not 4")
     }
 
     /// M1 declares per-DAY money plus the chart point for that day, and its

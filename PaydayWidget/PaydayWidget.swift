@@ -32,7 +32,6 @@ struct PaydayWidgetEntry: TimelineEntry {
     /// VoiceOver label can say "usual pace" or "last period" accurately.
     let pacePeriodCount: Int
     let daysRemaining: Int
-    let appearance: AppAppearance
     var relevance: TimelineEntryRelevance?
 }
 
@@ -51,7 +50,7 @@ struct PaydayWidgetProvider: TimelineProvider {
                 completeness: .empty
             )),
             paceDeltaCents: 1200, pacePeriodCount: 6, daysRemaining: 3,
-            appearance: AppGroup.appearance, relevance: nil)
+            relevance: nil)
     }
 
     /// Both of these hop to the main actor before touching the engine.
@@ -164,9 +163,14 @@ struct PaydayWidgetProvider: TimelineProvider {
         // unchecked by the lint written to prevent this class of miss.
         let context = ModelContext(SharedModelContainer.shared)
         let allRecords = (try? context.fetch(FetchDescriptor<ShiftRecord>())) ?? []
+        // The job the figure reads (see `buildEntry`), so the pace next to
+        // it compares the same job's shifts. `.all` with one job.
         let engine = StatsEngine(
             payrollTimeZone: policyStore.payrollTimeZone,
-            records: StatsRecordAdapter.tipRecords(from: allRecords)
+            records: StatsRecordAdapter.tipRecords(
+                from: allRecords,
+                job: .picked(nil, jobCount: policyStore.policies.jobs.count)
+            )
         )
         return dates.map {
             Self.buildEntry(at: $0, schedule: schedule, snapshot: snapshot, engine: engine, policyStore: policyStore)
@@ -176,14 +180,14 @@ struct PaydayWidgetProvider: TimelineProvider {
     private static func setupEntry(at date: Date) -> PaydayWidgetEntry {
         PaydayWidgetEntry(
             date: date, content: .setup, paceDeltaCents: nil, pacePeriodCount: 0,
-            daysRemaining: 0, appearance: AppGroup.appearance, relevance: nil)
+            daysRemaining: 0, relevance: nil)
     }
 
     private static func unavailableEntry(at date: Date) -> PaydayWidgetEntry {
         PaydayWidgetEntry(
             date: date, content: .figure(EarningsFigure.unavailable()),
             paceDeltaCents: nil, pacePeriodCount: 0, daysRemaining: 0,
-            appearance: AppGroup.appearance, relevance: nil)
+            relevance: nil)
     }
 
     @MainActor
@@ -230,7 +234,6 @@ struct PaydayWidgetProvider: TimelineProvider {
             paceDeltaCents: comparison?.deltaCents,
             pacePeriodCount: comparison?.periodCount ?? 0,
             daysRemaining: daysRemaining,
-            appearance: AppGroup.appearance,
             relevance: TimelineEntryRelevance(score: score)
         )
     }

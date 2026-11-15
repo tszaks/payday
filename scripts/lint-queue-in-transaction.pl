@@ -9,7 +9,12 @@ for my $f (sort @files) {
   local $/; my $src = <$fh>; close $fh;
   $src =~ s{/\*.*?\*/}{}gs;
   $src =~ s{//[^\n]*}{}g;
-  while ($src =~ /\bShiftCommands\.(?:commit|perform)\s*\(/g) {
+  # `perform` is private to ShiftCommands, so inside its own file it is called
+  # unqualified -- and that is where delete and restore write their queues.
+  my $call = $f =~ m{(?:^|/)Payday/Models/ShiftCommands\.swift$}
+    ? qr/\bShiftCommands\.(?:commit|perform)\s*\(|(?<![\w.])perform\s*\(/
+    : qr/\bShiftCommands\.(?:commit|perform)\s*\(/;
+  while ($src =~ /$call/g) {
     my $i = pos($src) - 1; my $len = length($src);
     # balance the argument parens
     my $d = 0;

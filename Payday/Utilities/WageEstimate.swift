@@ -3,7 +3,7 @@ import Foundation
 /// Per-shift wage math for the surfaces that have not moved to
 /// `EarningsSnapshot` yet. As of PR 3 every function here is a thin wrapper
 /// over `CompensationLedger`: no `Double` arithmetic, no second rounding
-/// rule, one engine. PR 5 migrates the callers and PR 8 deletes this type.
+/// rule, one engine. PR 5 moved the callers; PR 8 deletes this type.
 ///
 /// It remains wage-only by contract. Callers add the tip side themselves
 /// (`TipBreakdown`), and nothing here is ever classified as voluntary tips or
@@ -22,10 +22,8 @@ enum WageEstimate {
     /// here, 1556 as the second shift of W1's day). A figure that has to add
     /// up to a total alongside its siblings must come from
     /// `centsPerShift`/`centsByShiftID`, which allocate all of them at once.
-    /// What is left for this function is the genuinely solitary shift: the
-    /// live in-progress edit in `LogTipSheet`, whose shift is not saved yet,
-    /// and `StatsEngine`'s per-shift rate facts. PR 5 moves both onto
-    /// `EarningsSnapshot`.
+    /// What is left for this function is the genuinely solitary shift:
+    /// `StatsEngine`'s per-shift rate facts, its one remaining caller.
     static func cents(wageCentsPerHour: Int?, hours: Double) -> Int? {
         guard let wageCentsPerHour, wageCentsPerHour > 0, hours > 0 else { return nil }
         return CompensationLedger.roundCents(
@@ -96,11 +94,10 @@ enum WageEstimate {
     /// a 5.5h shift at 283c/hr read 2759 in the DayDetailSheet hero and
     /// 1203 + 1557 = 2760 in the two rows listed directly beneath it.
     ///
-    /// `cents(wageCentsPerHour:hours:)` remains for the surfaces that hold a
-    /// single shift with no sibling set to allocate against (LogTipSheet's
-    /// live in-progress edit, `StatsEngine`'s per-shift rate facts). Those
-    /// are still independently rounded and can still be 1c from this array;
-    /// PR 5 moves them onto `EarningsSnapshot`. See docs/PRODUCT.md Pillar 8.
+    /// `cents(wageCentsPerHour:hours:)` remains for `StatsEngine`'s per-shift
+    /// rate facts, which hold a single shift with no sibling set to allocate
+    /// against. Those are still independently rounded and can still be 1c
+    /// from this array. See docs/PRODUCT.md Pillar 8.
     static func centsPerShift(
         payrollTimeZone: TimeZone,
         workweekStartWeekday: Int,

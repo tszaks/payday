@@ -243,14 +243,16 @@ struct CalendarSnapshotParityTests {
     @Test("the month line carries the hours only when wages are off")
     func monthLineCarriesHoursOnlyWithWagesOff() throws {
         let records = straddlingWeek()
+        let wagesOnEngine = try #require(snapshot(records: records, policies: policies(rateCents: 1_000)))
         let withWages = CalendarMonthFacts(
-            snapshot: try #require(snapshot(records: records, policies: policies(rateCents: 1_000))),
+            snapshot: wagesOnEngine,
             displayedMonth: day(2026, 10, 1), calendar: calendarInPayrollZone()
         )
         #expect(withWages.monthLine == withWages.monthCaption)
 
+        let tipsOnlyEngine = try #require(snapshot(records: records, policies: policies(rateCents: nil)))
         let tipsOnly = CalendarMonthFacts(
-            snapshot: try #require(snapshot(records: records, policies: policies(rateCents: nil))),
+            snapshot: tipsOnlyEngine,
             displayedMonth: day(2026, 10, 1), calendar: calendarInPayrollZone()
         )
         #expect(tipsOnly.monthMinutes == 1_200)
@@ -447,7 +449,7 @@ struct CalendarSnapshotParityTests {
     func theMonthCaptionNamesTheUnpricedShift() throws {
         // Four priced days and one with NO hours, so the month is `.partial`
         // for exactly one reason and exactly one day.
-        var records = straddlingWeek()
+        let records = straddlingWeek()
         records[3].hoursWorked = nil          // Thu 2026-10-01
         let engine = try #require(snapshot(
             records: records, policies: policies(rateCents: 1_000)))
@@ -644,7 +646,7 @@ struct CalendarHonestyTests {
 
     @Test("a partial month never enters a delta against a total")
     func partialMonthSuppressesTheDelta() throws {
-        var records = windowedMonthRecords()
+        let records = windowedMonthRecords()
         records[2].hoursWorked = nil        // Sep 5 is unpriced → the month is partial
         let engine = try #require(snapshot(records: records, policies: policies(rateCents: 1_000)))
         let facts = CalendarMonthFacts(

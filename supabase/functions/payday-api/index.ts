@@ -207,6 +207,13 @@ function optionalDate(
 }
 
 function timestamp(value: unknown, field: string): string {
+  return new Date(exactTimestamp(value, field)).toISOString();
+}
+
+/// Validated like `timestamp`, but returned exactly as written. A cursor
+/// carries a row's own timestamp, which Postgres keeps to the microsecond;
+/// rounding it to the millisecond moves the cursor before its own row.
+function exactTimestamp(value: unknown, field: string): string {
   const result = requiredString(value, field, 64);
   if (
     !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/
@@ -228,7 +235,7 @@ function timestamp(value: unknown, field: string): string {
       `${field} must be an ISO-8601 timestamp.`,
     );
   }
-  return parsed.toISOString();
+  return result;
 }
 
 function receiptMetrics(
@@ -938,7 +945,7 @@ function expectedVersion(body: JsonObject): number {
 
 function listArguments(
   url: URL,
-): { limit: number; cursor?: string; includeDeleted: boolean } {
+): { limit: number; cursor?: string; include_deleted: boolean } {
   const limitValue = url.searchParams.get("limit");
   const limit = limitValue === null
     ? 100
@@ -947,7 +954,7 @@ function listArguments(
   return {
     limit,
     cursor,
-    includeDeleted: url.searchParams.get("include_deleted") === "true",
+    include_deleted: url.searchParams.get("include_deleted") === "true",
   };
 }
 
@@ -1327,11 +1334,6 @@ async function updateSettings(
   return { data: stripOwner(data as JsonObject) };
 }
 
-function money(row: JsonObject, field: string): number {
-  const value = row[field];
-  return typeof value === "number" && Number.isFinite(value) ? value : 0;
-}
-
 /// A derived shift, as the API reports it.
 ///
 /// **Reads, never computes.** This replaced `tipFacts` and `groupShifts`,
@@ -1350,16 +1352,16 @@ function money(row: JsonObject, field: string): number {
 /// the tip-out back, because "before tip-out" is a presentation of the same
 /// stored figure rather than a second derivation of it.
 function shiftResponse(row: JsonObject): JsonObject {
-  const netCents = money(row, "non_wage_earnings_cents");
-  const tipOutCents = money(row, "tip_out_cents");
+  const netCents = num(row.non_wage_earnings_cents);
+  const tipOutCents = num(row.tip_out_cents);
   return {
     id: row.id,
     work_date: row.work_date,
     shift_period: row.shift_period ?? null,
     recorded_at: row.recorded_at ?? null,
-    cash_tip_cents: money(row, "cash_tips_cents"),
-    credit_tip_cents: money(row, "credit_tips_cents"),
-    gratuity_cents: money(row, "gratuity_fees_cents"),
+    cash_tip_cents: num(row.cash_tips_cents),
+    credit_tip_cents: num(row.credit_tips_cents),
+    gratuity_cents: num(row.gratuity_fees_cents),
     gross_tip_earnings_cents: netCents + tipOutCents,
     tip_out_cents: tipOutCents,
     // Read-only here: agent writes still land on the legacy rows, which do
@@ -1457,11 +1459,17 @@ async function summary(
  * Pure, and separated from the fetch so the ARITHMETIC is testable without
  * a database. Dates are ISO `YYYY-MM-DD`, so lexical comparison IS date
  * comparison -- no parsing, and therefore no timezone to get wrong.
+ *
+ * `asOf` is the document's own cutoff and clamps the range end exactly as
+ * `SnapshotDocument.range` does: a day after it is left out even when the
+ * range covers it, and `null` means no cutoff. Required rather than
+ * defaulted, because a forgotten cutoff silently widens the total.
  */
 export function sumSnapshotDays(
   days: unknown,
   start: string | null,
   end: string | null,
+  asOf: string | null,
 ) {
   const t = {
     cash: 0, credit: 0, gratuity: 0, tipOut: 0, tipShareIn: 0, regular: 0,
@@ -1473,6 +1481,7 @@ export function sumSnapshotDays(
     if (!isRecord(d) || typeof d.day !== "string") continue;
     if (start !== null && d.day < start) continue;
     if (end !== null && d.day > end) continue;
+    if (asOf !== null && d.day > asOf) continue;
     const k = isRecord(d.knownComponents) ? d.knownComponents : {};
     t.cash += num(k.voluntaryCashCents);
     t.credit += num(k.voluntaryCreditCents);
@@ -1515,26 +1524,44 @@ export async function engineEarnings(
   start: string | null,
   end: string | null,
 ): Promise<JsonObject> {
-  const { data: snap } = await ctx.admin
+  // A failed read is an error, never "no_snapshot": that would tell the
+  // caller no device ever published.
+  const { data: snap, error: snapError } = await ctx.admin
     .from("earnings_snapshots")
     .select("dataset_revision,engine_version,as_of,payload")
     .eq("user_id", ctx.key.user_id)
     .maybeSingle();
+  if (snapError) {
+    throw new ApiError(
+      500,
+      "database_error",
+      "Unable to read the earnings snapshot.",
+    );
+  }
 
   if (!isRecord(snap) || !isRecord(snap.payload)) {
     return { available: false, reason: "no_snapshot" };
   }
 
-  const { data: rev } = await ctx.admin
+  const { data: rev, error: revError } = await ctx.admin
     .from("dataset_revisions")
     .select("revision")
     .eq("user_id", ctx.key.user_id)
     .maybeSingle();
+  if (revError) {
+    throw new ApiError(
+      500,
+      "database_error",
+      "Unable to read the earnings snapshot.",
+    );
+  }
   const current = isRecord(rev) && typeof rev.revision === "number"
     ? rev.revision
     : 0;
 
-  const t = sumSnapshotDays(snap.payload.days, start, end);
+  // The document's own cutoff, as the engine reads it. Absent means none.
+  const asOf = typeof snap.payload.asOf === "string" ? snap.payload.asOf : null;
+  const t = sumSnapshotDays(snap.payload.days, start, end, asOf);
 
   return {
     available: true,
@@ -1640,7 +1667,7 @@ function shiftCursor(value: unknown): ShiftCursor | undefined {
       work_date: dateOnly(decoded.work_date, "cursor.work_date"),
       recorded_at: decoded.recorded_at === null
         ? null
-        : timestamp(decoded.recorded_at, "cursor.recorded_at"),
+        : exactTimestamp(decoded.recorded_at, "cursor.recorded_at"),
       shift_id: uuid(decoded.shift_id, "cursor.shift_id"),
     };
   } catch (error) {
@@ -1915,7 +1942,7 @@ function auditCursor(value: unknown): AuditCursor | undefined {
     const decoded = JSON.parse(atob(padded));
     if (!isRecord(decoded)) throw new Error("invalid cursor");
     return {
-      requested_at: timestamp(decoded.requested_at, "cursor.requested_at"),
+      requested_at: exactTimestamp(decoded.requested_at, "cursor.requested_at"),
       request_id: uuid(decoded.request_id, "cursor.request_id"),
     };
   } catch (error) {
@@ -1953,7 +1980,7 @@ function changeCursor(value: unknown): ChangeCursor | undefined {
       !CHANGE_TABLES.includes(decoded.table as ChangeTable)
     ) throw new Error("invalid cursor");
     return {
-      updated_at: timestamp(decoded.updated_at, "cursor.updated_at"),
+      updated_at: exactTimestamp(decoded.updated_at, "cursor.updated_at"),
       table: decoded.table as ChangeTable,
       id: uuid(decoded.id, "cursor.id"),
     };
@@ -2001,6 +2028,12 @@ async function changePage(
   return (data ?? []) as JsonObject[];
 }
 
+// Code-point order, not `localeCompare`: collation puts `.` before `+`, so a
+// whole second ("…:00+00:00") would sort after a fraction of that second.
+function codePointOrder(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
 async function changes(
   ctx: RequestContext,
   args: JsonObject,
@@ -2024,7 +2057,7 @@ async function changes(
       ),
     }))
   ).sort((left, right) =>
-    String(left.row.updated_at).localeCompare(String(right.row.updated_at)) ||
+    codePointOrder(String(left.row.updated_at), String(right.row.updated_at)) ||
     CHANGE_TABLES.indexOf(left.table) - CHANGE_TABLES.indexOf(right.table) ||
     left.id.localeCompare(right.id)
   );
@@ -2447,7 +2480,7 @@ const tools = [
   {
     name: "list_shifts",
     description:
-      "List semantic shifts grouped from their cash and credit tip rows.",
+      "List shifts from the derived shifts table, newest first, with cursor pagination.",
     inputSchema: {
       type: "object",
       properties: {
@@ -2464,7 +2497,8 @@ const tools = [
   },
   {
     name: "get_shift",
-    description: "Get one shift and all of its underlying tip entries.",
+    description:
+      "Get one shift by its id or by any id in its legacy_entry_ids. Tip entries are not embedded.",
     inputSchema: {
       type: "object",
       properties: { shift_id: { type: "string", format: "uuid" } },
@@ -2950,6 +2984,14 @@ function openAPISpec(origin: string): JsonObject {
     "400": { description: "Invalid request or missing idempotency key" },
     "409": { description: "Version or idempotency conflict" },
   };
+  // The REST list routes take the same arguments as their MCP tools.
+  const queryParameters = (properties: JsonObject) =>
+    Object.entries(properties).map(([name, schema]) => ({
+      name,
+      in: "query",
+      schema,
+    }));
+  const pageLimit = { type: "integer", minimum: 1, maximum: 200, default: 100 };
   return {
     openapi: "3.1.0",
     info: {
@@ -3008,7 +3050,7 @@ function openAPISpec(origin: string): JsonObject {
             in: "query",
             schema: { type: "string" },
             description: "Opaque next_cursor returned by the previous page.",
-          }],
+          }, ...queryParameters({ ...dateRangeProperties, limit: pageLimit })],
           responses: { "200": { description: "Shifts" } },
         },
         post: {
@@ -3049,6 +3091,7 @@ function openAPISpec(origin: string): JsonObject {
         get: {
           security,
           summary: "List tip entries",
+          parameters: queryParameters(listProperties),
           responses: { "200": { description: "Tip entries" } },
         },
         post: {
@@ -3105,6 +3148,7 @@ function openAPISpec(origin: string): JsonObject {
         get: {
           security,
           summary: "List paychecks",
+          parameters: queryParameters(listProperties),
           responses: { "200": { description: "Paychecks" } },
         },
         post: {
@@ -3239,7 +3283,7 @@ function openAPISpec(origin: string): JsonObject {
             in: "query",
             schema: { type: "string" },
             description: "Opaque next_cursor returned by the previous page.",
-          }],
+          }, { name: "limit", in: "query", schema: pageLimit }],
           responses: { "200": { description: "Audit events" } },
         },
       },
@@ -3264,14 +3308,17 @@ function openAPISpec(origin: string): JsonObject {
 
 export const testing = {
   auditCursor,
+  changeCursor,
+  changes,
   dateOnly,
   encodeAuditCursor,
+  encodeChangeCursor,
   encodeShiftCursor,
+  handleREST,
   paycheckPayload,
   shiftResponse,
   settingsPayload,
   moveLedger,
-  publicPath,
   receiptMetrics,
   shiftCursor,
   timestamp,

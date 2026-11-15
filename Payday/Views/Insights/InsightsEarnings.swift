@@ -70,18 +70,13 @@ import Foundation
 ///
 /// Unclamped dataset (`asOf: .distantFuture`), the whole `CompensationPolicies`
 /// value, and the grid calendar in the frozen payroll zone. Before wave 2 this
-/// screen built its snapshot through `LegacySnapshotBridge.snapshot(entries:)`
-/// with `asOf: now` — the convenience overload, whose `ShiftDays.groupedByShift`
-/// call takes the DEFAULT `Calendar.current`. Both are defects wave 1 already
-/// paid for on Dashboard (`DashboardEarnings`'s header has the measurements):
-/// a device-zone grouping under a payroll-zone valuation mints different
-/// `shiftID`s for a legacy nil-`shiftID` row, and a dataset-level cutoff makes
-/// this screen a different DATASET from every other one, so a disagreement
-/// stops being diffable.
-///
-/// **This is the PR 2 slice S7 swap point for group 2.6.** When something
-/// finally writes `ShiftRecord` locally, `build` becomes
-/// `earningsStore.snapshot` and nothing above it changes.
+/// screen built its snapshot with `asOf: now` and grouped shifts with the
+/// DEFAULT `Calendar.current`. Both are defects wave 1 already paid for on
+/// Dashboard (`DashboardEarnings`'s header has the measurements): a
+/// device-zone grouping under a payroll-zone valuation mints different
+/// `shiftID`s for one shift, and a dataset-level cutoff makes this screen a
+/// different DATASET from every other one, so a disagreement stops being
+/// diffable.
 enum InsightsEarnings {
     // MARK: - The dataset
 
@@ -140,7 +135,7 @@ enum InsightsEarnings {
             shifts: adapted.inputs,
             rates: policies.rates,
             calendars: policies.calendars,
-            // Unclamped, for the reason the legacy build above records: this
+            // Unclamped, for the reason this file's header records: this
             // page has never applied a to-date cutoff, and saying so once in
             // the stamp beats passing it at every query site.
             asOf: CivilDay(.distantFuture, in: payrollTimeZone),
@@ -183,23 +178,15 @@ enum InsightsEarnings {
         /// Nil only when the inputs could not be canonically fingerprinted,
         /// which is a refusal and renders as unavailable, never as `$0.00`.
         let snapshot: EarningsSnapshot?
-        /// The rows `StatsEngine` analyses, already flattened out of
-        /// whichever representation built this dataset.
+        /// The rows `StatsEngine` analyses, shaped from the records that
+        /// built this dataset by `StatsRecordAdapter`.
         ///
-        /// Rows rather than the raw grouping, and `TipRecord` rather than
-        /// `TipEntry`, so that **no consumer can tell which representation
-        /// is underneath**. That is the whole point: this page reads the
-        /// legacy side before the server converts an account and the new
-        /// side after, and a consumer that could see the difference is a
-        /// consumer that could be switched half-way. The measured cost of
-        /// letting a caller reach past the builder is on the record — the
-        /// direct `entries:` call this type used to expose is exactly how
-        /// `PeriodsView` and this screen stayed unswitched while every
-        /// parity gate passed.
+        /// Rows rather than the raw records, so a consumer cannot reach past
+        /// the builder and read a different set of shifts than the snapshot
+        /// was built from.
         let tipRecords: [TipRecord]
-        /// Every shift id in the grouping the snapshot was built from, for
-        /// `pricing`'s totality check. Order is the grouping's: newest day
-        /// first, lunch before dinner.
+        /// Every shift id in the records the dataset holds, for `pricing`'s
+        /// totality check. Order is the records' own.
         let shiftIDs: [UUID]
     }
 
@@ -248,28 +235,18 @@ enum InsightsEarnings {
     ///
     /// 1. The basis is not wage-inclusive (`.off`, `.partial`, `.unavailable`).
     /// 2. There is no snapshot.
-    /// 3. **The map would not be total over the grouping.** Every group in
-    ///    `dataset.shiftDays` is a shift `StatsEngine` will hold and price, so
+    /// 3. **The map would not be total over the dataset.** Every id in
+    ///    `dataset.shiftIDs` is a shift `StatsEngine` will hold and price, so
     ///    every one of them has to be in the map. A valuation missing for any
     ///    one of them would leave the engine pricing that shift on tips and
     ///    its neighbours on earned income, which is exactly the mixed basis
     ///    this file exists to prevent — so the page collapses to tips rather
     ///    than half-pricing itself.
     ///
-    ///    That is a reachable state and not just a paranoid guard:
-    ///    `LegacySnapshotBridge.snapshot(shifts:)` **`compactMap`s** its
-    ///    groups through `LegacyLedgerBridge.shiftInput`, so a group that
-    ///    cannot produce a `ShiftInput` is silently absent from the snapshot
-    ///    while remaining present in the engine's records.
-    ///
-    ///    The other half of totality is that the two sides agree on a shift's
-    ///    ID at all. They do only because the view builds `StatsEngine` with
-    ///    the same grid calendar `build` grouped with: a legacy `TipEntry`
-    ///    with `shiftID == nil` takes a `ShiftDays.deterministicShiftID`
-    ///    derived from `calendar.startOfDay(...)`, so a device-zone grouping
-    ///    under a payroll-zone engine mints two different ids for one shift.
-    ///    `InsightsPricingTotalityTests` pins that agreement on a nil-`shiftID`
-    ///    row across two zones.
+    ///    Every record becomes one `ShiftInput` carrying the record's own id,
+    ///    so the two sides agree on a shift's id by construction and the
+    ///    guard is not expected to fire; it is what keeps a future gap from
+    ///    becoming a silently mixed comparison.
     ///
     ///    This is where the guarantee has to live: `StatsEngine.cents(of:)`
     ///    sees one shift at a time and has no second basis to fall the whole
@@ -416,24 +393,6 @@ enum InsightsEarnings {
         let coveredShiftCount: Int
         /// Shifts in the window, covered or not.
         let totalShiftCount: Int
-
-        /// "across 4 of 5 shifts", or "across 5 shifts" when the rate speaks
-        /// for all of them and the sample is still thin. With full coverage
-        /// at `InsightsNumbersGrid.minimumShiftsForFullSample` or more, empty:
-        /// the count is no longer a warning (Tyler, 2026-11-08).
-        ///
-        /// `docs/METRICS.md`'s presentation rules say `.partial` "makes $/hr
-        /// show 'N of M shifts'". With full coverage, "5 of 5 shifts" is a
-        /// sentence that adds no fact, so the fraction appears only when there
-        /// is a shortfall to disclose — the same rule
-        /// `HistoryEarnings.hourlyRateCaption` applies to the same metric.
-        var coverage: String {
-            guard coveredShiftCount < totalShiftCount else {
-                guard coveredShiftCount < InsightsNumbersGrid.minimumShiftsForFullSample else { return "" }
-                return "across \(CompletenessCopy.shiftCount(coveredShiftCount))"
-            }
-            return "across \(coveredShiftCount) of \(CompletenessCopy.shiftCount(totalShiftCount))"
-        }
     }
 }
 
@@ -486,16 +445,6 @@ enum InsightsBasis: Equatable {
     /// it maps to: with no dataset the chart yields no points at all.
     var chartMetric: EarningsChartMetric {
         isWageInclusive ? EarningsChartMetric.earnedIncome : EarningsChartMetric.nonWageEarnings
-    }
-
-    /// Which registry metric the page's figures are derived from, so a copy
-    /// test can assert the note and the numbers name the same one.
-    var metric: MetricID? {
-        switch self {
-        case .unavailable: return nil
-        case .earnedIncome: return .earnedIncome
-        case .nonWageEarnings: return .nonWageEarnings
-        }
     }
 
     /// The one sentence the page prints above its money, or nil when there is

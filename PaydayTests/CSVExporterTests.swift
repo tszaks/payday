@@ -65,7 +65,7 @@ struct CSVExporterTests {
             ShiftRecord(workDate: date(2026, 7, 8), cashTipsCents: 3_200,
                         creditTipsCents: 8_600, tipOutCents: 1_500)
         ]
-        let csv = CSVExporter.export(records: records, paycheckRecords: [], calculator: calculator)
+        let csv = CSVExporter.export(records: records, paycheckRecords: [], calculator: calculator, valuations: [:])
         let rows = csv.split(separator: "\n")
         #expect(rows.count == 2) // header + one shift
         let fields = rows[1].split(separator: ",", omittingEmptySubsequences: false).map(String.init)
@@ -79,7 +79,7 @@ struct CSVExporterTests {
     @Test("hours, start, end, sales, servers, and tip-out columns are blank when nothing was logged for them")
     func blankColumnsWhenUnset() {
         let records = [ShiftRecord(workDate: date(2026, 7, 8), cashTipsCents: 5_000)]
-        let csv = CSVExporter.export(records: records, paycheckRecords: [], calculator: calculator)
+        let csv = CSVExporter.export(records: records, paycheckRecords: [], calculator: calculator, valuations: [:])
         let fields = csv.split(separator: "\n")[1].split(separator: ",", omittingEmptySubsequences: false).map(String.init)
         #expect(fields[4] == "") // gratuity/fees
         #expect(fields[5] == "") // tip-out
@@ -102,7 +102,7 @@ struct CSVExporterTests {
             )
         )
 
-        let csv = CSVExporter.export(records: [record], paycheckRecords: [], calculator: calculator)
+        let csv = CSVExporter.export(records: [record], paycheckRecords: [], calculator: calculator, valuations: [:])
         let fields = csv.split(separator: "\n")[1].split(separator: ",", omittingEmptySubsequences: false).map(String.init)
 
         #expect(fields[3] == "121.36")
@@ -114,7 +114,7 @@ struct CSVExporterTests {
     @Test("servers column exports the canonical count when logged")
     func serversColumnPopulated() {
         let records = [ShiftRecord(workDate: date(2026, 7, 8), cashTipsCents: 5_000, serverCount: 3)]
-        let csv = CSVExporter.export(records: records, paycheckRecords: [], calculator: calculator)
+        let csv = CSVExporter.export(records: records, paycheckRecords: [], calculator: calculator, valuations: [:])
         let fields = csv.split(separator: "\n")[1].split(separator: ",", omittingEmptySubsequences: false).map(String.init)
         #expect(fields[11] == "3")
     }
@@ -126,7 +126,7 @@ struct CSVExporterTests {
         let clockIn = calendar.date(bySettingHour: 17, minute: 30, second: 0, of: day)!
         let clockOut = calendar.date(bySettingHour: 22, minute: 0, second: 0, of: day)!
         let records = [ShiftRecord(workDate: day, cashTipsCents: 5_000, clockIn: clockIn, clockOut: clockOut)]
-        let csv = CSVExporter.export(records: records, paycheckRecords: [], calculator: calculator)
+        let csv = CSVExporter.export(records: records, paycheckRecords: [], calculator: calculator, valuations: [:])
         let fields = csv.split(separator: "\n")[1].split(separator: ",", omittingEmptySubsequences: false).map(String.init)
         #expect(fields[8] == "17:30")
         #expect(fields[9] == "22:00")
@@ -141,7 +141,7 @@ struct CSVExporterTests {
             // One closeout on 7/9 → N.
             ShiftRecord(workDate: date(2026, 7, 9), cashTipsCents: 5_000)
         ]
-        let csv = CSVExporter.export(records: records, paycheckRecords: [], calculator: calculator)
+        let csv = CSVExporter.export(records: records, paycheckRecords: [], calculator: calculator, valuations: [:])
         let rows = csv.split(separator: "\n")
         #expect(rows[1].contains(",Y,"))
         #expect(rows[2].contains(",Y,"))
@@ -151,7 +151,7 @@ struct CSVExporterTests {
     @Test("a note containing a comma is quoted and escaped")
     func noteWithCommaIsQuoted() {
         let records = [ShiftRecord(workDate: date(2026, 7, 8), cashTipsCents: 5_000, note: "slow night, rainy")]
-        let csv = CSVExporter.export(records: records, paycheckRecords: [], calculator: calculator)
+        let csv = CSVExporter.export(records: records, paycheckRecords: [], calculator: calculator, valuations: [:])
         #expect(csv.contains("\"slow night, rainy\""))
     }
 
@@ -160,7 +160,7 @@ struct CSVExporterTests {
         let period = calculator.period(containing: date(2026, 7, 8))
         let records = [ShiftRecord(workDate: date(2026, 7, 8), creditTipsCents: 5_000)]
         let paycheck = PaycheckRecord(periodStart: period.start, periodEnd: period.end, paidTipsCents: 4800)
-        let csv = CSVExporter.export(records: records, paycheckRecords: [paycheck], calculator: calculator)
+        let csv = CSVExporter.export(records: records, paycheckRecords: [paycheck], calculator: calculator, valuations: [:])
         let fields = csv.split(separator: "\n")[1].split(separator: ",", omittingEmptySubsequences: false).map(String.init)
         #expect(fields[15] == "48.00")
         #expect(fields[14].contains("to"))
@@ -177,7 +177,7 @@ struct CSVExporterTests {
                         creditTipsCents: 8_600, tipOutCents: 1_500,
                         salesCents: 43_000, hoursWorked: 5)
         ]
-        let csv = CSVExporter.export(records: records, paycheckRecords: [], calculator: calculator)
+        let csv = CSVExporter.export(records: records, paycheckRecords: [], calculator: calculator, valuations: [:])
         // By header name, per E1's rule, rather than by index.
         #expect(Self.cell(csv, column: "Tip-Out") == "15.00")
         // "5.0000" and not "5": hours are now a fixed four decimal places, so
@@ -196,7 +196,7 @@ struct CSVExporterTests {
             ShiftRecord(workDate: date(2026, 7, 9), cashTipsCents: 5_000),
             ShiftRecord(workDate: date(2026, 7, 8), cashTipsCents: 5_000)
         ]
-        let csv = CSVExporter.export(records: records, paycheckRecords: [], calculator: calculator)
+        let csv = CSVExporter.export(records: records, paycheckRecords: [], calculator: calculator, valuations: [:])
         let rows = csv.split(separator: "\n")
         #expect(rows[1].hasPrefix("2026-07-08"))
         #expect(rows[2].hasPrefix("2026-07-09"))
@@ -400,7 +400,7 @@ struct CSVExporterE1Tests {
         let csv = CSVExporter.export(
             records: records, paycheckRecords: [],
             calculator: PayPeriodCalculator(
-                payrollTimeZone: PaydayTestZone.payroll, schedule: .fallback))
+                payrollTimeZone: PaydayTestZone.payroll, schedule: .fallback), valuations: [:])
         let hours = CSVExporterTests.cell(csv, column: "Hours")
         #expect(hours != "6.5", "what the shipped exporter wrote")
         #expect(hours != "6.4")
@@ -425,7 +425,7 @@ struct CSVExporterE1Tests {
         let csv = CSVExporter.export(
             records: records, paycheckRecords: [],
             calculator: PayPeriodCalculator(
-                payrollTimeZone: PaydayTestZone.payroll, schedule: .fallback))
+                payrollTimeZone: PaydayTestZone.payroll, schedule: .fallback), valuations: [:])
 
         for column in ["Non-Wage-Earnings", "Regular-Wages", "Overtime-Wages",
                        "Earned-Income", "Completeness"] {
@@ -435,6 +435,63 @@ struct CSVExporterE1Tests {
         // The hours still export, because those are a logged fact and not an
         // engine result.
         #expect(CSVExporterTests.cell(csv, column: "Hours") == "6.0000")
+    }
+
+    /// The path both screens that offer the file take: one
+    /// `HistoryEarnings.build` over the whole history, then
+    /// `CSVExporter.valuations(from:)`. Two shifts in two pay periods, so
+    /// the valuations are shown to cover the history and not one period.
+    @Test("the export carries the engine's wages for every shift in the history")
+    func exportCarriesTheSnapshotValuations() throws {
+        let earlierID = UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
+        let hours = 6.383333333333334
+        let records = [
+            ShiftRecord(id: Self.shiftID, workDate: Self.date(2026, 9, 29),
+                        cashTipsCents: 5_000, creditTipsCents: 6_500, hoursWorked: hours),
+            ShiftRecord(id: earlierID, workDate: Self.date(2026, 9, 8),
+                        creditTipsCents: 6_500, hoursWorked: hours)
+        ]
+        let policies = Self.policies()
+        let build = HistoryEarnings.build(
+            records: records,
+            policies: CompensationPolicies(rates: policies.rates, calendars: policies.calendars),
+            payrollTimeZone: PaydayTestZone.payroll
+        )
+        let snapshot = try #require(build.snapshot)
+        let calculator = PayPeriodCalculator(
+            payrollTimeZone: PaydayTestZone.payroll,
+            schedule: PaySchedule(frequency: .biweekly, anchorPeriodEnd: Self.date(2026, 10, 4))
+        )
+        let csv = CSVExporter.export(
+            records: records,
+            paycheckRecords: [],
+            calculator: calculator,
+            valuations: CSVExporter.valuations(from: build.snapshot)
+        )
+
+        // Oldest first: the earlier period's shift is row 1.
+        #expect(CSVExporterTests.cell(csv, row: 1, column: "Period") == "2026-09-07 to 2026-09-20")
+        #expect(CSVExporterTests.cell(csv, row: 2, column: "Period") == "2026-09-21 to 2026-10-04")
+        for (row, id) in [(1, earlierID), (2, Self.shiftID)] {
+            let components = try #require(snapshot.valuation(id)).components
+            // 283c/h for 383 minutes, E1's rate and hours.
+            #expect(components.regularWagesCents == 1_806)
+            #expect(components.overtimeWagesCents == 0)
+            #expect(CSVExporterTests.cell(csv, row: row, column: "Regular-Wages") == "18.06")
+            #expect(CSVExporterTests.cell(csv, row: row, column: "Overtime-Wages") == "0.00")
+            #expect(CSVExporterTests.cell(csv, row: row, column: "Completeness") == "complete")
+        }
+        #expect(try #require(snapshot.valuation(earlierID)).components.earnedIncomeCents == 8_306)
+        #expect(CSVExporterTests.cell(csv, row: 1, column: "Earned-Income") == "83.06")
+        #expect(try #require(snapshot.valuation(Self.shiftID)).components.earnedIncomeCents == 13_306)
+        #expect(CSVExporterTests.cell(csv, row: 2, column: "Earned-Income") == "133.06")
+    }
+
+    /// A refused snapshot still lets the file export, with the engine
+    /// columns blank, rather than blocking the export before a delete.
+    @Test("no snapshot gives no valuations")
+    func noSnapshotGivesNoValuations() {
+        #expect(CSVExporter.valuations(from: nil).isEmpty)
     }
 }
 
@@ -447,11 +504,45 @@ extension CSVExporterTests {
             ShiftRecord(workDate: date(2026, 7, 8), tipOutCents: 4_000, tipShareInCents: 18_000),
             ShiftRecord(workDate: date(2026, 7, 9), cashTipsCents: 1_000),
         ]
-        let csv = CSVExporter.export(records: records, paycheckRecords: [], calculator: calculator)
+        let csv = CSVExporter.export(records: records, paycheckRecords: [], calculator: calculator, valuations: [:])
         #expect(Self.cell(csv, row: 1, column: "Tip-Share-In") == "180.00")
         // Net is nonWageEarnings, which counts the share: 18000 - 4000.
         #expect(Self.cell(csv, row: 1, column: "Net") == "140.00")
         #expect(Self.cell(csv, row: 2, column: "Tip-Share-In") == "")
         #expect(CSVExporter.header.hasSuffix(",Tip-Share-In"))
+    }
+
+    // MARK: - Dates in the payroll zone
+
+    /// The zone's own midnight, built from that zone and never from the
+    /// device's, so these cases mean the same thing on any simulator.
+    private static func midnight(_ year: Int, _ month: Int, _ day: Int, in zone: TimeZone) -> Date {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = zone
+        return calendar.date(from: DateComponents(year: year, month: month, day: day))!
+    }
+
+    /// The engine reads a shift's day in the payroll zone, so the Date and
+    /// Period cells must too. A zone east of GMT is the case that broke: its
+    /// midnight is the previous day in GMT.
+    @Test("Date and Period are the payroll zone's civil days, east and west of GMT",
+          arguments: ["Asia/Tokyo", "America/Los_Angeles"])
+    func datesInPayrollZone(_ identifier: String) {
+        let zone = TimeZone(identifier: identifier)!
+        let calculator = PayPeriodCalculator(
+            payrollTimeZone: zone,
+            schedule: PaySchedule(frequency: .biweekly, anchorPeriodEnd: Self.midnight(2026, 7, 19, in: zone), firstWeekday: 2)
+        )
+        let records = [ShiftRecord(workDate: Self.midnight(2026, 7, 15, in: zone), cashTipsCents: 5_000)]
+        let csv = CSVExporter.export(records: records, paycheckRecords: [], calculator: calculator, valuations: [:])
+        #expect(Self.cell(csv, column: "Date") == "2026-07-15")
+        #expect(Self.cell(csv, column: "Period") == "2026-07-06 to 2026-07-19")
+    }
+
+    @Test("a note containing a bare carriage return is quoted")
+    func noteWithCarriageReturnIsQuoted() {
+        let records = [ShiftRecord(workDate: date(2026, 7, 8), cashTipsCents: 5_000, note: "slow\rnight")]
+        let csv = CSVExporter.export(records: records, paycheckRecords: [], calculator: calculator, valuations: [:])
+        #expect(csv.contains("\"slow\rnight\""))
     }
 }

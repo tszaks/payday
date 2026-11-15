@@ -76,19 +76,14 @@ struct ShiftRecordTests {
     /// re-adds `didSet { modifiedAt = .now }` to a `@Model` and believes it.
     ///
     /// MEASURED on the iOS 26 simulator with Swift 6: a `didSet` observer on a
-    /// `@Model` stored property never runs. The probe below counts its own
-    /// observer calls and gets zero, whether or not the object is in a
-    /// `ModelContext` and whether or not the context has been saved.
+    /// `@Model` stored property never runs. The probe that counts observer
+    /// calls lives in `SyncEditUploadTests` (`DidSetProbeModel`).
     ///
-    /// The shipped consequence is not hypothetical and is not fixed here:
-    /// `TipEntry` and `PaycheckRecord` both declare `didSet { modifiedAt =
-    /// .now }` on every stored property, so their `modifiedAt` is frozen at
-    /// insert, `clientUpdatedAt` never changes, `PaydaySyncState.changedIDs`
-    /// never reports an edited row, and Payday 1.0 cannot push an edit to an
-    /// existing tip or paycheck at all. Inserts and deletions are unaffected
-    /// (a fresh row gets a fresh `modifiedAt`; deletions go through the
-    /// pending-deletions queue).
-    @Test("CHARACTERIZATION: didSet on a @Model property never fires")
+    /// `TipEntry` and `PaycheckRecord` no longer declare `didSet` observers:
+    /// `touch(at:)` advances `modifiedAt` explicitly. This test pins the
+    /// consequence on a `TipEntry`: a bare property assignment does not
+    /// advance `modifiedAt`, whether or not the context has been saved.
+    @Test("CHARACTERIZATION: a bare assignment to a TipEntry property does not advance modifiedAt")
     func didSetOnAModelPropertyNeverFires() throws {
         let container = try ModelContainer(
             for: SharedModelContainer.schema,

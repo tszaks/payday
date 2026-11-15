@@ -6,7 +6,8 @@ import Testing
 /// wraps its assertions in `withKnownIssue` (use `expectingKnownIssues(for:)`)
 /// so CI stays green and honest: the failure is recorded as a known issue,
 /// not hidden. `KnownIssuesGateTests.knownIssueCountIsZero` asserts the list
-/// is empty when `PAYDAYCORE_RELEASE_GATE=1` (the release workflow, PR 8).
+/// is empty when `PAYDAYCORE_RELEASE_GATE=1`, which is set by hand: no
+/// workflow sets it.
 ///
 /// The list must shrink as fixtures go green, in the ordinary run and not
 /// only at release: `withKnownIssue` (without `isIntermittent: true`) records

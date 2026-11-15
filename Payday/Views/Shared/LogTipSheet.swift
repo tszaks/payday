@@ -144,8 +144,7 @@ struct LogTipSheet: View {
     @Environment(\.requestReview) private var requestReview
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Query private var paycheckRecords: [PaycheckRecord]
-    /// The other representation. SmartNudgeScheduler picks between this and
-    /// converted shift counts twice.
+    /// The shifts the sheet's preview, suggestions and scheduler calls read.
     @Query private var shiftRecords: [ShiftRecord]
 
     let target: TipEntrySheetTarget
@@ -226,6 +225,10 @@ struct LogTipSheet: View {
     /// error: claiming a sync is in progress when it is not would be the
     /// same defect pointed the other way.
     @State private var saveFailure: ShiftCommands.Failure?
+    /// Set once the shift is deleted, so the dismissal's `.onDisappear`
+    /// flush (and a debounced live save still in flight) does not write to
+    /// the record that was just removed.
+    @State private var didDelete = false
 
     /// New-entry only: the details group opens collapsed behind a one-line
     /// belief sentence (ShiftBeliefLine) instead of every row at full volume.
@@ -310,10 +313,7 @@ struct LogTipSheet: View {
             _draftRecordedAt = State(initialValue: .now)
         case .editShift(let record):
             // No anchor, and no upgrade. A `ShiftRecord` is the whole shift,
-            // so every value here is already the shift-level truth -- the
-            // `.edit` path above seeds from one row and then has
-            // `seedShiftDetailDefaults` resolve across siblings once `@Query`
-            // catches up, and that entire dance has nothing to do here.
+            // so every value here is already the shift-level truth.
             _cashCents = State(initialValue: record.cashTipsCents)
             _creditCents = State(initialValue: record.creditTipsCents)
             _date = State(initialValue: record.workDate)
@@ -476,10 +476,8 @@ struct LogTipSheet: View {
         return creditCount >= 3
     }
 
-    /// Runs once at appearance, before seedShiftDetailDefaults — a resolved
-    /// live-shift punch pair pre-empts the weekday-suggestion fill-in below
-    /// (which only fires when clockIn/clockOut are still nil) rather than
-    /// competing with it.
+    /// Runs once at appearance — a resolved live-shift punch pair fills
+    /// Started/Ended when the sheet was not handed them at init.
     private func applyLiveShiftEndModeIfNeeded() {
         guard case .new(_, let providedClockIn, let providedClockOut) = target else { return }
         guard let mode = LiveShiftEndModeResolver.resolve(
@@ -495,32 +493,9 @@ struct LogTipSheet: View {
         isEndingLiveShift = true
     }
 
-    /// Pulled out of the view body's onAppear closure — inlining this much
-    /// logic directly in a chained-modifier closure was slow enough to trip
-    /// the type checker's time budget.
-    private func seedShiftDetailDefaults() {
-        switch target {
-        case .new:
-            // Nothing is seeded from history — Tyler's no-assumptions law
-            // (2026-07-27): every shift is different, patterns never
-            // pre-populate a field. Only facts prefill: a live session's
-            // exact punches (init) and today's date. The role (PR B) is no
-            // exception: a wrong role silently moves the wage, and the chips
-            // are one tap, most recent first. The job (PR E1) starts on the
-            // primary, which is a setting, not a pattern: its tag is nil.
-            break
-        case .editShift:
-            // Nothing to upgrade: the record already carried every
-            // shift-level value into `init`, so re-resolving would be work
-            // that can only introduce a difference.
-            break
-        }
-    }
-
     private func handleSheetAppear() {
         prefersCreditFirstCache = computePrefersCreditFirst()
         applyLiveShiftEndModeIfNeeded()
-        seedShiftDetailDefaults()
     }
 
     /// Top to bottom, this sheet is ordered by a deliberate hierarchy:
@@ -722,12 +697,6 @@ struct LogTipSheet: View {
                     commitLiveEdit()
                     receiptScanSnapshot = nil
                     isDeferringReceiptScanRowDeletion = false
-                    // LAST, after `commitLiveEdit` above, and the order is
-                    // the whole point: this is the legacy write the deferral
-                    // exists to protect. Releasing the hold first would leave
-                    // a window in which a sync could promote the account
-                    // between the release and the write, which is precisely
-                    // the straddle being prevented.
                 }
             }
         }
@@ -813,10 +782,10 @@ struct LogTipSheet: View {
                     .animation(reduceMotion ? nil : PaydayAnimation.premiumSpring, value: facts.total.cents)
                     .lineLimit(1)
                     .minimumScaleFactor(0.5)
-                // "Wages estimated from your current rate" when the rate
-                // history was never confirmed, or what is missing and for how
-                // many shifts when the draft is partial. The sheet showed
-                // neither before, so an estimate read exactly like a fact.
+                // What is missing and for how many shifts when the draft is
+                // partial (`CompletenessCopy` decides; an estimate is
+                // disclosed in Settings, not here). Without it a partial
+                // total reads exactly like a fact.
                 if let caption = facts.total.caption {
                     Text(caption)
                         .font(PaydayFont.caption2)
@@ -1029,7 +998,7 @@ struct LogTipSheet: View {
                 HStack {
                     Text("Tip-out")
                     Spacer()
-                    CompactCurrencyField(cents: $tipOutCents, field: .tipOut, focusedField: $focusedCurrencyField, autoFocus: debugAutoFocusTipOut)
+                    CompactCurrencyField(label: "Tip-out", cents: $tipOutCents, field: .tipOut, focusedField: $focusedCurrencyField, autoFocus: debugAutoFocusTipOut)
                 }
                 .padding(.vertical, 14)
                 .id(CurrencyRowField.tipOut)
@@ -1040,7 +1009,7 @@ struct LogTipSheet: View {
                 HStack {
                     Text("Tip share received")
                     Spacer()
-                    CompactCurrencyField(cents: $tipShareInCents, field: .tipShareIn, focusedField: $focusedCurrencyField)
+                    CompactCurrencyField(label: "Tip share received", cents: $tipShareInCents, field: .tipShareIn, focusedField: $focusedCurrencyField)
                 }
                 .padding(.vertical, 14)
                 .id(CurrencyRowField.tipShareIn)
@@ -1058,7 +1027,7 @@ struct LogTipSheet: View {
                                 .foregroundStyle(PaydayColor.textSecondary)
                         }
                         Spacer()
-                        CompactCurrencyField(cents: gratuityFeesBinding, field: .gratuityFees, focusedField: $focusedCurrencyField)
+                        CompactCurrencyField(label: "Gratuity & fees", cents: gratuityFeesBinding, field: .gratuityFees, focusedField: $focusedCurrencyField)
                     }
                     .padding(.vertical, 14)
                     .id(CurrencyRowField.gratuityFees)
@@ -1068,16 +1037,17 @@ struct LogTipSheet: View {
                     HStack {
                         Text("Total amount")
                         Spacer()
-                        CompactCurrencyField(cents: totalAmountBinding, field: .receiptTotal, focusedField: $focusedCurrencyField)
+                        CompactCurrencyField(label: "Total amount", cents: totalAmountBinding, field: .receiptTotal, focusedField: $focusedCurrencyField)
                     }
                     .padding(.vertical, 14)
                     .id(CurrencyRowField.receiptTotal)
                     Divider()
                 }
                 HStack {
-                    Text(receiptMetrics?.totalAmountCents == nil ? "Sales" : "Gross sales")
+                    let salesLabel = receiptMetrics?.totalAmountCents == nil ? "Sales" : "Gross sales"
+                    Text(salesLabel)
                     Spacer()
-                    CompactCurrencyField(cents: $salesCents, field: .sales, focusedField: $focusedCurrencyField)
+                    CompactCurrencyField(label: salesLabel, cents: $salesCents, field: .sales, focusedField: $focusedCurrencyField)
                 }
                 .padding(.vertical, 14)
                 .id(CurrencyRowField.sales)
@@ -1092,7 +1062,7 @@ struct LogTipSheet: View {
                 HStack {
                     Text("Servers")
                     Spacer()
-                    CompactCountField(count: serverCountBinding, field: .servers, focusedField: $focusedCurrencyField, autoFocus: debugAutoFocusServers)
+                    CompactCountField(label: "Servers", count: serverCountBinding, field: .servers, focusedField: $focusedCurrencyField, autoFocus: debugAutoFocusServers)
                 }
                 .padding(.vertical, 14)
                 .id(CurrencyRowField.servers)
@@ -1106,8 +1076,8 @@ struct LogTipSheet: View {
 
     /// The Job row: one chip per job in Settings, primary first, shown only
     /// with two or more jobs. One tap switches; the primary is preselected
-    /// on a new shift because it is a setting (seedShiftDetailDefaults'
-    /// law forbids seeding from HISTORY, not from settings).
+    /// on a new shift because it is a setting (the no-assumptions rule
+    /// forbids seeding from HISTORY, not from settings).
     @ViewBuilder
     private var jobRow: some View {
         let jobFacts = LogShiftJobFacts(policies: policyStore.policies, current: jobName)
@@ -1241,7 +1211,7 @@ struct LogTipSheet: View {
             HStack {
                 Text("Guests")
                 Spacer()
-                CompactCountField(count: guestCountBinding, field: .guests, focusedField: $focusedCurrencyField, maxDigits: 3)
+                CompactCountField(label: "Guests", count: guestCountBinding, field: .guests, focusedField: $focusedCurrencyField, maxDigits: 3)
             }
             .padding(.vertical, 14)
             .id(CurrencyRowField.guests)
@@ -1260,7 +1230,7 @@ struct LogTipSheet: View {
                     }
                 }
                 Spacer()
-                CompactCountField(count: tableCountBinding, field: .tables, focusedField: $focusedCurrencyField, maxDigits: 3)
+                CompactCountField(label: "Tables", count: tableCountBinding, field: .tables, focusedField: $focusedCurrencyField, maxDigits: 3)
             }
             .padding(.vertical, 14)
             .id(CurrencyRowField.tables)
@@ -1924,6 +1894,7 @@ struct LogTipSheet: View {
     /// Coalesce keypad and text-field edits into one SwiftData mutation and
     /// one WidgetKit refresh after the user pauses, then flush on dismissal.
     private func commitLiveEdit() {
+        guard !didDelete else { return }
         // The record branch is a straight field update, where the legacy one
         // below has to reconcile two rows and re-derive which of them owns
         // the shift-level facts. That reconciliation is the two-row model's
@@ -1972,10 +1943,10 @@ struct LogTipSheet: View {
                 }
             } catch {
                 // Rolled back, so the shift is left exactly as it was rather
-                // than half-edited. Same reasoning as the legacy branch,
-                // including the known gap tracked in issue #26: this also
-                // runs as the `.onDisappear` flush, where an alert cannot be
-                // seen.
+                // than half-edited. The known gap tracked in issue #26: this
+                // also runs as the `.onDisappear` flush, where an alert
+                // cannot be seen.
+                saveFailure = error as? ShiftCommands.Failure
                 saveFailed = true
             }
             return
@@ -2011,9 +1982,9 @@ struct LogTipSheet: View {
     }
 
     private func delete() {
-        // The record branch FIRST, and it must exist: with only the `.edit`
-        // branch below, an `.editShift` target fell through to `dismiss()`
-        // and the sheet closed having deleted nothing. A delete that silently
+        // The record branch must exist: an `.editShift` target that fell
+        // through to `dismiss()` would close the sheet having deleted
+        // nothing. A delete that silently
         // does nothing is worse than one that fails loudly, because the user
         // watches the sheet close and believes it worked.
         if let record = editingRecord {
@@ -2042,6 +2013,7 @@ struct LogTipSheet: View {
                 saveFailed = true
                 return
             }
+            didDelete = true
             dismiss()
             return
         }
@@ -2059,16 +2031,13 @@ struct LogTipSheet: View {
 /// CompactCountField just below for the plain-integer sibling this powers
 /// (Servers).
 private struct CompactCurrencyField: View {
+    /// The row's own visible label, so VoiceOver names the field the same
+    /// way the screen does; the row's `Text` is a separate element.
+    let label: String
     @Binding var cents: Int
     let field: CurrencyRowField
     var focusedField: FocusState<CurrencyRowField?>.Binding
     var autoFocus: Bool = false
-    /// A same-weekday suggestion, shown only while cents == 0 — a hint to
-    /// tap into, never a value that saves on its own. See LogTipSheet's
-    /// seedShiftDetailDefaults: pre-filling this straight into `cents` used
-    /// to let a rushed Save silently attach last Friday's tip-out to
-    /// tonight.
-    var placeholderCents: Int? = nil
     @State private var digitsText: String = ""
 
     private static let maxDigits = 7
@@ -2076,28 +2045,18 @@ private struct CompactCurrencyField: View {
 
     var body: some View {
         ZStack(alignment: .trailing) {
-            if cents == 0, let placeholderCents {
-                // Secondary, not tertiary: textTertiary falls short of
-                // 4.5:1 contrast against fieldBackground in both modes, and
-                // a placeholder hint still has to be legible to read at all.
-                Text(Money.string(fromCents: placeholderCents))
-                    .font(PaydayFont.body)
-                    .monospacedDigit()
-                    .foregroundStyle(PaydayColor.textSecondary)
-                    .accessibilityHidden(true)
-            } else {
-                Text(Money.string(fromCents: cents))
-                    .font(PaydayFont.body)
-                    .monospacedDigit()
-                    .foregroundStyle(cents == 0 ? PaydayColor.textSecondary : PaydayColor.textPrimary)
-                    .contentTransition(.numericText())
-                    .accessibilityHidden(true)
-            }
+            Text(Money.string(fromCents: cents))
+                .font(PaydayFont.body)
+                .monospacedDigit()
+                .foregroundStyle(cents == 0 ? PaydayColor.textSecondary : PaydayColor.textPrimary)
+                .contentTransition(.numericText())
+                .accessibilityHidden(true)
             TextField("", text: $digitsText)
                 .keyboardType(.numberPad)
                 .focused(focusedField, equals: field)
                 .opacity(0.01)
                 .multilineTextAlignment(.trailing)
+                .accessibilityLabel(label)
                 .accessibilityValue(Money.string(fromCents: cents))
         }
         .padding(.horizontal, 10)
@@ -2130,20 +2089,21 @@ private struct CompactCurrencyField: View {
 }
 
 /// CompactCurrencyField's plain-integer sibling — same digit-shift field,
-/// same focus-ring and externally-driven FocusState, same placeholder
-/// treatment, but for a count rather than money: no currency formatting,
+/// same focus-ring and externally-driven FocusState, but for a count
+/// rather than money: no currency formatting,
 /// no unit suffix (the row's own label already says "Servers"), capped at
 /// 2 digits. A count reads as a fact worth stating plainly or not at all —
 /// unlike an amount, which always shows $0.00 even unset, a count with
-/// neither a real value nor a placeholder shows nothing rather than a
+/// real value shows nothing rather than a
 /// misleading "0" (a real "worked with zero servers" fact this app has no
 /// way to distinguish from "never asked" if it rendered the same as unset).
 private struct CompactCountField: View {
+    /// See `CompactCurrencyField.label`.
+    let label: String
     @Binding var count: Int
     let field: CurrencyRowField
     var focusedField: FocusState<CurrencyRowField?>.Binding
     var autoFocus: Bool = false
-    var placeholderCount: Int? = nil
     var maxDigits: Int = 2
     @State private var digitsText: String = ""
 
@@ -2151,15 +2111,7 @@ private struct CompactCountField: View {
 
     var body: some View {
         ZStack(alignment: .trailing) {
-            if count == 0, let placeholderCount {
-                // textSecondary, not textTertiary — see CompactCurrencyField's
-                // same contrast note above.
-                Text("\(placeholderCount)")
-                    .font(PaydayFont.body)
-                    .monospacedDigit()
-                    .foregroundStyle(PaydayColor.textSecondary)
-                    .accessibilityHidden(true)
-            } else if count > 0 {
+            if count > 0 {
                 Text("\(count)")
                     .font(PaydayFont.body)
                     .monospacedDigit()
@@ -2172,6 +2124,7 @@ private struct CompactCountField: View {
                 .focused(focusedField, equals: field)
                 .opacity(0.01)
                 .multilineTextAlignment(.trailing)
+                .accessibilityLabel(label)
                 .accessibilityValue(count == 0 ? "Not logged" : "\(count)")
         }
         .padding(.horizontal, 10)

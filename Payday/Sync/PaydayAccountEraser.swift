@@ -91,15 +91,16 @@ enum PaydayAccountEraser {
         preferencesStore.isCardTipsPaidAtClose = false
         preferencesStore.appearance = .system
 
-        // Identity-bound shared state. Left behind, the stale registration
-        // made `canRegister` refuse the next Apple ID on this device with
-        // accountMismatch — a lockout with no account left to mismatch.
+        // Identity-bound shared state: the explicit sign-out and app-lock
+        // flags. Left behind, the next account on this device would inherit
+        // the deleted account's sign-out and lock policy. The registration
+        // itself is cleared by PaydaySyncState.forget in the caller.
         PaydayAuthorizationState.reset()
 
         // Nothing to clear here for the shift cache: every durable fact about
         // it lives in the sync checkpoint, and this function's one caller
-        // already drops that whole key with PaydaySyncState.forget(userID:)
-        // (PaydayCloudGate.swift:304-306). A second per-account store would
+        // already drops that whole key with PaydaySyncState.forget(userID:).
+        // A second per-account store would
         // need its own eraser line and would be missed exactly once.
 
         // The widget reads the shared app-group store directly, so it has to

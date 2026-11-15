@@ -27,11 +27,11 @@ import SwiftUI
 ///
 /// ## And why it is not a second hand-maintained list
 ///
-/// The signal is `EarningsStore.triggerNames` itself, merged: the exact four
+/// The signal is `EarningsStore.triggerNames` itself, merged: the exact set of
 /// notifications the app's own snapshot owner rebuilds on. There is no
 /// second opinion here about what can move an input, which is the whole
 /// complaint rule 3 is making. A screen using this is subscribed to the same
-/// set `EarningsStore` is, so a fifth trigger added there reaches this screen
+/// set `EarningsStore` is, so a new trigger added there reaches this screen
 /// with no edit.
 ///
 /// The facts cache still keys on `stamp.digest` per rule 3. This only decides
@@ -46,7 +46,7 @@ enum LegacySnapshotRevision {
     /// Built per call rather than held in a `static let`: a merged
     /// `NotificationCenter.Publisher` is not `Sendable`, and the only honest
     /// way to hold one in global storage would be to claim otherwise.
-    /// Constructing it is four dictionary lookups.
+    /// Constructing it is a handful of dictionary lookups.
     static func publisher() -> Publishers.MergeMany<NotificationCenter.Publisher> {
         Publishers.MergeMany(
             EarningsStore.triggerNames.map {

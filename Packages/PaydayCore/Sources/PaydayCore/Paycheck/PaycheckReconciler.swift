@@ -91,10 +91,10 @@ public enum PaycheckReconciler {
             + components.wagesCents
     }
 
-    /// What the person already took home before payday when card tips are
-    /// paid at close: cash + card + tip share received − tip-out. The
-    /// payday card's "Tips already paid" line. Zero when nothing is paid
-    /// at close.
+    /// What the person already took home before payday. The payday card's
+    /// "Tips already paid" line. With card tips on the check this is the
+    /// cash already in hand (`voluntaryCashCents`); paid at close it is
+    /// cash + card + tip share received − tip-out.
     public static func tipsAlreadyPaidCents(
         from components: EarningsComponents,
         cardTipsOnCheck: Bool

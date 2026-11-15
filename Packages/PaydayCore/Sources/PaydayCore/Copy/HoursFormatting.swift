@@ -46,13 +46,15 @@ public enum HoursFormatting {
         return "\(sign)\(magnitude / 60):\(String(format: "%02d", magnitude % 60))"
     }
 
-    /// The conversion the adapter performs, in one place so the CSV and the
-    /// ledger cannot disagree about what 6.3833 hours means in minutes.
+    /// The conversion the adapter performs. It calls
+    /// `WorkedMinutes.minutes(fromHours:)`, the one place that conversion
+    /// lives, so the CSV and the ledger cannot disagree about what 6.3833
+    /// hours means in minutes.
     ///
     /// Rounded rather than truncated: `6.383333333333334 * 60` is
     /// `383.00000000000006` on some inputs and `382.99999999999994` on
     /// others, and truncation would silently lose a minute.
     public static func minutes(fromHours hours: Double) -> Int {
-        Int((hours * 60).rounded())
+        WorkedMinutes.minutes(fromHours: hours)
     }
 }

@@ -2,8 +2,8 @@ import Foundation
 
 /// A real paycheck as entered from the stub. Only `paidTipsCents` is
 /// required; every other line is optional because stubs differ and the
-/// user may enter only what they have. `PaycheckReconciler` (PR 4) compares
-/// these against the engine's expected figures for the same period.
+/// user may enter only what they have. `EarningsSnapshot.paycheck(periodEnd:)`
+/// pairs these with the expected figures for the same period.
 public struct PaycheckInput: Hashable, Codable, Sendable, Identifiable {
     public var id: UUID
     public var periodStart: CivilDay

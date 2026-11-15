@@ -90,7 +90,7 @@ struct CompletenessCopyTests {
         )
     }
 
-    @Test("estimated carries its caption; complete and off carry none")
+    @Test("estimated, complete, off and noShifts carry no caption")
     func otherCaptions() {
         #expect(CompletenessCopy.caption(.estimated) == nil)
         #expect(CompletenessCopy.caption(.complete) == nil)
@@ -328,6 +328,33 @@ struct CompletenessCopyTests {
         let caption = CompletenessCopy.caption(
             .partial(missingHours: 3, missingRate: 0), unpricedDays: days)
         #expect(caption == "wages missing for 3 shifts")
+    }
+
+    /// The days come one per unpriced SHIFT, so a lunch and a dinner on the
+    /// same day arrive as the same day twice. The caption names a day once.
+    @Test("two unpriced shifts on one day name that day once")
+    func twoShiftsOnOneDayNameItOnce() {
+        let day = CivilDay(year: 2026, month: 8, day: 31)
+        let caption = CompletenessCopy.caption(
+            .partial(missingHours: 2, missingRate: 0), unpricedDays: [day, day])
+        #expect(caption == "wages missing for Aug 31 -- add hours to price it")
+    }
+
+    @Test("a repeated day still leaves room to name a second day")
+    func aRepeatedDayCountsOnceTowardsTwo() {
+        let first = CivilDay(year: 2026, month: 8, day: 31)
+        let second = CivilDay(year: 2026, month: 9, day: 2)
+        let caption = CompletenessCopy.caption(
+            .partial(missingHours: 3, missingRate: 0), unpricedDays: [first, first, second])
+        #expect(caption == "wages missing for Aug 31 and Sep 2 -- add hours to price it")
+    }
+
+    @Test("three distinct days fall back to the count, even with a repeat among them")
+    func threeDistinctDaysWithARepeatFallBack() {
+        let days = [1, 1, 2, 3].map { CivilDay(year: 2026, month: 8, day: $0) }
+        let caption = CompletenessCopy.caption(
+            .partial(missingHours: 4, missingRate: 0), unpricedDays: days)
+        #expect(caption == "wages missing for 4 shifts")
     }
 
     /// A missing RATE is not a missing day -- no hours to add, so naming a

@@ -50,24 +50,17 @@ struct BreakdownRow: Identifiable {
 
 /// The drawer's contents, composed from ONE `EarningsResult`.
 ///
-/// Dashboard and Period detail each build this list by hand, from their own
-/// arithmetic, in the same order, with the same labels — and have drifted:
-/// Period detail back-derives its tip-out as
+/// Dashboard and Period detail each used to build this list by hand, from
+/// their own arithmetic, in the same order, with the same labels — and had
+/// drifted: Period detail back-derived its tip-out as
 /// `max(0, cash + credit + gratuity − net)` instead of reading the tip-out
 /// the ledger already knew, so any rounding disagreement upstream becomes a
 /// phantom "Tipped out" row.
 ///
-/// **NOT YET CALLED BY EITHER SCREEN.** These four functions exist, are
-/// tested (`HeroBreakdownDrawerSnapshotTests`) and are the one composition
-/// wave 1 swaps onto — but as of PR 5 wave 0 they have zero production
-/// callers. `DashboardView.heroWithDrawer` and `PeriodDetailFacts` still
-/// compose their own rows, still back-derive the tip-out, and still write
-/// `tipOutCents > 0 ? "You kept" : "Total"` (DashboardView.swift:570,
-/// PeriodDetailView.swift:264) instead of `CompletenessCopy`'s label, so
-/// Dashboard can still print "Total" over a partial period. The swap needs
-/// the hero PERIOD's `EarningsResult`, which is the hero migration itself:
-/// group 2.1 (Dashboard) and group 2.4 (Period detail), both wave 1. Do not
-/// read `docs/METRICS.md` rows [SC-02] or [SC-03] as closing those.
+/// These functions are the one composition behind the drawer, tested by
+/// `HeroBreakdownDrawerSnapshotTests`. Dashboard (`DashboardFacts`), Period
+/// detail (`PeriodDetailFacts`) and Calendar all call them, so no screen
+/// composes its own rows or back-derives the tip-out any more.
 ///
 /// Order is fixed and is the reason the component exists: everything that
 /// ADDS, then the subtotal, then everything that SUBTRACTS, then what is
@@ -152,14 +145,6 @@ extension BreakdownRow {
         return BreakdownRow(figure.label, cents: figure.cents, emphasized: true)
     }
 
-    /// The collapsed lip: the one or two figures that have to reconcile to
-    /// the hero directly above them.
-    ///
-    /// It used to show gross cash + credit, which sum to MORE than the hero
-    /// (tip-out is already out of the hero, wages are already in), so the
-    /// closed card presented two figures that could not be squared.
-    /// Whether there is anything worth opening the drawer for. A selection
-    /// with no tips at all (a wage-only shift) has no decomposition to show.
     /// A row's amount as it renders: negatives take a real U+2212 minus, and
     /// a figure the engine could not produce takes the placeholder rather
     /// than `$0.00` (PR 5 adapter contract, rule 4).
@@ -174,6 +159,8 @@ extension BreakdownRow {
         return Money.wholeDollarString(fromCents: cents)
     }
 
+    /// Whether there is anything worth opening the drawer for. A selection
+    /// with no tips at all (a wage-only shift) has no decomposition to show.
     static func hasBreakdown(_ result: EarningsResult) -> Bool {
         let components = result.knownComponents
         return components.voluntaryCashCents > 0

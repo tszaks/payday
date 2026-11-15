@@ -23,8 +23,8 @@ let package = Package(
         .testTarget(
             name: "PaydayCoreTests",
             dependencies: ["PaydayCore"],
-            // Fixtures/*.json are shared with the Deno golden test; the
-            // directory is copied whole so Bundle.module can list it.
+            // The Fixtures directory is copied whole so Bundle.module can
+            // list it.
             resources: [
                 .copy("Fixtures")
             ],

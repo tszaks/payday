@@ -2,7 +2,7 @@
 # Parsers produce CANDIDATES. They never persist.
 #
 # The last unenforced item on PR 7's list. The property is true today --
-# none of the five parser files mentions `.insert(`, `.save()` or
+# none of the six parser files mentions `.insert(`, `.save()` or
 # `ModelContext` -- and nothing was holding it there.
 #
 # WHY IT MATTERS, rather than as tidiness: a parser's output is a GUESS. It
@@ -14,13 +14,14 @@
 # It is also the easiest rule in the codebase to break by accident, because
 # "just save it here" is one line and reads as a convenience.
 #
-# Scope: the five files under Payday/Utilities that parse or cache scan
+# Scope: the six files under Payday/Utilities that parse or cache scan
 # results. A new parser must be added to this list -- which is deliberate,
 # since deciding a file is a parser is a design judgement a lint cannot make.
 set -uo pipefail
 
 PARSERS=(
   Payday/Utilities/PaycheckAIParser.swift
+  Payday/Utilities/PaycheckOCR.swift
   Payday/Utilities/ReceiptAIParser.swift
   Payday/Utilities/ScanImageEncoder.swift
   Payday/Utilities/ScanResultCache.swift

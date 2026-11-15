@@ -6,7 +6,7 @@ import Foundation
 /// with the rates and calendars, so it syncs with them and needs no table.
 ///
 /// `schedule` is the job's own pay schedule; nil means "same as the
-/// primary". Periods still follow the primary schedule until E2.
+/// primary". A job's periods follow it (E2b).
 public struct JobPolicy: Hashable, Codable, Sendable, Identifiable {
     public var id: UUID
     /// Trimmed, at most 40 scalars (`ShiftRole` rules, the server's unit).

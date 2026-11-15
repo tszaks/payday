@@ -14,9 +14,7 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @Query private var paycheckRecords: [PaycheckRecord]
     /// Only for "does this person have any history at all", which is what
-    /// gates the one-time rate-history prompt. Both representations count:
-    /// the server-side deriver lands in a later PR 2 slice, so a device may
-    /// hold history in either one.
+    /// gates the one-time rate-history prompt.
     @Query private var shiftRecords: [ShiftRecord]
 
     @State private var firstName: String

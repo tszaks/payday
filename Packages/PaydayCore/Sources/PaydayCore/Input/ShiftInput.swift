@@ -1,7 +1,7 @@
 import Foundation
 
 /// Lunch or dinner. Named `ShiftPeriodTag` so it never collides with the
-/// app's `ShiftPeriod` while both exist; PR 5 retires the app one.
+/// app's `ShiftPeriod` (the stored model enum).
 public enum ShiftPeriodTag: String, Codable, CaseIterable, Sendable {
     case lunch
     case dinner

@@ -366,6 +366,11 @@ final class PaydayCloudState {
             return Self.localEraseFailureMessage
         }
 
+        // The erase ended the shift session in the store. Its Live Activity
+        // is a separate system object, so it is ended here: no timer keeps
+        // running on the Lock Screen for an account that is gone.
+        await ShiftSessionManager.end(stashPendingEnd: false)
+
         if let deletedUserID {
             PaydaySyncState.forget(userID: deletedUserID)
         }
@@ -549,8 +554,6 @@ struct PaydayCloudGate<Content: View>: View {
             DebugSeeder.seedIfRequested(
                 scheduleStore: scheduleStore,
                 insightsStore: insightsStore,
-                moveLedgerStore: moveLedgerStore,
-                policyStore: policyStore,
                 preferencesStore: preferencesStore
             )
             #endif

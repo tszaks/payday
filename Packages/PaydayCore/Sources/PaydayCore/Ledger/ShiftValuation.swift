@@ -50,8 +50,7 @@ public enum WageUnavailableReason: String, Hashable, Codable, CaseIterable, Send
 
 /// One shift's wage outcome. `.valued` carries `assumed: true` when the rate
 /// policy that produced it has `provenance == .assumedFromLegacySetting`, so
-/// completeness can report "wages estimated from your current rate"
-/// (Design 1, step 8).
+/// completeness can report `.estimated` (Design 1, step 8).
 public enum WageValuation: Hashable, Codable, Sendable {
     case valued(WageComponents, assumed: Bool)
     case unavailable(WageUnavailableReason)

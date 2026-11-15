@@ -330,7 +330,7 @@ struct PaycheckAuditWagesVsComputedTests {
         #expect(finding(result, id: "wages-vs-computed")?.severity != .reconciles)
     }
 
-    @Test("one cent past the $1 tolerance, stub under computed, is a discrepancy with exact copy")
+    @Test("a stub $150 under computed is a discrepancy with exact copy")
     func underComputedIsDiscrepancy() {
         let result = findings(stub(regular: 30000), computedWages: computed)
         #expect(finding(result, id: "wages-vs-computed") == PaycheckAudit.Finding(
@@ -377,7 +377,7 @@ struct PaycheckAuditOvertimeMissingTests {
         #expect(finding(result, id: "overtime-missing") == PaycheckAudit.Finding(
             id: "overtime-missing",
             severity: .discrepancy,
-            message: "Your punches add up to 5h overtime hours this period; the stub shows no overtime pay."
+            message: "Your punches add up to 5h of overtime this period; the stub shows no overtime pay."
         ))
     }
 

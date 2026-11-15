@@ -557,7 +557,7 @@ struct EarningsSnapshotDigestTests {
     /// fingerprint. The canonical FORMAT is pinned independently by
     /// `InputManifestTests.pinnedDigest`; this pin is over W2's inputs
     /// specifically (5 shifts, 1 rate, 1 calendar, the biweekly schedule,
-    /// asOf 2026-10-02, engine 1).
+    /// asOf 2026-10-02, engine 3).
     @Test("the manifest digest is order-independent and pinned")
     func digestIsOrderIndependentAndPinned() throws {
         let fixture = try FixtureLoader.load("W2")
@@ -576,6 +576,9 @@ struct EarningsSnapshotDigestTests {
         // FORMAT is pinned independently by `InputManifestTests.pinnedDigest`,
         // whose new hex was derived with an external `shasum -a 256` over the
         // documented contract text rather than copied from the code.
+        // Re-pinned again for each engine version bump since (engine 2, daily
+        // overtime; engine 3, per-job pricing), which moves only the engine
+        // version in W2's canonical text.
         #expect(a.stamp.digest == "e285ebeb39fa2b67617eb0568c603e04fd23745f601559e889acd9d6a94c4aa5")
         #expect(a.shifts == b.shifts, "the valuations are order-independent too")
         #expect(a.stamp.generation != b.stamp.generation, "only the generation differs")

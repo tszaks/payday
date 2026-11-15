@@ -188,7 +188,7 @@ public struct InputManifest: Hashable, Codable, Sendable {
     /// Throws `ValidationError.reservedCharacter` when a free-text input
     /// would break the canonical encoding. Refusing here rather than in a
     /// precondition matters because these inputs reach us from decoded JSON
-    /// (fixtures today, synced payloads later), and a bad payload must be an
+    /// (fixtures and synced payloads), and a bad payload must be an
     /// error the caller can report, not a crash in the money path.
     public init(
         shifts: [ShiftInput],
@@ -265,10 +265,10 @@ public struct InputManifest: Hashable, Codable, Sendable {
     /// summary (digests + counts)".
     ///
     /// It is a typealias rather than a second struct because this type IS
-    /// that summary already — it holds five digests, four counts,
+    /// that summary already — it holds five digests, five counts,
     /// `engineVersion` and `asOf`, and not one byte of a shift, paycheck or
     /// policy. A separate summary struct would be a second copy of the same
-    /// eleven fields, and the two could disagree about which digest belongs
+    /// twelve fields, and the two could disagree about which digest belongs
     /// to which count.
     public typealias Summary = InputManifest
 

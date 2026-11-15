@@ -162,11 +162,15 @@ jobs:
               -v ON_ERROR_STOP=1 -f "$f"
           done
       - name: SQL concurrency tests
-        # Six facts need two or three CONCURRENT sessions, which a psql script
-        # cannot produce: the two lock variants, the try-lock loser's
+        # Eleven facts need two or three CONCURRENT sessions, which a psql
+        # script cannot produce: the two lock variants, the try-lock loser's
         # non-blocking-ness, the concurrent duplicate backlog insert, the 40P01
-        # row of the S-gate, and the one-shot meeting the trigger in both
-        # orders. This drives real psql processes against the same local stack.
+        # row of the S-gate, the one-shot meeting the trigger in both orders,
+        # the fold's abort handler meeting a concurrent uncommitted duplicate,
+        # that handler not waiting either, a device shift write meeting the
+        # one-shot in both orders, the cursor fence, and a two-user transaction
+        # terminating rather than hanging. This drives real psql processes
+        # against the same local stack.
         run: bash scripts/db-test-race.sh "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
       - name: supabase stop
         run: supabase stop

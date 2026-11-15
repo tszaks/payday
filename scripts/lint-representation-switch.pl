@@ -27,19 +27,6 @@
 use strict;
 use warnings;
 
-# Files where a legacy-only `entries:` call is the sanctioned internal arm of
-# a combined builder. Each of these DEFINES the switch; they are the one place
-# allowed to invoke a single representation deliberately.
-my %ARM_DEFINING_FILES = map { $_ => 1 } qw(
-    Payday/Utilities/CSVExporter.swift
-    Payday/Views/Calendar/CalendarView.swift
-    Payday/Views/Calendar/DayDetailSheet.swift
-    Payday/Views/Periods/HistoryEarnings.swift
-    Payday/Views/Dashboard/DashboardEarnings.swift
-    Payday/Views/Insights/InsightsEarnings.swift
-    Payday/Earnings/ShiftDraftPreview.swift
-);
-
 my @roots = @ARGV;
 die "usage: $0 <root>...\n" unless @roots;
 
@@ -54,7 +41,6 @@ my @violations;
 
 for my $path (sort @files) {
     (my $rel = $path) =~ s{^\./}{};
-    next if $ARM_DEFINING_FILES{$rel};
 
     open(my $fh, '<', $path) or next;
     my $src = do { local $/; <$fh> };

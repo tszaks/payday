@@ -33,12 +33,14 @@ struct SettingsWageRowTests {
     /// Rule 4: nil means the wage feature is off, and "$0.00" would be a
     /// claim that the rate is zero on real worked hours.
     @Test("no rate policy renders 'Not set', never a currency string")
+    @MainActor
     func noRateRendersNoCurrency() {
         #expect(PayrollSettingsSection.rateDisplay(nil) == "Not set")
         #expect(!PayrollSettingsSection.rateDisplay(nil).contains("$"))
     }
 
     @Test("a rate policy renders its own rate with cents")
+    @MainActor
     func rateRendersItself() {
         #expect(PayrollSettingsSection.rateDisplay(283) == Money.string(fromCents: 283))
         #expect(PayrollSettingsSection.rateDisplay(1_500) == Money.string(fromCents: 1_500))
@@ -50,6 +52,7 @@ struct SettingsWageRowTests {
     /// intent; nothing in Settings reads it back, so a stale mirror cannot
     /// put a different rate on screen.
     @Test("the row follows the rate policy, not the legacy scalar")
+    @MainActor
     func rowFollowsThePolicy() {
         let store = PolicyStore(defaults: freshDefaults())
         #expect(store.currentHourlyRateCents == nil)
@@ -76,6 +79,7 @@ struct SettingsWageRowTests {
     /// rule has to reject it explicitly or a `.confirmed` $0.00/hr policy
     /// reaches the ledger.
     @Test("zero and empty digits are both 'no rate', so the row never prints $0.00")
+    @MainActor
     func zeroIsNotARate() {
         #expect(PayrollSettingsSection.rateCents(fromDigits: "") == nil)
         #expect(PayrollSettingsSection.rateCents(fromDigits: "0") == nil)

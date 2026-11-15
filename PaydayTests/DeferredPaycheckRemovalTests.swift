@@ -218,7 +218,7 @@ struct DeferredPaycheckRemovalTests {
     @Test("every hide, Undo and commit announces a visibility change")
     func visibilityChangesAreAnnounced() throws {
         let removal = removal()
-        var posts = 0
+        nonisolated(unsafe) var posts = 0
         let observer = NotificationCenter.default.addObserver(
             forName: EarningsStore.paycheckVisibilityDidChange, object: nil, queue: nil
         ) { _ in posts += 1 }

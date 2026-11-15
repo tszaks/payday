@@ -6,8 +6,8 @@ enum AppTab: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
-/// Lets any tab's content switch the selected tab (e.g. Dashboard's "days
-/// left" tile jumping to Periods) without MainTabView needing to know about
+/// Lets any tab's content switch the selected tab (e.g. Dashboard's "See
+/// all" button jumping to Periods) without MainTabView needing to know about
 /// every screen that wants to do that.
 @Observable
 final class TabRouter {
@@ -127,13 +127,9 @@ struct MainTabView: View {
                 tabRouter.selected = .periods
             }
             // Screenshot/QA hook only: open the edit sheet directly for the
-            // most recent entry of a given kind, so a cash+credit night's
-            // shared shift details can be verified from both tabs without
-            // needing UI automation to tap into it. Named distinctly from
-            // DashboardView's own "-OpenEditSheet" (no kind arg) hook below
-            // — the two used to share a flag name and could both fire off
-            // the same launch args, each presenting its own sheet and
-            // tripping a "already presenting" SwiftUI/UIKit conflict.
+            // most recent shift with cash or credit tips (by kind), so the
+            // edit sheet can be verified without needing UI automation to
+            // tap into it.
             if let index = args.firstIndex(of: "-OpenEditSheetKind"), args.count > index + 1,
                let kind = TipKind(rawValue: args[index + 1]) {
                 let descriptor = FetchDescriptor<ShiftRecord>(sortBy: [SortDescriptor(\.workDate, order: .reverse)])

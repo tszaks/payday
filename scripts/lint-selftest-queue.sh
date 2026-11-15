@@ -14,7 +14,7 @@ CHECKER="$(cd "$(dirname "$0")" && pwd)/lint-queue-in-transaction.pl"
 FAIL=0
 
 SYMBOLS=(
-  recordTipDeletions cancelTipDeletions clearTipDeletions
+  clearTipDeletions
   recordShiftDeletion clearShiftDeletions
   recordShiftRestore clearShiftRestores
   clearShiftTombstones markShiftTombstonesFlushed
@@ -72,6 +72,33 @@ for sym in "${SYMBOLS[@]}"; do
   fi
 done
 [ "$NEG" -eq 0 ] && echo "   none reported, so the rule distinguishes position and not merely presence"
+
+# ShiftCommands.perform is private, so inside ShiftCommands.swift it is only
+# ever called unqualified -- and that file's delete and restore are where the
+# shift and legacy-entry queues get written. A rule that needs the
+# `ShiftCommands.` prefix cannot see them.
+echo "--- unqualified: the rule must report every symbol planted INSIDE perform(in:) in ShiftCommands.swift"
+UNQ=0
+for sym in "${SYMBOLS[@]}"; do
+  dir="$tmp/unqualified/$sym/Payday/Models"
+  mkdir -p "$dir"
+  cat > "$dir/ShiftCommands.swift" <<EOF
+enum ShiftCommands {
+    static func delete(_ id: UUID, in context: ModelContext) throws {
+        try perform(in: context) {
+            PaydaySyncState.$sym([UUID()])
+            context.delete(thing)
+        }
+    }
+}
+EOF
+  out=$(cd "$tmp/unqualified/$sym" && perl "$CHECKER" Payday 2>&1)
+  if [ -z "$out" ]; then
+    echo "   MISS: $sym planted inside an unqualified perform(in:) was NOT reported"
+    FAIL=1; UNQ=1
+  fi
+done
+[ "$UNQ" -eq 0 ] && echo "   all ${#SYMBOLS[@]} symbols reported"
 
 if [ "$FAIL" -ne 0 ]; then
   echo "SELFTEST FAILED"

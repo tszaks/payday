@@ -7,14 +7,13 @@ import Testing
 ///
 /// ## Read `AmbientParityTests` first -- it already covers the figure
 ///
-/// **CORRECTION.** I said criterion 5's "Siri == widget == app" leg was
-/// untested. It was not: `AmbientParityTests` ("Ambient parity: Siri ==
-/// widget == app") already asserts the ambient figure IS the app's own
-/// pay-period result, plus the overtime week, the label on an unpriced
-/// shift, an unavailable figure carrying no amount, the three absences
-/// reading differently, and the spoken sentence following the figure's label.
-/// Six tests. The claim was wrong and this header says so rather than
-/// quietly implying the coverage arrived with this file.
+/// Criterion 5's "Siri == widget == app" leg is covered by
+/// `AmbientParityTests` ("Ambient parity: Siri == widget == app"). It
+/// asserts the ambient figure IS the app's own pay-period result, plus the
+/// overtime week, the label on an unpriced shift, an unavailable figure
+/// carrying no amount, the three absences reading differently, and the
+/// spoken sentence following the figure's label. This file does not repeat
+/// that coverage.
 ///
 /// The money figure is also sound structurally, which is why that suite is
 /// short: `AmbientPeriodFigure` is ONE path, `PeriodTotalIntent` reaches it
@@ -122,5 +121,25 @@ struct AmbientSurfaceParityTests {
         let total = rows.reduce(0) { $0 + $1.netCents }
         #expect(total == (2_200 + 3_100 - 400) + (5_600 + 9_900),
                 "the pace baseline must sum the same shifts the ledger values")
+    }
+
+    /// The widget's figure reads the primary job only once there are two
+    /// jobs (`.picked(nil, jobCount:)`), so the pace beside it must too, as
+    /// the Dashboard's does. With one job the scope is `.all` and every
+    /// shift still counts.
+    @Test("the pace baseline reads the same job as the figure beside it")
+    func paceBaselineReadsTheFiguresJob() {
+        let records = Self.records() + [
+            ShiftRecord(workDate: Self.day(1), shiftPeriod: .lunch, cashTipsCents: 7_000,
+                        hoursWorked: 3, jobName: "Cafe", recordedAt: Self.day(1))
+        ]
+        let primaryTotal = (2_200 + 3_100 - 400) + (5_600 + 9_900)
+
+        let twoJobs = StatsRecordAdapter.tipRecords(from: records, job: .picked(nil, jobCount: 2))
+        #expect(twoJobs.reduce(0) { $0 + $1.netCents } == primaryTotal,
+                "the second job's shift must not reach the primary job's pace")
+
+        let oneJob = StatsRecordAdapter.tipRecords(from: records, job: .picked(nil, jobCount: 1))
+        #expect(oneJob.reduce(0) { $0 + $1.netCents } == primaryTotal + 7_000)
     }
 }

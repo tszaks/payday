@@ -120,15 +120,19 @@ public enum CompletenessCopy {
     ///
     /// Names up to two days. Beyond that a list is noise and the count is
     /// the more useful fact, so it falls back to `caption(_:)`.
+    ///
+    /// Callers pass one day per unpriced shift, so two shifts on one day
+    /// arrive as that day twice. Each day is named once, earliest first.
     public static func caption(_ state: WageState, unpricedDays: [CivilDay]) -> String? {
+        let days = Set(unpricedDays).sorted()
         guard case .partial(let missingHours, let missingRate) = state,
               missingHours > 0, missingRate == 0,
-              !unpricedDays.isEmpty, unpricedDays.count <= 2
+              !days.isEmpty, days.count <= 2
         else { return caption(state) }
 
-        let named = unpricedDays.count == 1
-            ? unpricedDays[0].shortLabel
-            : "\(unpricedDays[0].shortLabel) and \(unpricedDays[1].shortLabel)"
+        let named = days.count == 1
+            ? days[0].shortLabel
+            : "\(days[0].shortLabel) and \(days[1].shortLabel)"
         return "wages missing for \(named) -- add hours to price it"
     }
 

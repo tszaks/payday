@@ -24,8 +24,8 @@ struct PaydayMigrationReport: Equatable, Sendable {
     /// sync, and no flush of `pendingTipDeletions` -- which is the only
     /// carrier of a deletion a 1.0 build queued and never sent.
     ///
-    /// So the phase stays `.ready`, everything else syncs normally, only the
-    /// shift leg is skipped, and the wait is a BANNER.
+    /// So the phase stays `.ready`, everything syncs normally, and the wait
+    /// is a BANNER.
     ///
     /// ## This parameter has NO DEFAULT, on purpose
     ///
@@ -39,7 +39,7 @@ struct PaydayMigrationReport: Equatable, Sendable {
     /// A lint would have caught it. The compiler catches it BETTER, for free
     /// and forever: with no default, a new construction site cannot omit the
     /// question, it can only answer `nil` in writing. Same move as making
-    /// the earnings builders take a `ShiftRepresentation` -- hand the
+    /// the earnings builders take their inputs explicitly -- hand the
     /// enumeration to the type system rather than to a rule someone has to
     /// write correctly and keep correct.
     var conversionPending: Int?

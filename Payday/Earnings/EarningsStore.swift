@@ -185,11 +185,11 @@ final class EarningsStore {
     /// - Parameters:
     ///   - shiftsAreAuthoritative: whether `ShiftRecord` is the read-
     ///     authoritative representation for this account. Defaults to
-    ///     `false` because PR 2's conversion (slice S7) has not landed:
-    ///     until it does, an account with zero shifts and legacy rows is
-    ///     simply pre-conversion, NOT a wiped cache, and treating it as one
-    ///     would blank every screen for every existing user. S7 passes its
-    ///     single `shiftsAreAuthoritative` in here.
+    ///     `false`, so a store built without one treats an account with zero
+    ///     shifts and legacy rows as pre-conversion, NOT a wiped cache;
+    ///     treating it as one would blank every screen for every existing
+    ///     user. `PaydayApp` passes the single `shiftsAreAuthoritative` in
+    ///     here.
     ///   - requestShiftBaseline: what to do about a wiped cache. Defaults to
     ///     posting `shiftCacheWipeDetected`.
     init(
@@ -234,13 +234,11 @@ final class EarningsStore {
     /// calls `requestRebuild(reason: .sceneActive)` from `.onChange(of:
     /// scenePhase)` instead.
     ///
-    /// `nonisolated` and internal, not private, for one reason: a wave-1 PR 5
-    /// screen that still builds its own `LegacySnapshotBridge` snapshot has to
-    /// know when to build the next one, and the answer must be THIS list and
-    /// not a second copy of it. `LegacySnapshotRevision` merges exactly these
-    /// publishers. When PR 2 slice S7 lands and the screens read
-    /// `earningsStore.snapshot` directly, that consumer goes away and this can
-    /// go back to private.
+    /// `nonisolated` and internal, not private, for one reason: a screen that
+    /// caches what it derives from the snapshot has to know when to rebuild
+    /// it, and the answer must be THIS list and not a second copy of it.
+    /// `LegacySnapshotRevision` merges exactly these publishers. If that
+    /// consumer goes away, this can go back to private.
     nonisolated static let triggerNames: [(Notification.Name, Reason)] = [
         (ModelContext.didSave, .modelContextDidSave),
         (PaydaySettingsSyncClock.didChange, .settingsClockDidChange),

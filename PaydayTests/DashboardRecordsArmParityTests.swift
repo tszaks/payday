@@ -3,56 +3,29 @@ import Testing
 @testable import Payday
 @testable import PaydayCore
 
-/// Criterion 5 on the RECORDS arm, which was gated by one test while the
-/// legacy arm was gated by five suites.
+/// Criterion 5 on the records path: parity holds on real screen adapters.
 ///
-/// ## The measurement that produced this file
+/// ## What this file gates
 ///
-/// Criterion 5 says parity holds on real screen adapters. Counting suites
-/// does not establish that — a suite can exist and gate nothing — so the
-/// question was asked with a mutation instead: make `DashboardEarnings`
-/// clamp its DATASET to today while `HistoryEarnings` does not, which is
-/// exactly the cross-surface divergence criterion 5 forbids.
+/// Criterion 5 says the Dashboard, History and Calendar show one figure for
+/// one period, through the real screen adapters. A suite that exists is not
+/// proof that it gates anything, so each case here is written to fail when
+/// one surface diverges from another: for example, `DashboardEarnings`
+/// clamping its dataset to today while `HistoryEarnings` does not.
 ///
-/// Run twice, once against each arm of the builder:
+/// `ShiftRecord`s are the only stored shape since the flip, so the records
+/// builder is the only arm. These cases pin the claims that a person would
+/// meet on screen: the final-day membership, the drawer's reconciliation,
+/// the payday card, the cutoff and the order of the shift list.
 ///
-/// | Mutation | Suites catching | Failing tests |
-/// |---|---|---|
-/// | **legacy** arm clamps | 5 | 32 |
-/// | **records** arm clamps, before this file | 1 | 3 |
-/// | **records** arm clamps, after it | 2 | 14 |
+/// ## Why the fixtures are records
 ///
-/// The remaining gap — 5/32 against 2/14 — is PR 8's entry condition,
-/// recorded in `docs/RELEASE_GATE.md`: PR 8 may not delete the legacy arm
-/// until the records arm's catch count reaches what the legacy arm's was,
-/// because deleting legacy deletes the 32 with it.
+/// The fixtures construct `ShiftRecord`s directly. Turning a pair of
+/// entries into a record is the SERVER's deriver (`private.derive_shifts`),
+/// which has no Swift equivalent on device, and a fixture built by mirroring
+/// the deriver cannot catch a defect in the mirror.
 ///
-/// The legacy arm is deeply gated: `DashboardPeriodParityTests`
-/// ("Dashboard period income equals the History row and period detail" —
-/// criterion 5's first clause verbatim), the payday card, final-day
-/// membership, and the cutoff suite all fail. The records arm was caught
-/// only by `FlipGates5And7Tests.gate5FourConsumersAgree`, written the same
-/// day.
-///
-/// **That asymmetry is backwards relative to risk.** The legacy arm is what
-/// every account uses today and is scheduled for deletion in PR 8. The
-/// records arm is what every account uses after conversion — and since S15
-/// the flip is reachable, so the thinly gated arm is the one whose defects
-/// would reach a person.
-///
-/// ## Why this is a new file rather than a parameterisation
-///
-/// The obvious move is to run the existing 22 Dashboard parity tests through
-/// both arms. It is not available: those fixtures are hand-built `[TipEntry]`
-/// values, and turning a legacy pair into a `ShiftRecord` is the SERVER's
-/// deriver (`private.derive_shifts`), which has no Swift equivalent on
-/// device. Projecting records INTO entries exists, but building the fixtures
-/// that way would make every case mirror-derived — and a test built by
-/// mirroring cannot catch a defect in the mirror.
-///
-/// So these construct records directly and assert the same CLAIMS, not the
-/// same code. What is covered here is the gap the mutation exposed, not a
-/// duplicate of the legacy suite.
+/// So these cases assert CLAIMS about the screen, not the same code twice.
 @Suite("Dashboard parity on the records arm", .serialized)
 @MainActor
 struct DashboardRecordsArmParityTests {
@@ -158,11 +131,9 @@ struct DashboardRecordsArmParityTests {
 
     /// A shift on the FINAL day of the period is inside the engine's range.
     ///
-    /// The legacy arm has `DashboardFinalDayMembershipTests` for this, and it
-    /// failed under the mutation. The records arm had nothing. It is the
-    /// original audit's own measured defect — "a 5pm shift on the period's
-    /// last day was in the row's total and absent from the detail's" — so it
-    /// is worth pinning on the arm that will carry it.
+    /// It is the original audit's own measured defect — "a 5pm shift on the
+    /// period's last day was in the row's total and absent from the
+    /// detail's" — so it is pinned here on the path that carries it.
     @Test("a shift at 5pm on the period's final day is inside the records range")
     func finalDayShiftIsInRange() throws {
         let comp = Self.policies(rateCents: 1_800)
@@ -191,12 +162,6 @@ struct DashboardRecordsArmParityTests {
     /// **Criterion 5's second clause, end to end, on records:**
     /// calendar day == day detail == the sum of that day's shifts == the
     /// chart point.
-    ///
-    /// Measured before writing it, the same way the Dashboard gap was found:
-    /// clamping `CalendarEarnings`' records-arm dataset to today failed ONE
-    /// suite and three tests, all of them `gate5CalendarAgreesOnRecords`,
-    /// written the same day. The legacy arm of the equivalent Dashboard
-    /// mutation failed five suites and thirty-two tests.
     ///
     /// Four links, asserted as one identity rather than four separate
     /// equalities, because the defect this forbids is any ONE of them
@@ -255,7 +220,7 @@ struct DashboardRecordsArmParityTests {
         #expect(calendar.day(civil).shiftIDs.count == 2)
     }
 
-    // MARK: - The Dashboard sub-claims the legacy arm gates and records did not
+    // MARK: - The Dashboard sub-claims, on records
 
     /// Builds the facts the way `DashboardView.body` does, from records.
     private func facts(
@@ -291,9 +256,7 @@ struct DashboardRecordsArmParityTests {
     }
 
     /// **"The drawer's rows reconcile to the bottom line it prints them
-    /// under."** The legacy arm gates this
-    /// (`DashboardPeriodParityTests.drawerRowsReconcile`, which failed under
-    /// the mutation); the records arm did not.
+    /// under."**
     ///
     /// Criterion 5 at its smallest scale: a total printed directly above the
     /// rows it is made of. If those disagree the screen contradicts itself
@@ -417,9 +380,7 @@ struct DashboardRecordsArmParityTests {
     }
 
     /// **"The check is the tips line plus gratuity plus wages, and the gap
-    /// from the hero is exactly the cash."** The legacy arm gates this
-    /// (`DashboardPaydayCardTests.checkReconcilesAgainstTheHero`); the
-    /// records arm did not.
+    /// from the hero is exactly the cash."**
     ///
     /// The claim matters because the payday card and the hero sit on ONE
     /// screen showing different numbers ON PURPOSE — the check excludes cash
@@ -443,8 +404,7 @@ struct DashboardRecordsArmParityTests {
         // the card is about the period whose CHECK is due, not the period in
         // progress. Without it `predictedPaycheck` is `.unavailable` over
         // zero shifts and the assertion below compares against nil, which is
-        // a fixture mistake rather than a defect. The legacy test forces the
-        // same phase for the same reason.
+        // a fixture mistake rather than a defect.
         let facts = facts(records, now: Self.at(2026, 10, 7, hour: 12),
                           schedule: Self.schedule(), forcedPaydayPhase: .periodClosed)
 
@@ -500,11 +460,11 @@ struct DashboardRecordsArmParityTests {
     ///
     /// `@Query` has no sort, so `DashboardFacts` received records in
     /// insertion order and rendered them verbatim — oldest at the top on a
-    /// flipped account. The legacy arm's order is `ShiftDays
-    /// .groupedByShift`'s: newest day first, lunch before dinner inside a
-    /// day. This feeds the rows in scrambled order and asserts the screen's
-    /// list reads the same way either arm does.
-    @Test("the shift list reads newest-first through either arm, on records")
+    /// flipped account. The order the screen needs is
+    /// `ShiftDays.groupedByShift`'s: newest day first, lunch before dinner
+    /// inside a day. This feeds the rows in scrambled order and asserts the
+    /// screen's list reads that way.
+    @Test("the shift list reads newest-first, on records")
     func shiftRowsReadNewestFirstOnRecords() {
         let oldest = ShiftRecord(workDate: Self.at(2026, 10, 1),
                                  creditTipsCents: 5_000, hoursWorked: 5,

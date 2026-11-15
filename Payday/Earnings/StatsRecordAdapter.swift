@@ -24,8 +24,8 @@ import Foundation
 enum StatsRecordAdapter {
     /// **The one entry point.** `ShiftRecord`s in, `TipRecord` rows out.
     ///
-    /// There used to be a second arm over `TipEntry` rows, switched by
-    /// `ShiftRepresentation`; the flip made `ShiftRecord` the only stored
+    /// There used to be a second arm over `TipEntry` rows, switched by a
+    /// representation flag; the flip made `ShiftRecord` the only stored
     /// shape and the legacy arm is gone with it. A caller that fetched
     /// `TipEntry` directly measured against an empty history post-flip --
     /// the widget's pace baseline did exactly that, which is why this
@@ -37,6 +37,12 @@ enum StatsRecordAdapter {
             out.append(contentsOf: rows(for: record))
         }
         return out
+    }
+
+    /// The same rows, for one job's shifts only: the scope a figure beside
+    /// the pace reads, so the pace cannot count another job's shifts.
+    static func tipRecords(from records: [ShiftRecord], job: JobScope) -> [TipRecord] {
+        tipRecords(from: records.filter { job.includes($0.jobName) })
     }
 
     /// One record's rows.

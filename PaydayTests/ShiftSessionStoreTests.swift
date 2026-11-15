@@ -2,7 +2,7 @@ import Testing
 import Foundation
 @testable import Payday
 
-@Suite("ShiftSessionStore")
+@Suite("ShiftSessionStore", .serialized)
 final class ShiftSessionStoreTests {
     // These write to the REAL App Group suite the installed app reads, so
     // cleanup runs on the way out as well as in: a leftover pendingEnd

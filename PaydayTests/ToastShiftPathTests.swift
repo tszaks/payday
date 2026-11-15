@@ -3,19 +3,13 @@ import SwiftData
 import Testing
 @testable import Payday
 
-/// The flip's first piece, and gate 2's `restore` witness binds here.
+/// `UndoDeleteToast`'s `ShiftRecord` path, and gate 2's `restore` witness
+/// binds here.
 ///
-/// `UndoDeleteToast` gains a `ShiftRecord` path beside its `TipEntry` one
-/// rather than replacing it: both are needed at once during the conversion
-/// window, because a shipped 1.0 build writes `TipEntry` and an account that
-/// has not converted still reads it, while a converted account deletes a
-/// `ShiftRecord`.
-///
-/// Behaviour-neutral on merge: nothing calls the new path yet. That is exactly
-/// why it gets its own tests now — `ShiftCommands.restore` is one of the four
-/// zero-caller commands, and the reachability hazard is that unreached code
-/// ships unexercised. Gate 2 asserts the witness: a restore returns the
-/// `ShiftRecord` and resurrects no `TipEntry`.
+/// The toast deletes and restores a `ShiftRecord` through `ShiftCommands`
+/// (`ShiftCommands.delete` and `ShiftCommands.restore`), the same calls a
+/// person reaches from the shift row and the log sheet. Gate 2 asserts the
+/// witness: a restore returns the `ShiftRecord` and resurrects no `TipEntry`.
 @Suite("Toast shift path", .serialized)
 @MainActor
 struct ToastShiftPathTests {

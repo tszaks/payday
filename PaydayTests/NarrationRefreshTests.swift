@@ -37,7 +37,7 @@ struct NarrationRefreshTests {
 
     @Test("changed numbers still wait out the interval")
     func changedFactsWaitForInterval() {
-        // Half a day after the last narration, short of the daily floor.
+        // Right at the last narration, short of the daily floor.
         #expect(!NarrationRefresh.isDue(
             now: at(8, 4, hour: 12),
             snapshotGeneratedAt: at(8, 4),

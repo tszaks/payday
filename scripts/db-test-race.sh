@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The concurrency half of PR 2's gate, for slices S4, S5 and S6.
 #
-# Nine facts about the writers that share the payday:shiftmig advisory key need
+# Ten facts about the writers that share the payday:shiftmig advisory key need
 # two or three CONCURRENT sessions, which a single psql script cannot produce,
 # so they are here instead of in supabase/tests/shift_fold_test.sql and
 # supabase/tests/shift_write_rpcs_test.sql:
@@ -49,7 +49,7 @@ PG_BIN="${PG_BIN:-$PG_BIN_DEFAULT}"
 if [ -x "$PG_BIN/psql" ]; then
   PSQL_BIN="$PG_BIN/psql"
 else
-  PSQL_BIN="$(command -v psql)"
+  PSQL_BIN="$(command -v psql || true)"
 fi
 if [ -z "$PSQL_BIN" ]; then echo "no psql on PATH and none at $PG_BIN" >&2; exit 1; fi
 
@@ -813,7 +813,7 @@ check "theSwallowedLockTimeoutWasStillRecordedAsAFailureRow" \
 sed 's/^/      | /' "$WORK/c_locktimeout.out" | head -4
 
 # ===========================================================================
-# 7. THE HANDLER DOES NOT WAIT FOR THE OTHER TRANSACTION.
+# 8. THE HANDLER DOES NOT WAIT FOR THE OTHER TRANSACTION.
 #
 # statement_timeout does NOT re-arm after firing, and that is worse than
 # re-arming rather than better: a fold entered through `when query_canceled`
@@ -1165,7 +1165,7 @@ q "delete from auth.users where id = '$U7'" >/dev/null
 q "delete from auth.users where id in ('$U','$U2')" >/dev/null
 
 # ===========================================================================
-# 9. THE WATERMARK'S RESIDUAL INVARIANT: A TWO-USER TRANSACTION MUST NOT HANG.
+# 11. THE WATERMARK'S RESIDUAL INVARIANT: A TWO-USER TRANSACTION MUST NOT HANG.
 #
 # `dataset_revisions` is bumped by a DEFERRABLE INITIALLY DEFERRED constraint
 # trigger, so the watermark is acquired at COMMIT, last, and can never be the

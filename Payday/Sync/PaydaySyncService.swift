@@ -165,17 +165,6 @@ struct PaydayRemoteRepository {
         try await sendReturning(rows, function: "upsert_shifts")
     }
 
-    /// The account's conversion record, or nil when the account has none.
-    ///
-    /// Nil is the ordinary case, not an error: `shift_migration_state` has a
-    /// row only once the server has run a conversion for that account, so
-    /// every account today reads nil. `ShiftReadAuthority.State()` with all
-    /// four fields absent is correctly non-authoritative, so the caller can
-    /// treat nil as "not converted" without a special case.
-    ///
-    /// NOT `.single()`. That throws when no row exists, which would turn the
-    /// ordinary case into a sync failure -- the same trap
-    /// `fetchAllRows`' header records for the `user_settings` read.
     /// How many legacy rows this account still has to convert.
     ///
     /// Zero for an unauthenticated caller BY DESIGN -- the function reads
@@ -207,6 +196,17 @@ struct PaydayRemoteRepository {
             .value
     }
 
+    /// The account's conversion record, or nil when the account has none.
+    ///
+    /// Nil is the ordinary case, not an error: `shift_migration_state` has a
+    /// row only once the server has run a conversion for that account, so
+    /// every account today reads nil. `ShiftReadAuthority.State()` with all
+    /// four fields absent is correctly non-authoritative, so the caller can
+    /// treat nil as "not converted" without a special case.
+    ///
+    /// NOT `.single()`. That throws when no row exists, which would turn the
+    /// ordinary case into a sync failure -- the same trap
+    /// `fetchAllRows`' header records for the `user_settings` read.
     func fetchShiftMigrationState(userID: UUID) async throws -> RemoteShiftMigrationState? {
         let rows: [RemoteShiftMigrationState] = try await client
             .from("shift_migration_state")
@@ -316,17 +316,6 @@ struct PaydayRemoteRepository {
         return outcomes
     }
 
-    /// Shifts changed since `cursor`, on the same `(updated_at, id)` keyset the
-    /// tip leg uses.
-    ///
-    /// Deliberately no `serverNow` watermark, though the slice's plan named
-    /// one. A `statement_timestamp()` read in a SEPARATE statement from the
-    /// page is not a safe fence: a transaction can commit with an `updated_at`
-    /// earlier than that timestamp and still become visible only after the
-    /// page was read, so a client that advanced a time watermark would skip
-    /// those rows for good. That is exactly why Design 3's watermark is a
-    /// server-issued monotonic `dataset_revision` and not a clock, and it
-    /// lands with the snapshot work rather than being approximated here.
     /// Shifts changed since `cursor`, read through `fetch_shift_changes` so
     /// the page and the server's snapshot time arrive together.
     ///
@@ -768,9 +757,6 @@ final class PaydaySyncService {
         // whenever the user did not touch settings during the pass, so pulling
         // before `upsertSettings` reverts a locally changed wage.
         //
-        // Step 6a (`migrate_tip_entries_to_shifts`) is deliberately NOT here.
-        // It converts real accounts and trips the read flip, so it lands after
-        // this orchestration, never with it.
         // A cursor alone is not enough: if the checkpoint names shifts the
         // local store no longer has, the delta feed can never reintroduce
         // them, so fall back to a baseline read.
@@ -789,7 +775,7 @@ final class PaydaySyncService {
         // forgot it. `shifts` is DERIVED from `tip_entries`, so soft-deleting
         // a migrated shift while its source rows stay alive lets the server's
         // fold re-derive it and the deleted shift comes back. The producer
-        // (`ShiftCommands.deleteShift`) has been queueing these since PR 2.
+        // (`ShiftCommands.delete`) has been queueing these since PR 2.
         let pendingLegacyDeletions = PaydaySyncState.pendingLegacyEntryDeletions(for: userID)
         if !pendingLegacyDeletions.isEmpty {
             try await repository.softDeleteTips(pendingLegacyDeletions)
@@ -950,11 +936,15 @@ final class PaydaySyncService {
         )
         let locallyDeletedShifts = Set(localShiftVersionsAtStart.keys)
             .subtracting(shiftVersionsBeforeReconcile.keys)
+        // A queued deletion is skipped here too. The pull ran before the
+        // delete, so it can still hold the row live, and with no local record
+        // nothing else stops it being re-inserted. The readback below still
+        // covers these ids, so it is the server's answer that settles them.
         _ = try Self.reconcileShifts(
             pulledShifts.rows,
             in: context,
             localVersionsAtStart: localShiftVersionsAtStart,
-            locallyDeletedDuringSync: locallyDeletedShifts,
+            locallyDeletedDuringSync: locallyDeletedShifts.union(pendingShiftDeletions.keys),
             locallyChangedBeforeSync: changedShiftIDs,
             restoringIDs: Set(checkpoint.pendingShiftRestores.keys)
         )
@@ -977,13 +967,14 @@ final class PaydaySyncService {
             )
         }
         try context.save()
-        if !remoteTips.isEmpty || !remotePaychecks.isEmpty || remoteSettings != nil {
+        if !remoteTips.isEmpty || !remotePaychecks.isEmpty || remoteSettings != nil
+            || !pulledShifts.rows.isEmpty || !readbackShifts.isEmpty {
             PaydayWidgetRefresh.request()
         }
         PaydaySyncState.clearTipDeletions(pendingTipDeletions.keys, for: userID)
         PaydaySyncState.clearPaycheckDeletions(pendingPaycheckDeletions.keys, for: userID)
         // Mirrors the two lines above, and its absence was a real leak: the
-        // shift queue was cleared only on the UNDO path (:646), never after a
+        // shift queue was cleared only on the UNDO path, never after a
         // successful flush. Every later pass then re-sent every deletion the
         // account had ever made, and `shiftReadbackIDs` grew without bound
         // because it is keyed on this queue. Reached only if the flush above
@@ -1124,6 +1115,7 @@ final class PaydaySyncService {
         let followUp = !tipsChangedDuringSync.isEmpty
             || !paychecksChangedDuringSync.isEmpty
             || settingsChangedDuringSync
+            || !shiftsChangedDuringSync.isEmpty
 
         // Read the watermark LAST, after every push and pull this pass will
         // do. Reading it earlier would record a number that this pass's own
@@ -1138,9 +1130,36 @@ final class PaydaySyncService {
         )
     }
 
-    /// The read-authority decision for one sync pass. Returns whether the
-    /// promotion was DEFERRED, which the caller maps onto
-    /// `requiresFollowUpSync`.
+    @MainActor
+    /// What one pass of the leg learned. Two facts, because the row carries
+    /// two and an earlier version returned only one.
+    ///
+    /// It returned `Bool` -- the deferral -- and DISCARDED
+    /// `remaining_group_count`. That is the whole reason
+    /// `PaydayMigrationReport.conversionPending` was never assigned anywhere
+    /// in the app: the only code that read the column threw the number away
+    /// one line after reading it, so the banner's producer had no source and
+    /// `isConversionPending` was false for every account forever. The banner
+    /// was fully built and fully tested and could not appear.
+    ///
+    /// A struct rather than a tuple so adding a third fact later cannot
+    /// silently reorder the two that exist.
+    struct ShiftAuthorityLegResult: Equatable {
+        /// Legacy groups the server has not folded yet, or nil when this pass
+        /// learned nothing -- an absent row, or a read that failed.
+        ///
+        /// **nil and 0 are different answers and the banner treats them the
+        /// same way only by coincidence.** nil is "no information"; 0 is "the
+        /// server says it is finished". Collapsing nil to 0 would be
+        /// harmless here and wrong in the next reader, so the distinction is
+        /// kept at the type.
+        let remainingGroupCount: Int?
+
+        static let unknown = ShiftAuthorityLegResult(remainingGroupCount: nil)
+    }
+
+    /// The read-authority decision for one sync pass. Returns what the pass
+    /// learned about the conversion; see `ShiftAuthorityLegResult`.
     ///
     /// `fetch` is injected with the real repository call supplied at the one
     /// production call site, the same shape as `ShiftCommands.perform`'s
@@ -1180,46 +1199,6 @@ final class PaydaySyncService {
     /// because by this point in a pass the rows are reconciled and the
     /// checkpoint written -- throwing would discard a successful sync over a
     /// fact that is only ever an optimisation.
-    ///
-    /// ## What the liveness guarantee actually is
-    ///
-    /// Precisely: **a deferral requests a retry UNLESS the next read fails.**
-    /// Not "a deferral always produces a retry".
-    ///
-    /// The `catch` returns false, so if a follow-up pass's own migration-state
-    /// read fails, no further follow-up is requested and the deferred
-    /// promotion waits for the next natural sync instead. That is benign --
-    /// legacy is the safe fallback and the account simply stays there a while
-    /// longer -- but it is a weaker guarantee than the unconditional one, and
-    /// stating it unconditionally is how a caveat becomes a surprise.
-    @MainActor
-    /// What one pass of the leg learned. Two facts, because the row carries
-    /// two and an earlier version returned only one.
-    ///
-    /// It returned `Bool` -- the deferral -- and DISCARDED
-    /// `remaining_group_count`. That is the whole reason
-    /// `PaydayMigrationReport.conversionPending` was never assigned anywhere
-    /// in the app: the only code that read the column threw the number away
-    /// one line after reading it, so the banner's producer had no source and
-    /// `isConversionPending` was false for every account forever. The banner
-    /// was fully built and fully tested and could not appear.
-    ///
-    /// A struct rather than a tuple so adding a third fact later cannot
-    /// silently reorder the two that exist.
-    struct ShiftAuthorityLegResult: Equatable {
-        /// Legacy groups the server has not folded yet, or nil when this pass
-        /// learned nothing -- an absent row, or a read that failed.
-        ///
-        /// **nil and 0 are different answers and the banner treats them the
-        /// same way only by coincidence.** nil is "no information"; 0 is "the
-        /// server says it is finished". Collapsing nil to 0 would be
-        /// harmless here and wrong in the next reader, so the distinction is
-        /// kept at the type.
-        let remainingGroupCount: Int?
-
-        static let unknown = ShiftAuthorityLegResult(remainingGroupCount: nil)
-    }
-
     static func applyShiftAuthorityLeg(
         userID: UUID,
         fetch: () async throws -> RemoteShiftMigrationState?
@@ -1232,7 +1211,7 @@ final class PaydaySyncService {
             // failure read as nil demotes a promoted account, and would do so
             // on every pass rather than transiently.
             let state = try row.authorityState()
-            let outcome = PaydaySyncState.applyShiftAuthority(state, for: userID)
+            _ = PaydaySyncState.applyShiftAuthority(state, for: userID)
             return ShiftAuthorityLegResult(
                 // Read from the PARSED state, not from `row`, so the count
                 // and the authority decision can never come from different
@@ -1247,6 +1226,14 @@ final class PaydaySyncService {
             // `.unknown` rather than a zero count: a failed read must not
             // announce "conversion finished" to the banner, for the same
             // reason it must not demote the representation.
+            //
+            // Logged because an unparseable timestamp fails on every pass,
+            // and without this line nothing anywhere would show it. The type
+            // and the column name only: never the value.
+            let column = (error as? RemoteShiftMigrationState.UnparseableTimestamp)?.column ?? "none"
+            Self.logger.error(
+                "Shift authority read failed. type=\(String(describing: type(of: error)), privacy: .public) column=\(column, privacy: .public)"
+            )
             return .unknown
         }
     }
@@ -1700,21 +1687,5 @@ final class PaydaySyncService {
             policyStore.replaceFromSupabase(remotePolicies)
         }
         PaydaySettingsSyncClock.acceptRemoteTimestamp(timestamp)
-    }
-
-    private static func report(snapshot: PaydayRemoteSnapshot) throws -> PaydayMigrationReport {
-        let tips = snapshot.tips.filter { $0.deletedAt == nil }.map(\.businessValue).sorted { $0.id.uuidString < $1.id.uuidString }
-        let paychecks = snapshot.paychecks.filter { $0.deletedAt == nil }.map(\.businessValue).sorted { $0.id.uuidString < $1.id.uuidString }
-        return PaydayMigrationReport(
-            localTipEntryCount: tips.count,
-            localPaycheckCount: paychecks.count,
-            remoteTipEntryCount: tips.count,
-            remotePaycheckCount: paychecks.count,
-            tipEntryHash: try PaydayMigrationHash.value(tips),
-            paycheckHash: try PaydayMigrationHash.value(paychecks),
-            // A remote snapshot carries tips, paychecks and settings; the
-            // conversion row is fetched on its own leg and is not in it.
-            conversionPending: nil
-        )
     }
 }

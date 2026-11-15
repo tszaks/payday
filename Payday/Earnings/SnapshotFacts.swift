@@ -93,22 +93,6 @@ import Foundation
 //
 //  ── WHAT IS NOT DONE, AND WILL BITE YOU ─────────────────────────────────
 //
-//  **Nothing writes `ShiftRecord` locally yet.** PR 2 slices S5-S8 are open,
-//  so `EarningsStore`'s snapshot is EMPTY on a real device: the store reads
-//  `FetchDescriptor<ShiftRecord>` and the only writers of that model today
-//  are tests. A screen that switches to `earningsStore.snapshot` before S7
-//  lands shows a person with four years of shifts an empty screen.
-//
-//  Until then, wave 0 feeds the shared components a REAL snapshot built from
-//  the legacy rows: `LegacySnapshotBridge.snapshot(shifts:policies:...)`,
-//  same engine, same types, and the user's OWN `PolicyStore.policies` — so
-//  the rate history, the workweek history and the frozen payroll zone are
-//  the store's. What the bridge does not carry is the `paychecks` and
-//  `schedule` inputs `EarningsStore` supplies, so a caller that starts
-//  asking `snapshot.payPeriod(_:)` has to wait for the swap. Every wave-0
-//  consumer asks `day(_:)`, `range(_:)` or `valuation(_:)`, which read
-//  neither. See the bridge's own header for the list.
-//
 //  **The three heroes are the open hole.** Dashboard's, Period detail's and
 //  DayDetailSheet's hero figures are still composed by the screen: the
 //  snapshot on their facts structs feeds the ROWS and the CHART, not the

@@ -32,4 +32,12 @@ struct LogTipsAmountValidationTests {
     func roundsToNearestCent() {
         #expect(LogTipsAmountValidation.validatedCents(for: 10.006) == 1001)
     }
+
+    /// A Shortcut can hand the intent any Double, including a divide result
+    /// that is not a number at all. Each must be refused, not trap the
+    /// intent process on the conversion to Int.
+    @Test("NaN, infinities and a huge amount are rejected", arguments: [Double.nan, .infinity, -.infinity, 1e300])
+    func nonFiniteAndHugeRejected(_ amount: Double) {
+        #expect(LogTipsAmountValidation.validatedCents(for: amount) == nil)
+    }
 }

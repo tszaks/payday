@@ -37,11 +37,11 @@ import SwiftData
 struct InsightsView: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(PolicyStore.self) private var policyStore
-    /// The other representation. `InsightsEarnings.build` picks one, and it
-    /// has to be the same one Dashboard picks: group 2.6's whole point is
-    /// that this page and the headline above it share a basis, and reading a
-    /// different REPRESENTATION is a sharper version of the same defect than
-    /// reading a different basis.
+    /// The shifts `InsightsEarnings.build` reads. They have to be the same
+    /// set Dashboard reads: group 2.6's whole point is that this page and
+    /// the headline above it share a basis, and reading a different set of
+    /// shifts is a sharper version of the same defect than reading a
+    /// different basis.
     @Query(sort: \ShiftRecord.workDate, order: .reverse) private var shiftRecords: [ShiftRecord]
 
     @State private var isShowingBackfillSheet = false
@@ -51,8 +51,7 @@ struct InsightsView: View {
     /// input to it moved. Replaces the `@State private var dataRevision`
     /// this screen carried, which watched `ModelContext.didSave` alone: a
     /// queued policy change or a midnight rollover left the page serving
-    /// figures computed under the old inputs. Gone entirely when PR 2 slice
-    /// S7 lets this read `earningsStore.snapshot`.
+    /// figures computed under the old inputs.
     @State private var snapshotRevision = 0
     /// Any instant on the current civil day. The DAY itself is derived in
     /// `body` through the payroll calendar, not stored: a stored
@@ -93,9 +92,8 @@ struct InsightsView: View {
         // window. `InsightsEarnings` holds the pair together and its header
         // carries the two defects that come from doing either one twice.
         //
-        // The representation switch, inside `InsightsEarnings.build` exactly
-        // as this comment promised before the switch existed, and on the
-        // same predicate every other switched screen uses.
+        // The build, inside `InsightsEarnings.build`, from the same
+        // `ShiftRecord`s every other screen reads.
         let roleOptions = InsightsEarnings.roleOptions(records: shiftRecords, job: job)
         // A role that has left the list (its last shift deleted or renamed)
         // reads as All rather than an empty page.
@@ -569,10 +567,9 @@ struct InsightsPageFacts: SnapshotFacts {
     ///
     /// The consequence, stated rather than hidden: a wage-inclusive basis
     /// means every shift in the dataset is wage-valued, which means every
-    /// shift has hours, so `HourlyRate.coverage`'s "across 5 of 6 shifts"
-    /// fraction is now unreachable FROM THIS SCREEN. It stays because
-    /// `docs/METRICS.md`'s presentation rules require it of the metric and
-    /// History's caption for the same metric still reaches it. Whether
+    /// shift has hours, so an "across 5 of 6 shifts" coverage fraction
+    /// would be unreachable FROM THIS SCREEN; the tile shows the rate only,
+    /// and History's caption for the same metric carries the fraction. Whether
     /// Insights should instead show a tips-only $/hr — which needs a
     /// registry metric, not a division here — is a decision for Tyler,
     /// flagged the same way the whole-history completeness gate is.
@@ -626,9 +623,9 @@ struct InsightsPageFacts: SnapshotFacts {
     ///     rather than passed in alongside it, so the engine and the snapshot
     ///     cannot be looking at two different sets of rows.
     ///   - calendar: the GRID calendar in the frozen payroll zone, the SAME
-    ///     one `InsightsEarnings.build` grouped with. It has to be: a legacy
-    ///     `TipEntry` with `shiftID == nil` takes a deterministic id derived
-    ///     from `calendar.startOfDay(...)`, so two calendars mint two ids for
+    ///     one `InsightsEarnings.build` grouped with. It has to be: a shift
+    ///     without a stored id takes a deterministic id derived from
+    ///     `calendar.startOfDay(...)`, so two calendars mint two ids for
     ///     one shift and the pricing map misses.
     init(
         dataset: InsightsEarnings.Dataset,
@@ -715,9 +712,10 @@ private struct InsightsCacheIdentity: Hashable {
 /// the same split `DashboardRenderCache` documents:
 ///
 /// - The DATASET (the grouping and the snapshot built from it) is valid while
-///   `revision` has not moved. `LegacySnapshotBridge` costs 41.7 ms over
-///   1,000 shifts and 307.4 ms over 10,000 (MEASURED, iPhone 17 Pro
-///   simulator, 2026-09-18), so it must not run per `body`.
+///   `revision` has not moved. Building the snapshot cost 41.7 ms over
+///   1,000 shifts and 307.4 ms over 10,000 (MEASURED on the earlier
+///   `LegacySnapshotBridge` build, iPhone 17 Pro simulator, 2026-09-18),
+///   so it must not run per `body`.
 /// - The FACTS are valid while the dataset digest and the selection have not
 ///   moved. `digest` is the complete key; `selection` is the presentational
 ///   remainder.

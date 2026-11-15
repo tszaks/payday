@@ -64,8 +64,8 @@ struct PeriodsPageFacts: SnapshotFacts {
     let stamp: SnapshotStamp?
 
     /// - Parameters:
-    ///   - snapshot: `HistoryEarnings.build`'s, until PR 2 S7 makes it
-    ///     `earningsStore.snapshot`. Nil renders placeholders, never zeros.
+    ///   - snapshot: `HistoryEarnings.build`'s. Nil renders placeholders,
+    ///     never zeros.
     ///   - schedule: the pay-period GRID. Presentational: it decides which
     ///     periods exist and when each one is paid, and it prices nothing.
     ///     Its `firstWeekday` is NOT a workweek and never reaches a money
@@ -152,8 +152,6 @@ struct PeriodsPageFacts: SnapshotFacts {
 /// are that trigger. They are not a dependency list — "the local store was
 /// written" and "the policy value changed" between them cover every input
 /// the build reads.
-///
-/// When PR 2 S7 lands, `EarningsStore` owns this and the whole struct goes.
 private struct HistorySnapshotCache {
     let writes: Int
     let policies: CompensationPolicies
@@ -167,12 +165,12 @@ struct PeriodsView: View {
     @Environment(PolicyStore.self) private var policyStore
     @Environment(UserPreferencesStore.self) private var preferencesStore
     @Environment(TabRouter.self) private var tabRouter
-    /// The other representation. `snapshotBuild` picks one, and it must be
-    /// the SAME one `PeriodDetailView` picks: this list pushes into that
-    /// detail, so a row total from one source over a detail from the other
-    /// is criterion 5 broken on the exact pair the original audit measured
-    /// it on -- "a 5pm shift on the period's last day was in the row's
-    /// total and absent from the detail's".
+    /// The shifts `snapshotBuild` hands to `HistoryEarnings.build`. It must
+    /// be the SAME set `PeriodDetailView` hands over: this list pushes into
+    /// that detail, so a row total from one source over a detail from
+    /// another is criterion 5 broken on the exact pair the original audit
+    /// measured it on -- "a 5pm shift on the period's last day was in the
+    /// row's total and absent from the detail's".
     @Query private var shiftRecords: [ShiftRecord]
     @Query private var paycheckRecords: [PaycheckRecord]
 
@@ -318,11 +316,11 @@ struct PeriodsView: View {
            cached.payrollTimeZone == zone {
             return cached.build
         }
-        // Both representations handed over; `HistoryEarnings.build` resolves
-        // which one. The choice deliberately does NOT live here -- this
-        // screen reading legacy while the detail it pushes into read records
-        // is the audit's original criterion-5 defect, and a screen that
-        // cannot make the choice cannot make it differently.
+        // `HistoryEarnings.build` is the one entry point. The build
+        // deliberately does NOT live here -- this screen and the detail it
+        // pushes into must read the same dataset (the audit's original
+        // criterion-5 defect), and a screen that cannot build its own cannot
+        // build it differently.
         return HistoryEarnings.build(
             records: shiftRecords,
             policies: policies,
@@ -338,7 +336,8 @@ struct PeriodsView: View {
                 records: shiftRecords,
                 paycheckRecords: paycheckRecords.hidingPendingRemoval(),
                 calculatorForJob: { policyStore.calculator(forJob: $0, primarySchedule: scheduleStore.schedule) },
-                job: job
+                job: job,
+                valuations: CSVExporter.valuations(from: snapshotBuild().snapshot)
             )
         }
     }

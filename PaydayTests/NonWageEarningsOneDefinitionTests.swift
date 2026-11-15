@@ -49,8 +49,6 @@ struct NonWageEarningsOneDefinitionTests {
 
     @Test("delegating to PaydayCore changes no value, over a seeded sweep")
     func delegationIsBehaviourPreserving() {
-        var rng = SystemRandomNumberGenerator()
-        _ = rng
         // Deterministic, not random: a refactor gate that varies run to run
         // cannot be re-derived, and an unreproducible gate is not a gate.
         var seed: UInt64 = 0x5EED

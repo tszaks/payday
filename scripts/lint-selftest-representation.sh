@@ -184,6 +184,23 @@ plant_positive "unmarked twin of the marked case" 'func f() {
     )
 }'
 
+# A file that DEFINES a combined builder's arms gets no file-wide pass. A
+# legacy-only call added to one later is the same defect as anywhere else, so
+# it is planted under a real arm-defining file's path, which none of the cases
+# above can stand in for: they all live in Case.swift. Case.swift still holds
+# the unmarked twin, so it is removed first or it would answer for this case.
+rm -f "$TMP/Payday/Views/Case.swift"
+mkdir -p "$TMP/Payday/Views/Calendar"
+printf '%s\n' 'func f() {
+    X.build(entries: allEntries, policies: p)
+}' > "$TMP/Payday/Views/Calendar/CalendarView.swift"
+out=$(cd "$TMP" && perl "$REPO/scripts/lint-representation-switch.pl" Payday 2>&1)
+if [ -z "$out" ]; then
+  echo "MISS (rule stayed silent): a legacy-only call in Payday/Views/Calendar/CalendarView.swift"
+  fail=1
+fi
+rm -f "$TMP/Payday/Views/Calendar/CalendarView.swift"
+
 # ------------------------------------------------- the rule's ROOTS have teeth
 # A rule's roots are as much a part of it as its pattern.
 #
@@ -248,5 +265,5 @@ if [ "$fail" -ne 0 ]; then
   echo "rule 23 self-test FAILED"
   exit 1
 fi
-echo "rule 23 proves itself: 9 defect shapes caught, 6 correct shapes left alone, every root covered"
+echo "rule 23 proves itself: 10 defect shapes caught, 6 correct shapes left alone, every root covered"
 exit 0

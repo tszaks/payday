@@ -5,8 +5,8 @@ import Testing
 
 /// PR 2 slice S9: the one place a shift is created, edited, deleted or undone.
 ///
-/// Three claims are asserted here, and each of them is a bug the shipped build
-/// actually has: a shift saves atomically, a shift with hours but no tips
+/// Three claims are asserted here, and each of them is a bug an earlier build
+/// had: a shift saves atomically, a shift with hours but no tips
 /// saves at all, and an unconfirmed conversion result is not editable.
 @Suite("Shift commands", .serialized)
 @MainActor

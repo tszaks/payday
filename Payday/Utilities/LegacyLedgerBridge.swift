@@ -3,8 +3,9 @@ import Foundation
 /// The one adapter from the legacy `TipEntry` representation to
 /// `CompensationLedger`'s inputs, so `WageEstimate` and `PeriodIncome` can be
 /// thin wrappers over the engine instead of two more copies of the wage
-/// arithmetic. Both of those types are deleted in PR 8 once every consumer
-/// reads `EarningsSnapshot` directly (PR 5), and this bridge goes with them.
+/// arithmetic. Both of those types are deleted in PR 8, and this bridge goes
+/// with them; the consumers now read `EarningsSnapshot` directly (PR 5), apart
+/// from `StatsEngine`'s per-shift rate fallback.
 ///
 /// It exists because the pre-PaydayCore surfaces are handed `[[TipEntry]]`
 /// and a plain `Int?` rate, not policies. Rather than let them keep doing

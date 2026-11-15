@@ -3,8 +3,7 @@ import Foundation
 /// The pay schedule as the engine needs it: enough to lay out pay periods
 /// and to fingerprint in the `InputManifest`. `frequency` is the raw string
 /// of the app's `PayFrequency` (`weekly`, `biweekly`, `twiceMonthly`,
-/// `monthly`) so the package does not have to own that enum until
-/// `PayPeriodCalculator` moves in (PR 3).
+/// `monthly`) so the package does not have to own that enum.
 ///
 /// `firstWeekday` is grid-only: it decides how the Calendar draws its
 /// weeks. Overtime bucketing is owned by `PayrollCalendarPolicy

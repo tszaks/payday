@@ -106,10 +106,11 @@ struct DatasetRevisionLegTests {
         #expect(stored(id) == nil, "the claim is false the moment the write lands")
     }
 
-    /// The production call site passes no account and relies on the
-    /// registered one, so that path is exercised rather than assumed --
-    /// a defaulted argument nobody tests is how a producer goes missing.
-    @Test("the no-argument form uses the registered account")
+    /// `invalidateSyncedDatasetRevision()` with no account relies on the
+    /// registered one (`PaydayCloudGate` calls it that way), so that path is
+    /// exercised rather than assumed -- a defaulted argument nobody tests is
+    /// how a producer goes missing.
+    @Test("invalidating with no account argument uses the registered account")
     func noArgumentFormUsesRegisteredAccount() async {
         guard let registered = PaydaySyncState.registeredUserID else {
             // Nothing registered in this run; register one so the real path

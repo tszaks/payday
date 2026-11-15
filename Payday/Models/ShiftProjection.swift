@@ -74,7 +74,7 @@ enum ShiftProjection {
     ///   0 and a shift worth 4000 reports 5000, with the gratuity and the
     ///   hours vanishing the same way.
     ///
-    /// So the rule is exactly `ShiftWriter` plus `ShiftDetails` semantics,
+    /// So the rule is exactly the legacy writer's plus `ShiftDetails` semantics,
     /// which is what makes it zero-delta against the legacy side:
     ///
     /// 1. One row per kind whose amount is non-zero. If both are zero, exactly

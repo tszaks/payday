@@ -55,10 +55,9 @@ struct PeriodDetailFacts: SnapshotFacts {
     let hourlyRateCaption: String?
 
     /// The drawer, composed by the shared component from the same result:
-    /// `BreakdownRow.ledgerRows(_:)`, `.total(_:)`, `.lipText(_:)` and
-    /// `.hasBreakdown(_:)`. Wave 0 wrote and tested all four and left them
-    /// with zero production callers; these four fields are those callers
-    /// (`docs/METRICS.md` [SC-02] and [SC-03]).
+    /// `BreakdownRow.ledgerRows(_:)`, `.total(_:)` and `.hasBreakdown(_:)`;
+    /// these three fields hold their results (`docs/METRICS.md` [SC-02] and
+    /// [SC-03]).
     let breakdownRows: [BreakdownRow]
     let breakdownTotal: BreakdownRow
     let hasBreakdown: Bool
@@ -98,7 +97,7 @@ struct PeriodDetailFacts: SnapshotFacts {
     /// - Parameters:
     ///   - snapshot: `HistoryEarnings.build`'s, over the WHOLE history, so a
     ///     workweek straddling this period's boundary keeps the overtime it
-    ///     produced. PR 2 S7 makes it `earningsStore.snapshot`.
+    ///     produced.
     ///   - shiftRecordDays: the same records the snapshot was built from, so
     ///     a record's `id` here indexes it.
     ///   - schedule: the pay-period GRID, for the pay DATE only. Its
@@ -217,7 +216,7 @@ struct PeriodDetailView: View {
     @Environment(PayScheduleStore.self) private var scheduleStore
     @Environment(PolicyStore.self) private var policyStore
     @Environment(UserPreferencesStore.self) private var preferencesStore
-    /// The other representation. `snapshotBuild()` picks one; never both.
+    /// The shifts `snapshotBuild()` hands to `HistoryEarnings.build`.
     @Query private var shiftRecords: [ShiftRecord]
     @Query private var paycheckRecords: [PaycheckRecord]
 
@@ -350,10 +349,9 @@ struct PeriodDetailView: View {
            cached.payrollTimeZone == zone {
             return cached.build
         }
-        // Both representations handed over; `HistoryEarnings.build` resolves
-        // which one and keeps the snapshot and the row list on the SAME one,
-        // which is what stops a total from one source sitting over rows from
-        // another.
+        // `HistoryEarnings.build` keeps the snapshot and the row list on the
+        // SAME records, which is what stops a total from one source sitting
+        // over rows from another.
         return HistoryEarnings.build(
             records: shiftRecords,
             policies: policies,
@@ -466,8 +464,7 @@ struct PeriodDetailView: View {
     }
 
     /// The record row. No `if let anchor` guard, because a record IS the
-    /// shift -- the legacy row has to reach for `items.first` and renders
-    /// nothing at all if the group is somehow empty.
+    /// shift.
     private func shiftRow(
         for record: ShiftRecord,
         facts: PeriodDetailFacts
@@ -489,10 +486,6 @@ struct PeriodDetailView: View {
         .shiftContextMenu(record: record, sheetTarget: $sheetTarget, undoState: undoState, context: modelContext)
     }
 
-    /// The card used to carry its own date range as a caption; folding it
-    /// into the nav title instead frees that space for the payday/rate line.
-    /// The year only shows when the period crosses into one other than the
-    /// current one — most periods live entirely inside a single year.
     /// A tapped payday push asked for this period's stub sheet with the
     /// scanner started. Both onAppear and onChange call through here: the
     /// detail may already be on screen when the tap arrives (the app was
@@ -504,6 +497,10 @@ struct PeriodDetailView: View {
         showPaycheckSheet = true
     }
 
+    /// The card used to carry its own date range as a caption; folding it
+    /// into the nav title instead frees that space for the payday/rate line.
+    /// The year only shows when the period crosses into one other than the
+    /// current one — most periods live entirely inside a single year.
     private var periodTitle: String {
         let currentYear = Calendar.current.component(.year, from: Date())
         let endYear = Calendar.current.component(.year, from: period.end)

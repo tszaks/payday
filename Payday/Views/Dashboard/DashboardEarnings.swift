@@ -6,12 +6,12 @@ import Foundation
 /// ## Why it exists — two measured defects, both about doing this twice
 ///
 /// **The grouping calendar.** `DashboardView.body` built its snapshot with
-/// `LegacySnapshotBridge.snapshot(entries:)`, the convenience overload whose
-/// `ShiftDays.groupedByShift` call takes the DEFAULT `Calendar.current` —
+/// a convenience snapshot overload (since removed) whose
+/// `ShiftDays.groupedByShift` call took the DEFAULT `Calendar.current` —
 /// the DEVICE's zone. `DashboardFacts.init` then grouped the same rows again
 /// with `PayrollCalendar.gridCalendar(in: payrollTimeZone)` — the FROZEN
-/// payroll zone — and looked the results up by those ids. For a legacy
-/// `TipEntry` with `shiftID == nil` the fallback id is
+/// payroll zone — and looked the results up by those ids. For a row with no
+/// stored `shiftID` the fallback id was
 /// `ShiftDays.deterministicShiftID(for:calendar:)`, which is
 /// `calendar.startOfDay(...)`-derived, so the two minted DIFFERENT ids for
 /// any row whose civil day differs between the zones and
@@ -44,7 +44,7 @@ import Foundation
 /// `DashboardFacts`, for the hero only. One shared stamp, so a disagreement
 /// between two screens stays diffable, and Dashboard's cutoff is something
 /// it declares rather than something baked into its copy of the data — and
-/// declares on screen too, via `DashboardFacts.heroDeferredShiftCount`.
+/// declares on screen too, via `DashboardFacts.declaringDeferral`.
 ///
 /// ## The same shape as `HistoryEarnings.Build`, on purpose
 ///
@@ -55,13 +55,14 @@ import Foundation
 /// copy invented by the next screen. They are kept separate today only
 /// because the plan's rule is that a shared change does not get made twice
 /// by two parallel workers; this one is flagged for the coordinator.
-///
-/// **This is the PR 2 slice S7 swap point.** When something finally writes
-/// `ShiftRecord` locally, `build` becomes `earningsStore.snapshot` and
-/// nothing above it changes.
 enum DashboardEarnings {
+    /// **The one entry point.** `ShiftRecord`s — the only stored shape since
+    /// the flip — in, one dataset out. The snapshot and the rows come from
+    /// the same input, so the hero cannot sit over rows drawn from a
+    /// different dataset.
+    ///
     /// - Parameters:
-    ///   - entries: every local `TipEntry`, not the period's slice. The
+    ///   - records: every local `ShiftRecord`, not the period's slice. The
     ///     ledger allocates the overtime threshold across the complete
     ///     workweek of the shifts it is handed, so a fourteen-day slice
     ///     cannot price the forty-first hour of a week that began before day
@@ -73,21 +74,7 @@ enum DashboardEarnings {
     ///     a `.distantPast` confirmed policy, and two screens bucketing
     ///     overtime into different weeks when one of them read the
     ///     pay-period GRID's weekday. The engine does the effective dating.
-    ///   - calendar: the GRID calendar, in the frozen payroll zone
-    ///     (`PayrollCalendar.gridCalendar(in:)`). It groups and it bounds
-    ///     periods; it prices nothing.
-    /// The shift-representation dataset.
-    ///
-    /// The swap this type's header promised: "`LegacySnapshotBridge` and not
-    /// `earningsStore.snapshot`: nothing writes `ShiftRecord` on a device
-    /// until PR 2 slice S7 ... the swap is inside `DashboardEarnings.build`."
-    /// This is that swap, and it keeps the snapshot and the rows on the SAME
-    /// representation so the hero cannot sit over rows drawn from the other
-    /// one.
-    /// **The one entry point.** `ShiftRecord`s — the only stored shape since
-    /// the flip — in, one dataset out. The snapshot and the rows come from
-    /// the same input so the hero cannot sit over rows drawn from a
-    /// different representation.
+    ///   - payrollTimeZone: the FROZEN payroll zone, for civil-day dating.
     @MainActor
     static func build(
         records: [ShiftRecord],
@@ -193,7 +180,7 @@ enum DashboardEarnings {
             shifts: adapted.inputs,
             rates: policies.rates,
             calendars: policies.calendars,
-            // Unclamped, the same decision the legacy build makes below: the
+            // Unclamped, the same decision `HistoryEarnings.build` makes: the
             // to-date cutoff is the HERO's scope, not the dataset's.
             asOf: CivilDay(.distantFuture, in: payrollTimeZone),
             unreadableReceiptShiftIDs: adapted.unreadableReceiptShiftIDs

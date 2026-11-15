@@ -17,8 +17,8 @@ public struct CompensationPolicies: Hashable, Codable, Sendable {
     /// Payroll calendar history, normalized to effect order.
     public var calendars: [PayrollCalendarPolicy]
     /// The person's jobs (PR E1), primary first. Empty for everyone with one
-    /// job: a job list appears only when a second job is added, so an
-    /// account that never adds one keeps today's JSON byte for byte.
+    /// job, encoded as `[]`: a job list appears only when a second job is
+    /// added.
     public var jobs: [JobPolicy]
     /// The job TAG the lookups below answer for (E2b). Nil on every value
     /// except one returned by `policies(forJob:)`, so an unfiltered value
@@ -59,8 +59,6 @@ public struct CompensationPolicies: Hashable, Codable, Sendable {
         self.init(version: version, rates: rates, calendars: calendars, jobs: jobs)
     }
 
-    /// `jobs` is encoded only when there are any, so an account with one job
-    /// writes exactly the JSON it wrote before jobs existed.
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(version, forKey: .version)
@@ -227,7 +225,7 @@ public struct CompensationPolicies: Hashable, Codable, Sendable {
 
     /// Returns a copy with a job added. The first extra job also creates the
     /// primary entry (`primaryName`, `primaryID`), because "one job" is
-    /// stored as no list at all. A blank name, or one that matches an
+    /// stored as an empty list. A blank name, or one that matches an
     /// existing job (trimmed, case-insensitive), changes nothing.
     public func addingJob(
         id: UUID,

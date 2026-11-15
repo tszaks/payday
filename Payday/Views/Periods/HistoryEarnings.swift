@@ -32,13 +32,6 @@ enum HistoryEarnings {
     /// query per period, is also what makes the list and the detail the same
     /// engine answering at two scopes.
     ///
-    /// **This is the PR 2 S7 swap point for group 2.4.** Nothing writes
-    /// `ShiftRecord` on a device yet, so `earningsStore.snapshot` is empty
-    /// and a screen switched onto it today would show a person with years of
-    /// shifts a blank page (`LegacySnapshotBridge`'s header has the
-    /// measurement). When the shift sync leg lands, this function's body
-    /// becomes `earningsStore.snapshot` and nothing below it changes.
-    ///
     /// - Parameters:
     ///   - policies: `PolicyStore.policies`, whole. Never a scalar rate and
     ///     never a scalar weekday: wave 0 measured $520.00/`.complete`
@@ -46,21 +39,8 @@ enum HistoryEarnings {
     ///     a `.distantPast` confirmed policy, and two screens bucketing
     ///     overtime into different weeks when one read the pay-period GRID's
     ///     weekday. The engine does the effective dating.
-    ///   - calendar: the GRID calendar, for shift grouping and period
-    ///     boundaries. Presentation only; it prices nothing.
-    /// The shift-representation build.
+    ///   - payrollTimeZone: the FROZEN payroll zone, for civil-day dating.
     ///
-    /// This is the single switch point for four consumers -- `PeriodDetailView`,
-    /// `DashboardEarnings`, `InsightsEarnings` and `PeriodsView` all reach
-    /// their money through `HistoryEarnings.build`. Switching HERE rather than
-    /// in each view is what keeps them from disagreeing: one source decision,
-    /// four screens, no possibility of a half-switched surface.
-    ///
-    /// It also keeps the snapshot and the rows on the SAME representation. A
-    /// screen whose total came from the engine while its rows came from the
-    /// legacy store would show one figure over rows summing to something else
-    /// under any bug -- which is criterion 5 broken by construction, on the
-    /// most scrutinised screens in the app.
     /// **The one entry point.** `ShiftRecord`s — the only stored shape since
     /// the flip — in, one `Build` out. Four consumers reach their money
     /// through here (`PeriodDetailView`, `DashboardEarnings`,
@@ -78,7 +58,7 @@ enum HistoryEarnings {
             shifts: adapted.inputs,
             rates: policies.rates,
             calendars: policies.calendars,
-            // The same no-cutoff decision the legacy build makes below, and
+            // The same no-cutoff decision `CalendarEarnings.snapshot` makes, and
             // for the same recorded reason: HP-01 and HP-05 both say History
             // applies no to-date cutoff, and saying it ONCE in the snapshot's
             // own stamp beats passing `asOf: .distantFuture` at a dozen query
@@ -115,17 +95,17 @@ enum HistoryEarnings {
 
     /// What a pay period earned, composed from `range(_:)`.
     ///
-    /// **Composed, because the bridge's snapshot cannot attest a pay period.**
-    /// `LegacySnapshotBridge` supplies no `EarningsInputs.schedule`, so
+    /// **Composed, because this build's snapshot cannot attest a pay period.**
+    /// `build` supplies no `EarningsInputs.schedule`, so
     /// `stamp.manifest` carries no schedule digest and nothing in the
     /// snapshot can tell a consumer that the pay-period GRID moved
     /// underneath it. `snapshot.payPeriod(_:)` would still return these exact
     /// cents — MEASURED: it and `range(_:)` are the same `ranged(...)` call
     /// with a different `EarningsScope` label — so the choice here is about
     /// honesty of scope, not arithmetic: this result says `.range`, which is
-    /// all the dataset behind it can support. When PR 2 S7 lands and
-    /// `EarningsStore` supplies the schedule, this becomes
-    /// `snapshot.payPeriod(_:)` and the cents do not move.
+    /// all the dataset behind it can support. If the snapshot ever carries the
+    /// schedule, this can become `snapshot.payPeriod(_:)` and the cents do
+    /// not move.
     static func earnings(
         _ snapshot: EarningsSnapshot?,
         for period: PayPeriod,
@@ -242,11 +222,8 @@ struct PeriodCheckComparison: Equatable {
     /// dataset, next to a literal `$0.00` for a figure the engine could not
     /// answer.
     ///
-    /// Narrow today (a nil snapshot needs an `InputManifest.ValidationError`)
-    /// and ordinary after the PR 2 S7 swap, where `EarningsStore` is
-    /// `.loading` before its first build and `.unavailable` on a failed
-    /// fetch: the green verdict would have rendered on the first frame of
-    /// every cold launch.
+    /// Narrow (a nil snapshot needs an `InputManifest.ValidationError`), but
+    /// a verdict with no dataset behind it is wrong whenever it renders.
     init?(result: EarningsResult?, paycheck: PaycheckRecord?, cardTipsOnCheck: Bool = true) {
         guard let result, let paycheck else { return nil }
         // ONE expectation, built by the reconciler from this period's own

@@ -1,23 +1,19 @@
 import Foundation
 import Testing
 @testable import Payday
-@testable import PaydayCore
 
-/// Flip gate 1, landed ahead of the flip so the property is proven rather than
-/// invented alongside the change that depends on it.
+/// Flip gate 1: a shift logged this session must count toward tonight's nudge.
 ///
-/// `BackfillSheet` and `LogTipSheet` pass `allEntries + sessionEntries` /
-/// `+ newEntries` to the schedulers, because `@Query` has not refreshed by the
-/// time `onDisappear` fires. When the writer flips, those additions must become
-/// `shiftRecords + the records just created`. If that is missed, the user logs a
-/// shift and the very next thing the app does is tell them "you haven't logged
-/// today" -- the bug #40 switched this scheduler to prevent, reintroduced from
-/// the other side.
+/// `BackfillSheet` and `LogTipSheet` pass `shiftRecords + the records just
+/// created` to the schedulers, because `@Query` has not refreshed by the time
+/// `onDisappear` fires. If that is missed, the user logs a shift and the very
+/// next thing the app does is tell them "you haven't logged today" -- the bug
+/// #40 switched this scheduler to prevent, reintroduced from the other side.
 ///
-/// This suite asserts the receiving end is ready: a `ShiftRecord` handed in
-/// alongside the queried ones suppresses tonight's nudge exactly as a queried
-/// one would. So at flip time the only thing left to get right is passing it,
-/// and gate 1 is a check on the call site rather than on the mechanism.
+/// This suite asserts the receiving end: a `ShiftRecord` handed in alongside
+/// the queried ones suppresses tonight's nudge exactly as a queried one
+/// would. So the only thing left to get right is passing it, and the gate is
+/// a check on the call site rather than on the mechanism.
 @Suite("Flip gate 1: logged this session", .serialized)
 @MainActor
 struct FlipGate1SessionLoggedTests {
@@ -70,7 +66,7 @@ struct FlipGate1SessionLoggedTests {
         let beforeLogging = SmartNudgeScheduler.rhythmFireDate(
             shiftRecords: queried, from: Self.now
         )
-        let tonight = try? #require(beforeLogging)
+        let tonight = beforeLogging
         #expect(tonight != nil, "the fixture must produce a nudge, or this proves nothing")
         if let tonight {
             #expect(Self.calendar.isDate(tonight, inSameDayAs: Self.now))

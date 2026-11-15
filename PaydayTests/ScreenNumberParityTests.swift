@@ -170,7 +170,8 @@ struct ScreenNumberParityTests {
         let calculator = PayPeriodCalculator(payrollTimeZone: Self.zone, schedule: .fallback)
         let csv = CSVExporter.export(
             records: Self.records(), paycheckRecords: [],
-            calculator: calculator
+            calculator: calculator,
+            valuations: [:]
         )
         // Two shifts, so two rows under the header.
         #expect(csv.split(separator: "\n").count == 3)

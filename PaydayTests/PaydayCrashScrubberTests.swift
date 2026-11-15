@@ -90,11 +90,12 @@ struct PaydayCrashScrubberTests {
     func httpBreadcrumbLosesItsQuery() throws {
         let crumb = Breadcrumb()
         crumb.category = "http"
-        crumb.data = [
-            "url": "https://bkkxunqqfkogxibyyjmc.supabase.co/rest/v1/shifts?user_id=eq.11111111-1111-4111-8111-111111111111&select=cash_tips_cents",
-            "method": "GET",
-            "status_code": 500
-        ]
+        crumb.setData(
+            value: "https://bkkxunqqfkogxibyyjmc.supabase.co/rest/v1/shifts?user_id=eq.11111111-1111-4111-8111-111111111111&select=cash_tips_cents",
+            key: "url"
+        )
+        crumb.setData(value: "GET", key: "method")
+        crumb.setData(value: 500, key: "status_code")
         let scrubbed = try #require(PaydayCrashScrubber.scrub(crumb))
         let url = try #require(scrubbed.data?["url"] as? String)
         #expect(url == "https://bkkxunqqfkogxibyyjmc.supabase.co/rest/v1/shifts")
@@ -111,12 +112,10 @@ struct PaydayCrashScrubberTests {
     func bodiesAreRemoved() throws {
         let crumb = Breadcrumb()
         crumb.category = "http"
-        crumb.data = [
-            "url": "https://example.supabase.co/rest/v1/shifts",
-            "response_body": #"[{"cash_tips_cents":24750}]"#,
-            "request_body": #"{"p_rows":[]}"#,
-            "body": "anything"
-        ]
+        crumb.setData(value: "https://example.supabase.co/rest/v1/shifts", key: "url")
+        crumb.setData(value: #"[{"cash_tips_cents":24750}]"#, key: "response_body")
+        crumb.setData(value: #"{"p_rows":[]}"#, key: "request_body")
+        crumb.setData(value: "anything", key: "body")
         let scrubbed = try #require(PaydayCrashScrubber.scrub(crumb))
         #expect(scrubbed.data?["response_body"] == nil)
         #expect(scrubbed.data?["request_body"] == nil)
@@ -127,7 +126,8 @@ struct PaydayCrashScrubberTests {
     func breadcrumbDataIsRedacted() throws {
         let crumb = Breadcrumb()
         crumb.category = "app.lifecycle"
-        crumb.data = ["headline": "Total $912.44", "count": 3]
+        crumb.setData(value: "Total $912.44", key: "headline")
+        crumb.setData(value: 3, key: "count")
         let scrubbed = try #require(PaydayCrashScrubber.scrub(crumb))
         #expect(scrubbed.data?["headline"] as? String == "Total [redacted]")
         #expect(scrubbed.data?["count"] as? Int == 3)
