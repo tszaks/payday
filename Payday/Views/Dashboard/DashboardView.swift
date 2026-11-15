@@ -53,7 +53,7 @@ import TipKit
 /// so every screen's stamp is the same stamp and a disagreement between two
 /// of them stays diffable (contract rule 3). Dashboard's period-to-date
 /// cutoff is therefore an `asOf:` argument on one query rather than a
-/// property of its copy of the data — and `heroDeferredShiftCount` makes the
+/// property of its copy of the data — and `declaringDeferral` makes the
 /// narrower scope visible, because a hero that quietly excludes a shift whose
 /// own row is right underneath it is two answers to one question.
 ///
@@ -95,9 +95,7 @@ struct DashboardFacts: SnapshotFacts {
     /// showing at all.
     let paydayPhase: PaydayMoment.Phase?
     /// Whether this period has any shift to draw — the gate the empty state
-    /// hangs off. It used to ask `periodEntries.isEmpty`, which is
-    /// legacy-only: the first account to flip saw "No shifts this period."
-    /// under a correct, non-zero hero.
+    /// hangs off.
     let shiftCount: Int
 
     var hasShiftsThisPeriod: Bool { shiftCount > 0 }
@@ -127,21 +125,6 @@ struct DashboardFacts: SnapshotFacts {
     /// to today, labelled and captioned by its own `Completeness`. Renders no
     /// currency at all when the engine could not answer (rule 4).
     let hero: EarningsFigure
-    /// How many shifts the hero period holds that its to-date clamp excluded
-    /// — shifts dated after today. A COUNT, not money: the figures all still
-    /// come from the engine, and this only decides whether the hero has to
-    /// say that it is not the whole period.
-    ///
-    /// MEASURED, and the reason it exists: a biweekly period whose only
-    /// shift was dated two days ahead rendered `heroText "$0.00"`, `label
-    /// "Total"`, `caption nil`, state `.noShifts` — directly above that
-    /// shift's own row reading $394.00, because `valuation(_:)` is
-    /// deliberately unclamped. The empty-state sentence the `$0.00`
-    /// deferral leans on ("No shifts this period.") is gated on
-    /// `periodEntries.isEmpty`, which is false in that state, so nothing on
-    /// screen explained the zero. It was also a regression: the superseded
-    /// hero printed 14400 for the same input.
-    let heroDeferredShiftCount: Int
     /// The drawer's itemization, straight off the same `EarningsResult` the
     /// hero is — so "Cash tips + Credit tips + Gratuity + Wages - Tipped out"
     /// reconciles to the bottom line by construction, not by agreement.
@@ -385,17 +368,16 @@ struct DashboardFacts: SnapshotFacts {
         // How much of the hero period the to-date clamp left out, as a count
         // of shifts. Both sides are the engine's own selection over the same
         // snapshot: `valuations(in:)` is unclamped, `result.shiftIDs` is what
-        // the clamped query actually summed. See `heroDeferredShiftCount`.
+        // the clamped query actually summed. See `declaringDeferral`.
         let heroRange = Self.range(of: heroPeriod, in: payrollTimeZone)
         let heroShiftsInPeriod = snapshot.map { $0.valuations(in: heroRange, job: job).count } ?? 0
         let deferredShiftCount = max(0, heroShiftsInPeriod - (heroResult?.shiftIDs.count ?? 0))
-        heroDeferredShiftCount = deferredShiftCount
 
         // ONE EarningsResult behind the whole hero: the face figure, the
-        // drawer's rows, the drawer's bottom line and the collapsed lip.
-        // Nothing here adds, subtracts, scales or rounds a cents value; the
-        // four `BreakdownRow` builders are wave 0's shared composition and
-        // this is their first production caller ([SC-02], [SC-03]).
+        // drawer's rows, the drawer's bottom line and whether it has
+        // anything to open. Nothing here adds, subtracts, scales or rounds a
+        // cents value; the `BreakdownRow` builders are the shared
+        // composition ([SC-02], [SC-03]).
         let ledgerHasBreakdown: Bool
         if let heroResult {
             let figure = Self.declaringDeferral(
@@ -542,6 +524,19 @@ struct DashboardFacts: SnapshotFacts {
 
     /// The same figure, saying out loud that the hero period holds shifts
     /// its to-date clamp left out.
+    ///
+    /// `deferredShiftCount` is how many shifts the hero period holds that
+    /// the clamp excluded — shifts dated after today. A COUNT, not money:
+    /// the figures all still come from the engine, and this only decides
+    /// whether the hero has to say that it is not the whole period.
+    ///
+    /// MEASURED, and the reason it exists: a biweekly period whose only
+    /// shift was dated two days ahead rendered `heroText "$0.00"`, `label
+    /// "Total"`, `caption nil`, state `.noShifts` — directly above that
+    /// shift's own row reading $394.00, because `valuation(_:)` is
+    /// deliberately unclamped. The empty-state sentence ("No shifts this
+    /// period.") is gated on `shiftCount`, which is nonzero in that state,
+    /// so nothing on screen explained the zero.
     ///
     /// The CENTS are untouched — this adds, subtracts and rounds nothing, and
     /// the amount is still the engine's answer for the clamped selection.
@@ -702,8 +697,7 @@ struct DashboardView: View {
     /// input to it moved. Not a `dataRevision`: that watched
     /// `ModelContext.didSave` alone, so a queued policy change or a midnight
     /// rollover left this screen serving figures computed under the old
-    /// inputs. Gone entirely when PR 2 slice S7 lets this read
-    /// `earningsStore.snapshot`.
+    /// inputs.
     @State private var snapshotRevision = 0
     /// The `end` (as a reference-date interval) of the period whose completion
     /// card the person dismissed; 0 means none. Kept so the card stays gone
@@ -773,11 +767,8 @@ struct DashboardView: View {
         // payroll-zone lookup, and a dataset-level `asOf` that made this
         // screen a different dataset from History's.
         //
-        // `LegacySnapshotBridge` and not `earningsStore.snapshot`: nothing
-        // writes `ShiftRecord` on a device until PR 2 slice S7, so the
-        // store's snapshot is empty and a screen on it would show a person
-        // with years of shifts a blank page. The swap is inside
-        // `DashboardEarnings.build`.
+        // The snapshot is built inside `DashboardEarnings.build`, from the
+        // same `ShiftRecord`s every other screen reads.
         let datasets = renderCache?.revision == snapshotRevision
             && renderCache?.datasets.first?.cardTipsPaidAtClose == preferencesStore.isCardTipsPaidAtClose
             ? renderCache!.datasets
@@ -960,7 +951,7 @@ struct DashboardView: View {
         tonightLineRow(facts)
 
         if !facts.hasShiftsThisPeriod {
-            emptyState(facts)
+            emptyState()
         } else {
             shiftsSection(facts)
                 .padding(.horizontal, PaydaySpacing.p16)
@@ -1000,7 +991,7 @@ struct DashboardView: View {
     /// The hero card with a cash/credit drawer tucked behind it, via the
     /// shared HeroBreakdownDrawer (same peek + slide treatment as Vero's
     /// coverage drawer, now also used by PeriodDetailView's hero). The
-    /// drawer's collapsed lip shows the earnings split at rest; tapping the
+    /// drawer's collapsed lip reads "Breakdown" at rest; tapping the
     /// hero slides it open to the full reconciliation (cash tips + credit
     /// tips + employee gratuity - tip-out = take-home), which is where the
     /// tip-out lives now instead of cluttering the card face.
@@ -1138,12 +1129,12 @@ struct DashboardView: View {
                 // shifts" (adapter contract, rule 4). A pay period with no
                 // shifts at all is a different case and DOES print $0.00:
                 // that zero is a fact, and "No shifts this period." is drawn
-                // directly underneath it because `periodEntries` is empty.
+                // directly underneath it because `shiftCount` is zero.
                 //
                 // A period whose shifts are all dated AHEAD of today used to
                 // land in the same $0.00-under-"Total" presentation while
                 // that sentence was NOT drawn (the shift's own row was),
-                // which is the state `heroDeferredShiftCount` closed: the
+                // which is the state `declaringDeferral` closed: the
                 // label becomes "Known so far" and the caption below names
                 // the shifts dated later in the period.
                 Text(facts.hero.text ?? ShiftDayRow.unavailablePlaceholder)
@@ -1156,8 +1147,7 @@ struct DashboardView: View {
                     .animation(reduceMotion ? nil : PaydayAnimation.premiumSpring, value: facts.hero.cents)
                     .lineLimit(1)
                     .minimumScaleFactor(0.5)
-                // "Wages estimated from your current rate" / "wages missing
-                // for 1 shift". The one line that keeps a partial total from
+                // "wages missing for 1 shift". The one line that keeps a partial total from
                 // reading as a settled one; `CompletenessCopy` decides when
                 // it exists, never this screen.
                 if let caption = facts.hero.caption {
@@ -1370,9 +1360,7 @@ struct DashboardView: View {
         }
     }
 
-    /// The record row. No `if let anchor`: a record IS the shift, where the
-    /// legacy row below has to reach for `items.first` and renders nothing at
-    /// all if the group is somehow empty.
+    /// The record row. No `if let anchor`: a record IS the shift.
     private func shiftRow(
         for record: ShiftRecord,
         facts: DashboardFacts
@@ -1400,11 +1388,9 @@ struct DashboardView: View {
     /// double image. Its description line ("Log your tips and watch the total
     /// build toward payday") also only restated the title.
     ///
-    /// The wording follows the hero: when the hero reads "Last pay period", the
-    /// empty list belongs to the NEW period, and "Nothing logged yet this
-    /// period" directly under a completed period's total reads like a
-    /// contradiction rather than a new start.
-    private func emptyState(_ facts: DashboardFacts) -> some View {
+    /// Constant wording: "No shifts this period." holds whichever period the
+    /// hero is showing.
+    private func emptyState() -> some View {
         Text("No shifts this period.")
             .font(PaydayFont.subheadline)
             .foregroundStyle(PaydayColor.textSecondary)

@@ -5,7 +5,6 @@ import SwiftData
 /// exact-hours pass from scanning every punch-backed row on every launch.
 enum MigrationRunner {
     private static let versionKey = "com.szakacsmedia.payday.localMigrationVersion"
-    private static let currentVersion = 2
 
     static func runPending(in context: ModelContext, defaults: UserDefaults = AppGroup.defaults) {
         let version = defaults.integer(forKey: versionKey)
@@ -87,8 +86,8 @@ enum MigrationRunner {
     /// shift-grouping is needed here. A shift with no punches — manual
     /// hours, entered some other way — is left exactly as entered.
     /// Naturally idempotent: recomputing the same punches always yields the
-    /// same answer, so this is safe to run on every launch with no separate
-    /// "already migrated" flag.
+    /// same answer, so a repeat run changes nothing. `runPending` still runs it
+    /// once, gated by the version flag, to skip the scan on later launches.
     @discardableResult
     static func recomputeExactHours(in context: ModelContext, calendar: Calendar = .current) -> Bool {
         let descriptor = FetchDescriptor<TipEntry>(

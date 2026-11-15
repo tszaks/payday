@@ -39,7 +39,7 @@ struct PaycheckEntrySheet: View {
     @Environment(UserPreferencesStore.self) private var preferencesStore
     @Environment(PolicyStore.self) private var policyStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    /// The other representation. Handed to `PaydayPushScheduler` so the
+    /// Handed to `PaydayPushScheduler` so the
     /// figure the payday notification SPEAKS comes from the same source the
     /// screens show; this sheet itself reads its money from the snapshot.
     @Query private var shiftRecords: [ShiftRecord]

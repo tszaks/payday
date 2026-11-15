@@ -3,8 +3,7 @@ import SwiftData
 
 /// Edit, Duplicate, Delete — the same three actions on every shift row,
 /// wherever shifts are listed (Dashboard, day detail, period detail).
-/// Scoped to the whole shift now, not one entry: duplicating or deleting a
-/// merged cash+credit closeout acts on both rows together.
+/// Scoped to the whole shift: one `ShiftRecord`.
 ///
 /// ## Why this file is in PR 5's shared-component slice (METRICS [SC-08])
 ///
@@ -16,11 +15,8 @@ import SwiftData
 ///
 /// Its contract is that it copies verbatim. No arithmetic, no
 /// normalization, no re-derivation of the shift-level fields — every stored
-/// field is copied per row, with exactly two substitutions: one fresh
-/// `shiftID` shared by the whole copy, and `recordedAt: .now`. Copying per
-/// row rather than re-deriving automatically preserves the canonical rule
-/// that only the row which held hours/tip-out/sales/period/clock-times/
-/// server-count in the source still holds them in the copy.
+/// field is copied, with exactly two substitutions: a fresh id and
+/// `recordedAt: .now`.
 ///
 /// **Wave 0 changed nothing here, and pinned it instead.**
 /// `SharedComponentSnapshotTests.duplicateIsValuedIdenticallyByTheEngine`

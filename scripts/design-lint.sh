@@ -15,8 +15,9 @@ FAIL=0
 # grep over app + widget extension sources; tests/build excluded
 SRC=(Payday PaydayWidget)
 
-# Every source line as `path:line:text`, with comments and string CONTENTS
-# blanked. Built once; every rule below greps this instead of the raw files.
+# Every source line as `path:line:text`, with comments blanked (string
+# contents are left intact; lint-blank-comments.pl says why). Built once;
+# every rule below greps this instead of the raw files.
 #
 # The reason is a false positive this script produced on its own explanatory
 # comments: a rule of the form "this spelling must not appear outside these
@@ -27,8 +28,28 @@ SRC=(Payday PaydayWidget)
 # elsewhere. Blanking once, centrally, removes it from all rules at once
 # instead of rewording every comment that trips one.
 SOURCE_STREAM=$(mktemp)
-trap 'rm -f "$SOURCE_STREAM"' EXIT
+CHECKER_ERR=$(mktemp)
+trap 'rm -f "$SOURCE_STREAM" "$CHECKER_ERR"' EXIT
 perl scripts/lint-blank-comments.pl "${SRC[@]}" > "$SOURCE_STREAM"
+BLANK_STATUS=$?
+# Every grep rule below reads this stream, so an empty or half-written one
+# would let all of them print [PASS] at once while checking nothing.
+if [ "$BLANK_STATUS" -ne 0 ] || [ ! -s "$SOURCE_STREAM" ]; then
+  echo "[FAIL] comment-blanking exited $BLANK_STATUS with $(wc -l < "$SOURCE_STREAM" | tr -d ' ') line(s) of source, so no rule could prove anything"
+  echo "=== Design lint FAILED — see docs/DESIGN.md ==="
+  exit 1
+fi
+
+# An embedded checker that cannot run prints nothing, and nothing reads
+# exactly like a clean result. So each one's exit status is checked, and a
+# checker that fails is a rule failure, never a pass. $1 is the rule number,
+# $2 the checker's exit status; its stderr is in $CHECKER_ERR.
+report_broken_checker() {
+  FAIL=1
+  echo "[FAIL] rule $1's checker exited $2, so the rule proved nothing"
+  sed 's/^/   /' "$CHECKER_ERR"
+  echo ""
+}
 
 run_check() {
   local name="$1" pattern="$2" exclude_re="$3" hint="$4"
@@ -124,13 +145,16 @@ run_check \
 # 10. No emojis in USER-FACING strings. Developer log lines (print/os_log) are
 #     excluded since they're not product voice. Perl is portable across macOS
 #     (BSD) and Linux CI runners where grep -P is not.
-EMOJI_HITS=$(find "${SRC[@]}" -name '*.swift' -print0 2>/dev/null \
+EMOJI_HITS=$( { find "${SRC[@]}" -name '*.swift' -print0 \
   | xargs -0 perl -CSD -ne '
       next if /(logger\.|console\.|os_log|Logger\(|\bprint\(|\.debug\(|\.info\(|\.warning\(|\.error\(|\.notice\(|\.fault\(|\.critical\(|#warning|#error)/;
       print "$ARGV:$.: $_" if /[\x{1F000}-\x{1FAFF}\x{2600}-\x{27BF}\x{2B00}-\x{2BFF}\x{1F1E6}-\x{1F1FF}\x{FE0F}\x{20E3}]/ || /\\u\{(?:1F[0-9A-Fa-f]{3}|2[67][0-9A-Fa-f]{2}|2B[0-9A-Fa-f]{2}|FE0F|20E3)\}/;
       close ARGV if eof;
-    ' 2>/dev/null || true)
-if [ -n "$EMOJI_HITS" ]; then
+    '; } 2>"$CHECKER_ERR")
+EMOJI_STATUS=$?
+if [ "$EMOJI_STATUS" -ne 0 ]; then
+  report_broken_checker 10 "$EMOJI_STATUS"
+elif [ -n "$EMOJI_HITS" ]; then
   FAIL=1
   echo "[FAIL] No emojis in source"
   echo "$EMOJI_HITS" | sed 's/^/   /'
@@ -150,10 +174,12 @@ echo ""
 #     marks a payload v2 without performing the subtraction that makes it v2,
 #     and every later reader then trusts the label.
 #
-#     LogTipSheet.swift:1053 is a pre-existing violation, excluded here and
-#     NOT forgiven. It is `gratuityFeesBinding`, the legacy two-row edit path,
-#     which S9 replaces with ShiftCommands.update. Delete this exclusion in
-#     S9 — the ban has no teeth against the edit path until then.
+#     LogTipSheet.swift:~1388 is a pre-existing violation, excluded here and
+#     NOT forgiven. It is `gratuityFeesBinding`, the legacy two-row edit path.
+#     S9 was meant to replace it with ShiftCommands.update and delete this
+#     exclusion; it did not, so the exclusion is still required and the ban
+#     still has no teeth against the edit path. Delete the exclusion when that
+#     path moves to ShiftCommands.update.
 run_check \
   "earningsSchemaVersion is assigned only in ShiftReceiptMetrics.swift" \
   'earningsSchemaVersion *=' \
@@ -167,15 +193,15 @@ run_check \
 #     it from the owner only — $22.00 apart on the N4 shape, and a different
 #     cash/credit split, which is what drives the paycheck comparison).
 #
-#     TipBreakdown.swift and StatsEngine.swift are the two permanent legacy
-#     read legs (tip_entries stays a write surface indefinitely, so the legacy
-#     projection never goes away) and are the "before" side of the section 11
-#     parity gate. They are excluded because they are the rule's existing
-#     consumers, not because a new one would be acceptable.
+#     StatsEngine.swift is the permanent legacy read leg (tip_entries stays a
+#     write surface indefinitely, so the legacy projection never goes away)
+#     and is the "before" side of the section 11 parity gate. It is excluded
+#     because it is the rule's existing consumer, not because a new one would
+#     be acceptable.
 run_check \
-  "voluntaryTipsCents( is called only from its own file and the two legacy read legs" \
+  "voluntaryTipsCents( is called only from its own file and the legacy read leg" \
   'voluntaryTipsCents\(' \
-  'Utilities/ShiftReceiptMetrics\.swift|Utilities/TipBreakdown\.swift|Utilities/StatsEngine\.swift' \
+  'Utilities/ShiftReceiptMetrics\.swift|Utilities/StatsEngine\.swift' \
   "Read a shift's money through ShiftRecord/the projection, or add the case to ShiftReceiptMetrics.swift. Do not re-derive the v1 split"
 
 # 13. ShiftRecord.receiptMetrics is ENCODE-ONLY and has one writer.
@@ -220,7 +246,7 @@ run_check \
 #
 #     20260904125000 predates public.shifts entirely and reads tip_entries, so
 #     it is excluded by name.
-SQL_GRAT_HITS=$(find supabase -name '*.sql' -print0 2>/dev/null \
+SQL_GRAT_RAW=$( { find supabase -name '*.sql' -print0 \
   | xargs -0 awk '
       function scan_dollar_quotes(line,   rest, tag) {
         rest = line
@@ -249,9 +275,15 @@ SQL_GRAT_HITS=$(find supabase -name '*.sql' -print0 2>/dev/null \
         # terminator. Without this the exemption would again outlive the body.
         if (dq == "" && index($0, ";") > 0) fn = ""
       }
-    ' 2>/dev/null \
+    '; } 2>"$CHECKER_ERR")
+SQL_GRAT_STATUS=$?
+# Filtered only after the status is taken: grep -v exits 1 when nothing is
+# left, which inside the pipeline would read as a broken checker.
+SQL_GRAT_HITS=$(printf '%s\n' "$SQL_GRAT_RAW" \
   | grep -v '20260904125000_optimize_payday_summary_and_shift_listing\.sql' || true)
-if [ -n "$SQL_GRAT_HITS" ]; then
+if [ "$SQL_GRAT_STATUS" -ne 0 ]; then
+  report_broken_checker 14 "$SQL_GRAT_STATUS"
+elif [ -n "$SQL_GRAT_HITS" ]; then
   FAIL=1
   echo "[FAIL] gratuityFeesCents' appears in SQL outside private.receipt_gratuity_cents' body"
   echo "$SQL_GRAT_HITS" | sed 's/^/   /'
@@ -290,7 +322,7 @@ fi
 #     `do update set ... where <condition>` are both at that depth and are
 #     still caught; a WHERE inside a subquery in the SET list is not, which is
 #     correct -- it cannot skip the row.
-SQL_CONFLICT_HITS=$(find supabase -name '*.sql' -print0 2>/dev/null \
+SQL_CONFLICT_HITS=$( { find supabase -name '*.sql' -print0 \
   | xargs -0 awk '
       function conflict_predicate(text,    i, d, ch, rest) {
         # text starts at the "on conflict" token. Depth 0 is the clause.
@@ -319,8 +351,11 @@ SQL_CONFLICT_HITS=$(find supabase -name '*.sql' -print0 2>/dev/null \
           stmt = ""
         }
       }
-    ' 2>/dev/null || true)
-if [ -n "$SQL_CONFLICT_HITS" ]; then
+    '; } 2>"$CHECKER_ERR")
+SQL_CONFLICT_STATUS=$?
+if [ "$SQL_CONFLICT_STATUS" -ne 0 ]; then
+  report_broken_checker 15 "$SQL_CONFLICT_STATUS"
+elif [ -n "$SQL_CONFLICT_HITS" ]; then
   FAIL=1
   echo "[FAIL] ON CONFLICT with a predicate WHERE on public.shifts"
   echo "$SQL_CONFLICT_HITS" | sed 's/^/   /'
@@ -396,7 +431,6 @@ fi
 MONEY_BOUNDARY_ALLOWLIST="
 Payday/Models/TipEntry.swift
 Payday/Models/LegacyShiftRow.swift
-Payday/Utilities/PaycheckAudit.swift
 Payday/Utilities/StatsEngine.swift
 "
 
@@ -408,8 +442,14 @@ money_boundary_hits() { # file
       # order to explain why it is gone is not a violation -- StatsEngine
       # documents "Double(cents)/100/hours" for exactly that reason.
       sub(/\/\/.*$/, "", line)
+      # `observed.netCents` is the printed net of a scanned pay stub
+      # (PaycheckObservation), not the net of a shift. Reading it computes
+      # nothing, so it is ignored only on a line with no arithmetic operator
+      # at all; any arithmetic on it, and every other `.netCents`, still counts.
+      net = line
+      if (net !~ /[-+*\/%]/) gsub(/observed\.netCents/, "", net)
     }
-    line ~ /\.netCents/ ||
+    net ~ /\.netCents/ ||
     line ~ /cashTipsCents[[:space:]]*\+/ ||
     # `tipOutCents ??` counts ONLY when the LINE does arithmetic.
     #
@@ -518,8 +558,11 @@ SNAPSHOT_HITS=$(perl -e '
       print "$path: $type.$name is never assigned in init(from:)\n" unless $decoded{$type}{$name};
     }
   }
-' 2>/dev/null || true)
-if [ -n "$SNAPSHOT_HITS" ]; then
+' 2>"$CHECKER_ERR")
+SNAPSHOT_STATUS=$?
+if [ "$SNAPSHOT_STATUS" -ne 0 ]; then
+  report_broken_checker 16 "$SNAPSHOT_STATUS"
+elif [ -n "$SNAPSHOT_HITS" ]; then
   FAIL=1
   echo "[FAIL] A hand-written Codable in PaydaySyncState.swift is missing a key"
   echo "$SNAPSHOT_HITS" | sed 's/^/   /'
@@ -538,8 +581,6 @@ fi
 #       is a fresh bool on AppGroup, which IS in the widget's sources and so
 #       would compile) leaves the Lock Screen printing pre-conversion numbers
 #       while the app prints post-conversion ones.
-#     recordTipDeletions — the durable deletion queue. A second writer is a
-#       deletion that reaches one queue and not the other.
 #     shiftCacheRequiresBaseline — the wiped-shift-cache detector of 7.4. The
 #       device may never derive a shift, so this fact decides whether a forced
 #       server baseline runs, and 7.2/7.3 make the Snapshot checkpoint its one
@@ -567,7 +608,6 @@ pin_check() {
 }
 
 pin_check "shiftsAreAuthoritative" 'func +shiftsAreAuthoritative\b' Payday PaydayWidget --include=*.swift
-pin_check "recordTipDeletions" 'func +recordTipDeletions\b' Payday PaydayWidget --include=*.swift
 pin_check "shiftCacheRequiresBaseline" 'func +shiftCacheRequiresBaseline\b' Payday PaydayWidget --include=*.swift
 pin_check "payday_shift_rollback_at" 'create +(or +replace +)?function +[a-z_.]*payday_shift_rollback_at' supabase --include=*.sql
 
@@ -633,6 +673,7 @@ AUTHORITATIVE_OMISSIONS=$(perl -e '
   use strict; use warnings; use File::Find;
   my @files; my @hits;
   find(sub { push @files, $File::Find::name if /\.swift$/ }, "Payday", "PaydayWidget");
+  die "no Swift files under Payday or PaydayWidget\n" unless @files;
   for my $f (sort @files) {
     open(my $fh, "<", $f) or next;
     local $/; my $src = <$fh>; close $fh;
@@ -655,8 +696,11 @@ AUTHORITATIVE_OMISSIONS=$(perl -e '
     }
   }
   print "$_\n" for @hits;
-')
-if [ -n "$AUTHORITATIVE_OMISSIONS" ]; then
+' 2>"$CHECKER_ERR")
+AUTHORITATIVE_STATUS=$?
+if [ "$AUTHORITATIVE_STATUS" -ne 0 ]; then
+  report_broken_checker 19 "$AUTHORITATIVE_STATUS"
+elif [ -n "$AUTHORITATIVE_OMISSIONS" ]; then
   FAIL=1
   echo "[FAIL] An engine reader omits shiftsAreAuthoritative, so it silently uses the pre-conversion rule"
   printf '%s\n' "$AUTHORITATIVE_OMISSIONS" | sed 's/^/   /'
@@ -769,15 +813,16 @@ fi
 #     widening: a lint that has never been shown to catch every shape it claims
 #     to is a lint trusted on faith.
 #
-#     `lint-selftest-queue.sh` plants one instance of each of the 14
-#     `PaydaySyncState` queue mutators inside a `commit` body and asserts rule
+#     `lint-selftest-queue.sh` plants one instance of each of the 12
+#     `PaydaySyncState` queue mutators inside a `commit` body, and again inside
+#     an unqualified `perform(in:)` in `ShiftCommands.swift`, and asserts rule
 #     20 reports every one. It also plants each of them AFTER the commit and
 #     asserts none is reported, so the rule is shown to discriminate on
 #     POSITION rather than on mere presence -- a rule that fires on everything
 #     is as useless as one that fires on nothing.
 #
 #     Proven to work: narrowing the checker back to its original tip-only form
-#     makes the self-test report 12 misses and fail.
+#     makes the self-test report 24 misses and fail.
 QUEUE_SELFTEST=$(bash scripts/lint-selftest-queue.sh 2>&1)
 QUEUE_SELFTEST_STATUS=$?
 if [ "$QUEUE_SELFTEST_STATUS" -ne 0 ]; then
@@ -786,7 +831,7 @@ if [ "$QUEUE_SELFTEST_STATUS" -ne 0 ]; then
   printf '%s\n' "$QUEUE_SELFTEST" | sed 's/^/   /'
   echo ""
 else
-  echo "[PASS] rule 20 proves itself against all 14 queue symbols, positive and negative"
+  echo "[PASS] rule 20 proves itself against all 12 queue symbols, positive and negative"
 fi
 
 # --- Rule 23: no app-code call reads the legacy shift representation alone.
@@ -863,7 +908,7 @@ fi
 #     time in this engagement and the second inside this rule's own test.
 #
 #     Proven to work, both halves: stubbing rule 23's reporting branch makes
-#     the self-test report 9 misses and fail; re-narrowing the invocation to
+#     the self-test report 10 misses and fail; re-narrowing the invocation to
 #     `Payday` makes it fail with "MISS (scope)".
 REPRESENTATION_SELFTEST=$(bash scripts/lint-selftest-representation.sh 2>&1)
 REPRESENTATION_SELFTEST_STATUS=$?

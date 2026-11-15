@@ -32,11 +32,19 @@ rate-limited, revocable, and audited.
 > disagreed about a shift's date, its detail precedence and its receipt owner.
 > There is now one, in SQL, and this layer reads it.
 >
-> **Wages are still not reported.** A wage is a property of a workweek under a
-> rate policy, not of a row, so no figure here includes one. The app's
-> wage-inclusive totals will reach the API through a device-published
-> snapshot; until then a period figure from this API and one from the app are
-> the same *non-wage* number and are not comparable as totals.
+> **Wages are reported in `data.earnings` of the summary.** A wage is a
+> property of a workweek under a rate policy, not of a row, so the server does
+> not value one. The iPhone publishes a snapshot of per-day figures its engine
+> already valued, and `GET /v1/summary` (`get_summary`) adds up the days in
+> the requested range: `earned_income_cents` is the wage-inclusive figure the
+> app shows, beside `regular_wages_cents`, `overtime_wages_cents`, the tip
+> components, `minutes_worked`, `shift_count` and `days_in_range`. Days after
+> the snapshot's `as_of` are left out, as the app leaves them out.
+> `available: false` with `reason: "no_snapshot"` means no device has
+> published yet; `stale: true` means the data changed after the snapshot was
+> made and stays true until a device publishes again. `data.shifts` is the
+> older tips-only total: it includes no wage and is not comparable with
+> `data.earnings` or with the app.
 
 REST resources include summaries, grouped shifts, raw tip entries, paychecks,
 settings, incremental changes, agent keys, and the audit log. The MCP endpoint
@@ -47,7 +55,8 @@ publishes matching tools.
 Send a key as `Authorization: Bearer pd_live_…`. Available scopes are:
 
 - `read`: summaries, shifts, tips, paychecks, settings, and changes
-- `write`: create/update/restore shifts, tips, paychecks, and settings
+- `write`: create shifts; create/update/restore tips and paychecks; update
+  settings
 - `delete`: soft-delete tips and paychecks
 - `admin`: create/revoke keys and read the audit log
 

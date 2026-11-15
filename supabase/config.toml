@@ -124,8 +124,9 @@ file_size_limit = "50MiB"
 verify_jwt = false
 
 [functions.payroll-connect]
-# The app calls this with the signed-in person's Supabase access token, and
-# the function checks that token itself by asking Supabase Auth for the user
+# The app calls this for one action only: `forget`, during account deletion
+# (PaydayCloudGate.forgetRetiredPayrollConnection). It sends the signed-in
+# person's Supabase access token, and the function checks that token itself by asking Supabase Auth for the user
 # (GET /auth/v1/user) before it touches Truv. That check works with both the
 # legacy JWT secret and the newer asymmetric signing keys, and it also refuses
 # a token whose session was signed out. Gateway verification is off so the

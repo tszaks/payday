@@ -2,7 +2,7 @@ import Foundation
 
 /// When Payday may ask for an App Store rating.
 ///
-/// A deliberately quiet cadence: the third, twenty-fifth and hundredth
+/// A deliberately quiet cadence: the fifth, twenty-fifth and hundredth
 /// completed shift, never twice inside six months. Apple may suppress any
 /// request without telling us, so this records ATTEMPTS and never assumes a
 /// prompt was actually shown.

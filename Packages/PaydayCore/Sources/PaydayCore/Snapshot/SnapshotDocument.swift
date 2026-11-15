@@ -42,8 +42,8 @@ import Foundation
 public struct SnapshotDocument: Codable, Sendable, Equatable {
 
     /// Bumped when the shape changes in a way an older reader cannot handle.
-    /// The server stores it beside `engine_version` so a reader can refuse a
-    /// document it does not understand instead of misreading one.
+    /// Carried inside the payload, so a reader can refuse a document it does
+    /// not understand instead of misreading one. No reader checks it yet.
     public static let currentSchemaVersion = 1
 
     public let schemaVersion: Int

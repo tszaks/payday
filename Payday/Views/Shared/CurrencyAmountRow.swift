@@ -31,6 +31,9 @@ struct CurrencyAmountRow: View {
     let field: CurrencyRowField
     var focusedField: FocusState<CurrencyRowField?>.Binding
     var autoFocus: Bool = false
+    /// What VoiceOver calls the field. Nil reads "<label> tips", which is
+    /// right for Cash and Credit; a row that is not tips names itself.
+    var spokenLabel: String? = nil
 
     @State private var digitsText: String = ""
     private var isFocused: Bool { focusedField.wrappedValue == field }
@@ -58,7 +61,7 @@ struct CurrencyAmountRow: View {
                     .focused(focusedField, equals: field)
                     .opacity(0.01)
                     .frame(maxWidth: 180, alignment: .trailing)
-                    .accessibilityLabel("\(label) tips")
+                    .accessibilityLabel(spokenLabel ?? "\(label) tips")
                     .accessibilityValue(Money.string(fromCents: cents))
             }
         }

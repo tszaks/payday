@@ -298,10 +298,10 @@ struct LogShiftPreSaveParityTests {
             hoursWorked: Draft.hoursWorked,
             recordedAt: Draft.recordedAt
         )
-        let savedInput = try #require(ShiftInputAdapter.input(
+        let savedInput = ShiftInputAdapter.input(
             from: saved,
             calendars: policies.calendars
-        ))
+        )
         var previewInput = try #require(standardDraftInput(policies: policies))
 
         // The id is the ONE field that legitimately differs: the save mints

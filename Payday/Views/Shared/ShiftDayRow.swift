@@ -122,7 +122,7 @@ struct ShiftDayRow: View {
     /// Not "$0.00", which would be a sentence about money that is not true,
     /// and not blank, which reads as a layout bug. An en dash is the
     /// platform's own "no value here".
-    static let unavailablePlaceholder = "–"
+    nonisolated static let unavailablePlaceholder = "–"
 
     var body: some View {
         HStack(alignment: .firstTextBaseline) {

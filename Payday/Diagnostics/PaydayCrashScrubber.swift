@@ -46,7 +46,7 @@ enum PaydayCrashScrubber {
     /// required to be three digits, so a trailing comma that is punctuation
     /// rather than part of the number is left alone: `$40, and then` keeps its
     /// comma and its sentence.
-    nonisolated(unsafe) private static let moneyPattern = try? NSRegularExpression(
+    private static let moneyPattern = try? NSRegularExpression(
         pattern: #"[$£€¥]\s?\d+(?:[.,]\d{3})*(?:[.,]\d{1,2})?"#
     )
 
@@ -92,7 +92,8 @@ enum PaydayCrashScrubber {
             crumb.message = redactingMoney(in: message)
         }
 
-        if var data = crumb.data {
+        if let original = crumb.data {
+            var data = original
             if category == "http" || category == "network" {
                 // A response body is never diagnostic enough to justify
                 // carrying whatever it contains.
@@ -108,7 +109,17 @@ enum PaydayCrashScrubber {
                     data[key] = redactingMoney(in: text)
                 }
             }
-            crumb.data = data
+            // Written back one key at a time: the whole-dictionary setter is
+            // deprecated, and assigning a bridged Swift dictionary to it can
+            // crash. A nil value removes the key.
+            for key in original.keys where data[key] == nil {
+                crumb.setData(value: nil, key: key)
+            }
+            for (key, value) in data {
+                if let text = value as? String, text != original[key] as? String {
+                    crumb.setData(value: text, key: key)
+                }
+            }
         }
 
         return crumb

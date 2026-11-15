@@ -17,9 +17,10 @@ import SwiftData
 /// It used to be this day's shifts alone. The overtime threshold belongs to a
 /// WORKWEEK, so a ledger handed one day can never allocate overtime: MEASURED
 /// on the straddling Thursday, 3396c day-scoped against 3679c week-scoped, and
-/// the tile that opened this sheet had the same hole. Both surfaces now read
-/// one whole-dataset snapshot from `CalendarEarnings`, which is what makes
-/// "calendar tile == this sheet's hero" an identity rather than a coincidence.
+/// the tile that opened this sheet had the same hole. Both surfaces now build
+/// one whole-dataset snapshot the same way (`CalendarEarnings.snapshot`, and
+/// this struct's own `init`), which is what makes "calendar tile == this
+/// sheet's hero" an identity rather than a coincidence.
 /// Internal rather than private so the parity gate can measure the REAL
 /// adapter. A parity test that re-implements the screen's arithmetic in its
 /// own helper proves the helper, and that is exactly how a screen came to
@@ -84,10 +85,8 @@ struct DayDetailFacts: SnapshotFacts {
     /// dissolves it. The row facts looked representation-bound because the
     /// signature took the legacy tuple, but the body only ever used
     /// `shiftID`, `day` and the shift's period. All three sit directly on a
-    /// `ShiftRecord`, so no enum over the two representations and no generic
-    /// over `LegacyShiftRow` is needed here at all -- each caller supplies the
-    /// three from its own shape, the legacy one via `ShiftDetails.resolve` and
-    /// the record one by reading its own canonical fields.
+    /// `ShiftRecord`, so the caller supplies the three by reading the
+    /// record's own canonical fields (see `rowFacts(for:shiftCount:note:)`).
     func rowFacts(
         shiftID: UUID,
         day: Date,

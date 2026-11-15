@@ -206,7 +206,7 @@ struct PaycheckAudit {
         guard observed.overtimeWagesCents == nil || observed.overtimeWagesCents == 0 else { return nil }
         guard observed.hasAnyNonWageField || observed.regularWagesCents != nil else { return nil }
         let hours = WorkedMinutes.hoursLabel(minutes: overtimeMinutes)
-        return Finding(id: "overtime-missing", severity: .discrepancy, message: "Your punches add up to \(hours) overtime hours this period; the stub shows no overtime pay.")
+        return Finding(id: "overtime-missing", severity: .discrepancy, message: "Your punches add up to \(hours) of overtime this period; the stub shows no overtime pay.")
     }
 
     /// Whole dollars when the amount is an even dollar figure, cents otherwise.

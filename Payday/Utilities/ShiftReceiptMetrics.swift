@@ -13,9 +13,9 @@ enum TableCountSource: String, Codable, Hashable, Sendable {
     }
 }
 
-/// Rich facts captured from one end-of-shift printout. TipEntry persists this
-/// as one optional JSON string on the shift's canonical row, which keeps the
-/// CloudKit model compact while allowing new receipt fields to remain
+/// Rich facts captured from one end-of-shift printout. The stored model
+/// persists this as one optional JSON string on the shift's row, which keeps
+/// the CloudKit model compact while allowing new receipt fields to remain
 /// additive and optional.
 struct ShiftReceiptMetrics: Codable, Equatable, Hashable, Sendable {
     /// Version 2 means the parent TipEntry amount contains voluntary tips
@@ -132,8 +132,8 @@ struct ShiftReceiptMetrics: Codable, Equatable, Hashable, Sendable {
     /// additive category.
     ///
     /// **This is a port of the READ path, not the edit path**, and the
-    /// distinction is worth real money. `TipBreakdown.total` resolves the one
-    /// row that owns the receipt and applies `voluntaryTipsCents` to **that
+    /// distinction is worth real money. The legacy read path resolved the one
+    /// row that owns the receipt and applied `voluntaryTipsCents` to **that
     /// row only** — `max(0, amount - gratuity)`. `LogTipSheet`'s
     /// `gratuityFeesBinding` instead moves the whole folded gratuity to the
     /// other kind, which is a deliberate reassignment while a person is

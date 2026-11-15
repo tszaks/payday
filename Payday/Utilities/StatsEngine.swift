@@ -2000,7 +2000,8 @@ enum RevealCopy {
         let isAbove = deltaCents >= 0
         var base = "\(Money.string(fromCents: abs(deltaCents))) \(isAbove ? "above" : "below") your \(weekdayName(weekday)) average."
         if sampleCount < minimumSampleForCleanAverage {
-            base = "\(Money.string(fromCents: abs(deltaCents))) \(isAbove ? "above" : "below") your \(weekdayName(weekday)) average (across \(NumberWords.spell(sampleCount)) \(weekdayName(weekday))s)."
+            let days = sampleCount == 1 ? weekdayName(weekday) : "\(weekdayName(weekday))s"
+            base = "\(Money.string(fromCents: abs(deltaCents))) \(isAbove ? "above" : "below") your \(weekdayName(weekday)) average (across \(NumberWords.spell(sampleCount)) \(days))."
         }
         guard let periodRank else { return base }
         let rankText: String

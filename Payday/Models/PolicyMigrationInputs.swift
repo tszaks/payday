@@ -36,14 +36,4 @@ enum PolicyMigrationInputs {
 
         return candidates.min()
     }
-
-    /// How many shifts the user has, across both representations, for the
-    /// "is the rate-history prompt owed" question. A count, not a merge: it
-    /// only has to answer "any at all".
-    @MainActor
-    static func shiftCount(in context: ModelContext) -> Int {
-        let shifts = (try? context.fetchCount(FetchDescriptor<ShiftRecord>())) ?? 0
-        guard shifts == 0 else { return shifts }
-        return (try? context.fetchCount(FetchDescriptor<TipEntry>())) ?? 0
-    }
 }

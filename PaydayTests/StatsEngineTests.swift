@@ -27,18 +27,6 @@ private func record(_ year: Int, _ month: Int, _ day: Int, cents: Int, kind: Tip
     return TipRecord(date: shiftDate, amountCents: cents, kind: kind, isDouble: isDouble, recordedAt: recordedAt, hoursWorked: hoursWorked, tipOutCents: tipOutCents, salesCents: salesCents, shiftPeriod: shiftPeriod, shiftID: shiftID, clockIn: clockIn, clockOut: clockOut, receiptMetrics: receiptMetrics, note: note)
 }
 
-private func receiptFacts(guests: Int, checks: Int, tables: Int, tableSource: TableCountSource, netSalesCents: Int, categories: [ShiftReceiptMetrics.CategorySales] = []) -> ShiftReceiptMetrics {
-    ShiftReceiptMetrics(
-        guestCount: guests,
-        creditCheckCount: checks,
-        tableCount: tables,
-        tableCountSource: tableSource,
-        netSalesCents: netSalesCents,
-        cashSalesCents: 0,
-        categorySales: categories
-    )
-}
-
 /// Two distinct shift ids for building emergent "double" days in tests — a
 /// double is now two shifts on one calendar day, each with its own id.
 private let lunchShift = UUID()
@@ -1167,7 +1155,7 @@ struct RevealTests {
     // unrendered sentence. PR 5 group 2.6 deleted the whole path rather than
     // migrating it. The live $/hr figure is now
     // `EarningsResult.hourlyRateCents`, pinned by
-    // `InsightsSnapshotParityTests.theHourlyTileIsTheEnginesOwnRate`.
+    // `InsightsNumbersGridTests.noHourlyTileWithoutAnEngineAnswer`.
 }
 
 /// Tyler's ruling (2026-07-27): a shift speaks ONE number. These fixtures

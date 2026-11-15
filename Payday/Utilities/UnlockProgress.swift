@@ -44,7 +44,7 @@ enum UnlockCopy {
             return "\(remaining) more \(shiftWord) for insights"
         case .weekday(let weekday):
             // Calendar.current, not the caller's calendar — matches how
-            // StatsEngine's own Move copy names weekdays (see weekdaySwapMove).
+            // `RevealCopy` in StatsEngine.swift names weekdays.
             let name = Calendar.current.weekdaySymbols[weekday - 1]
             return "\(remaining) more \(name) \(shiftWord) for a \(name) average"
         case .hourlyRate:

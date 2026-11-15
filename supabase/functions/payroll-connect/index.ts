@@ -686,7 +686,7 @@ export function createHandler(
   };
 }
 
-export const testing = { authenticate, findTruvUser };
+export const testing = { findTruvUser };
 
 if (import.meta.main) {
   Deno.serve(

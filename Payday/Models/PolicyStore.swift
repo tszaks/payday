@@ -158,21 +158,6 @@ final class PolicyStore {
         return updated
     }
 
-    /// The calendar policy a new one has to start on a boundary of, and the
-    /// one whose frozen zone is "the payroll time zone".
-    ///
-    /// **Never feed this to a valuation.** It is `calendars.last`, so once
-    /// the user queues a workweek change it is a policy that is not in effect
-    /// yet — reading its weekday re-buckets all of history TODAY. Wave 0's
-    /// first cut did exactly that on two screens. The valuation lookups are
-    /// `calendarPolicyInEffect(today:)` and `policies.calendar(on:)`, and the
-    /// engine does its own effective dating when handed the whole
-    /// `CompensationPolicies` value, which is what every money path should
-    /// pass.
-    var latestCalendarPolicy: PayrollCalendarPolicy? {
-        policies.latestCalendar
-    }
-
     /// Whether the one-time rate-history prompt is still owed: the only rate
     /// policies on file are legacy assumptions AND there is at least one
     /// shift whose wages therefore read as estimated. A brand-new user with
@@ -204,11 +189,6 @@ final class PolicyStore {
     /// Adds or replaces one rate policy (by id) as a user edit.
     func applyRate(_ policy: PayRatePolicy) {
         apply(policies.adding(rate: policy))
-    }
-
-    /// Adds or replaces one calendar policy (by id) as a user edit.
-    func applyCalendar(_ policy: PayrollCalendarPolicy) {
-        apply(policies.adding(calendar: policy))
     }
 
     /// The plain "Hourly wage" row in Settings: the user is saying what their

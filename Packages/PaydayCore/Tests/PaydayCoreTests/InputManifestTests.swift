@@ -148,13 +148,16 @@ struct InputManifestTests {
     /// same bytes and pasted. Do not "fix" a mismatch here by re-pinning: a
     /// mismatch means the encoding changed.
     ///
-    /// Re-pinned once, deliberately, on 2026-09-18, when `tipOutCents` was
-    /// canonicalized to `?? 0`. The only byte that moved in `canonicalText`
-    /// is shift `2222...`'s tip-out field, `-` to `0`. The new hex was
-    /// DERIVED, not copied out of the failing assertion: the contract literal
-    /// was extracted and hashed with `shasum -a 256` independently, and that
-    /// external hash agrees with what the encoder produces. A hex pasted from
-    /// the code's own output would only prove the code equals itself.
+    /// Re-pinned three times, deliberately. First on 2026-09-18, when
+    /// `tipOutCents` was canonicalized to `?? 0`: the only byte that moved in
+    /// `canonicalText` was shift `2222...`'s tip-out field, `-` to `0`. That
+    /// new hex was DERIVED, not copied out of the failing assertion: the
+    /// contract literal was extracted and hashed with `shasum -a 256`
+    /// independently, and that external hash agrees with what the encoder
+    /// produces. A hex pasted from the code's own output would only prove the
+    /// code equals itself. Then twice for an engine version bump, where the
+    /// `engine|` line was the only line that moved: `engine|2` with daily
+    /// overtime, and `engine|3` with per-job pricing.
     static let pinnedDigest = "3f1fcf2eb2efc3bbfcfb90d0b799528a50cdda776aaa77b124f8f4a078f4e36d"
 
     /// The pair that must be read together, so neither half looks like a bug.
@@ -688,7 +691,7 @@ struct InputManifestTests {
 
     /// Every representable date encodes exactly as before, so adding the
     /// bound is not a `formatVersion` bump. The pinned canonical text in
-    /// `canonicalTextIsPinned` covers the fixture; this covers the edges.
+    /// `canonicalTextMatches` covers the fixture; this covers the edges.
     @Test("Representable dates encode unchanged (no format-version bump)")
     func representableDatesUnchanged() {
         for seconds in [0.0, 1.0, -1.0, 1_790_000_000.9, -1_790_000_000.9, 1e15, -1e15] {

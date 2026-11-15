@@ -17,9 +17,7 @@ struct BackfillSheet: View {
     @Environment(PayScheduleStore.self) private var scheduleStore
     @Environment(UserPreferencesStore.self) private var preferencesStore
     @Query private var paycheckRecords: [PaycheckRecord]
-    /// The other representation. SmartNudgeScheduler picks between this and
-    /// `allEntries` on `shiftsAreAuthoritative`; it must never read both, or a
-    /// converted shift counts twice.
+    /// The shifts SmartNudgeScheduler reads when the sheet reschedules.
     @Query private var shiftRecords: [ShiftRecord]
 
     @State private var selectedDate: Date
@@ -31,14 +29,12 @@ struct BackfillSheet: View {
     @State private var shiftsAddedCount = 0
     @State private var saveFailed = false
     @State private var datesWithExistingShifts: Set<Date> = []
-    /// Entries saved this session, appended to allEntries when rescheduling
-    /// the nudge at dismiss — same defensive concatenation LogTipSheet.saveNew
-    /// uses, since allEntries' @Query isn't guaranteed to have refreshed by
-    /// the time onDisappear fires for the very last save.
-    /// The same, in the shift representation. Backfill enters a whole history
-    /// in one sitting, so `@Query` lags badly here -- this is why the session
-    /// list exists at all, and the record path needs its own for the same
-    /// reason. Exactly one of the two ever fills.
+    /// Shifts saved this session, appended to `shiftRecords` when
+    /// rescheduling the nudge at dismiss — same defensive concatenation
+    /// LogTipSheet.saveNew uses, since the `@Query` isn't guaranteed to have
+    /// refreshed by the time onDisappear fires for the very last save.
+    /// Backfill enters a whole history in one sitting, so `@Query` lags badly
+    /// here -- this is why the session list exists at all.
     @State private var sessionRecords: [ShiftRecord] = []
 
     init() {
@@ -73,7 +69,7 @@ struct BackfillSheet: View {
                             .id("cash-\(shiftsAddedCount)")
                         CurrencyAmountRow(label: "Credit", cents: $creditCents, field: .credit, focusedField: $focusedField)
                             .id("credit-\(shiftsAddedCount)")
-                        CurrencyAmountRow(label: "Tip-out", cents: $tipOutCents, field: .tipOut, focusedField: $focusedField)
+                        CurrencyAmountRow(label: "Tip-out", cents: $tipOutCents, field: .tipOut, focusedField: $focusedField, spokenLabel: "Tip-out")
                             .id("tipOut-\(shiftsAddedCount)")
                     }
                     .padding(.horizontal)
@@ -190,8 +186,10 @@ struct BackfillSheet: View {
     }
 
     /// The one place a shift actually gets written — shared by "Save & Add
-    /// Another" and both Done buttons so there's exactly one save path.
-    private func performSave() {
+    /// Another" and the Done button so there's exactly one save path.
+    /// Returns whether the shift was written, so neither caller clears the
+    /// amounts or closes the sheet on a save that did not happen.
+    private func performSave() -> Bool {
         // Explicit and atomic. This path persisted only through autosave, so
         // with autosave off a backfilled shift would vanish on relaunch --
         // and backfill is used to enter a whole history at once, so the loss
@@ -212,12 +210,13 @@ struct BackfillSheet: View {
             // re-entered rather than silently lost, and the counter does not
             // advance on a save that did not happen.
             saveFailed = true
-            return
+            return false
         }
         sessionRecords.append(contentsOf: records)
         datesWithExistingShifts.insert(Calendar.current.startOfDay(for: selectedDate))
         PaydayHaptics.success()
         shiftsAddedCount += 1
+        return true
     }
 
     private func refreshExistingShiftDates() {
@@ -233,7 +232,7 @@ struct BackfillSheet: View {
     /// steps the date back a day (the natural direction when working
     /// backward through a notebook), and bumps the session counter.
     private func saveAndAddAnother() {
-        performSave()
+        guard performSave() else { return }
         cashCents = 0
         creditCents = 0
         tipOutCents = 0
@@ -243,7 +242,9 @@ struct BackfillSheet: View {
     /// Never silently discards entered amounts: whatever's on screen gets
     /// saved first if it adds up to a valid shift, then the sheet closes.
     private func finishAndDismiss() {
-        if canSave { performSave() }
+        if canSave {
+            guard performSave() else { return }
+        }
         dismiss()
     }
 }

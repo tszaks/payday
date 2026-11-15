@@ -117,11 +117,11 @@ targets:
         embed: true
       - package: Supabase
       - package: PaydayCore
-      # App target only, deliberately. The widget and the intents extension
-      # crash in their own processes and would each need their own DSN
-      # plumbing AND their own screenshot/view-hierarchy suppression, since
-      # both render money. Worth doing; not worth bundling into the change
-      # that establishes the privacy rules.
+      # App target only, deliberately. The widget extension crashes in its
+      # own process and would need its own DSN plumbing AND its own
+      # screenshot/view-hierarchy suppression, since it renders money. Worth
+      # doing; not worth bundling into the change that establishes the
+      # privacy rules.
       - package: Sentry
 
   PaydayWidget:
@@ -138,12 +138,12 @@ targets:
       # widget, openingFailed is set, and the Lock Screen renders
       # "Couldn't load" while the app is perfectly healthy.
       - path: Payday/Models/ShiftRecord.swift
-      # The widget compiles ShiftDetails, which S9 makes generic over
+      # The widget compiles ShiftDetails, which is generic over
       # LegacyShiftRow, so the protocol has to be in this target too or that
       # file no longer compiles here. ShiftProjection comes with it because
       # the widget reads shifts through the same projection the app does --
       # two surfaces resolving a shift differently is the whole class of bug
-      # this PR exists to remove.
+      # that sharing it removes.
       - path: Payday/Models/LegacyShiftRow.swift
       - path: Payday/Models/ShiftProjection.swift
       # The widget must consult the SAME shiftsAreAuthoritative the app does,
@@ -164,15 +164,13 @@ targets:
       # copy of the predicate reachable from AppGroup.swift, which is already
       # in this target) is exactly the divergence the comment above warns
       # about: it would compile, and no test would cover it.
-      # The pace baseline feeds a StatsEngine, and which representation it
-      # reads has to be the same decision the money figure above it makes.
-      # `StatsRecordAdapter` owns that conversion and `ShiftRepresentation`
-      # owns the one read of the predicate, so both compile here rather than
-      # the widget spelling the switch a second time -- a second spelling is
-      # how the Lock Screen and the app come to disagree, which is the whole
-      # reason this target's file list is explicit in the first place.
+      # The pace baseline feeds a StatsEngine, so it needs the same
+      # `ShiftRecord` -> `TipRecord` conversion the money figure above it
+      # uses. `StatsRecordAdapter` owns that conversion, so it compiles here
+      # rather than the widget spelling it a second time -- a second spelling
+      # is how the Lock Screen and the app come to disagree, which is the
+      # whole reason this target's file list is explicit in the first place.
       - path: Payday/Earnings/StatsRecordAdapter.swift
-      - path: Payday/Earnings/ShiftRepresentation.swift
       - path: Payday/Sync/ShiftReadAuthority.swift
       - path: Payday/Models/PayScheduleStore.swift
       # The widget values shifts too, so it reads the same compensation
@@ -192,13 +190,13 @@ targets:
       - path: Payday/Earnings/AmbientPeriodFigure.swift
       - path: Payday/Utilities/PayPeriod.swift
       - path: Payday/Utilities/StatsEngine.swift
-      # StatsEngine's Move copy spells its counts through this — the widget
+      # StatsEngine's reveal copy spells its counts through this — the widget
       # compiles StatsEngine, so it needs it too or the build fails with
       # "cannot find 'NumberWords' in scope".
       - path: Payday/Utilities/NumberWords.swift
       - path: Payday/Utilities/WageEstimate.swift
       # WageEstimate and PeriodIncome are thin wrappers over
-      # CompensationLedger as of PR 3, and the bridge is how they reach it.
+      # CompensationLedger, and the bridge is how they reach it.
       - path: Payday/Utilities/LegacyLedgerBridge.swift
       - path: Payday/Utilities/ShiftDays.swift
       - path: Payday/Utilities/ShiftDetails.swift

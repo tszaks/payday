@@ -5,8 +5,13 @@
 > screen, the Truv SDK or the import; paychecks already imported stay as
 > ordinary paychecks, and account deletion still removes the on-device ledger
 > file (`PaydayAccountEraser.removeRetiredPayStubLedger`). The edge function
-> below was left in the repository unchanged. The rest of this page describes
-> the feature as it was.
+> below was left in the repository unchanged. Since that removal (PR #176)
+> the app calls it for one thing only: the `forget` action, during account
+> deletion (`PaydayCloudGate.forgetRetiredPayrollConnection` in
+> `Payday/Sync/PaydayCloudGate.swift`), so that "Account deletion calls
+> `forget` first" below is still current. Keep the function and its secrets
+> deployed while a TestFlight 1.0.5 account can still hold a Truv user. The
+> rest of this page describes the feature as it was.
 
 "Connect payroll" lets a person sign in to their payroll account (Toast, or
 any provider Truv supports) and imports their pay stubs as paychecks.

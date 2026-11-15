@@ -18,7 +18,7 @@ private let settingsClockKey = "com.szakacsmedia.payday.settingsModifiedAt"
 struct PolicyStoreMigrationTests {
 
     @Test("the first calendar policy freezes the resolved first weekday and the device zone")
-    func freezesTheCalendar() {
+    func freezesTheCalendar() throws {
         let defaults = freshDefaults()
         let store = PolicyStore(defaults: defaults)
         #expect(store.policies.isEmpty)
@@ -30,7 +30,7 @@ struct PolicyStoreMigrationTests {
             deviceTimeZone: PaydayTestZone.newYork
         )
 
-        let policy = try! #require(outcome.createdCalendarPolicy)
+        let policy = try #require(outcome.createdCalendarPolicy)
         #expect(policy.workweekStartWeekday == 2)
         #expect(policy.payrollTimeZone == PaydayTestZone.newYork)
         #expect(policy.effectiveFrom == .distantPast)
@@ -64,7 +64,7 @@ struct PolicyStoreMigrationTests {
     }
 
     @Test("the migration creates ONE assumed rate policy from the earliest shift")
-    func createsOneAssumedRate() {
+    func createsOneAssumedRate() throws {
         let defaults = freshDefaults()
         let store = PolicyStore(defaults: defaults)
         var calendar = Calendar(identifier: .gregorian)
@@ -76,7 +76,7 @@ struct PolicyStoreMigrationTests {
             baseHourlyWageCents: 283, deviceTimeZone: PaydayTestZone.newYork
         )
 
-        let rate = try! #require(outcome.createdRatePolicy)
+        let rate = try #require(outcome.createdRatePolicy)
         #expect(store.policies.rates.count == 1, "no rate history is invented")
         #expect(rate.hourlyRateCents == 283)
         #expect(rate.provenance == .assumedFromLegacySetting)
@@ -348,9 +348,9 @@ struct PolicyStoreEditTests {
     }
 
     @Test("editing the rate rewrites the latest policy in place, so correcting a typo is not a raise")
-    func editRewritesInPlace() {
+    func editRewritesInPlace() throws {
         let store = migratedStore()
-        let before = try! #require(store.policies.latestRate)
+        let before = try #require(store.policies.latestRate)
 
         store.applyRateEdit(hourlyRateCents: 300)
 
@@ -399,7 +399,7 @@ struct PolicyStoreEditTests {
     /// honest answer, and "zero means the wage feature is off" has to be one
     /// rule across both entry points.
     @Test("a dated rate change of zero stores no policy, and the shift reads rateNotSet rather than a valued $0.00")
-    func zeroDatedRateChangeStoresNothing() {
+    func zeroDatedRateChangeStoresNothing() throws {
         let store = migratedStore(rate: nil)
         #expect(store.policies.rates.isEmpty, "no legacy wage, so no rate policy exists yet")
         let changeDay = CivilDay(year: 2026, month: 9, day: 28)
@@ -416,7 +416,7 @@ struct PolicyStoreEditTests {
         let output = CompensationLedger.evaluate(
             [shift], rates: store.policies.rates, calendars: store.policies.calendars
         )
-        let valuation = try! #require(output.valuations.first)
+        let valuation = try #require(output.valuations.first)
         #expect(valuation.wage.isValued == false)
         #expect(valuation.wage.unavailableReason == .rateNotSet)
         #expect(valuation.components.regularWagesCents == 0)
@@ -440,6 +440,7 @@ struct PolicyStoreEditTests {
     /// The Save button and the "$0.00" placeholder were the other half of the
     /// same P0: the sheet gated Save on `cents != nil`, and `Int("0")` is 0.
     @Test("the shared digits-to-rate rule reads zero as no rate at all")
+    @MainActor
     func zeroDigitsParseToNoRate() {
         #expect(PayrollSettingsSection.rateCents(fromDigits: "") == nil)
         #expect(PayrollSettingsSection.rateCents(fromDigits: "0") == nil)
@@ -472,13 +473,13 @@ struct PolicyStoreEditTests {
     }
 
     @Test("a workweek change takes effect at the next boundary strictly after today")
-    func workweekChangeTakesEffectNextBoundary() {
+    func workweekChangeTakesEffectNextBoundary() throws {
         let store = migratedStore(weekday: 2)
         // Monday 2026-09-28. Today being a boundary must NOT make the change
         // retroactive to this morning.
         let today = CivilDay(year: 2026, month: 9, day: 28)
 
-        let pending = try! #require(store.applyCalendarChange(
+        let pending = try #require(store.applyCalendarChange(
             workweekStartWeekday: 1, payrollTimeZone: PaydayTestZone.newYork, today: today
         ))
 
@@ -525,11 +526,11 @@ struct PolicyStoreEditTests {
     }
 
     @Test("a zone change freezes the new zone forward and leaves earlier shifts on the old one")
-    func zoneChangeIsForwardOnly() {
+    func zoneChangeIsForwardOnly() throws {
         let store = migratedStore(weekday: 2)
         let today = CivilDay(year: 2026, month: 9, day: 30)
 
-        let pending = try! #require(store.applyCalendarChange(
+        let pending = try #require(store.applyCalendarChange(
             workweekStartWeekday: 2, payrollTimeZone: PaydayTestZone.tokyo, today: today
         ))
 
@@ -542,11 +543,11 @@ struct PolicyStoreEditTests {
     }
 
     @Test("turning daily overtime on queues a pending policy at the next boundary that carries the threshold")
-    func dailyOvertimeIsPending() {
+    func dailyOvertimeIsPending() throws {
         let store = migratedStore(weekday: 2)
         let today = CivilDay(year: 2026, month: 9, day: 30)
 
-        let pending = try! #require(store.applyCalendarChange(
+        let pending = try #require(store.applyCalendarChange(
             workweekStartWeekday: 2, payrollTimeZone: PaydayTestZone.newYork,
             dailyOvertimeThresholdMinutes: 480, today: today
         ))
@@ -572,14 +573,14 @@ struct PolicyStoreEditTests {
     }
 
     @Test("a workweek change keeps daily overtime on, pending or already in effect")
-    func workweekChangeCarriesDailyOvertime() {
+    func workweekChangeCarriesDailyOvertime() throws {
         let store = migratedStore(weekday: 2)
         let today = CivilDay(year: 2026, month: 9, day: 30)
 
         // Pending: on, then the workweek start changes before it lands.
         store.applyCalendarChange(workweekStartWeekday: 2, payrollTimeZone: PaydayTestZone.newYork,
                                   dailyOvertimeThresholdMinutes: 480, today: today)
-        let replaced = try! #require(store.applyCalendarChange(
+        let replaced = try #require(store.applyCalendarChange(
             workweekStartWeekday: 1, payrollTimeZone: PaydayTestZone.newYork, today: today
         ))
         #expect(replaced.workweekStartWeekday == 1)
@@ -588,7 +589,7 @@ struct PolicyStoreEditTests {
 
         // In effect: weeks later the setting is live; a new workweek change keeps it.
         let later = CivilDay(year: 2026, month: 10, day: 14)
-        let next = try! #require(store.applyCalendarChange(
+        let next = try #require(store.applyCalendarChange(
             workweekStartWeekday: 4, payrollTimeZone: PaydayTestZone.newYork, today: later
         ))
         #expect(next.dailyOvertimeThresholdMinutes == 480)
@@ -657,7 +658,7 @@ struct FrozenPayrollTimeZoneTests {
     }
 
     @Test("StatsEngine uses the zone it is given, not the process zone")
-    func engineHonoursTheGivenZone() {
+    func engineHonoursTheGivenZone() throws {
         let instant = ISO8601DateFormatter().date(from: "2026-10-05T02:30:00Z")!
         let records = [TipRecord(date: instant, amountCents: 5000, kind: .credit, isDouble: false, hoursWorked: 5)]
 
@@ -665,8 +666,8 @@ struct FrozenPayrollTimeZoneTests {
         let tokyo = StatsEngine(payrollTimeZone: PaydayTestZone.tokyo, records: records)
 
         #expect(newYork.payrollTimeZone == PaydayTestZone.newYork)
-        let newYorkNight = try! #require(newYork.nightlyTotals().first)
-        let tokyoNight = try! #require(tokyo.nightlyTotals().first)
+        let newYorkNight = try #require(newYork.nightlyTotals().first)
+        let tokyoNight = try #require(tokyo.nightlyTotals().first)
         #expect(newYorkNight.cents == tokyoNight.cents, "the money is the same money")
         #expect(newYorkNight.date != tokyoNight.date, "but the civil day it lands on is not")
     }

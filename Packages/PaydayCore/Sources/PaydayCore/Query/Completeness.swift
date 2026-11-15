@@ -61,7 +61,7 @@ public enum WageState: Equatable, Hashable, Codable, Sendable {
     case off
     /// Every selected shift has a confirmed wage: plain amount, "Total".
     case complete
-    /// Every selected shift has a wage, but some rest on the legacy rate assumption: plain amount plus "Wages estimated from your current rate".
+    /// Every selected shift has a wage, but some rest on the legacy rate assumption: plain amount, no caption; Settings discloses the estimate.
     case estimated
     /// Some selected shifts have no wage. `missingHours` lack hours; `missingRate` have hours but no rate policy in effect. Headline is "Known so far".
     case partial(missingHours: Int, missingRate: Int)

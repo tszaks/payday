@@ -345,8 +345,9 @@ struct RenderFactsPerformanceTests {
     ///
     /// Budgeted rather than assumed, and NOT at interactive latency — this
     /// runs on foreground and after a log, never inside a scroll or a frame.
-    /// The PR 2 S7 swap to `earningsStore.snapshot` deletes the build here
-    /// entirely, which is the real fix.
+    /// Reading `earningsStore.snapshot` instead would delete the build here
+    /// entirely, which is the real fix; `PaydayPushScheduler` still builds
+    /// its own snapshot in `spokenFigure` today.
     ///
     /// **2,000 rows here, though the number quoted in `docs/METRICS.md` was
     /// measured at 10,000. MEASURED why:** the one-off 10,000-row run took

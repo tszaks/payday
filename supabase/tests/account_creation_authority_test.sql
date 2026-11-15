@@ -302,6 +302,98 @@ select 'CONTROL: an unguarded raise DOES block signup, so the test above means s
         where id = 'aaaaaaaa-4444-4444-4444-444444444444')
 where (select trigger_installed from ctx);
 
+-- ============================================================ WHO MAY ASK
+-- `payday_nothing_unconverted` is a definer granted to `authenticated`, so it
+-- must answer only for the caller's own account. The two fixtures above give
+-- both answers: 2222 has nothing unconverted (true), 5555 holds a never-folded
+-- legacy row (false).
+--
+-- Runs a query under the given role and JWT and returns its boolean. The
+-- capture is returned rather than written inside the role switch: role
+-- `authenticated` cannot write this session's temporary tables. Both GUCs are
+-- set because `auth.uid()` reads `request.jwt.claim.sub` before
+-- `request.jwt.claims`, and the earlier sections leave the former set.
+create function pg_temp.answer_as(p_role text, p_claims jsonb, p_sql text)
+returns boolean language plpgsql as $$
+declare v boolean;
+begin
+  perform set_config('request.jwt.claim.sub', coalesce(p_claims ->> 'sub', ''), true);
+  perform set_config('request.jwt.claims', coalesce(p_claims::text, ''), true);
+  if p_role is not null then
+    execute format('set local role %I', p_role);
+  end if;
+  execute p_sql into v;
+  reset role;
+  return v;
+end;
+$$;
+
+insert into results
+select 'an authenticated caller asking about ANOTHER account gets false, not that account''s answer',
+       pg_temp.answer_as('authenticated',
+         '{"sub":"aaaaaaaa-5555-5555-5555-555555555555","role":"authenticated"}',
+         $q$select public.payday_nothing_unconverted('aaaaaaaa-2222-2222-2222-222222222222')$q$)
+       is false;
+
+insert into results
+select 'an authenticated caller asking about ITSELF gets its true answer (true)',
+       pg_temp.answer_as('authenticated',
+         '{"sub":"aaaaaaaa-2222-2222-2222-222222222222","role":"authenticated"}',
+         $q$select public.payday_nothing_unconverted('aaaaaaaa-2222-2222-2222-222222222222')$q$)
+       is true;
+
+insert into results
+select 'an authenticated caller asking about ITSELF gets its true answer (false)',
+       pg_temp.answer_as('authenticated',
+         '{"sub":"aaaaaaaa-5555-5555-5555-555555555555","role":"authenticated"}',
+         $q$select public.payday_nothing_unconverted('aaaaaaaa-5555-5555-5555-555555555555')$q$)
+       is false;
+
+-- The path the app takes: the view, as `authenticated`, unchanged.
+insert into results
+select 'the view still reads authoritative for its own account as authenticated',
+       pg_temp.answer_as('authenticated',
+         '{"sub":"aaaaaaaa-2222-2222-2222-222222222222","role":"authenticated"}',
+         $q$select coalesce(bool_and(migrated_at is not null), false)
+              from public.shift_migration_state
+             where user_id = 'aaaaaaaa-2222-2222-2222-222222222222'$q$);
+
+-- An operator in psql with no JWT, and service_role, may name any account.
+insert into results
+select 'with no JWT the function answers for any account',
+       pg_temp.answer_as(null, null,
+         $q$select public.payday_nothing_unconverted('aaaaaaaa-2222-2222-2222-222222222222')
+               and not public.payday_nothing_unconverted('aaaaaaaa-5555-5555-5555-555555555555')$q$);
+
+insert into results
+select 'with the service_role claim the function answers for any account',
+       pg_temp.answer_as(null, '{"role":"service_role"}',
+         $q$select public.payday_nothing_unconverted('aaaaaaaa-2222-2222-2222-222222222222')
+               and not public.payday_nothing_unconverted('aaaaaaaa-5555-5555-5555-555555555555')$q$);
+
+insert into results
+select 'as role service_role the function answers for any account',
+       pg_temp.answer_as('service_role', '{"role":"service_role"}',
+         $q$select public.payday_nothing_unconverted('aaaaaaaa-2222-2222-2222-222222222222')
+               and not public.payday_nothing_unconverted('aaaaaaaa-5555-5555-5555-555555555555')$q$);
+
+select set_config('request.jwt.claim.sub', '', true);
+select set_config('request.jwt.claims', '', true);
+
+-- The view is read-only to the client. A UNION ALL view is not auto-updatable
+-- today, but that is a property of its shape, not a grant.
+insert into results
+select 'authenticated may SELECT the view and may not INSERT, UPDATE or DELETE it',
+       has_table_privilege('authenticated', 'public.shift_migration_state', 'SELECT')
+       and not has_table_privilege('authenticated', 'public.shift_migration_state', 'INSERT')
+       and not has_table_privilege('authenticated', 'public.shift_migration_state', 'UPDATE')
+       and not has_table_privilege('authenticated', 'public.shift_migration_state', 'DELETE');
+
+insert into results
+select 'anon and authenticated may not execute payday_legacy_shift_id',
+       not has_function_privilege('anon', 'public.payday_legacy_shift_id(date)', 'EXECUTE')
+       and not has_function_privilege('authenticated', 'public.payday_legacy_shift_id(date)', 'EXECUTE');
+
 -- ------------------------------------------------------------------ verdict
 do $$
 declare failed text;

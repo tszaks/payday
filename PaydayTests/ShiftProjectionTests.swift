@@ -3,7 +3,7 @@ import Testing
 @testable import Payday
 
 /// PR 2 slice S9: a shift rendered as the legacy rows every existing reader
-/// expects, and the proof that both sides agree to the cent.
+/// expects, and the rule that fixes each projected figure to the cent.
 ///
 /// The projection rule is small and was stated incompatibly twice in an
 /// earlier draft, in a way that cost real money either way it was resolved.

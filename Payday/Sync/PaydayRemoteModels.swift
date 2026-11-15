@@ -687,15 +687,6 @@ enum ShiftWriteStatus: Equatable, Sendable {
         }
     }
 
-    var raw: String {
-        switch self {
-        case .stored: "stored"
-        case .refused: "refused"
-        case .invalid: "invalid"
-        case .unknown(let value): value
-        }
-    }
-
     /// Whether the client may treat the row as synced.
     var isPersisted: Bool { self == .stored }
 }
@@ -718,12 +709,6 @@ struct ShiftWriteOutcome: Decodable, Equatable, Sendable {
         shiftID = try container.decodeIfPresent(UUID.self, forKey: .shiftID)
         status = ShiftWriteStatus(raw: try container.decode(String.self, forKey: .status))
         storedClientUpdatedAt = try container.decodeIfPresent(String.self, forKey: .storedClientUpdatedAt)
-    }
-
-    init(shiftID: UUID?, status: ShiftWriteStatus, storedClientUpdatedAt: String?) {
-        self.shiftID = shiftID
-        self.status = status
-        self.storedClientUpdatedAt = storedClientUpdatedAt
     }
 }
 
@@ -756,18 +741,6 @@ enum ShiftLifecycleStatus: Equatable, Sendable {
         default: self = .unknown(raw)
         }
     }
-
-    var raw: String {
-        switch self {
-        case .deleted: "deleted"
-        case .restored: "restored"
-        case .absent: "absent"
-        case .notDeleted: "not_deleted"
-        case .refused: "refused"
-        case .invalid: "invalid"
-        case .unknown(let value): value
-        }
-    }
 }
 
 struct ShiftLifecycleOutcome: Decodable, Equatable, Sendable {
@@ -783,11 +756,6 @@ struct ShiftLifecycleOutcome: Decodable, Equatable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         shiftID = try container.decodeIfPresent(UUID.self, forKey: .shiftID)
         status = ShiftLifecycleStatus(raw: try container.decode(String.self, forKey: .status))
-    }
-
-    init(shiftID: UUID?, status: ShiftLifecycleStatus) {
-        self.shiftID = shiftID
-        self.status = status
     }
 }
 

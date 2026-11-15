@@ -243,9 +243,9 @@ enum ShiftCommands {
         try perform(in: context) {
             try edits(record)
             // `didSet` never fires on a SwiftData model, so nothing advances
-            // this on its own and an edited row would never enter the upload
-            // set. Measured on 2026-09-17; it is why edits silently stopped
-            // syncing in the shipped build.
+            // this on its own and an edited row would keep a stale stamp.
+            // Measured on 2026-09-17; under the shipped build's clock-based
+            // upload set that is why edits silently stopped syncing.
             record.touch()
         }
     }

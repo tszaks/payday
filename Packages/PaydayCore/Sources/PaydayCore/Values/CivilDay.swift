@@ -24,7 +24,7 @@ public struct CivilDay: Hashable, Comparable, Codable, Sendable {
     public let day: Int
 
     /// Builds a day from components. Traps on an out-of-range component; use
-    /// `init?(year:month:day:)` (the failable variant) for untrusted input.
+    /// `init?(validating:month:day:)` (the failable variant) for untrusted input.
     public init(year: Int, month: Int, day: Int) {
         precondition(CivilDay.isValid(year: year, month: month, day: day),
                      "CivilDay \(year)-\(month)-\(day) is not a valid Gregorian date")
@@ -61,8 +61,9 @@ public struct CivilDay: Hashable, Comparable, Codable, Sendable {
     /// went through a `Date` would be a wage a travelling device could move.
     ///
     /// Never optional: `DateComponents` with a valid Gregorian year, month
-    /// and day always resolves, and the `.distantPast` fallback would be a
-    /// silently wrong x-position rather than a visible failure.
+    /// and day always resolves, and the `Date(timeIntervalSinceReferenceDate: 0)`
+    /// fallback would be a silently wrong x-position rather than a visible
+    /// failure.
     public func date(in timeZone: TimeZone) -> Date {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = timeZone
@@ -96,7 +97,6 @@ public struct CivilDay: Hashable, Comparable, Codable, Sendable {
 
     // MARK: Arithmetic
 
-    /// Days since 1970-01-01 (negative before it). Proleptic Gregorian.
     /// "Aug 31". For copy that has to NAME a day rather than count one.
     ///
     /// Built from a table rather than a `DateFormatter` because this type is
@@ -110,6 +110,7 @@ public struct CivilDay: Hashable, Comparable, Codable, Sendable {
         return "\(months[month - 1]) \(day)"
     }
 
+    /// Days since 1970-01-01 (negative before it). Proleptic Gregorian.
     public var dayNumber: Int {
         CivilDay.dayNumber(year: year, month: month, day: day)
     }

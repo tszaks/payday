@@ -111,14 +111,6 @@ enum EarningsChartMetric: Equatable {
     case earnedIncome
     case nonWageEarnings
 
-    /// The registry identity, for a test that wants to name it.
-    var metricID: MetricID {
-        switch self {
-        case .earnedIncome: return MetricID.earnedIncome
-        case .nonWageEarnings: return MetricID.nonWageEarnings
-        }
-    }
-
     /// The one place a bar's figure is built, so the metric the caller
     /// declared is the metric the bar's cents, label, peak callout and scrub
     /// readout all come from.
@@ -215,10 +207,9 @@ struct EarningsChartFacts: SnapshotFacts {
     /// Carries the chart's completeness for the header and the axis.
     let whole: EarningsResult?
     let stamp: SnapshotStamp?
-    /// What every bar on this chart is worth, as the caller declared it.
-    /// Exposed so a screen's parity test can assert the chart is on the same
-    /// metric as the sentence printed above it.
-    let metric: EarningsChartMetric
+    /// The zone the buckets were cut in, so a scrubbed `Date` maps back to
+    /// the same civil day the bars were built from.
+    let timeZone: TimeZone
 
     /// - Parameters:
     ///   - snapshot: nil while `EarningsStore` is loading or unavailable.
@@ -251,7 +242,7 @@ struct EarningsChartFacts: SnapshotFacts {
         let charted = cutoff.map { range.clamped(to: $0) } ?? range
         granularity = .forRange(charted)
         stamp = snapshot?.stamp
-        self.metric = metric
+        self.timeZone = timeZone
 
         guard let snapshot, !charted.isEmpty else {
             points = []
@@ -361,10 +352,24 @@ struct NightlyEarningsChart: View {
 
     private var selectedPoint: EarningsChartPoint? {
         guard let selectedDate else { return nil }
-        let calendar = Calendar.current
+        return Self.point(at: selectedDate, in: facts)
+    }
+
+    /// The bar under the finger. A week, month or year bar is drawn across
+    /// its whole bucket, so the answer is the point whose own range holds
+    /// the touched civil day, not the point whose first day is nearest: Jan
+    /// 20 is nearer Feb 1 than Jan 1, and still on the January bar. A touch
+    /// outside every range falls back to the nearest first day.
+    static func point(at date: Date, in facts: EarningsChartFacts) -> EarningsChartPoint? {
+        let day = CivilDay(date, in: facts.timeZone)
+        if let containing = facts.points.first(where: { $0.range.contains(day) }) {
+            return containing
+        }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = facts.timeZone
         return facts.points.min { lhs, rhs in
-            let lhsDistance = abs(calendar.dateComponents([.day], from: lhs.date, to: selectedDate).day ?? .max)
-            let rhsDistance = abs(calendar.dateComponents([.day], from: rhs.date, to: selectedDate).day ?? .max)
+            let lhsDistance = abs(calendar.dateComponents([.day], from: lhs.date, to: date).day ?? .max)
+            let rhsDistance = abs(calendar.dateComponents([.day], from: rhs.date, to: date).day ?? .max)
             return lhsDistance < rhsDistance
         }
     }
@@ -391,7 +396,7 @@ struct NightlyEarningsChart: View {
                     y: .value("Earnings", point.cents)
                 )
                 .foregroundStyle(PaydayColor.primary.opacity(
-                    barOpacity(for: point, selectedDate: selected?.date)
+                    barOpacity(for: point, selected: selected)
                 ))
                 // NOT re-shaded for `.partial` here, deliberately. Design 2
                 // asks for a hollow bar on an incomplete bucket, and
@@ -498,7 +503,7 @@ struct NightlyEarningsChart: View {
         return "\(facts.granularity.title) chart. Best \(facts.granularity.bestPeriodName)\(qualifier) \(amount)."
     }
 
-    private func barOpacity(for point: EarningsChartPoint, selectedDate: Date?) -> Double {
+    private func barOpacity(for point: EarningsChartPoint, selected: EarningsChartPoint?) -> Double {
         // Maintain at least 3:1 against every app surface. Selection still
         // reads clearly, but neighboring bars never fade into inaccessible
         // decoration while the user scrubs.
@@ -506,8 +511,8 @@ struct NightlyEarningsChart: View {
         let base = facts.maxCents > 0
             ? floor + (1 - floor) * (Double(point.cents) / Double(facts.maxCents))
             : floor
-        guard let selectedDate else { return base }
-        return Calendar.current.isDate(point.date, inSameDayAs: selectedDate)
+        guard let selected else { return base }
+        return point.id == selected.id
             ? 1.0
             : max(floor, base * 0.85)
     }

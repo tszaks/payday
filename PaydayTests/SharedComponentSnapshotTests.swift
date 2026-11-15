@@ -18,12 +18,12 @@ private func at(_ year: Int, _ month: Int, _ day: Int, hour: Int = 17) -> Date {
 
 /// The compensation policies a test STATES as its own history.
 ///
-/// `LegacySnapshotBridge` values with `PolicyStore.policies` — the user's
+/// Tests value shifts with `PolicyStore.policies` — the user's
 /// real, effective-dated rate and workweek history — rather than a scalar
 /// rate it re-stamps as `.distantPast`. So a test has to say what that
 /// history is, and this is the plain one: one confirmed rate that has always
 /// been the rate, one Monday-start workweek in the payroll zone. Tests about
-/// rate HISTORY build their own (see `LegacySnapshotBridgeTests`).
+/// rate HISTORY build their own.
 private func testPolicies(rateCents: Int? = 283, workweekStartWeekday: Int = 2) -> CompensationPolicies {
     let calendar = PayrollCalendarPolicy(
         id: PolicyMigration.deterministicID("test/calendar/\(workweekStartWeekday)"),
@@ -119,21 +119,6 @@ private func fixtureSnapshot(
     )
 }
 
-@MainActor
-private func fixtureSnapshot(
-    entries: [TipEntry],
-    policies: CompensationPolicies,
-    payrollTimeZone: TimeZone,
-    asOf: Date
-) -> EarningsSnapshot? {
-    fixtureSnapshot(
-        records: shifts(entries),
-        policies: policies,
-        payrollTimeZone: payrollTimeZone,
-        asOf: asOf
-    )
-}
-
 /// The records-native spelling, for tests whose fixtures are already
 /// `ShiftRecord`s (the undo round-trips).
 @MainActor
@@ -174,14 +159,14 @@ private func w1Entries() -> [TipEntry] {
 }
 
 @MainActor
-private func w1Snapshot(rateCents: Int? = 283) -> EarningsSnapshot {
+private func w1Snapshot(rateCents: Int? = 283) throws -> EarningsSnapshot {
     let snapshot = fixtureSnapshot(
         shifts: groups(w1Entries()),
         policies: testPolicies(rateCents: rateCents),
         payrollTimeZone: PaydayTestZone.payroll,
         asOf: at(2026, 9, 30)
     )
-    return try! #require(snapshot)
+    return try #require(snapshot)
 }
 
 // MARK: - ShiftDayRow
@@ -203,7 +188,7 @@ struct ShiftDayRowSnapshotTests {
 
     @Test("W1's dinner row is 6000 + 1556, the number only a workweek allocation produces")
     func w1RowsAreTheAllocation() throws {
-        let snapshot = w1Snapshot()
+        let snapshot = try w1Snapshot()
         let lunch = rowFacts(snapshot, shiftID(1))
         let dinner = rowFacts(snapshot, shiftID(2))
 
@@ -224,7 +209,7 @@ struct ShiftDayRowSnapshotTests {
 
     @Test("the row's figure IS the snapshot's answer for that shift, field for field")
     func theFigureIsTheSnapshotsAnswer() throws {
-        let snapshot = w1Snapshot()
+        let snapshot = try w1Snapshot()
         let valuation = try #require(snapshot.valuation(shiftID(2)))
         let facts = rowFacts(snapshot, shiftID(2))
         // Not "equal to a number the snapshot also happens to report": the
@@ -236,8 +221,8 @@ struct ShiftDayRowSnapshotTests {
     }
 
     @Test("a shift the snapshot does not hold renders no currency, never $0.00")
-    func aMissingShiftRendersNoCurrency() {
-        let facts = rowFacts(w1Snapshot(), shiftID(999))
+    func aMissingShiftRendersNoCurrency() throws {
+        let facts = try rowFacts(w1Snapshot(), shiftID(999))
         #expect(facts.amount.isUnavailable)
         #expect(facts.amount.text == nil)
         #expect((facts.amount.text ?? ShiftDayRow.unavailablePlaceholder) != Money.string(fromCents: 0))
@@ -268,8 +253,8 @@ struct ShiftDayRowSnapshotTests {
     }
 
     @Test("with the wage feature off, a row's figure is labelled Tips rather than Total")
-    func wagesOffRelabelsTheRow() {
-        let facts = rowFacts(w1Snapshot(rateCents: nil), shiftID(2))
+    func wagesOffRelabelsTheRow() throws {
+        let facts = try rowFacts(w1Snapshot(rateCents: nil), shiftID(2))
         #expect(facts.amount.metric == .nonWageEarnings)
         #expect(facts.amount.label == "Tips")
         #expect(facts.amount.mayBeCalledATotal == false)
@@ -298,8 +283,8 @@ struct ShiftDayRowSnapshotTests {
     }
 
     @Test("the row's note is trimmed and an all-whitespace note is dropped")
-    func noteHandling() {
-        let snapshot = w1Snapshot()
+    func noteHandling() throws {
+        let snapshot = try w1Snapshot()
         #expect(ShiftDayRowFacts(
             snapshot: snapshot, shiftID: shiftID(1), day: at(2026, 9, 28),
             period: nil, dayHasMultipleShifts: false, note: "  slammed  "
@@ -423,7 +408,7 @@ struct HeroBreakdownDrawerSnapshotTests {
 
     @Test("with wages off the bottom line is Tips, and no $0.00 wage row is drawn")
     func wagesOffDrawsNoWageRow() throws {
-        let snapshot = w1Snapshot(rateCents: nil)
+        let snapshot = try w1Snapshot(rateCents: nil)
         let result = snapshot.day(CivilDay(at(2026, 9, 28), in: PaydayTestZone.payroll))
         let rows = BreakdownRow.ledgerRows(result)
         #expect(rows.contains { $0.label.hasPrefix("Wages") } == false)
@@ -643,6 +628,86 @@ struct NightlyEarningsChartSnapshotTests {
         // Two years of months: every fourth, not all twenty-four.
         #expect(EarningsChartAxisGranularity.axisLabelStride(pointCount: 24) == 4)
     }
+
+    /// A month bar spans the whole month, so a finger on Jan 20 is on the
+    /// January bar. Jan 20 is 19 days from Jan 1 and only 12 from Feb 1, so
+    /// a nearest-first-day rule reads out February here.
+    @Test("scrubbing Jan 20 on a month chart reads out January")
+    func monthScrubReadsTheTouchedMonth() throws {
+        let facts = EarningsChartFacts(
+            snapshot: try weekSnapshot(),
+            range: DayRange(
+                start: CivilDay(year: 2026, month: 1, day: 1),
+                end: CivilDay(year: 2026, month: 6, day: 30)
+            ),
+            timeZone: PaydayTestZone.payroll,
+            asOf: .distantFuture
+        )
+        #expect(facts.granularity == .month)
+        let selected = try #require(NightlyEarningsChart.point(at: at(2026, 1, 20), in: facts))
+        #expect(selected.range == DayRange(
+            start: CivilDay(year: 2026, month: 1, day: 1),
+            end: CivilDay(year: 2026, month: 1, day: 31)
+        ))
+    }
+
+    /// The last day of a week bar is six days from its own first day and one
+    /// from the next bar's, so a nearest-first-day rule reads out the next
+    /// week there.
+    @Test("scrubbing the last day of a week bar reads out that week")
+    func weekScrubReadsTheTouchedWeek() throws {
+        let facts = EarningsChartFacts(
+            snapshot: try weekSnapshot(),
+            range: DayRange(start: weekRange.start, end: weekRange.start.adding(days: 40)),
+            timeZone: PaydayTestZone.payroll,
+            asOf: .distantFuture
+        )
+        #expect(facts.granularity == .week)
+        // An interior week, so it is a full seven days rather than an edge
+        // bucket clamped to the range.
+        let week = try #require(facts.points.dropFirst().first { $0.range.count == 7 })
+        let lastDay = week.range.end
+        #expect(NightlyEarningsChart.point(at: at(lastDay.year, lastDay.month, lastDay.day), in: facts) == week)
+        let firstDay = week.range.start
+        #expect(NightlyEarningsChart.point(at: at(firstDay.year, firstDay.month, firstDay.day), in: facts) == week)
+    }
+
+    @Test("scrubbing a day chart reads out the touched day, at any hour of it")
+    func dayScrubReadsTheTouchedDay() throws {
+        let facts = EarningsChartFacts(
+            snapshot: try weekSnapshot(),
+            range: weekRange,
+            timeZone: PaydayTestZone.payroll,
+            asOf: .distantFuture
+        )
+        #expect(facts.granularity == .day)
+        for point in facts.points {
+            let day = point.range.start
+            for hour in [0, 17, 23] {
+                #expect(NightlyEarningsChart.point(at: at(day.year, day.month, day.day, hour: hour), in: facts) == point)
+            }
+        }
+    }
+
+    /// Outside every bar the nearest bar answers: the first one before the
+    /// chart, the last one after it, and nothing when there are no bars.
+    @Test("a touch outside every bar falls back to the nearest one")
+    func outOfRangeScrubFallsBackToTheNearestBar() throws {
+        let snapshot = try weekSnapshot()
+        for range in [weekRange, DayRange(start: weekRange.start, end: weekRange.start.adding(days: 40))] {
+            let facts = EarningsChartFacts(
+                snapshot: snapshot,
+                range: range,
+                timeZone: PaydayTestZone.payroll,
+                asOf: .distantFuture
+            )
+            #expect(NightlyEarningsChart.point(at: at(2026, 9, 20), in: facts) == facts.points.first)
+            let after = range.end.adding(days: 3)
+            #expect(NightlyEarningsChart.point(at: at(after.year, after.month, after.day), in: facts) == facts.points.last)
+        }
+        let empty = EarningsChartFacts(snapshot: nil, range: weekRange, timeZone: PaydayTestZone.payroll)
+        #expect(NightlyEarningsChart.point(at: at(2026, 9, 28), in: empty) == nil)
+    }
 }
 
 // MARK: - ShiftContextMenu (Duplicate)
@@ -660,8 +725,11 @@ struct DuplicateShiftValuationTests {
                      serverCount: 4),
             TipEntry(date: at(2026, 9, 28), amountCents: 2000, kind: .cash, shiftID: shiftID(1))
         ]
-        // Exactly what `duplicateShift(_:into:)` writes: every stored field
-        // copied per row, one fresh shared shiftID, recordedAt = now.
+        // A hand-built copy in the shape a duplicate has: every stored field
+        // copied per row, one fresh shared shiftID, recordedAt = now. This
+        // values the copy through the engine; it does not call the context
+        // menu's private `duplicateShift`, which now takes one `ShiftRecord`
+        // and goes through `ShiftCommands.create`.
         let copyID = shiftID(2)
         let copy = source.map { entry in
             TipEntry(
@@ -907,7 +975,7 @@ struct FixtureSnapshotEngineTests {
             shifts: shifts,
             wageCentsPerHour: 283
         )
-        let snapshot = w1Snapshot()
+        let snapshot = try w1Snapshot()
         for shift in shifts {
             #expect(
                 snapshot.valuation(shift.shiftID)?.components.wagesCents == existing[shift.shiftID],
@@ -919,7 +987,7 @@ struct FixtureSnapshotEngineTests {
     @Test("the snapshot's tips are exactly the records', per shift and in total")
     func snapshotTipsMatchTheRecords() throws {
         let records = shifts(w1Entries())
-        let snapshot = w1Snapshot()
+        let snapshot = try w1Snapshot()
         for record in records {
             let components = try #require(snapshot.valuation(record.id)?.components)
             #expect(components.voluntaryCashCents == record.cashTipsCents)
@@ -953,8 +1021,8 @@ struct FixtureSnapshotEngineTests {
     }
 
     @Test("no rate means the wage feature is off, not a wage of zero under a Total")
-    func noRateMeansWagesOff() {
-        let snapshot = w1Snapshot(rateCents: nil)
+    func noRateMeansWagesOff() throws {
+        let snapshot = try w1Snapshot(rateCents: nil)
         #expect(snapshot.wageFeatureEnabled == false)
         let day = snapshot.day(CivilDay(at(2026, 9, 28), in: PaydayTestZone.payroll))
         #expect(day.completeness.state == .off)
@@ -1056,7 +1124,7 @@ struct FixtureSnapshotEngineTests {
 
         // The same shifts under a CONFIRMED rate are complete, so the state
         // is tracking the provenance and not something else about the day.
-        let confirmed = w1Snapshot().day(CivilDay(at(2026, 9, 28), in: PaydayTestZone.payroll))
+        let confirmed = try w1Snapshot().day(CivilDay(at(2026, 9, 28), in: PaydayTestZone.payroll))
         #expect(confirmed.completeness.state == .complete)
     }
 

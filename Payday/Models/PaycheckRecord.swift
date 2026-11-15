@@ -55,7 +55,7 @@ final class PaycheckRecord {
 
     /// The job this check is from (PR E1): trimmed, 1-40 characters, nil
     /// for the primary job, never empty (`ShiftRole.normalized`). A tag
-    /// only; periods follow the primary schedule until E2.
+    /// only; the job's periods follow its own schedule (`JobPolicy.schedule`).
     var jobName: String?
 
     // MARK: - What used to be computed here, and why nothing is

@@ -11,7 +11,7 @@ This file is for AI agents that work **on** Payday's code. For the agent-facing 
 - App and widget: `xcodebuild test -project Payday.xcodeproj -scheme Payday -destination 'platform=iOS Simulator,name=iPhone 17 Pro'`
 - Edge function: `cd supabase/functions/payday-api && deno test`
 - Design lint: `bash scripts/design-lint.sh`
-- Migrations: `supabase start && supabase db reset --local` (needs Docker). See [docs/CI.md](docs/CI.md) for the SQL test runners.
+- Migrations: `supabase start && supabase db reset --local` (needs Docker). The CI job also runs the SQL tests in `supabase/tests/` and `scripts/db-test-race.sh`; see [docs/CI.md](docs/CI.md) for the commands, and for running them without Docker.
 - Run every suite that reads the code you changed. CI runs five required jobs on `production`; all must be green.
 
 ## Code map

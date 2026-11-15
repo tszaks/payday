@@ -4,7 +4,7 @@ import Testing
 @testable import Payday
 
 /// Flip gate 2: a WITNESS per command, written against `ShiftCommands`
-/// directly so the gate exists before the writer is wired to it.
+/// directly.
 ///
 /// The danger this closes is precise, and it is why the gate is a witness
 /// rather than an outcome check. Every read-side test can pass while the
@@ -20,10 +20,10 @@ import Testing
 ///   * `restore` returns it and resurrects no `TipEntry` (asserted in
 ///     `ToastShiftPathTests`, since the toast is what exercises it)
 ///
-/// `ShiftCommands.create`/`update`/`delete`/`restore` have zero production
-/// callers today, so this is also the reachability hazard being measured
-/// rather than documented: the same coverage-versus-reachability distinction
-/// that hid the `shiftsAreAuthoritative` wiring for three slices.
+/// `ShiftCommands.create`/`update`/`delete`/`restore` are the production
+/// writers now (`LogTipSheet`, `BackfillSheet`, `ShiftContextMenu`,
+/// `UndoDeleteToast`, `LogTipsIntent`), so these witnesses cover the path
+/// a person reaches, not a path with no caller.
 @Suite("Flip gate 2: command witnesses", .serialized)
 @MainActor
 struct FlipGate2WitnessTests {

@@ -20,7 +20,7 @@ public struct SnapshotStamp: Hashable, Codable, Sendable {
     /// `serverDatasetRevision`.
     public let generation: UInt64
 
-    /// The manifest summary: five digests, four counts, `engineVersion` and
+    /// The manifest summary: five digests, five counts, `engineVersion` and
     /// `asOf`, and none of the input rows themselves.
     public let manifest: InputManifest.Summary
 

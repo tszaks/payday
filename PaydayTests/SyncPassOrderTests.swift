@@ -70,9 +70,9 @@ struct SyncPassOrderTests {
 
     /// A pass over an empty account completes, and the ORDER of its calls is
     /// recorded so the shift-leg reordering in design 7.5 has something to
-    /// break. Today there is no shift leg, so this locks in what exists --
-    /// which is the point of writing it before the reorder rather than
-    /// after.
+    /// break. The asserted list includes the shift legs
+    /// (`migrate_tip_entries_to_shifts`, `fetch_shift_changes`,
+    /// `shift_migration_state`), so a reorder shows up as a failure here.
     @Test("a sync pass over an empty account completes and records its call order")
     func emptyPassRecordsItsOrder() async throws {
         let service = PaydaySyncService(client: client())
@@ -89,8 +89,8 @@ struct SyncPassOrderTests {
 
         let calls = RoutingStub.recordedPaths()
 
-        // The SHIPPED order, recorded from a real pass rather than read off
-        // the source: settings push, then the baseline pull.
+        // The order, recorded from a real pass rather than read off the
+        // source: settings push, then the baseline pull and the shift legs.
         #expect(calls == [
             "POST /rest/v1/rpc/upsert_user_settings",
             "POST /rest/v1/rpc/payday_unmigrated_tip_row_count",
@@ -204,10 +204,9 @@ struct SyncPassOrderTests {
     ///
     /// `aQueuedLegacyEntryDeletionReachesTheServer` proves the legacy source
     /// rows get tombstoned. This proves the shift row itself does. Both are
-    /// required before PR 8 may delete the legacy calculation paths, because
-    /// deleting them IS the flip whatever the flag says, and a deletion that
-    /// never reaches the server means the first thing the new representation
-    /// does is resurrect a shift the user deleted.
+    /// required, because a deletion that never reaches the server means the
+    /// first thing the new representation does is resurrect a shift the user
+    /// deleted.
     @Test("a queued shift deletion is actually flushed to the server")
     func aQueuedShiftDeletionReachesTheServer() async throws {
         let doomed = UUID(uuidString: "90000000-0000-4000-8000-0000000000c1")!
@@ -243,6 +242,100 @@ struct SyncPassOrderTests {
             PaydaySyncState.pendingShiftDeletions(for: Self.user).isEmpty,
             "the shift deletion queue never drained"
         )
+    }
+
+    /// A deletion still in the queue when the pass starts must not be undone
+    /// by the pull that runs before it.
+    ///
+    /// The shift leg pulls before it pushes, so a shift deleted soon after it
+    /// synced is still live in the pull. The local record is gone, so nothing
+    /// in the pull reconcile knew to skip it, and the readback's tombstone
+    /// then saw a record that "changed during sync" and left it in place.
+    @Test("a queued shift deletion is not resurrected by the pull that precedes it")
+    func aQueuedShiftDeletionIsNotResurrectedByThePull() async throws {
+        let doomed = UUID(uuidString: "90000000-0000-4000-8000-0000000000c2")!
+        let service = PaydaySyncService(client: client())
+        PaydaySyncState.clearShiftTombstones([doomed], for: Self.user)
+        PaydaySyncState.recordShiftDeletion(doomed, for: Self.user)
+        // The server still holds the shift live when the pull runs, and the
+        // step-9 readback sees the tombstone this pass just wrote.
+        RoutingStub.route("/rpc/fetch_shift_changes", to: """
+            {"server_now":"2026-09-19T00:00:00.000Z","rows":[\(Self.shiftRow(doomed, deletedAt: nil))]}
+            """)
+        RoutingStub.route("/rest/v1/shifts", to: """
+            [\(Self.shiftRow(doomed, deletedAt: "\"2026-09-18T23:59:30.000Z\""))]
+            """)
+        let ctx = try context()
+
+        _ = try await service.synchronize(
+            context: ctx,
+            scheduleStore: PayScheduleStore(),
+            preferencesStore: UserPreferencesStore(),
+            moveLedgerStore: MoveLedgerStore(),
+            policyStore: PolicyStore(),
+            userID: Self.user
+        )
+
+        let calls = RoutingStub.recordedPaths()
+        #expect(
+            calls.contains("POST /rest/v1/rpc/soft_delete_shifts"),
+            "the shift deletion queue was never flushed; got \(calls)"
+        )
+        let survivors = try ctx.fetch(FetchDescriptor<ShiftRecord>()).filter { $0.id == doomed }
+        #expect(survivors.isEmpty, "the deleted shift came back from the pull")
+        #expect(PaydaySyncState.pendingShiftDeletions(for: Self.user).isEmpty)
+        PaydaySyncState.clearShiftTombstones([doomed], for: Self.user)
+    }
+
+    /// A shift edited while the pass waits on the network is left
+    /// unacknowledged, so the pass is not finished: it must ask for a
+    /// follow-up and must not record the dataset watermark as clean.
+    @Test("a shift edited during the pass requests a follow-up and withholds the watermark")
+    func aShiftEditedDuringThePassRequestsAFollowUp() async throws {
+        let service = PaydaySyncService(client: client())
+        // A clean pass would store this revision; a dirty one stores nil.
+        RoutingStub.route("/rest/v1/dataset_revisions", to: "[{\"revision\":42}]")
+        let ctx = try context()
+        let record = ShiftRecord(
+            id: Self.shift,
+            workDate: Date(timeIntervalSince1970: 1_758_000_000),
+            cashTipsCents: 1_000,
+            hoursWorked: 5
+        )
+        ctx.insert(record)
+        try ctx.save()
+
+        // `liveSessionUserID` runs after every network read and before the
+        // reconcile, which is the window a user edit lands in.
+        let outcome = try await service.synchronize(
+            context: ctx,
+            scheduleStore: PayScheduleStore(),
+            preferencesStore: UserPreferencesStore(),
+            moveLedgerStore: MoveLedgerStore(),
+            policyStore: PolicyStore(),
+            userID: Self.user,
+            liveSessionUserID: { @MainActor in
+                record.cashTipsCents = 2_500
+                try ctx.save()
+                return Self.user
+            }
+        )
+
+        #expect(outcome.requiresFollowUpSync, "a mid-pass shift edit scheduled no follow-up")
+        #expect(
+            PaydaySyncState.snapshot(for: Self.user).syncedDatasetRevision == nil,
+            "the watermark was recorded over an unsent shift edit"
+        )
+    }
+
+    /// One `shifts` row as the server returns it.
+    private static func shiftRow(_ id: UUID, deletedAt: String?) -> String {
+        """
+        {"id":"\(id.uuidString)","user_id":"\(user.uuidString)",
+         "work_date":"2026-09-18","cash_tips_cents":1500,"credit_tips_cents":0,
+         "client_updated_at":"2026-09-18T23:58:00.000Z",
+         "updated_at":"2026-09-18T23:58:00.000Z","deleted_at":\(deletedAt ?? "null")}
+        """
     }
 
     /// Step 0's queue must DRAIN, and this is the third queue in this file

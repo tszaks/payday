@@ -27,7 +27,7 @@ enum PaydayRemoteDate {
 
     /// The one calendar `stableDay` renders in. Fixed at UTC on purpose: see
     /// `stableDay`.
-    nonisolated(unsafe) private static let fixedDayCalendar: Calendar = {
+    private static let fixedDayCalendar: Calendar = {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
         return calendar
@@ -39,8 +39,8 @@ enum PaydayRemoteDate {
     /// for why those are deliberately separate).
     ///
     /// Every date this app persists is local midnight in whatever zone the row
-    /// was written in: `Calendar.current.startOfDay(...)` in ShiftWriter,
-    /// LogTipSheet and `PayPeriodCalculator.period(containing:)`, or
+    /// was written in: `Calendar.current.startOfDay(...)` in LogTipSheet,
+    /// LogTipsIntent and `PayPeriodCalculator.period(containing:)`, or
     /// `parseDay` (which lands on local midnight too) on reconcile. Rendering
     /// such an instant back through `Calendar.current` is only correct while
     /// the device stays in the zone that wrote it: seen from any zone further

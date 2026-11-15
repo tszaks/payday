@@ -217,7 +217,7 @@ struct ShiftAuthorityLegTests {
     /// A non-null timestamp that will not parse used to collapse to nil, and
     /// `isAuthoritative` opens with `guard migratedAt != nil` -- so it read as
     /// "never converted" and DEMOTED a promoted account. The row exists, so
-    /// the leg\'s absent-row guard does not catch it.
+    /// the leg's absent-row guard does not catch it.
     ///
     /// Severe rather than cosmetic: demoting a promoted account hides every
     /// shift logged since promotion, because those exist only as

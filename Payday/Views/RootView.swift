@@ -5,15 +5,12 @@ import SwiftData
 struct RootView: View {
     @Environment(PayScheduleStore.self) private var scheduleStore
     @Environment(UserPreferencesStore.self) private var preferencesStore
-    @Environment(OnboardingStateStore.self) private var onboardingStore
     @Environment(\.scenePhase) private var scenePhase
     @State private var lockController = AppLockController()
     @State private var hasEvaluatedInitialLock = false
     @State private var onboardingViewModel = PaydayOnboardingViewModel()
     @Query private var paycheckRecords: [PaycheckRecord]
-    /// The other representation. SmartNudgeScheduler picks between this and
-    /// `allEntries` on `shiftsAreAuthoritative`; it must never read both, or a
-    /// converted shift counts twice.
+    /// The shifts the schedulers read. `ShiftRecord` is the only stored shape.
     @Query private var shiftRecords: [ShiftRecord]
 
     var body: some View {

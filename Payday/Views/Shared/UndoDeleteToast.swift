@@ -44,10 +44,8 @@ final class UndoDeleteToastState {
 
     /// Deletes one `ShiftRecord`.
     ///
-    /// Singular, where the legacy path takes an array, and that is the point:
-    /// the array exists only because a merged cash+credit closeout is TWO
-    /// `TipEntry` rows. One shift is one `ShiftRecord`, so the plural
-    /// disappears with the two-row model.
+    /// Singular: one shift is one `ShiftRecord`, so there is no plural to
+    /// delete.
     ///
     /// `ShiftCommands.delete` owns the ordering -- it removes the row, saves,
     /// and only then writes the deletion queue and the tombstone (#51). So

@@ -32,10 +32,7 @@ healthy build:
 ## What is left, and it is one thing
 
 An auth token for **dSYM upload**, or crashes arrive as raw addresses and are
-unreadable. Sentry → Settings → Auth Tokens, scope `project:releases`. Both
-tokens already on this machine are dead (`sntrys_` returns 401 invalid org
-token, `sntryu_` returns 401 invalid token), so this one genuinely has to be
-minted. Export it locally before the upload below, or add it as the GitHub
+unreadable. Sentry → Settings → Auth Tokens, scope `project:releases`. Export it locally before the upload below, or add it as the GitHub
 secret `SENTRY_AUTH_TOKEN`.
 
 Not needed until the first archive.
@@ -95,7 +92,7 @@ indexes and status codes in a message are what make a crash diagnosable.
 
 ## Not yet covered
 
-The widget and the App Intents extension crash in their own processes and are
-**not** reporting. Each would need its own DSN plumbing and its own
-screenshot / view-hierarchy suppression, since both render money. Worth doing;
+The widget crashes in its own process and is
+**not** reporting. It would need its own DSN plumbing and its own
+screenshot / view-hierarchy suppression, since it renders money. Worth doing;
 kept out of the change that establishes the rules above.

@@ -17,7 +17,7 @@ enum ShiftRecordSource: String, Codable, Sendable {
 /// receipt) living on whichever of the two `ShiftDetails` picked as canonical.
 /// That shape is what `TipBreakdown`, `ShiftDays` and `ShiftDetails` exist to
 /// reassemble on every read, and it is why a wage-only shift cannot be saved
-/// at all (`ShiftWriter.insertShift` appends a row only for a non-zero amount,
+/// at all (the legacy writer appended a row only for a non-zero amount,
 /// so hours with no tips produce zero rows and the hours are dropped).
 ///
 /// `ShiftRecord` is the read-authoritative local mirror of `public.shifts`.
@@ -97,11 +97,10 @@ final class ShiftRecord {
     /// `TipEntry` edited across a 50 ms sleep reports a `modifiedAt` delta of
     /// exactly 0.0.
     ///
-    /// That matters because `clientUpdatedAt` is derived from this field
-    /// (`PaydayRemoteModels.swift:206`) and `PaydaySyncState.changedIDs`
-    /// compares it against the acknowledged value, so a record whose
-    /// `modifiedAt` did not advance is reported as already synced and its edit
-    /// is never pushed. Every writer of this record must therefore call
+    /// That matters because `clientUpdatedAt` is derived from this field.
+    /// The upload set is chosen by a content fingerprint
+    /// (`PaydaySyncState.changedIDs`), so an edit whose `modifiedAt` did not
+    /// advance still uploads, but with a stale `clientUpdatedAt`. Every writer of this record must therefore call
     /// `touch()`, which is what makes `ShiftCommands.perform` (S9) the right
     /// place to do it exactly once per save.
     var modifiedAt: Date = Date.now
@@ -156,9 +155,9 @@ final class ShiftRecord {
     /// the edit, from the same place that saves.
     ///
     /// This exists because `didSet` on a `@Model` property is dead code (see
-    /// `modifiedAt`). Skip it and the edit stays on this device forever: the
-    /// push leg computes its upload set from `clientUpdatedAt`, which is this
-    /// field, so an unchanged value means "already acknowledged".
+    /// `modifiedAt`). Skip it and the edit still uploads, because the push
+    /// leg chooses its upload set by content fingerprint, but it carries a
+    /// stale `clientUpdatedAt`.
     func touch(_ date: Date = .now) {
         modifiedAt = date
     }

@@ -34,6 +34,9 @@ enum LogTipsAmountValidation {
     static let maximumCents = 99_999_99
 
     static func validatedCents(for amount: Double) -> Int? {
+        // Checked on the Double first: a Shortcut can pass NaN, an infinity
+        // or a huge value, and converting any of those to Int traps.
+        guard amount.isFinite, amount > 0, amount <= 100_000 else { return nil }
         let cents = Int((amount * 100).rounded())
         guard cents > 0, cents <= maximumCents else { return nil }
         return cents
@@ -162,7 +165,7 @@ struct LogTipsIntent: AppIntent {
             // the upload set. Assigning the one field leaves hours, sales,
             // period and clock times exactly as the shift already carried
             // them — the record model gives that for free, where the legacy
-            // path below has to resolve and rewrite them to avoid dropping
+            // rows had to resolve and rewrite them to avoid dropping
             // any.
             try ShiftCommands.update(target, in: context) { record in
                 if kind.tipKind == .cash {

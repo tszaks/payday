@@ -26,13 +26,11 @@ private struct DaySelection: Identifiable {
 /// valuations — so `Σ tiles == headline` is arithmetic rather than hope, and a
 /// week that straddles the month edge keeps the overtime it earned.
 ///
-/// ## Why the bridge and not `earningsStore`
+/// ## Where the snapshot is built
 ///
-/// Nothing writes `ShiftRecord` on a device yet (PR 2 slices S6-S13 are open),
-/// so `earningsStore.snapshot` is EMPTY in production and a screen switched
-/// onto it today would show a person with years of shifts a blank grid. See
-/// `LegacySnapshotBridge`'s header. When the shift sync leg lands this enum is
-/// the one place either Calendar surface has to change.
+/// Both Calendar surfaces build their snapshot here, from the `ShiftRecord`s
+/// they already hold, so this enum is the one place either of them has to
+/// change.
 enum CalendarEarnings {
     /// The grouping calendar, which is NOT the grid's calendar: the grid needs
     /// the user's week start for its layout, and a shift grouping must not.
@@ -71,7 +69,7 @@ enum CalendarEarnings {
             shifts: adapted.inputs,
             rates: policies.rates,
             calendars: policies.calendars,
-            // `.distantFuture` for the reason the legacy overload above
+            // `.distantFuture` for the reason this function's doc
             // records at length: the calendar has never clamped to today and
             // must not start, and opting out in the STAMP rather than per
             // query is what keeps `day(_:)`, `range(_:)` and `days(in:)`

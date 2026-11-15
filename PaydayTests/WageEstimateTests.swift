@@ -135,11 +135,11 @@ struct WageEstimateCentsSummedPerShiftTests {
         //
         // On two DIFFERENT days on purpose. The first version of this test
         // put both at `Date(timeIntervalSinceReferenceDate: 0)`, a shape no
-        // live caller produces: `CalendarView` groups the month `by: \.day`
-        // and calls this once per day, and `DayDetailSheet` passes a single
-        // day, so the multi-shift input a real screen hands this function is
-        // a multi-shift DAY, and the multi-day input is what `PeriodIncome`
-        // hands it. One day per shift also makes the allocation order
+        // live caller produced: the calendar grouped the month `by: \.day`
+        // and called this once per day, and `DayDetailSheet` passed a single
+        // day, so the multi-shift input a real screen handed this function
+        // was a multi-shift DAY, and the multi-day input was a whole
+        // period's. One day per shift also makes the allocation order
         // deterministic (the canonical order is work day first), so the two
         // per-shift figures below can be asserted by number at all.
         var calendar = Calendar(identifier: .gregorian)

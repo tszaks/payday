@@ -314,7 +314,7 @@ struct LogShiftRevealBasisTests {
         )
         #expect(scalarResult.isRecord == false)
         #expect(RevealCopy.comparison(for: scalarResult.comparison, period: .dinner)
-            == "$50.00 below your Friday average (across one Fridays).")
+            == "$50.00 below your Friday average (across one Friday).")
     }
 }
 
@@ -509,7 +509,7 @@ struct RevealComparisonParityTests {
         // And it is the LEDGER's delta and the LEDGER's rank: $150.00 tonight
         // against a prior Friday the ledger valued at $200.00, second-best in
         // the period rather than best. MEASURED.
-        #expect(logCopy == "$50.00 below your Friday average (across one Fridays). Second-best dinner this period.")
+        #expect(logCopy == "$50.00 below your Friday average (across one Friday). Second-best dinner this period.")
 
         // What the log sheet said before: the same shift, the same evening,
         // a different verdict.
@@ -525,6 +525,6 @@ struct RevealComparisonParityTests {
         )
         #expect(brokenCopy != dashboardCopy)
         // It disagreed about BOTH numbers: the delta and the rank. MEASURED.
-        #expect(brokenCopy == "$0.00 above your Friday average (across one Fridays). Best dinner this period.")
+        #expect(brokenCopy == "$0.00 above your Friday average (across one Friday). Best dinner this period.")
     }
 }

@@ -40,17 +40,8 @@ enum PaydayColor {
     /// value preserves the same hue while clearing contrast on alabaster and
     /// white; dark mode keeps the original bright brand green.
     static let primary = Color(lightHex: "00852F", darkHex: "00B83F")
-    /// Foreground for text/icons placed directly on the green.
-    static let onPrimary = Color(lightHex: "FFFFFF", darkHex: "000000")
-    /// Foreground for text/icons placed directly on caution surfaces.
-    static let onCaution = Color(lightHex: "FFFFFF", darkHex: "000000")
-    /// Foreground for text/icons placed directly on error/red surfaces.
-    static let onError = Color(lightHex: "FFFFFF", darkHex: "000000")
 
     // MARK: - Semantic Colors
-
-    /// Success = the one green.
-    static let success = primary
 
     /// Caution — the only other warning accent, foreground-safe in both modes.
     static let caution = Color(lightHex: "B44400", darkHex: "FF9F0A")
@@ -85,12 +76,10 @@ struct PaydayWidgetColors {
 // MARK: - Corner Radius Scale
 
 enum PaydayRadius {
-    static let xs: CGFloat = 6
     static let sm: CGFloat = 10
     static let md: CGFloat = 14
     static let lg: CGFloat = 18
     static let xl: CGFloat = 24
-    static let full: CGFloat = 9999
 }
 
 // MARK: - Spacing Scale (4-point base)
@@ -102,7 +91,6 @@ enum PaydaySpacing {
     static let p16: CGFloat = 16
     static let p20: CGFloat = 20
     static let p24: CGFloat = 24
-    static let p30: CGFloat = 30
     static let p32: CGFloat = 32
     static let p40: CGFloat = 40
 
@@ -142,23 +130,18 @@ enum PaydayFont {
     static let displaySmall = Font.system(size: 20, weight: .bold, design: .rounded)
 
     // MARK: - Semantic Text (SF Pro, scales with Dynamic Type)
-    static let largeTitle = Font.largeTitle.weight(.heavy)
     static let title = Font.title2.weight(.bold)
     static let title3 = Font.title3.weight(.bold)
     static let headline = Font.headline.weight(.bold)
-    static let headlineBold = Font.headline.weight(.heavy)
     static let body = Font.body.weight(.semibold)
-    static let bodySemibold = Font.body.weight(.bold)
     /// Every other body-ish token here is semibold or bolder — this is the
     /// one true regular weight, for paragraph copy (e.g. Insights) where
     /// stacking multiple semibold paragraphs reads as a wall of bold text.
     static let bodyRegular = Font.body
-    static let callout = Font.callout.weight(.semibold)
     static let subheadline = Font.subheadline.weight(.semibold)
     static let subheadlineSemibold = Font.subheadline.weight(.bold)
     static let footnote = Font.footnote.weight(.semibold)
     static let caption = Font.caption.weight(.semibold)
-    static let captionSemibold = Font.caption.weight(.bold)
     static let caption2 = Font.caption2.weight(.semibold)
 
     // MARK: - Small Text (fixed sizes for UI chrome — badges, labels)
@@ -167,18 +150,12 @@ enum PaydayFont {
     // MARK: - Icon Sizes (fixed, for SF Symbols)
     static let iconSmall = Font.system(size: 14)
     static let iconMedium = Font.system(size: 18)
-    static let iconLarge = Font.system(size: 24)
     static let iconXL = Font.system(size: 32)
 }
 
 // MARK: - Premium View Modifiers
 
 extension View {
-
-    /// Applies negative tracking for premium financial typography.
-    func premiumTracking(_ value: CGFloat = -0.5) -> some View {
-        self.tracking(value)
-    }
 
     /// Native iOS 26 glass capsule. Payday's floor is 26.0, so there is no
     /// pre-26 fallback branch to carry.
@@ -220,16 +197,6 @@ extension View {
             .frame(maxWidth: .infinity)
             .background(PaydayColor.cardBackground, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
             .paydayPremiumShadow()
-    }
-
-    /// Premium spring animation curve — Apple's .smooth preset.
-    func paydaySpring() -> Animation {
-        .smooth
-    }
-
-    /// Snappier spring for quick, precise interactions — Apple's .snappy preset.
-    func paydayPaperSpring() -> Animation {
-        .snappy
     }
 }
 
@@ -300,14 +267,8 @@ enum PaydayAnimation {
 
     /// Fast micro-interaction (100ms) — button taps, toggles.
     static let microDuration: TimeInterval = 0.1
-    /// Quick transition (150ms) — list item stagger delay.
-    static let quickDuration: TimeInterval = 0.15
     /// Standard transition (200ms) — fade in/out.
     static let standardDuration: TimeInterval = 0.2
-    /// Modal/keyboard sync (300ms).
-    static let modalDuration: TimeInterval = 0.3
-    /// Premium spring response (400ms).
-    static let premiumDuration: TimeInterval = 0.4
     /// Smooth transition (500ms) — longer easing.
     static let smoothDuration: TimeInterval = 0.5
 

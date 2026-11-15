@@ -155,7 +155,7 @@ struct ShiftRolesDataTests {
     func csvUnchangedWithoutRoles() {
         let csv = CSVExporter.export(
             records: [ShiftRecord(workDate: day(2026, 7, 8), cashTipsCents: 5_000)],
-            paycheckRecords: [], calculator: Self.calculator)
+            paycheckRecords: [], calculator: Self.calculator, valuations: [:])
         let header = csv.split(separator: "\n").first.map(String.init)
         #expect(header == CSVExporter.header)
         #expect(!(header ?? "").contains("Role"))
@@ -168,7 +168,7 @@ struct ShiftRolesDataTests {
                 ShiftRecord(workDate: day(2026, 7, 8), cashTipsCents: 5_000, roleName: "Bar"),
                 ShiftRecord(workDate: day(2026, 7, 9), cashTipsCents: 5_000),
             ],
-            paycheckRecords: [], calculator: Self.calculator)
+            paycheckRecords: [], calculator: Self.calculator, valuations: [:])
         let lines = csv.split(separator: "\n").map(String.init)
         #expect(lines[0] == CSVExporter.header + ",Role")
         let headers = lines[0].split(separator: ",").map(String.init)

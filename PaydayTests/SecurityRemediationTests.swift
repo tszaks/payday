@@ -162,7 +162,7 @@ struct CSVFormulaNeutralizationTests {
             schedule: PaySchedule(frequency: .biweekly, anchorPeriodEnd: Date(timeIntervalSince1970: 1_779_000_000))
         )
         let record = ShiftRecord(workDate: day, cashTipsCents: 5_000, note: note)
-        let csv = CSVExporter.export(records: [record], paycheckRecords: [], calculator: calculator)
+        let csv = CSVExporter.export(records: [record], paycheckRecords: [], calculator: calculator, valuations: [:])
         let fields = csv.split(separator: "\n")[1]
             .split(separator: ",", omittingEmptySubsequences: false)
             .map(String.init)
