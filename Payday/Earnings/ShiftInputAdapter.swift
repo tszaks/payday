@@ -98,12 +98,16 @@ enum ShiftInputAdapter {
 /// Turns stored `PaycheckRecord`s into `PaycheckInput`s.
 @MainActor
 enum PaycheckInputAdapter {
-    static func inputs(from records: [PaycheckRecord], payrollTimeZone: TimeZone) -> [PaycheckInput] {
-        records.map { record in
+    /// Each period day is read through `StoredDay`, in its OWN job's latest
+    /// zone: the zone that job's periods are laid out and stored in, which
+    /// for a job in another zone is not the primary's.
+    static func inputs(from records: [PaycheckRecord], calendars: [PayrollCalendarPolicy]) -> [PaycheckInput] {
+        let storedDay = StoredDay(.periodDay, calendars: calendars)
+        return records.map { record in
             PaycheckInput(
                 id: record.id,
-                periodStart: CivilDay(record.periodStart, in: payrollTimeZone),
-                periodEnd: CivilDay(record.periodEnd, in: payrollTimeZone),
+                periodStart: storedDay.civilDay(record.periodStart, job: record.jobName),
+                periodEnd: storedDay.civilDay(record.periodEnd, job: record.jobName),
                 // `paidTipsCents`, NOT `reconciledPaidTipsCents`.
                 // `MetricID.observedPaidTips` is "exactly as entered"; the
                 // ±100c repair is a proposal a person accepts in the entry

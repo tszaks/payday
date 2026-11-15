@@ -28,7 +28,7 @@ struct ShiftProjectionTests {
             creditTipsCents: 2_000
         )
 
-        let rows = ShiftProjection.rows(for: shift)
+        let rows = ShiftProjection.rows(for: shift, day: shift.workDate)
 
         #expect(rows.count == 2)
         // Credit first, matching the detail rank and the order the legacy
@@ -60,7 +60,7 @@ struct ShiftProjectionTests {
             note: "busy"
         )
 
-        let rows = ShiftProjection.rows(for: shift)
+        let rows = ShiftProjection.rows(for: shift, day: shift.workDate)
 
         #expect(rows.count == 1, "no phantom $0 credit row")
         let row = try #require(rows.first)
@@ -85,7 +85,7 @@ struct ShiftProjectionTests {
             hoursWorked: 5
         )
 
-        let rows = ShiftProjection.rows(for: shift)
+        let rows = ShiftProjection.rows(for: shift, day: shift.workDate)
 
         #expect(rows.count == 1)
         let row = try #require(rows.first)
@@ -106,7 +106,7 @@ struct ShiftProjectionTests {
             hoursWorked: 6
         )
 
-        let rows = ShiftProjection.rows(for: shift)
+        let rows = ShiftProjection.rows(for: shift, day: shift.workDate)
         let credit = try #require(rows.first { $0.kind == .credit })
         let cash = try #require(rows.first { $0.kind == .cash })
 
@@ -133,7 +133,7 @@ struct ShiftProjectionTests {
             recordedAt: recorded
         )
 
-        let rows = ShiftProjection.rows(for: shift)
+        let rows = ShiftProjection.rows(for: shift, day: shift.workDate)
 
         #expect(rows.count == 2)
         #expect(rows.allSatisfy { $0.note == "N" })
@@ -153,8 +153,8 @@ struct ShiftProjectionTests {
             creditTipsCents: 2_000
         )
 
-        let first = ShiftProjection.rows(for: shift).map(\.id)
-        let second = ShiftProjection.rows(for: shift).map(\.id)
+        let first = ShiftProjection.rows(for: shift, day: shift.workDate).map(\.id)
+        let second = ShiftProjection.rows(for: shift, day: shift.workDate).map(\.id)
 
         #expect(first == second)
         #expect(Set(first).count == 2, "cash and credit must not collide")
@@ -165,7 +165,7 @@ struct ShiftProjectionTests {
     @Test("a projected id is never the shift's own id")
     func projectedIDIsNamespaced() {
         let shift = ShiftRecord(workDate: Self.day(2026, 9, 7), cashTipsCents: 100)
-        let rows = ShiftProjection.rows(for: shift)
+        let rows = ShiftProjection.rows(for: shift, day: shift.workDate)
         #expect(!rows.map(\.id).contains(shift.id))
         // Every projected row still points BACK at its shift, which is how a
         // reader groups them.
@@ -176,8 +176,8 @@ struct ShiftProjectionTests {
     func differentShiftsDoNotCollide() {
         let a = ShiftRecord(workDate: Self.day(2026, 9, 8), cashTipsCents: 100)
         let b = ShiftRecord(workDate: Self.day(2026, 9, 8), cashTipsCents: 100)
-        let ids = Set(ShiftProjection.rows(for: a).map(\.id))
-            .union(ShiftProjection.rows(for: b).map(\.id))
+        let ids = Set(ShiftProjection.rows(for: a, day: a.workDate).map(\.id))
+            .union(ShiftProjection.rows(for: b, day: b.workDate).map(\.id))
         #expect(ids.count == 2)
     }
 
@@ -201,7 +201,7 @@ struct ShiftProjectionTests {
             receiptMetrics: metrics,
             note: "N"
         )
-        let projected = ShiftProjection.rows(for: shift)
+        let projected = ShiftProjection.rows(for: shift, day: shift.workDate)
 
         let details = ShiftDetails.resolve(from: projected)
         #expect(details.tipOutCents == tipOut)
@@ -227,7 +227,7 @@ struct ShiftProjectionTests {
             note: "N"
         )
 
-        let projected = ShiftProjection.rows(for: shift)
+        let projected = ShiftProjection.rows(for: shift, day: shift.workDate)
         #expect(projected.compactMap(\.note) == ["N"])
     }
 
@@ -239,7 +239,10 @@ struct ShiftProjectionTests {
             ShiftRecord(workDate: Self.day(2026, 9, 13), hoursWorked: 4)
         ]
 
-        let rows = ShiftProjection.rows(for: shifts)
+        let storedDay = StoredDay(.workDay, calendars: [PayrollCalendarPolicy(
+            id: PolicyMigration.deterministicID("projection/many"), effectiveFrom: .distantPast,
+            workweekStartWeekday: 1, payrollTimeZone: PaydayTestZone.payroll)])
+        let rows = ShiftProjection.rows(for: shifts, storedDay: storedDay, in: PaydayTestZone.payroll)
 
         #expect(rows.count == 4)
         #expect(Set(rows.map(\.id)).count == 4)

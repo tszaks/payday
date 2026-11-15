@@ -466,6 +466,7 @@ struct PaydayNotificationParityTests {
         let facts = DashboardFacts(
             snapshot: dataset.snapshot,
             allShiftRecords: dataset.shiftRecordDays,
+            calendars: compensation.calendars,
             allTipRecords: dataset.tipRecords,
             withholdingModel: dataset.withholdingModel,
             schedule: PaySchedule(frequency: .weekly, anchorPeriodEnd: date(2026, 7, 19), payDelayDays: 5, firstWeekday: nil),
@@ -532,6 +533,7 @@ struct PaydayNotificationParityTests {
         let facts = DashboardFacts(
             snapshot: dataset.snapshot,
             allShiftRecords: dataset.shiftRecordDays,
+            calendars: compensation.calendars,
             allTipRecords: dataset.tipRecords,
             withholdingModel: dataset.withholdingModel,
             schedule: PaySchedule(frequency: .weekly, anchorPeriodEnd: date(2026, 7, 19), payDelayDays: 5, firstWeekday: nil),

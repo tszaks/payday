@@ -147,6 +147,28 @@ struct LogTipsIntent: AppIntent {
             : IntentDialog("Logged \(Money.string(fromCents: cents)) in \(kindText) tips."))
     }
 
+    /// Every shift, of any job, whose stored day is today on the phone's
+    /// calendar. Each job stores today at its own zone's start of the day, a
+    /// different instant per zone, so the fetch is a window of instants wide
+    /// enough for every zone (`ShiftDraftPreview.instants(covering:)`) and
+    /// the day is then compared as a civil day.
+    @MainActor
+    static func todaysRecords(
+        in context: ModelContext,
+        now: Date,
+        calendars: [PayrollCalendarPolicy],
+        phoneTimeZone: TimeZone = .current
+    ) throws -> [ShiftRecord] {
+        let today = CivilDay(now, in: phoneTimeZone)
+        let storedDay = StoredDay(.workDay, calendars: calendars)
+        var descriptor = FetchDescriptor<ShiftRecord>()
+        if let window = ShiftDraftPreview.instants(covering: DayRange(day: today)) {
+            let (earliest, latest) = (window.lowerBound, window.upperBound)
+            descriptor.predicate = #Predicate { $0.workDate >= earliest && $0.workDate <= latest }
+        }
+        return try context.fetch(descriptor).filter { storedDay.civilDay($0.workDate, job: $0.jobName) == today }
+    }
+
     /// The new representation. Returns whether it completed an existing
     /// shift rather than starting one, which is the only thing the spoken
     /// confirmation needs to know.
@@ -165,10 +187,7 @@ struct LogTipsIntent: AppIntent {
         cents: Int,
         tipOutCents: Int?
     ) throws -> Bool {
-        // Today on the phone's calendar, as the primary job's stored day.
-        let today = StoredDay(.workDay, calendars: calendars).stored(picked: now, job: nil)
-        let todaysRecords = try context.fetch(FetchDescriptor<ShiftRecord>(predicate: #Predicate { $0.workDate == today }))
-        let target = todaysRecords
+        let target = try Self.todaysRecords(in: context, now: now, calendars: calendars)
             .filter { ShiftCommands.mayMutate($0) }
             .filter { kind.tipKind == .cash ? $0.cashTipsCents == 0 : $0.creditTipsCents == 0 }
             .max { ($0.recordedAt ?? .distantPast) < ($1.recordedAt ?? .distantPast) }

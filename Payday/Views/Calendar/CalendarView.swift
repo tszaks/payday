@@ -32,17 +32,6 @@ private struct DaySelection: Identifiable {
 /// they already hold, so this enum is the one place either of them has to
 /// change.
 enum CalendarEarnings {
-    /// The grouping calendar, which is NOT the grid's calendar: the grid needs
-    /// the user's week start for its layout, and a shift grouping must not.
-    /// The payroll zone is frozen here for the same reason the engine freezes
-    /// it — a device that travels must not re-date a shift.
-    static func groupingCalendar(payrollTimeZone: TimeZone) -> Calendar {
-        var calendar = Calendar.current
-        calendar.timeZone = payrollTimeZone
-        return calendar
-    }
-
-
     /// One snapshot over every shift, valued with the user's OWN rate and
     /// workweek history, effective dates intact.
     ///

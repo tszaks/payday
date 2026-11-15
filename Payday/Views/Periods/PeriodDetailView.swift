@@ -34,7 +34,7 @@ struct PeriodDetailFacts: SnapshotFacts {
     /// `[ShiftRecord]` and not a projection because these rows are the edit
     /// and delete targets: `ProjectedShiftRow` is deliberately un-persistable.
     let shiftRecordDays: [ShiftRecord]
-    let multiShiftDays: Set<Date>
+    let multiShiftDays: Set<CivilDay>
     /// The civil days this screen asked about, so a caller can see the scope
     /// as well as the cents.
     let range: DayRange
@@ -134,8 +134,13 @@ struct PeriodDetailFacts: SnapshotFacts {
         // set by construction.
         let recordRows = shiftRecordDays.filter { selected.contains($0.id) }
         self.shiftRecordDays = recordRows
-        var shiftCounts: [Date: Int] = [:]
-        for record in recordRows { shiftCounts[record.workDate, default: 0] += 1 }
+        // Counted on the engine's own work day (`StoredDay.civilDay`, through
+        // the adapter): every row here was selected by the snapshot. Two
+        // shifts on one day can be stored at two instants, one per zone.
+        var shiftCounts: [CivilDay: Int] = [:]
+        for day in recordRows.compactMap({ snapshot?.valuation($0.id)?.workDay }) {
+            shiftCounts[day, default: 0] += 1
+        }
         multiShiftDays = Set(shiftCounts.filter { $0.value >= 2 }.keys)
 
         if let periodResult {
@@ -469,15 +474,16 @@ struct PeriodDetailView: View {
         for record: ShiftRecord,
         facts: PeriodDetailFacts
     ) -> some View {
-        Button {
+        let storedDay = StoredDay(.workDay, calendars: policyStore.policies.calendars)
+        return Button {
             sheetTarget = .editShift(record)
         } label: {
             ShiftDayRow(facts: ShiftDayRowFacts(
                 snapshot: facts.snapshot,
                 shiftID: record.id,
-                day: StoredDay(.workDay, calendars: policyStore.policies.calendars).shown(record.workDate, job: record.jobName),
+                day: storedDay.shown(record.workDate, job: record.jobName),
                 period: record.shiftPeriod,
-                dayHasMultipleShifts: facts.multiShiftDays.contains(record.workDate)
+                dayHasMultipleShifts: facts.multiShiftDays.contains(storedDay.civilDay(record.workDate, job: record.jobName))
             ))
             .padding(.vertical, PaydaySpacing.p12)
             .contentShape(Rectangle())

@@ -99,7 +99,7 @@ extension SyncPassOrderTests {
         #expect(shifts.count == Self.serverDays.count)
         #expect(ShiftInputAdapter.inputs(from: shifts, calendars: calendars).map(\.workDay.iso) == Self.serverDays)
         let check = try #require(try context.fetch(FetchDescriptor<PaycheckRecord>()).first)
-        let paychecks = PaycheckInputAdapter.inputs(from: [check], payrollTimeZone: policyStore.payrollTimeZone)
+        let paychecks = PaycheckInputAdapter.inputs(from: [check], calendars: calendars)
         #expect(paychecks.map(\.periodStart.iso) == ["2026-07-13"])
         #expect(paychecks.map(\.periodEnd.iso) == ["2026-07-19"])
 

@@ -145,7 +145,7 @@ enum InsightsEarnings {
         let shown = reported ?? records
         return Dataset(
             snapshot: snapshot,
-            tipRecords: StatsRecordAdapter.tipRecords(from: shown),
+            tipRecords: StatsRecordAdapter.tipRecords(from: shown, calendars: policies.calendars, payrollTimeZone: payrollTimeZone),
             shiftIDs: shown.map(\.id)
         )
     }

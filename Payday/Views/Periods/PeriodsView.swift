@@ -342,6 +342,7 @@ struct PeriodsView: View {
                 records: shiftRecords,
                 paycheckRecords: paycheckRecords.hidingPendingRemoval(),
                 calculatorForJob: { policyStore.calculator(forJob: $0, primarySchedule: scheduleStore.schedule) },
+                calendars: policyStore.policies.calendars,
                 job: job,
                 valuations: CSVExporter.valuations(from: snapshotBuild().snapshot)
             )

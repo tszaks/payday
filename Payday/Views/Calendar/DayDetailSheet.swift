@@ -39,7 +39,7 @@ struct DayDetailFacts: SnapshotFacts {
     /// holding a shift with no hours logged reads "Known so far", never
     /// "Total", and a failed read renders no currency at all.
     let total: EarningsFigure
-    /// For a row's label: its stored day as the phone's calendar shows it.
+    /// A row's own civil day, for the day's rows and for a row's label.
     private let storedDay: StoredDay
 
     /// The day, from the shift representation — the only stored shape since
@@ -53,9 +53,9 @@ struct DayDetailFacts: SnapshotFacts {
     /// facts initializer. Views build these on the main actor already.
     @MainActor
     init(shiftRecords records: [ShiftRecord], date: Date, policies: CompensationPolicies, payrollTimeZone: TimeZone) {
-        let calendar = CalendarEarnings.groupingCalendar(payrollTimeZone: payrollTimeZone)
         let civilDay = CivilDay(date, in: payrollTimeZone)
-        storedDay = StoredDay(.workDay, calendars: policies.calendars)
+        let storedDay = StoredDay(.workDay, calendars: policies.calendars)
+        self.storedDay = storedDay
 
         let adapted = ShiftInputAdapter.adapt(records, calendars: policies.calendars)
         let resolvedSnapshot = try? EarningsSnapshot.build(EarningsInputs(
@@ -78,7 +78,7 @@ struct DayDetailFacts: SnapshotFacts {
             shiftRecords = dayResult.shiftIDs.compactMap { byID[$0] }.sorted(by: Self.listOrder)
         } else {
             total = .unavailable()
-            shiftRecords = records.filter { calendar.isDate($0.workDate, inSameDayAs: date) }.sorted(by: Self.listOrder)
+            shiftRecords = records.filter { storedDay.civilDay($0.workDate, job: $0.jobName) == civilDay }.sorted(by: Self.listOrder)
         }
     }
 

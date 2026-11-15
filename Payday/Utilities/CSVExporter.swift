@@ -60,7 +60,10 @@ enum CSVExporter {
         calendar: Calendar = .current,
         valuations: [UUID: ShiftValuation]
     ) -> String {
-        export(records: records, paycheckRecords: paycheckRecords, calculatorForJob: { _ in calculator }, calendar: calendar, valuations: valuations)
+        // One grid in one zone: a shift the engine did not value is read on
+        // that grid's calendar.
+        let shifts = records.map { RowShift(record: $0, workDay: CivilDay($0.workDate, in: calculator.payrollTimeZone)) }
+        return export(shifts: shifts, paycheckRecords: paycheckRecords, calculatorForJob: { _ in calculator }, calendar: calendar, valuations: valuations)
     }
 
     /// The same file with each row priced on its OWN job's pay-period grid
@@ -68,17 +71,22 @@ enum CSVExporter {
     /// filed under the primary's periods or matched to the primary's check.
     /// `job` drops the other jobs' rows; `.all` keeps every row. Build
     /// `calculatorForJob` from `PolicyStore.calculator(forJob:primarySchedule:)`.
+    /// `calendars` (`PolicyStore.policies.calendars`) name the work day of a
+    /// shift the engine did not value, as `StoredDay` reads it for the engine.
     @MainActor
     static func export(
         records: [ShiftRecord],
         paycheckRecords: [PaycheckRecord],
         calculatorForJob: (String?) -> PayPeriodCalculator,
+        calendars: [PayrollCalendarPolicy],
         job: JobScope = .all,
         calendar: Calendar = .current,
         valuations: [UUID: ShiftValuation]
     ) -> String {
+        let storedDay = StoredDay(.workDay, calendars: calendars)
         let kept = records.filter { job.includes($0.jobName) }
-        return export(shifts: kept.map(RowShift.init(record:)), paycheckRecords: paycheckRecords, calculatorForJob: calculatorForJob, calendar: calendar, valuations: valuations)
+        let shifts = kept.map { RowShift(record: $0, workDay: storedDay.civilDay($0.workDate, job: $0.jobName)) }
+        return export(shifts: shifts, paycheckRecords: paycheckRecords, calculatorForJob: calculatorForJob, calendar: calendar, valuations: valuations)
     }
 
     /// `export`'s `valuations`, from the snapshot the calling screen already
@@ -113,10 +121,14 @@ enum CSVExporter {
             calculators[key] = built
             return built
         }
-        var dayShiftCounts: [Date: Int] = [:]
-        for shift in shifts { dayShiftCounts[shift.day, default: 0] += 1 }
+        // The row's work day: the engine's own when it valued the shift, else
+        // the stored day's civil day. Two shifts on one day can be stored at
+        // two instants, one per zone, so a double is counted on the day.
+        func workDay(_ shift: RowShift) -> CivilDay { valuations[shift.shiftID]?.workDay ?? shift.workDay }
+        var dayShiftCounts: [CivilDay: Int] = [:]
+        for shift in shifts { dayShiftCounts[workDay(shift), default: 0] += 1 }
         let rows = shifts.map { shift -> String in
-            row(for: shift, dayHasMultipleShifts: (dayShiftCounts[shift.day] ?? 0) >= 2, paycheckRecords: paycheckRecords, calculator: calculator(for: shift.jobName), calendar: calendar, valuation: valuations[shift.shiftID], includesRole: includesRole, includesJob: includesJob)
+            row(for: shift, workDay: workDay(shift), dayHasMultipleShifts: (dayShiftCounts[workDay(shift)] ?? 0) >= 2, paycheckRecords: paycheckRecords, calculator: calculator(for: shift.jobName), calendar: calendar, valuation: valuations[shift.shiftID], includesRole: includesRole, includesJob: includesJob)
         }
         return ([header(includesRole: includesRole, includesJob: includesJob)] + rows).joined(separator: "\n")
     }
@@ -129,7 +141,10 @@ enum CSVExporter {
     /// Every money value arrives already resolved — no arithmetic happens in
     /// the row.
     private struct RowShift {
+        /// The stored instant, for the file's order.
         let day: Date
+        /// The stored day's civil day, for a shift the engine did not value.
+        let workDay: CivilDay
         let shiftID: UUID
         let cashCents: Int
         let creditCents: Int
@@ -176,8 +191,9 @@ enum CSVExporter {
         /// under `-O` and which therefore guarantees nothing in a shipped
         /// build.
         @MainActor
-        init(record: ShiftRecord) {
+        init(record: ShiftRecord, workDay: CivilDay) {
             day = record.workDate
+            self.workDay = workDay
             shiftID = record.id
             cashCents = record.cashTipsCents
             creditCents = record.creditTipsCents
@@ -197,8 +213,7 @@ enum CSVExporter {
         }
     }
 
-    private static func row(for shift: RowShift, dayHasMultipleShifts: Bool, paycheckRecords: [PaycheckRecord], calculator: PayPeriodCalculator, calendar: Calendar, valuation: ShiftValuation?, includesRole: Bool, includesJob: Bool) -> String {
-        let day = shift.day
+    private static func row(for shift: RowShift, workDay: CivilDay, dayHasMultipleShifts: Bool, paycheckRecords: [PaycheckRecord], calculator: PayPeriodCalculator, calendar: Calendar, valuation: ShiftValuation?, includesRole: Bool, includesJob: Bool) -> String {
         let shiftDetails = shift
         let cashCents = shift.cashCents
         let creditCents = shift.creditCents
@@ -207,13 +222,11 @@ enum CSVExporter {
         let shiftField = shift.shiftPeriod?.displayName ?? ""
         let note = shift.note
 
-        // The row's work day: the engine's own when it valued the shift (it
-        // reads the day in the payroll zone in effect FOR that shift, which
-        // the latest zone is not after a payroll zone change), else the
-        // stored day in the latest zone. The period is the one that holds
-        // that day, so the Date cell always lies inside the Period cell.
+        // The period is the one that holds the row's work day (the engine's,
+        // read in the payroll zone in effect FOR that shift, which the latest
+        // zone is not after a payroll zone change), so the Date cell always
+        // lies inside the Period cell.
         let zone = calculator.payrollTimeZone
-        let workDay = valuation?.workDay ?? CivilDay(day, in: zone)
         let period = calculator.period(containing: workDay.date(in: zone))
         // The check for THIS shift's job (PR E1): same period and the same job
         // tag, nil meaning the primary on both sides. Two jobs paid in the

@@ -57,7 +57,7 @@ enum SmartNudgeScheduler {
     ) -> Date? {
         let storedDay = StoredDay(.workDay, calendars: PolicyStore.storedPolicies().calendars)
         return rhythmFireDate(
-            rows: ShiftProjection.rows(for: shiftRecords),
+            rows: ShiftProjection.rows(for: shiftRecords, storedDay: storedDay, in: PolicyStore.storedPayrollTimeZone()),
             loggedDays: Set(shiftRecords.map { storedDay.civilDay($0.workDate, job: $0.jobName) }),
             from: now
         )

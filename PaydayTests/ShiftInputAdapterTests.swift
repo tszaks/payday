@@ -200,7 +200,7 @@ struct PaycheckInputAdapterTests {
         #expect(proposal?.correctionCents == 50)
         #expect(record.paidTipsCents == 10_000, "the proposal is not the observation")
 
-        let input = PaycheckInputAdapter.inputs(from: [record], payrollTimeZone: payroll)[0]
+        let input = PaycheckInputAdapter.inputs(from: [record], calendars: [mondayCalendarPolicy()])[0]
         #expect(input.paidTipsCents == 10_000, "observedPaidTips is exactly as entered")
         #expect(input.paidTipsCents != 10_050, "the proposal is never applied by the adapter")
         #expect(input.periodStart == CivilDay(year: 2026, month: 9, day: 21))
@@ -213,7 +213,7 @@ struct PaycheckInputAdapterTests {
         let primary = PaycheckRecord(periodStart: instant(2026, 9, 21), periodEnd: instant(2026, 10, 4), paidTipsCents: 0)
         let cafe = PaycheckRecord(periodStart: instant(2026, 9, 21), periodEnd: instant(2026, 10, 4), paidTipsCents: 0)
         cafe.jobName = "Cafe"
-        let inputs = PaycheckInputAdapter.inputs(from: [primary, cafe], payrollTimeZone: payroll)
+        let inputs = PaycheckInputAdapter.inputs(from: [primary, cafe], calendars: [mondayCalendarPolicy()])
         #expect(inputs.map(\.jobName) == [nil, "Cafe"])
     }
 }

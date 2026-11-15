@@ -8,8 +8,9 @@ import Foundation
 /// it is read in. For a work day that is the zone of the calendar policy in
 /// effect on that day for the shift's job, the zone `civilDay(_:job:)` reads
 /// it in for the engine. For a period day it is the job's latest zone, the
-/// zone `PayPeriodCalculator` lays the job's periods out in and the zone the
-/// paycheck is matched to its period in. Midnight in Tokyo on July 19 is
+/// zone `PayPeriodCalculator` lays the job's periods out in, the zone the
+/// paycheck is matched to its period in and the zone the engine reads it in
+/// (`PaycheckInputAdapter`). Midnight in Tokyo on July 19 is
 /// 8 AM on July 18 in Los Angeles, so storing the PHONE's midnight put a
 /// shift logged in Tokyo for a Los Angeles payroll on the day before, in the
 /// wrong workweek and the wrong pay period. The payroll zone's start of the
@@ -18,11 +19,13 @@ import Foundation
 ///
 /// Every conversion between a stored day and anything else goes through
 /// here, as `PayScheduleAnchor` does for the pay schedule anchor: a picker
-/// shows the phone's calendar (`stored(picked:job:)`, `shown(_:job:)`), the
-/// server holds a `YYYY-MM-DD` day (`wireDay`, `stored(wireDay:job:)`), and a
-/// row stored under the old phone-midnight rule is re-anchored once
-/// (`repaired`). For a phone in its payroll zone every one of them is the
-/// identity, so nothing it stores, sends or shows moves.
+/// shows the phone's calendar (`stored(picked:job:)`, `shown(_:job:)`), a
+/// reader that reads every day on one calendar gets the day's start there
+/// (`start(of:job:in:)`), the server holds a `YYYY-MM-DD` day (`wireDay`,
+/// `stored(wireDay:job:)`), and a row stored under the old phone-midnight
+/// rule is re-anchored once (`repaired`). For an account with one payroll
+/// zone, on a phone in that zone, every one of them is the identity, so
+/// nothing it stores, sends or shows moves.
 ///
 /// With no calendar policy at all (a first launch before the migration) the
 /// zone falls back to the device's, the single moment the app is allowed to
@@ -44,9 +47,13 @@ struct StoredDay {
     /// - Parameter calendars: every calendar policy, every job's, as
     ///   `CompensationPolicies.calendars` holds them. Each day reads its zone
     ///   from its OWN job's calendars (the `policies(forJob:)` partition); a
-    ///   job with no calendar of its own reads the primary's.
-    init(_ kind: Kind, calendars: [PayrollCalendarPolicy]) {
+    ///   job with no calendar of its own reads the primary's. Sorted here,
+    ///   once, into effect order, so no read sorts.
+    init(_ kind: Kind, calendars unsorted: [PayrollCalendarPolicy]) {
         self.kind = kind
+        let calendars = unsorted.sorted {
+            ($0.effectiveFrom, $0.id.uuidString) < ($1.effectiveFrom, $1.id.uuidString)
+        }
         allCalendars = calendars
         primaryCalendars = calendars.filter { $0.jobName == nil }
         var byJob: [String: [PayrollCalendarPolicy]] = [:]
@@ -61,19 +68,27 @@ struct StoredDay {
 
     /// The civil day a stored day names.
     ///
-    /// A work day resolves its zone in two steps, because the zone lives on
-    /// the calendar policy in effect on that day and picking the policy
-    /// needs the day: read the day in the latest policy's zone, then re-read
-    /// it in the zone of the policy in effect on that day. A zone change
-    /// moves a timestamp by hours, never by more than a day, so the second
-    /// read is the answer. A period day is read in the job's latest zone.
+    /// A work day is read by the latest policy whose OWN reading of the
+    /// instant is on or after its own `effectiveFrom`, walking from the
+    /// latest policy back; when none qualifies, by the latest zone. The zone
+    /// lives on the policy in effect on that day, and picking the policy
+    /// needs the day, so each policy is asked in its own zone. That is what
+    /// makes the reader give back the day the writer stored: the first day of
+    /// a policy whose zone is east of a later one starts the evening before
+    /// in the later zone, which a read in the latest zone alone would name.
+    /// For one or two policies, the first from `.distantPast`, this is the
+    /// same function as reading in the latest zone and then re-reading in the
+    /// zone of the policy in effect on that day. A period day is read in the
+    /// job's latest zone.
     func civilDay(_ stored: Date, job: String?) -> CivilDay {
         let calendars = calendars(for: job)
         let latestZone = Self.latestZone(in: calendars)
-        let provisional = CivilDay(stored, in: latestZone)
-        guard kind == .workDay else { return provisional }
-        let zone = Self.policy(in: calendars, onOrBefore: provisional)?.payrollTimeZone ?? latestZone
-        return zone == latestZone ? provisional : CivilDay(stored, in: zone)
+        guard kind == .workDay else { return CivilDay(stored, in: latestZone) }
+        for policy in calendars.reversed() {
+            let day = CivilDay(stored, in: policy.payrollTimeZone)
+            if day >= policy.effectiveFrom { return day }
+        }
+        return CivilDay(stored, in: latestZone)
     }
 
     // MARK: The writer
@@ -93,7 +108,18 @@ struct StoredDay {
     /// The date a picker, or anything that formats on the phone's calendar,
     /// must be given to show the stored day's own civil day.
     func shown(_ stored: Date, job: String?, phoneTimeZone: TimeZone = .current) -> Date {
-        civilDay(stored, job: job).date(in: phoneTimeZone)
+        start(of: stored, job: job, in: phoneTimeZone)
+    }
+
+    // MARK: Readers that work on one calendar
+
+    /// The start, in `zone`, of the stored day's own civil day: what a reader
+    /// that reads every day on one calendar (a stats engine, a grouping, a
+    /// day key) must be given. Rows of another policy or another job sit at
+    /// their own zone's midnight, which that one calendar can name as the day
+    /// before.
+    func start(of stored: Date, job: String?, in zone: TimeZone) -> Date {
+        civilDay(stored, job: job).date(in: zone)
     }
 
     // MARK: The wire
@@ -131,7 +157,13 @@ struct StoredDay {
     /// The limit is the instant itself, which does not say which zone wrote
     /// it. A row written in a third zone, neither the phone's current zone
     /// nor the payroll zone, is recovered only when that zone lies in
-    /// `stableDay`'s window (UTC-10:30, UTC+13:30].
+    /// `stableDay`'s window (UTC-10:30, UTC+13:30]. The same holds after a
+    /// payroll zone change AWAY from a zone outside that window (UTC-11,
+    /// UTC+14): a row stored at that zone's midnight is not this phone's
+    /// midnight, so `stableDay` names its day, and that can be the day next
+    /// to the one it was. The row then moves to that adjacent day and its
+    /// upload fingerprint, which digests the same `stableDay`, does not
+    /// change, so nothing uploads to correct it.
     func repaired(_ stored: Date, job: String?, phoneTimeZone: TimeZone = .current) -> Date {
         if let zone = singleZone(for: job), Self.isMidnight(stored, in: zone) { return stored }
         let day = civilDay(stored, job: job)
@@ -155,7 +187,7 @@ struct StoredDay {
         calendars.last?.payrollTimeZone ?? .current
     }
 
-    /// The zone `day` is read in: the reader's second step, from the day.
+    /// The zone `day` is stored in: the policy in effect on that day.
     private func zone(on day: CivilDay, job: String?) -> TimeZone {
         let calendars = calendars(for: job)
         let latestZone = Self.latestZone(in: calendars)
@@ -173,6 +205,10 @@ struct StoredDay {
 
     /// Local midnight exactly. A day whose clocks change at midnight starts
     /// at 01:00, fails this, and takes the calendar path, which keeps it.
+    /// It also accepts a midnight that is not a day's start: on a day whose
+    /// clocks fall back at midnight, the second 00:00. That instant is kept
+    /// as stored. Every reader names the same civil day for it, because
+    /// readers compare civil days, never stored instants.
     private static func isMidnight(_ date: Date, in zone: TimeZone) -> Bool {
         let local = date.timeIntervalSince1970 + Double(zone.secondsFromGMT(for: date))
         return local.truncatingRemainder(dividingBy: 86_400) == 0
@@ -180,13 +216,11 @@ struct StoredDay {
 
     /// The last calendar policy effective on or before `day`. Same rule as
     /// `CompensationPolicies.calendar(on:)`, which takes a whole
-    /// `CompensationPolicies`; this one takes the array it is given.
+    /// `CompensationPolicies`; this one takes the sorted array it is given.
     private static func policy(
         in calendars: [PayrollCalendarPolicy],
         onOrBefore day: CivilDay
     ) -> PayrollCalendarPolicy? {
-        calendars
-            .sorted { ($0.effectiveFrom, $0.id.uuidString) < ($1.effectiveFrom, $1.id.uuidString) }
-            .last { $0.effectiveFrom <= day }
+        calendars.last { $0.effectiveFrom <= day }
     }
 }

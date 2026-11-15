@@ -1752,10 +1752,15 @@ struct LogTipSheet: View {
         // refreshed mid-call), so isEmpty here means genuinely the first.
         let isFirstShiftEver = shiftRecords.isEmpty
         // Clamp to today: the picker already blocks future dates, but never
-        // trust the initial/bound value to enforce it. The stored day, which
-        // is what the calculator and the engine below read.
-        let normalizedDate = StoredDay(.workDay, calendars: policyStore.policies.calendars)
-            .stored(picked: min(date, .now), job: jobName)
+        // trust the initial/bound value to enforce it. The stored day's civil
+        // day as it starts in the payroll zone, the one calendar the
+        // calculator and the engine below read every day on.
+        let storedDay = StoredDay(.workDay, calendars: policyStore.policies.calendars)
+        let normalizedDate = storedDay.start(
+            of: storedDay.stored(picked: min(date, .now), job: jobName),
+            job: jobName,
+            in: policyStore.payrollTimeZone
+        )
         let trimmedNote = note.isEmpty ? nil : note
         let recordedAt = Date.now
         let effectiveTipOutCents = tipOutCents > 0 ? tipOutCents : nil
@@ -1797,7 +1802,11 @@ struct LogTipSheet: View {
         let revealSnapshot = revealHistorySnapshot()
         let statsEngine = StatsEngine(
             payrollTimeZone: policyStore.payrollTimeZone,
-            records: StatsRecordAdapter.tipRecords(from: shiftRecords),
+            records: StatsRecordAdapter.tipRecords(
+                from: shiftRecords,
+                calendars: policyStore.policies.calendars,
+                payrollTimeZone: policyStore.payrollTimeZone
+            ),
             valuedShiftCents: Self.valuedCents(in: revealSnapshot)
         )
         // The draft's own id, not a stand-in UUID: it is the id the draft was

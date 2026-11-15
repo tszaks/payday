@@ -116,7 +116,8 @@ struct AmbientSurfaceParityTests {
     /// empty here is the truncation defect's residual shape.
     @Test("the pace baseline sees every stored shift")
     func paceBaselineSeesTheRecords() {
-        let rows = StatsRecordAdapter.tipRecords(from: Self.records())
+        let rows = StatsRecordAdapter.tipRecords(
+            from: Self.records(), calendars: Self.policies().calendars, payrollTimeZone: Self.zone)
         #expect(!rows.isEmpty)
         let total = rows.reduce(0) { $0 + $1.netCents }
         #expect(total == (2_200 + 3_100 - 400) + (5_600 + 9_900),
@@ -135,11 +136,13 @@ struct AmbientSurfaceParityTests {
         ]
         let primaryTotal = (2_200 + 3_100 - 400) + (5_600 + 9_900)
 
-        let twoJobs = StatsRecordAdapter.tipRecords(from: records, job: .picked(nil, jobCount: 2))
+        let twoJobs = StatsRecordAdapter.tipRecords(
+            from: records, job: .picked(nil, jobCount: 2), calendars: Self.policies().calendars, payrollTimeZone: Self.zone)
         #expect(twoJobs.reduce(0) { $0 + $1.netCents } == primaryTotal,
                 "the second job's shift must not reach the primary job's pace")
 
-        let oneJob = StatsRecordAdapter.tipRecords(from: records, job: .picked(nil, jobCount: 1))
+        let oneJob = StatsRecordAdapter.tipRecords(
+            from: records, job: .picked(nil, jobCount: 1), calendars: Self.policies().calendars, payrollTimeZone: Self.zone)
         #expect(oneJob.reduce(0) { $0 + $1.netCents } == primaryTotal + 7_000)
     }
 }

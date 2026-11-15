@@ -142,6 +142,7 @@ struct ScreenNumberParityTests {
         let dashboard = DashboardFacts(
             snapshot: dashboardBuild.snapshot,
             allShiftRecords: dashboardBuild.shiftRecordDays,
+            calendars: comp.calendars,
             allTipRecords: dashboardBuild.tipRecords,
             withholdingModel: dashboardBuild.withholdingModel,
             schedule: schedule,
