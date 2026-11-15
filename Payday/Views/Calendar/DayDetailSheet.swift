@@ -39,6 +39,8 @@ struct DayDetailFacts: SnapshotFacts {
     /// holding a shift with no hours logged reads "Known so far", never
     /// "Total", and a failed read renders no currency at all.
     let total: EarningsFigure
+    /// A row's own civil day, for the day's rows and for a row's label.
+    private let storedDay: StoredDay
 
     /// The day, from the shift representation — the only stored shape since
     /// the flip.
@@ -51,8 +53,9 @@ struct DayDetailFacts: SnapshotFacts {
     /// facts initializer. Views build these on the main actor already.
     @MainActor
     init(shiftRecords records: [ShiftRecord], date: Date, policies: CompensationPolicies, payrollTimeZone: TimeZone) {
-        let calendar = CalendarEarnings.groupingCalendar(payrollTimeZone: payrollTimeZone)
         let civilDay = CivilDay(date, in: payrollTimeZone)
+        let storedDay = StoredDay(.workDay, calendars: policies.calendars)
+        self.storedDay = storedDay
 
         let adapted = ShiftInputAdapter.adapt(records, calendars: policies.calendars)
         let resolvedSnapshot = try? EarningsSnapshot.build(EarningsInputs(
@@ -75,7 +78,7 @@ struct DayDetailFacts: SnapshotFacts {
             shiftRecords = dayResult.shiftIDs.compactMap { byID[$0] }.sorted(by: Self.listOrder)
         } else {
             total = .unavailable()
-            shiftRecords = records.filter { calendar.isDate($0.workDate, inSameDayAs: date) }.sorted(by: Self.listOrder)
+            shiftRecords = records.filter { storedDay.civilDay($0.workDate, job: $0.jobName) == civilDay }.sorted(by: Self.listOrder)
         }
     }
 
@@ -135,7 +138,7 @@ struct DayDetailFacts: SnapshotFacts {
     ) -> ShiftDayRowFacts {
         rowFacts(
             shiftID: record.id,
-            day: record.workDate,
+            day: storedDay.shown(record.workDate, job: record.jobName),
             period: record.shiftPeriod,
             shiftCount: shiftCount,
             note: note
@@ -159,8 +162,14 @@ struct DayDetailSheet: View {
     /// Always "Wed, Jul 15" — weekday abbrev, month, day. Never collapsed
     /// to "Today" / bare "Wednesday", which reads fine in a list of shifts but not as a
     /// sheet title naming one specific day.
-    private var titleText: String {
-        date.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day())
+    static func titleText(for date: Date, in zone: TimeZone) -> String {
+        date.formatted(Date.FormatStyle(timeZone: zone).weekday(.abbreviated).month(.abbreviated).day())
+    }
+
+    /// The date the Log Shift sheet opens on. Its picker shows the phone's
+    /// calendar, so the tapped payroll day moves across as the same civil day.
+    static func defaultLogDate(for date: Date, in zone: TimeZone) -> Date {
+        CivilDay(date, in: zone).date(in: .current)
     }
 
     var body: some View {
@@ -204,7 +213,7 @@ struct DayDetailSheet: View {
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
             .background(PaydayColor.background)
-            .navigationTitle(titleText)
+            .navigationTitle(Self.titleText(for: date, in: policyStore.payrollTimeZone))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -212,7 +221,7 @@ struct DayDetailSheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button {
-                        sheetTarget = .new(defaultDate: date)
+                        sheetTarget = .new(defaultDate: Self.defaultLogDate(for: date, in: policyStore.payrollTimeZone))
                     } label: {
                         Image(systemName: "plus")
                     }

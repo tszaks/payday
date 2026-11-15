@@ -22,7 +22,10 @@ struct InsightsNoteRecencyTests {
             creditTipsCents: cents,
             note: note
         )
-        return StatsRecordAdapter.tipRecords(from: [shift])[0]
+        let calendars = [PayrollCalendarPolicy(
+            id: PolicyMigration.deterministicID("noterecency/calendar"), effectiveFrom: .distantPast,
+            workweekStartWeekday: 1, payrollTimeZone: PaydayTestZone.payroll)]
+        return StatsRecordAdapter.tipRecords(from: [shift], calendars: calendars, payrollTimeZone: PaydayTestZone.payroll)[0]
     }
 
     @Test("a shift with a note is counted like any other shift in the facts window")

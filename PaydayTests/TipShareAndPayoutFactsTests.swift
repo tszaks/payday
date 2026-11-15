@@ -52,6 +52,7 @@ struct TipShareAndPayoutFactsTests {
         return DashboardFacts(
             snapshot: dataset.snapshot,
             allShiftRecords: dataset.shiftRecordDays,
+            calendars: Self.policies(rateCents: rateCents).calendars,
             allTipRecords: dataset.tipRecords,
             withholdingModel: dataset.withholdingModel,
             cardTipsPaidAtClose: dataset.cardTipsPaidAtClose,
@@ -104,7 +105,8 @@ struct TipShareAndPayoutFactsTests {
                         tipOutCents: 4_000, tipShareInCents: 18_000, recordedAt: Self.at(2026, 10, date))
         }
         let insights = try #require(
-            StatsEngine(payrollTimeZone: Self.zone, records: StatsRecordAdapter.tipRecords(from: shifts))
+            StatsEngine(payrollTimeZone: Self.zone, records: StatsRecordAdapter.tipRecords(
+                from: shifts, calendars: Self.policies(rateCents: 0).calendars, payrollTimeZone: Self.zone))
                 .insightsFacts(referenceDate: Self.at(2026, 10, 10))
         )
         #expect(!InsightsNumbersGrid.rows(for: insights, hourly: nil).joined().contains { $0.id == "tipPercent" })
@@ -115,7 +117,8 @@ struct TipShareAndPayoutFactsTests {
                         salesCents: 50_000, tipShareInCents: 18_000, recordedAt: shift.workDate)
         }
         let salesInsights = try #require(
-            StatsEngine(payrollTimeZone: Self.zone, records: StatsRecordAdapter.tipRecords(from: withSales))
+            StatsEngine(payrollTimeZone: Self.zone, records: StatsRecordAdapter.tipRecords(
+                from: withSales, calendars: Self.policies(rateCents: 0).calendars, payrollTimeZone: Self.zone))
                 .insightsFacts(referenceDate: Self.at(2026, 10, 10))
         )
         let tile = try #require(InsightsNumbersGrid.rows(for: salesInsights, hourly: nil).joined().first { $0.id == "tipPercent" })

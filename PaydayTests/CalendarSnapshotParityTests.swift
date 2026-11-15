@@ -541,7 +541,8 @@ struct CalendarHonestyTests {
     @Test("a future in-month day is announced as upcoming, never as no shifts")
     func futureDayIsUpcoming() {
         let label = DayCell.label(
-            day: day(2026, 9, 25), tile: nil, isCurrentMonth: true, isFuture: true)
+            day: day(2026, 9, 25), tile: nil, isCurrentMonth: true, isFuture: true,
+            zone: PaydayTestZone.payroll)
         #expect(label.contains("upcoming"), "got \(label)")
         #expect(!label.contains("no shifts"))
     }
@@ -559,7 +560,7 @@ struct CalendarHonestyTests {
         #expect(
             DayCell.label(
                 day: day(2026, 9, 25), tile: tile,
-                isCurrentMonth: true, isFuture: true)
+                isCurrentMonth: true, isFuture: true, zone: PaydayTestZone.payroll)
                 == "September 25, $42.00 logged"
         )
     }
@@ -569,7 +570,7 @@ struct CalendarHonestyTests {
         #expect(
             DayCell.label(
                 day: day(2026, 9, 8), tile: nil,
-                isCurrentMonth: true, isFuture: false)
+                isCurrentMonth: true, isFuture: false, zone: PaydayTestZone.payroll)
                 == "September 8, no shifts"
         )
     }

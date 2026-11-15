@@ -528,7 +528,7 @@ final class ModelContextEarningsInputSource: EarningsInputSource {
         return EarningsFetch(
             inputs: EarningsInputs(
                 shifts: adapted.inputs,
-                paychecks: PaycheckInputAdapter.inputs(from: paychecks, payrollTimeZone: zone),
+                paychecks: PaycheckInputAdapter.inputs(from: paychecks, calendars: policies.calendars),
                 schedule: schedule().map { scheduleInput($0, zone: zone) },
                 rates: policies.rates,
                 calendars: policies.calendars,

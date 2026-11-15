@@ -183,7 +183,7 @@ struct ShiftRolesDataTests {
 
     private static func remote(role: String?) -> RemoteShift {
         let record = ShiftRecord(workDate: day(2026, 9, 1), cashTipsCents: 1_000, roleName: role)
-        return RemoteShift(record: record, userID: UUID(uuidString: "11111111-1111-4111-8111-111111111111")!)
+        return RemoteShift(record: record, userID: UUID(uuidString: "11111111-1111-4111-8111-111111111111")!, calendars: [])
     }
 
     @Test("the role is always sent, null when none, and survives the round trip")

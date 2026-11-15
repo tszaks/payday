@@ -77,7 +77,7 @@ struct ShiftReceiptMetricsTests {
         let context = ModelContext(container)
         context.autosaveEnabled = false
         let record = try ShiftCommands.create(
-            in: context, workDate: .now, shiftPeriod: .dinner,
+            in: context, workDate: .now, calendars: [], shiftPeriod: .dinner,
             creditTipsCents: 2_400, receiptMetrics: metrics
         )
 

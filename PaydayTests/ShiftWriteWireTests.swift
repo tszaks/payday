@@ -540,7 +540,7 @@ extension ShiftWriteWireTests {
     @Test("a record carries its tip share into the upload")
     func recordCarriesTipShareIn() {
         let record = ShiftRecord(workDate: .now, tipOutCents: 4_000, tipShareInCents: 18_000)
-        let remote = RemoteShift(record: record, userID: Self.userID)
+        let remote = RemoteShift(record: record, userID: Self.userID, calendars: [])
         #expect(remote.tipShareInCents == 18_000)
         #expect(record.nonWageEarningsCents == 14_000)
     }

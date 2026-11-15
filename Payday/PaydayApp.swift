@@ -40,6 +40,10 @@ struct PaydayApp: App {
         // built here rather than relying on property initialization order.
         let policyStore = PolicyStore()
         let scheduleStore = PayScheduleStore()
+        // Before the earnings store, the widget refresh and the first sync
+        // exist, so none of them reads a row whose stored day breaks
+        // `StoredDay`'s rule (rows written by an earlier build).
+        StoredDayRepair.run(in: SharedModelContainer.shared.mainContext, policyStore: policyStore)
         _policyStore = State(initialValue: policyStore)
         _scheduleStore = State(initialValue: scheduleStore)
         _earningsStore = State(initialValue: EarningsStore(

@@ -258,14 +258,14 @@ struct JobsWireTests {
     @MainActor
     private static func remoteShift(job: String?) -> RemoteShift {
         RemoteShift(record: ShiftRecord(workDate: jobDay(1), cashTipsCents: 1_000, jobName: job),
-                    userID: UUID(uuidString: "11111111-1111-4111-8111-111111111111")!)
+                    userID: UUID(uuidString: "11111111-1111-4111-8111-111111111111")!, calendars: [])
     }
 
     @MainActor
     private static func remotePaycheck(job: String?) -> RemotePaycheckRecord {
         let record = PaycheckRecord(periodStart: jobDay(1), periodEnd: jobDay(14), paidTipsCents: 0)
         record.jobName = job
-        return RemotePaycheckRecord(record: record, userID: UUID(uuidString: "11111111-1111-4111-8111-111111111111")!)
+        return RemotePaycheckRecord(record: record, userID: UUID(uuidString: "11111111-1111-4111-8111-111111111111")!, calendars: [])
     }
 
     @Test("a shift's job is always sent, null for the primary, and round-trips")

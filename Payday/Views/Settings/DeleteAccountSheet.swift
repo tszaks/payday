@@ -77,6 +77,7 @@ struct DeleteAccountSheet: View {
                                 records: shiftRecords,
                                 paycheckRecords: paycheckRecords,
                                 calculatorForJob: { policyStore.calculator(forJob: $0, primarySchedule: scheduleStore.schedule) },
+                                calendars: policyStore.policies.calendars,
                                 valuations: CSVExporter.valuations(from: HistoryEarnings.build(
                                     records: shiftRecords,
                                     policies: policyStore.policies,

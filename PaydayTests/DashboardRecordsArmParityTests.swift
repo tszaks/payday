@@ -237,6 +237,7 @@ struct DashboardRecordsArmParityTests {
         return DashboardFacts(
             snapshot: dataset.snapshot,
             allShiftRecords: dataset.shiftRecordDays,
+            calendars: comp.calendars,
             allTipRecords: dataset.tipRecords,
             withholdingModel: dataset.withholdingModel,
             schedule: schedule,

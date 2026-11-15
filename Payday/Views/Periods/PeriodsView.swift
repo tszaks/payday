@@ -44,6 +44,9 @@ struct PeriodsPageFacts: SnapshotFacts {
     // MARK: Presentation
 
     let rows: [Row]
+    /// The zone every row's period and pay date are midnights in, so a row
+    /// names its days in it.
+    let payrollTimeZone: TimeZone
     let year: Int
     /// Whether the year-to-date header has anything to say. False on a fresh
     /// install, where the old code checked "are there any nights" and this
@@ -90,6 +93,7 @@ struct PeriodsPageFacts: SnapshotFacts {
             calendar: calendar
         )
         stamp = snapshot?.stamp
+        self.payrollTimeZone = payrollTimeZone
 
         var periods: [PayPeriod] = []
         var cursor = periodCalculator.period(containing: now)
@@ -226,7 +230,7 @@ struct PeriodsView: View {
                     }
                     ForEach(facts.rows) { row in
                         NavigationLink(value: row.period) {
-                            PeriodRow(row: row)
+                            PeriodRow(row: row, payrollTimeZone: facts.payrollTimeZone)
                         }
                         .buttonStyle(PressableButtonStyle())
                         if row.period != facts.rows.last?.period {
@@ -342,6 +346,7 @@ struct PeriodsView: View {
                 records: shiftRecords,
                 paycheckRecords: paycheckRecords.hidingPendingRemoval(),
                 calculatorForJob: { policyStore.calculator(forJob: $0, primarySchedule: scheduleStore.schedule) },
+                calendars: policyStore.policies.calendars,
                 job: job,
                 valuations: CSVExporter.valuations(from: snapshotBuild().snapshot)
             )
@@ -500,6 +505,7 @@ extension PeriodsView {
 
 private struct PeriodRow: View {
     let row: PeriodsPageFacts.Row
+    let payrollTimeZone: TimeZone
 
     var body: some View {
         HStack(alignment: .center, spacing: PaydaySpacing.p12) {
@@ -559,7 +565,7 @@ private struct PeriodRow: View {
     /// fixable in the app. `.estimated` applies to every row at once and is
     /// disclosed on the year-to-date headline instead.
     private var payDateLine: String {
-        let payDate = PaydayCopy.payDateText(payDate: row.payDate)
+        let payDate = PaydayCopy.payDateText(payDate: row.payDate, timeZone: payrollTimeZone)
         guard case .partial = row.earned.completeness.state, let caption = row.earned.caption else {
             return payDate
         }
@@ -567,7 +573,7 @@ private struct PeriodRow: View {
     }
 
     private var dateRangeString: String {
-        "\(row.period.start.formatted(.dateTime.month(.abbreviated).day())) – \(row.period.end.formatted(.dateTime.month(.abbreviated).day()))"
+        row.period.rangeText(in: payrollTimeZone)
     }
 
     private func deltaString(_ deltaCents: Int) -> String {

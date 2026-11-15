@@ -54,6 +54,12 @@ final class PolicyStore {
 
     private(set) var policies: CompensationPolicies
 
+    /// The calendars the stored days in the store follow: the ones
+    /// `StoredDayRepair` last brought them to, nil before its first pass of
+    /// this launch. Kept beside the policies because it is their previous
+    /// value that names a stored day exactly when a payroll zone changes.
+    @ObservationIgnored var calendarsStoredDaysFollow: [PayrollCalendarPolicy]?
+
     init(defaults: UserDefaults = AppGroup.defaults) {
         self.defaults = defaults
         self.policies = Self.load(from: defaults)

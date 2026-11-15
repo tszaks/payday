@@ -484,6 +484,7 @@ struct SyncEditUploadTests {
         _ = try PaydaySyncService.reconcilePaychecks(
             [decodedPaycheck],
             in: context,
+            calendars: [],
             forceRemote: true
         )
         try context.save()
@@ -507,18 +508,14 @@ struct SyncEditUploadTests {
         )
 
         let localTip = RemoteTipEntry(entry: entry, userID: Self.userID)
-        let localPaycheck = RemotePaycheckRecord(record: record, userID: Self.userID)
+        let localPaycheck = RemotePaycheckRecord(
+            record: record, userID: Self.userID, periodStart: "2026-08-24", periodEnd: "2026-09-06")
         #expect(
             try localTip.contentFingerprint(workDate: "2026-09-05")
                 == (try decodedTip.contentFingerprint(workDate: "2026-09-05"))
         )
-        #expect(
-            try localPaycheck.contentFingerprint(periodStart: "2026-08-24", periodEnd: "2026-09-06")
-                == (try decodedPaycheck.contentFingerprint(
-                    periodStart: "2026-08-24",
-                    periodEnd: "2026-09-06"
-                ))
-        )
+        #expect(decodedPaycheck.periodStart == "2026-08-24" && decodedPaycheck.periodEnd == "2026-09-06")
+        #expect(try localPaycheck.contentFingerprint == (try decodedPaycheck.contentFingerprint))
     }
 
     /// Why `PaydayMigrationService` seeds its checkpoint from the LOCAL rows

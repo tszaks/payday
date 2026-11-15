@@ -16,6 +16,7 @@ struct BackfillSheet: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(PayScheduleStore.self) private var scheduleStore
     @Environment(UserPreferencesStore.self) private var preferencesStore
+    @Environment(PolicyStore.self) private var policyStore
     @Query private var paycheckRecords: [PaycheckRecord]
     /// The shifts SmartNudgeScheduler reads when the sheet reschedules.
     @Query private var shiftRecords: [ShiftRecord]
@@ -201,6 +202,7 @@ struct BackfillSheet: View {
             records = [try ShiftCommands.create(
                 in: modelContext,
                 workDate: selectedDate,
+                calendars: policyStore.policies.calendars,
                 cashTipsCents: cashCents,
                 creditTipsCents: creditCents,
                 tipOutCents: tipOutCents > 0 ? tipOutCents : nil
@@ -221,9 +223,10 @@ struct BackfillSheet: View {
 
     private func refreshExistingShiftDates() {
         // This set is what stops backfill offering a night the user has
-        // already entered.
+        // already entered. Each stored day as the picker's calendar shows it.
+        let storedDay = StoredDay(.workDay, calendars: policyStore.policies.calendars)
         let recordDays = (shiftRecords + sessionRecords).map {
-            Calendar.current.startOfDay(for: $0.workDate)
+            storedDay.shown($0.workDate, job: $0.jobName)
         }
         datesWithExistingShifts = Set(recordDays)
     }

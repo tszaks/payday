@@ -299,6 +299,7 @@ struct JobDashboardScopeTests {
     private func facts(_ dataset: DashboardEarnings.Dataset) -> DashboardFacts {
         DashboardFacts(
             snapshot: dataset.snapshot, allShiftRecords: dataset.shiftRecordDays,
+            calendars: twoJobs().calendars,
             allTipRecords: dataset.tipRecords, withholdingModel: dataset.withholdingModel,
             cardTipsPaidAtClose: dataset.cardTipsPaidAtClose, schedule: primarySchedule,
             now: at(2026, 10, 6), forcedPaydayPhase: nil, dismissedClosedEnd: nil, dismissedCheckEnd: nil,
@@ -323,7 +324,8 @@ struct JobDashboardScopeTests {
         #expect(dataset.job == .all)
         let after = facts(dataset)
         let before = DashboardFacts(
-            snapshot: dataset.snapshot, allShiftRecords: records, allTipRecords: dataset.tipRecords,
+            snapshot: dataset.snapshot, allShiftRecords: records, calendars: oneJob().calendars,
+            allTipRecords: dataset.tipRecords,
             withholdingModel: dataset.withholdingModel, schedule: primarySchedule, now: at(2026, 10, 6),
             forcedPaydayPhase: nil, dismissedClosedEnd: nil, dismissedCheckEnd: nil, payrollTimeZone: zone)
         #expect(before.hero == after.hero)

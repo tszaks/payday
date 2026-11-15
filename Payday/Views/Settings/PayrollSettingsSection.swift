@@ -498,7 +498,7 @@ struct PayrollSettingsSection: View {
         guard let date = calendar.date(from: DateComponents(year: day.year, month: day.month, day: day.day)) else {
             return day.iso
         }
-        return date.formatted(.dateTime.weekday(.wide).month(.wide).day().locale(.current))
+        return date.formatted(Date.FormatStyle(timeZone: zone).weekday(.wide).month(.wide).day().locale(.current))
     }
 
     /// "New York" rather than "America/New_York": the identifier is a

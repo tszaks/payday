@@ -483,7 +483,7 @@ struct NightlyEarningsChart: View {
     private func headerText(selected: EarningsChartPoint?) -> some View {
         Group {
             if let selected, let amount = selected.figure.text {
-                Text("\(amount) \(selectionPeriodText(for: selected.date, granularity: facts.granularity))")
+                Text("\(amount) \(Self.selectionPeriodText(for: selected.date, granularity: facts.granularity, in: facts.timeZone))")
             } else {
                 Text(facts.granularity.title)
             }
@@ -517,16 +517,16 @@ struct NightlyEarningsChart: View {
             : max(floor, base * 0.85)
     }
 
-    private func selectionPeriodText(for date: Date, granularity: EarningsChartAxisGranularity) -> String {
+    static func selectionPeriodText(for date: Date, granularity: EarningsChartAxisGranularity, in zone: TimeZone) -> String {
         switch granularity {
         case .day:
-            return "on \(date.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day()))"
+            return "on \(date.formatted(Date.FormatStyle(timeZone: zone).weekday(.abbreviated).month(.abbreviated).day()))"
         case .week:
-            return "for the week of \(date.formatted(.dateTime.month(.abbreviated).day()))"
+            return "for the week of \(date.formatted(Date.FormatStyle(timeZone: zone).month(.abbreviated).day()))"
         case .month:
-            return "in \(date.formatted(.dateTime.month(.wide).year()))"
+            return "in \(date.formatted(Date.FormatStyle(timeZone: zone).month(.wide).year()))"
         case .year:
-            return "in \(date.formatted(.dateTime.year()))"
+            return "in \(date.formatted(Date.FormatStyle(timeZone: zone).year()))"
         }
     }
 }

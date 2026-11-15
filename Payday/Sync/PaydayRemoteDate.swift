@@ -38,14 +38,16 @@ enum PaydayRemoteDate {
     /// local row, never for the wire value (see `RemoteTipEntry.businessValue`
     /// for why those are deliberately separate).
     ///
-    /// Every date this app persists is local midnight in whatever zone the row
-    /// was written in: `Calendar.current.startOfDay(...)` in LogTipSheet,
-    /// LogTipsIntent and `PayPeriodCalculator.period(containing:)`, or
-    /// `parseDay` (which lands on local midnight too) on reconcile. Rendering
-    /// such an instant back through `Calendar.current` is only correct while
-    /// the device stays in the zone that wrote it: seen from any zone further
-    /// west, midnight belongs to the PREVIOUS day. That is fatal for a version
-    /// — `work_date` is inside the row's content fingerprint — because it
+    /// Every date this app persists is a local midnight: a shift's or a
+    /// paycheck's stored day is the start of its civil day in the payroll
+    /// zone (`StoredDay`), a legacy `TipEntry`'s is midnight on the calendar
+    /// of the phone that downloaded it (`parseDay`), and a row an earlier
+    /// build wrote holds that phone's midnight until `StoredDayRepair` moves
+    /// it. Rendering such an instant through `Calendar.current` is only
+    /// correct while the device sits in the zone of that midnight: seen from
+    /// any zone further west, midnight belongs to the PREVIOUS day. That is
+    /// fatal for a version — `work_date` is inside the row's content
+    /// fingerprint — because it
     /// would move every fingerprint in the history the first time the device
     /// flew west and put the whole history in the upload set with no user
     /// edit.

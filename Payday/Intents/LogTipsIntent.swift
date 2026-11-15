@@ -122,12 +122,17 @@ struct LogTipsIntent: AppIntent {
         }
 
         let context = SharedModelContainer.shared.mainContext
-        let today = Calendar.current.startOfDay(for: .now)
 
         // Siri is the surface where a write hurt most mid-transition: the
         // user says "log my tips", hears a confirmation, and sees nothing
         // until the server folds the row. Writes are records-only now.
-        let completedIntoExistingShift = try logToRecords(in: context, today: today, cents: cents, tipOutCents: tipOutCents)
+        let completedIntoExistingShift = try logToRecords(
+            in: context,
+            now: .now,
+            calendars: PolicyStore.storedPolicies().calendars,
+            cents: cents,
+            tipOutCents: tipOutCents
+        )
 
         let shiftRecords = try context.fetch(FetchDescriptor<ShiftRecord>())
         let paycheckRecords = try context.fetch(FetchDescriptor<PaycheckRecord>())
@@ -142,6 +147,28 @@ struct LogTipsIntent: AppIntent {
             : IntentDialog("Logged \(Money.string(fromCents: cents)) in \(kindText) tips."))
     }
 
+    /// Every shift, of any job, whose stored day is today on the phone's
+    /// calendar. Each job stores today at its own zone's start of the day, a
+    /// different instant per zone, so the fetch is a window of instants wide
+    /// enough for every zone (`ShiftDraftPreview.instants(covering:)`) and
+    /// the day is then compared as a civil day.
+    @MainActor
+    static func todaysRecords(
+        in context: ModelContext,
+        now: Date,
+        calendars: [PayrollCalendarPolicy],
+        phoneTimeZone: TimeZone = .current
+    ) throws -> [ShiftRecord] {
+        let today = CivilDay(now, in: phoneTimeZone)
+        let storedDay = StoredDay(.workDay, calendars: calendars)
+        var descriptor = FetchDescriptor<ShiftRecord>()
+        if let window = ShiftDraftPreview.instants(covering: DayRange(day: today)) {
+            let (earliest, latest) = (window.lowerBound, window.upperBound)
+            descriptor.predicate = #Predicate { $0.workDate >= earliest && $0.workDate <= latest }
+        }
+        return try context.fetch(descriptor).filter { storedDay.civilDay($0.workDate, job: $0.jobName) == today }
+    }
+
     /// The new representation. Returns whether it completed an existing
     /// shift rather than starting one, which is the only thing the spoken
     /// confirmation needs to know.
@@ -153,9 +180,14 @@ struct LogTipsIntent: AppIntent {
     /// rather than mutated and allowed to throw, so Siri starts a fresh
     /// shift instead of failing outright on a `conversionPending` row.
     @MainActor
-    private func logToRecords(in context: ModelContext, today: Date, cents: Int, tipOutCents: Int?) throws -> Bool {
-        let todaysRecords = try context.fetch(FetchDescriptor<ShiftRecord>(predicate: #Predicate { $0.workDate == today }))
-        let target = todaysRecords
+    private func logToRecords(
+        in context: ModelContext,
+        now: Date,
+        calendars: [PayrollCalendarPolicy],
+        cents: Int,
+        tipOutCents: Int?
+    ) throws -> Bool {
+        let target = try Self.todaysRecords(in: context, now: now, calendars: calendars)
             .filter { ShiftCommands.mayMutate($0) }
             .filter { kind.tipKind == .cash ? $0.cashTipsCents == 0 : $0.creditTipsCents == 0 }
             .max { ($0.recordedAt ?? .distantPast) < ($1.recordedAt ?? .distantPast) }
@@ -180,7 +212,8 @@ struct LogTipsIntent: AppIntent {
 
         _ = try ShiftCommands.create(
             in: context,
-            workDate: today,
+            workDate: now,
+            calendars: calendars,
             cashTipsCents: kind.tipKind == .cash ? cents : 0,
             creditTipsCents: kind.tipKind == .credit ? cents : 0,
             tipOutCents: tipOutCents

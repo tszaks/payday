@@ -55,7 +55,12 @@ enum SmartNudgeScheduler {
         shiftRecords: [ShiftRecord],
         from now: Date = .now
     ) -> Date? {
-        rhythmFireDate(rows: ShiftProjection.rows(for: shiftRecords), from: now)
+        let storedDay = StoredDay(.workDay, calendars: PolicyStore.storedPolicies().calendars)
+        return rhythmFireDate(
+            rows: ShiftProjection.rows(for: shiftRecords, storedDay: storedDay, in: PolicyStore.storedPayrollTimeZone()),
+            loggedDays: Set(shiftRecords.map { storedDay.civilDay($0.workDate, job: $0.jobName) }),
+            from: now
+        )
     }
 
     /// The learned typical-hour heuristic keeps reminders useful without
@@ -63,7 +68,8 @@ enum SmartNudgeScheduler {
     /// Generic over the row rather than existential, so Release still
     /// specializes it: the measured witness-table cost of a protocol here is
     /// a `-Onone` effect only (see docs/design/FOLLOWUP-release-perf-budget.md).
-    static func rhythmFireDate<Row: LegacyShiftRow>(rows: [Row], from now: Date = .now) -> Date? {
+    /// `loggedDays` are the stored days' own civil days (`StoredDay`).
+    static func rhythmFireDate<Row: LegacyShiftRow>(rows: [Row], loggedDays: Set<CivilDay>, from now: Date = .now) -> Date? {
         let engine = StatsEngine(payrollTimeZone: PolicyStore.storedPayrollTimeZone(), records: rows.map(TipRecord.init))
         // `referenceDate: now`, not the default `.now`. The rhythm window and
         // the fire-date search must share ONE clock: with the default, the
@@ -72,14 +78,14 @@ enum SmartNudgeScheduler {
         // "now"s. That also made this untestable.
         let rhythm = engine.workRhythm(referenceDate: now)
         guard !rhythm.usualWeekdays.isEmpty, let typicalLogHour = rhythm.typicalLogHour else { return nil }
-        return nextFireDate(usualWeekdays: rhythm.usualWeekdays, typicalLogHour: typicalLogHour, rows: rows, from: now)
+        return nextFireDate(usualWeekdays: rhythm.usualWeekdays, typicalLogHour: typicalLogHour, loggedDays: loggedDays, from: now)
     }
 
     /// The next moment worth nudging: today if it's a usual night, the
     /// time hasn't passed, and nothing's logged yet — otherwise the next
     /// usual weekday after today, no "already logged" check needed since
     /// that day hasn't happened yet.
-    static func nextFireDate<Row: LegacyShiftRow>(usualWeekdays: Set<Int>, typicalLogHour: Int, rows: [Row], from now: Date = .now) -> Date? {
+    static func nextFireDate(usualWeekdays: Set<Int>, typicalLogHour: Int, loggedDays: Set<CivilDay>, from now: Date = .now) -> Date? {
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: now)
         for dayOffset in 0..<8 {
@@ -93,7 +99,7 @@ enum SmartNudgeScheduler {
             // (which writes ShiftRecord and never TipEntry) unless this reader
             // has already been switched -- the user would be told "you haven't
             // logged today" straight after logging.
-            if dayOffset == 0, rows.contains(where: { calendar.isDate($0.date, inSameDayAs: candidateDay) }) {
+            if dayOffset == 0, loggedDays.contains(CivilDay(candidateDay, in: calendar.timeZone)) {
                 continue
             }
             return fireTime

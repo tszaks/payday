@@ -70,7 +70,7 @@ private func record(
 private func ledgerBasisEngine(records: [ShiftRecord], snapshot: EarningsSnapshot?) -> StatsEngine {
     StatsEngine(
         payrollTimeZone: PaydayTestZone.payroll,
-        records: records.flatMap { ShiftProjection.rows(for: $0).map(TipRecord.init) },
+        records: records.flatMap { ShiftProjection.rows(for: $0, day: $0.workDate).map(TipRecord.init) },
         calendar: revealCalendar(),
         valuedShiftCents: snapshot.map { snap in
             Dictionary(
@@ -88,7 +88,7 @@ private func ledgerBasisEngine(records: [ShiftRecord], snapshot: EarningsSnapsho
 private func scalarBasisEngine(records: [ShiftRecord], scalarCents: [UUID: Int]) -> StatsEngine {
     StatsEngine(
         payrollTimeZone: PaydayTestZone.payroll,
-        records: records.flatMap { ShiftProjection.rows(for: $0).map(TipRecord.init) },
+        records: records.flatMap { ShiftProjection.rows(for: $0, day: $0.workDate).map(TipRecord.init) },
         calendar: revealCalendar(),
         valuedShiftCents: scalarCents
     )

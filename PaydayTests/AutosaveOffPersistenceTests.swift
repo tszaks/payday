@@ -107,6 +107,7 @@ struct AutosaveOffPersistenceTests {
             createdID = try ShiftCommands.create(
                 in: context,
                 workDate: Self.day,
+                calendars: [],
                 cashTipsCents: 5_000,
                 hoursWorked: 6.5
             ).id
@@ -133,7 +134,7 @@ struct AutosaveOffPersistenceTests {
         do {
             let context = try store.open()
             let record = try ShiftCommands.create(
-                in: context, workDate: Self.day, cashTipsCents: 5_000)
+                in: context, workDate: Self.day, calendars: [], cashTipsCents: 5_000)
             id = record.id
             try ShiftCommands.update(record, in: context) {
                 $0.cashTipsCents = 6_000
@@ -198,7 +199,7 @@ struct AutosaveOffPersistenceTests {
         do {
             let context = try store.open()
             let record = try ShiftCommands.create(
-                in: context, workDate: Self.day, cashTipsCents: 5_000)
+                in: context, workDate: Self.day, calendars: [], cashTipsCents: 5_000)
             id = record.id
 
             struct Boom: Error {}

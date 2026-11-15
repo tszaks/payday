@@ -169,7 +169,9 @@ struct PaydayWidgetProvider: TimelineProvider {
             payrollTimeZone: policyStore.payrollTimeZone,
             records: StatsRecordAdapter.tipRecords(
                 from: allRecords,
-                job: .picked(nil, jobCount: policyStore.policies.jobs.count)
+                job: .picked(nil, jobCount: policyStore.policies.jobs.count),
+                calendars: policyStore.policies.calendars,
+                payrollTimeZone: policyStore.payrollTimeZone
             )
         )
         return dates.map {

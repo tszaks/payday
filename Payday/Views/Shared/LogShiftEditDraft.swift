@@ -5,8 +5,8 @@ import Foundation
 ///
 /// Each value is kept after the rule its write applies -- a tip-out of 0 is
 /// nil, an empty note is nil, a role is trimmed, the day is clamped to today
-/// and taken at its start -- so two drafts are equal exactly when they would
-/// write the same record. That equality is what lets `LogTipSheet` skip a
+/// and stored as `StoredDay` stores it -- so two drafts are equal exactly
+/// when they would write the same record. That equality is what lets `LogTipSheet` skip a
 /// write nobody asked for: an untouched sheet's draft equals the one it
 /// seeded, and writing it anyway would stamp a new `modifiedAt` and upload a
 /// copy that can be older than the server's.
@@ -50,11 +50,14 @@ struct LogShiftEditDraft: Equatable {
     let clockOut: Date?
     let serverCount: Int?
 
-    init(_ fields: Fields) {
+    /// `calendars`: every calendar policy, which decide the zone the
+    /// picked day is stored in (`ShiftCommands.create` takes the same).
+    init(_ fields: Fields, calendars: [PayrollCalendarPolicy]) {
         cashCents = fields.cashCents
         creditCents = fields.creditCents
         receiptMetrics = fields.receiptMetrics
-        workDate = Calendar.current.startOfDay(for: min(fields.date, .now))
+        workDate = StoredDay(.workDay, calendars: calendars)
+            .stored(picked: min(fields.date, .now), job: fields.jobName)
         note = fields.note.isEmpty ? nil : fields.note
         hoursWorked = fields.hoursWorked
         tipOutCents = fields.tipOutCents > 0 ? fields.tipOutCents : nil
@@ -110,13 +113,14 @@ struct LogShiftEditDraft: Equatable {
 extension LogShiftEditDraft.Fields {
     /// The values the Edit Shift sheet opens with. The sheet seeds its state
     /// from this, so the draft of an untouched sheet is
-    /// `LogShiftEditDraft(Fields(record:))`.
-    init(record: ShiftRecord) {
+    /// `LogShiftEditDraft(Fields(record:calendars:), calendars:)`. `date` is
+    /// the stored day as the phone's calendar shows it, for the picker.
+    init(record: ShiftRecord, calendars: [PayrollCalendarPolicy]) {
         self.init(
             cashCents: record.cashTipsCents,
             creditCents: record.creditTipsCents,
             receiptMetrics: record.receiptMetrics,
-            date: record.workDate,
+            date: StoredDay(.workDay, calendars: calendars).shown(record.workDate, job: record.jobName),
             note: record.note ?? "",
             hoursWorked: record.hoursWorked,
             tipOutCents: record.tipOutCents ?? 0,

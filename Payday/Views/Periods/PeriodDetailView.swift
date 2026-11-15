@@ -34,7 +34,7 @@ struct PeriodDetailFacts: SnapshotFacts {
     /// `[ShiftRecord]` and not a projection because these rows are the edit
     /// and delete targets: `ProjectedShiftRow` is deliberately un-persistable.
     let shiftRecordDays: [ShiftRecord]
-    let multiShiftDays: Set<Date>
+    let multiShiftDays: Set<CivilDay>
     /// The civil days this screen asked about, so a caller can see the scope
     /// as well as the cents.
     let range: DayRange
@@ -134,8 +134,13 @@ struct PeriodDetailFacts: SnapshotFacts {
         // set by construction.
         let recordRows = shiftRecordDays.filter { selected.contains($0.id) }
         self.shiftRecordDays = recordRows
-        var shiftCounts: [Date: Int] = [:]
-        for record in recordRows { shiftCounts[record.workDate, default: 0] += 1 }
+        // Counted on the engine's own work day (`StoredDay.civilDay`, through
+        // the adapter): every row here was selected by the snapshot. Two
+        // shifts on one day can be stored at two instants, one per zone.
+        var shiftCounts: [CivilDay: Int] = [:]
+        for day in recordRows.compactMap({ snapshot?.valuation($0.id)?.workDay }) {
+            shiftCounts[day, default: 0] += 1
+        }
         multiShiftDays = Set(shiftCounts.filter { $0.value >= 2 }.keys)
 
         if let periodResult {
@@ -193,7 +198,7 @@ struct PeriodDetailFacts: SnapshotFacts {
         // RECORDED against an unreadable dataset is not "no paycheck": say
         // which half is missing, in `EarningsUnavailable`'s own words, rather
         // than describing a check the person already entered as expected.
-        let payDateText = payDate.formatted(.dateTime.month(.abbreviated).day())
+        let payDateText = payDate.formatted(Date.FormatStyle(timeZone: payrollTimeZone).month(.abbreviated).day())
         if periodResult == nil {
             noPaycheckCaption = resolvedPaycheck == nil
                 ? "Expected on \(payDateText)"
@@ -286,7 +291,7 @@ struct PeriodDetailView: View {
         }
         .contentMargins(.bottom, 88, for: .scrollContent)
         .background(PaydayColor.background)
-        .navigationTitle(periodTitle)
+        .navigationTitle(Self.periodTitle(period: period, now: .now, in: jobCalculator.payrollTimeZone))
         .navigationBarTitleDisplayMode(.inline)
         .sheet(item: $sheetTarget) { target in
             LogTipSheet(target: target).paydayAppearance()
@@ -469,21 +474,24 @@ struct PeriodDetailView: View {
         for record: ShiftRecord,
         facts: PeriodDetailFacts
     ) -> some View {
-        Button {
+        let storedDay = StoredDay(.workDay, calendars: policyStore.policies.calendars)
+        return Button {
             sheetTarget = .editShift(record)
         } label: {
             ShiftDayRow(facts: ShiftDayRowFacts(
                 snapshot: facts.snapshot,
                 shiftID: record.id,
-                day: record.workDate,
+                day: storedDay.shown(record.workDate, job: record.jobName),
                 period: record.shiftPeriod,
-                dayHasMultipleShifts: facts.multiShiftDays.contains(record.workDate)
+                dayHasMultipleShifts: facts.multiShiftDays.contains(storedDay.civilDay(record.workDate, job: record.jobName))
             ))
             .padding(.vertical, PaydaySpacing.p12)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .shiftContextMenu(record: record, sheetTarget: $sheetTarget, undoState: undoState, context: modelContext)
+        .shiftContextMenu(
+            record: record, sheetTarget: $sheetTarget, undoState: undoState, context: modelContext,
+            calendars: policyStore.policies.calendars)
     }
 
     /// A tapped payday push asked for this period's stub sheet with the
@@ -501,14 +509,14 @@ struct PeriodDetailView: View {
     /// into the nav title instead frees that space for the payday/rate line.
     /// The year only shows when the period crosses into one other than the
     /// current one — most periods live entirely inside a single year.
-    private var periodTitle: String {
-        let currentYear = Calendar.current.component(.year, from: Date())
-        let endYear = Calendar.current.component(.year, from: period.end)
-        let start = period.start.formatted(.dateTime.month(.abbreviated).day())
+    static func periodTitle(period: PayPeriod, now: Date, in zone: TimeZone) -> String {
+        let currentYear = CivilDay(now, in: zone).year
+        let endYear = CivilDay(period.end, in: zone).year
         if endYear != currentYear {
-            return "\(start) – \(period.end.formatted(.dateTime.month(.abbreviated).day().year()))"
+            let style = Date.FormatStyle(timeZone: zone).month(.abbreviated).day()
+            return "\(period.start.formatted(style)) – \(period.end.formatted(style.year()))"
         }
-        return "\(start) – \(period.end.formatted(.dateTime.month(.abbreviated).day()))"
+        return period.rangeText(in: zone)
     }
 }
 

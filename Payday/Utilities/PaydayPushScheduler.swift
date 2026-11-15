@@ -394,18 +394,12 @@ enum PaydayPushScheduler {
             newestFirst.append((period, fireDate))
         }
 
-        // A recorded check's boundaries are payroll-zone midnights when the
-        // check was entered on this phone, and this phone's own midnights
-        // when it was downloaded. Either calendar can be the one that names
-        // the stored day, so a boundary matches under either reading.
-        func names(_ stored: Date, _ boundary: Date) -> Bool {
-            let day = CivilDay(boundary, in: zone)
-            return CivilDay(stored, in: zone) == day || CivilDay(stored, in: calendar.timeZone) == day
-        }
-
+        // A recorded check's boundaries are stored days in this job's payroll
+        // zone (`StoredDay`), however the check reached this phone.
         return newestFirst.reversed().first { period, _ in
             qualifies(period) && !paycheckRecords.contains {
-                names($0.periodStart, period.start) && names($0.periodEnd, period.end)
+                CivilDay($0.periodStart, in: zone) == CivilDay(period.start, in: zone)
+                    && CivilDay($0.periodEnd, in: zone) == CivilDay(period.end, in: zone)
             }
         }
     }

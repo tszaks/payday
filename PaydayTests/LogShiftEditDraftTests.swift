@@ -115,7 +115,7 @@ struct LogShiftEditDraftTests {
     ) throws -> ShiftRecord {
         let record = ShiftRecord(workDate: Self.dayBefore, recordedAt: Self.day)
         context.insert(record)
-        LogShiftEditDraft(fields).apply(to: record)
+        LogShiftEditDraft(fields, calendars: []).apply(to: record)
         try context.save()
         return record
     }
@@ -136,10 +136,10 @@ struct LogShiftEditDraftTests {
         default: Self.emptyFields()
         }
         let context = try context()
-        let written = LogShiftEditDraft(fields)
+        let written = LogShiftEditDraft(fields, calendars: [])
         let record = try record(writing: fields, in: context)
 
-        let seeded = LogShiftEditDraft(LogShiftEditDraft.Fields(record: record))
+        let seeded = LogShiftEditDraft(LogShiftEditDraft.Fields(record: record, calendars: []), calendars: [])
 
         #expect(seeded == written)
     }
@@ -154,7 +154,7 @@ struct LogShiftEditDraftTests {
         context.insert(record)
         try context.save()
 
-        let seeded = LogShiftEditDraft(LogShiftEditDraft.Fields(record: record))
+        let seeded = LogShiftEditDraft(LogShiftEditDraft.Fields(record: record, calendars: []), calendars: [])
 
         #expect(seeded.tipOutCents == nil)
         #expect(seeded.tipShareInCents == nil)
@@ -162,7 +162,7 @@ struct LogShiftEditDraftTests {
         #expect(seeded.note == nil)
         #expect(seeded.receiptMetrics == nil)
         #expect(seeded.workDate == record.workDate)
-        #expect(LogShiftEditDraft(LogShiftEditDraft.Fields(record: record)) == seeded)
+        #expect(LogShiftEditDraft(LogShiftEditDraft.Fields(record: record, calendars: []), calendars: []) == seeded)
     }
 
     // MARK: - Every field counts
@@ -189,7 +189,7 @@ struct LogShiftEditDraftTests {
             ("clockOut", { $0.clockOut = nil }),
             ("serverCount", { $0.serverCount = 6 })
         ]
-        let original = LogShiftEditDraft(base)
+        let original = LogShiftEditDraft(base, calendars: [])
 
         // A field added to the draft without a case here fails this line.
         #expect(cases.map(\.0) == Mirror(reflecting: original).children.compactMap(\.label))
@@ -197,7 +197,7 @@ struct LogShiftEditDraftTests {
         for (name, change) in cases {
             var changed = base
             change(&changed)
-            #expect(LogShiftEditDraft(changed) != original, "a change to \(name) compares equal, so it would never be written")
+            #expect(LogShiftEditDraft(changed, calendars: []) != original, "a change to \(name) compares equal, so it would never be written")
         }
     }
 
@@ -212,17 +212,17 @@ struct LogShiftEditDraftTests {
         context.insert(storedZero)
         try context.save()
 
-        var fields = LogShiftEditDraft.Fields(record: record)
+        var fields = LogShiftEditDraft.Fields(record: record, calendars: [])
         fields.tipOutCents = 0
         fields.tipShareInCents = 0
         fields.salesCents = 0
-        let draft = LogShiftEditDraft(fields)
+        let draft = LogShiftEditDraft(fields, calendars: [])
 
         #expect(draft.tipOutCents == nil)
         #expect(draft.tipShareInCents == nil)
         #expect(draft.salesCents == nil)
-        #expect(draft == LogShiftEditDraft(LogShiftEditDraft.Fields(record: record)))
-        #expect(draft == LogShiftEditDraft(LogShiftEditDraft.Fields(record: storedZero)))
+        #expect(draft == LogShiftEditDraft(LogShiftEditDraft.Fields(record: record, calendars: []), calendars: []))
+        #expect(draft == LogShiftEditDraft(LogShiftEditDraft.Fields(record: storedZero, calendars: []), calendars: []))
     }
 
     @Test("an empty note is the stored nil")
@@ -233,10 +233,10 @@ struct LogShiftEditDraftTests {
         let record = try record(writing: empty, in: context)
         let storedEmpty = ShiftRecord(workDate: Self.day, note: "")
 
-        #expect(LogShiftEditDraft(empty).note == nil)
+        #expect(LogShiftEditDraft(empty, calendars: []).note == nil)
         #expect(record.note == nil)
-        #expect(LogShiftEditDraft(LogShiftEditDraft.Fields(record: record)) == LogShiftEditDraft(empty))
-        #expect(LogShiftEditDraft(LogShiftEditDraft.Fields(record: storedEmpty)).note == nil)
+        #expect(LogShiftEditDraft(LogShiftEditDraft.Fields(record: record, calendars: []), calendars: []) == LogShiftEditDraft(empty, calendars: []))
+        #expect(LogShiftEditDraft(LogShiftEditDraft.Fields(record: storedEmpty, calendars: []), calendars: []).note == nil)
     }
 
     @Test("a role or job with spaces equals its normalised form")
@@ -251,9 +251,9 @@ struct LogShiftEditDraftTests {
         none.roleName = nil
         none.jobName = nil
 
-        #expect(LogShiftEditDraft(padded) == LogShiftEditDraft(Self.fullFields()))
-        #expect(LogShiftEditDraft(padded).roleName == "Bar")
-        #expect(LogShiftEditDraft(blank) == LogShiftEditDraft(none))
+        #expect(LogShiftEditDraft(padded, calendars: []) == LogShiftEditDraft(Self.fullFields(), calendars: []))
+        #expect(LogShiftEditDraft(padded, calendars: []).roleName == "Bar")
+        #expect(LogShiftEditDraft(blank, calendars: []) == LogShiftEditDraft(none, calendars: []))
     }
 
     @Test("the work day is stored as the start of the day")
@@ -261,8 +261,8 @@ struct LogShiftEditDraftTests {
         var evening = Self.fullFields()
         evening.date = Self.clockOut
 
-        #expect(LogShiftEditDraft(evening).workDate == Self.day)
-        #expect(LogShiftEditDraft(evening) == LogShiftEditDraft(Self.fullFields()))
+        #expect(LogShiftEditDraft(evening, calendars: []).workDate == Self.day)
+        #expect(LogShiftEditDraft(evening, calendars: []) == LogShiftEditDraft(Self.fullFields(), calendars: []))
     }
 
     // MARK: - At the record
@@ -280,8 +280,8 @@ struct LogShiftEditDraftTests {
         try context.save()
 
         // What the sheet seeds, and what it would write if closed untouched.
-        let committed = LogShiftEditDraft(LogShiftEditDraft.Fields(record: record))
-        let atClose = LogShiftEditDraft(LogShiftEditDraft.Fields(record: record))
+        let committed = LogShiftEditDraft(LogShiftEditDraft.Fields(record: record, calendars: []), calendars: [])
+        let atClose = LogShiftEditDraft(LogShiftEditDraft.Fields(record: record, calendars: []), calendars: [])
 
         #expect(atClose == committed, "equal drafts are what make commitLiveEdit skip the write")
         #expect(record.modifiedAt == stamp)
@@ -298,17 +298,17 @@ struct LogShiftEditDraftTests {
         record.touch(stamp)
         try context.save()
 
-        let committed = LogShiftEditDraft(LogShiftEditDraft.Fields(record: record))
-        var fields = LogShiftEditDraft.Fields(record: record)
+        let committed = LogShiftEditDraft(LogShiftEditDraft.Fields(record: record, calendars: []), calendars: [])
+        var fields = LogShiftEditDraft.Fields(record: record, calendars: [])
         fields.cashCents = 12_000
-        let edited = LogShiftEditDraft(fields)
+        let edited = LogShiftEditDraft(fields, calendars: [])
         #expect(edited != committed)
 
         try ShiftCommands.update(record, in: context) { edited.apply(to: $0) }
 
         #expect(record.cashTipsCents == 12_000)
         #expect(record.modifiedAt > stamp)
-        #expect(LogShiftEditDraft(LogShiftEditDraft.Fields(record: record)) == edited)
+        #expect(LogShiftEditDraft(LogShiftEditDraft.Fields(record: record, calendars: []), calendars: []) == edited)
     }
 
     /// Why the sheet compares with what it SEEDED and not with the record at
@@ -320,7 +320,7 @@ struct LogShiftEditDraftTests {
     func syncedRecordIsNotOverwritten() throws {
         let context = try context()
         let record = try record(writing: Self.fullFields(), in: context)
-        let committed = LogShiftEditDraft(LogShiftEditDraft.Fields(record: record))
+        let committed = LogShiftEditDraft(LogShiftEditDraft.Fields(record: record, calendars: []), calendars: [])
         let atClose = committed
 
         // Another phone's edit arrives through sync.
@@ -328,7 +328,7 @@ struct LogShiftEditDraftTests {
         try context.save()
 
         #expect(atClose == committed)
-        #expect(atClose != LogShiftEditDraft(LogShiftEditDraft.Fields(record: record)),
+        #expect(atClose != LogShiftEditDraft(LogShiftEditDraft.Fields(record: record, calendars: []), calendars: []),
                 "comparing with the record at close would rewrite the older seed")
         #expect(record.cashTipsCents == 12_000)
     }

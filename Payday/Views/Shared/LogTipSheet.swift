@@ -323,7 +323,9 @@ struct LogTipSheet: View {
         case .editShift(let record):
             // No anchor, and no upgrade. A `ShiftRecord` is the whole shift,
             // so every value here is already the shift-level truth.
-            let fields = LogShiftEditDraft.Fields(record: record)
+            // The persisted policies, because the environment's store is not
+            // readable from `init`; it writes them through on every change.
+            let fields = LogShiftEditDraft.Fields(record: record, calendars: PolicyStore.storedPolicies().calendars)
             _cashCents = State(initialValue: fields.cashCents)
             _creditCents = State(initialValue: fields.creditCents)
             _date = State(initialValue: fields.date)
@@ -381,7 +383,7 @@ struct LogTipSheet: View {
             clockIn: clockIn,
             clockOut: clockOut,
             serverCount: serverCount
-        ))
+        ), calendars: policyStore.policies.calendars)
     }
 
     private var canSave: Bool {
@@ -1750,8 +1752,15 @@ struct LogTipSheet: View {
         // refreshed mid-call), so isEmpty here means genuinely the first.
         let isFirstShiftEver = shiftRecords.isEmpty
         // Clamp to today: the picker already blocks future dates, but never
-        // trust the initial/bound value to enforce it.
-        let normalizedDate = Calendar.current.startOfDay(for: min(date, .now))
+        // trust the initial/bound value to enforce it. The stored day's civil
+        // day as it starts in the payroll zone, the one calendar the
+        // calculator and the engine below read every day on.
+        let storedDay = StoredDay(.workDay, calendars: policyStore.policies.calendars)
+        let normalizedDate = storedDay.start(
+            of: storedDay.stored(picked: min(date, .now), job: jobName),
+            job: jobName,
+            in: policyStore.payrollTimeZone
+        )
         let trimmedNote = note.isEmpty ? nil : note
         let recordedAt = Date.now
         let effectiveTipOutCents = tipOutCents > 0 ? tipOutCents : nil
@@ -1793,7 +1802,11 @@ struct LogTipSheet: View {
         let revealSnapshot = revealHistorySnapshot()
         let statsEngine = StatsEngine(
             payrollTimeZone: policyStore.payrollTimeZone,
-            records: StatsRecordAdapter.tipRecords(from: shiftRecords),
+            records: StatsRecordAdapter.tipRecords(
+                from: shiftRecords,
+                calendars: policyStore.policies.calendars,
+                payrollTimeZone: policyStore.payrollTimeZone
+            ),
             valuedShiftCents: Self.valuedCents(in: revealSnapshot)
         )
         // The draft's own id, not a stand-in UUID: it is the id the draft was
@@ -1825,18 +1838,18 @@ struct LogTipSheet: View {
         // THE WRITER FLIP. One decision, and the two paths are mutually
         // Records are the only representation a write lands in now.
         //
-        // `date` is passed raw to both, deliberately and verified: both
-        // writers clamp internally with the identical rule --
-        // `ShiftCommands.create` clamps to today internally
-        // (`startOfDay(for: min(workDate, .now))`), so `date` is passed raw
-        // and the day a shift lands on cannot drift. `create` is NOT wrapped
-        // in `commit`: it owns its own single save and rollback, and
-        // wrapping would nest two transactions.
+        // `date` is passed raw, deliberately and verified: `ShiftCommands
+        // .create` clamps to today internally with the identical rule
+        // (`StoredDay.stored(picked: min(workDate, .now), job:)`), so the day
+        // a shift lands on cannot drift. `create` is NOT wrapped in `commit`:
+        // it owns its own single save and rollback, and wrapping would nest
+        // two transactions.
         let newRecords: [ShiftRecord]
         do {
             newRecords = [try ShiftCommands.create(
                 in: modelContext,
                 workDate: date,
+                calendars: policyStore.policies.calendars,
                 shiftPeriod: shiftPeriod,
                 cashTipsCents: cashCents,
                 creditTipsCents: creditCents,

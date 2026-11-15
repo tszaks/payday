@@ -73,6 +73,7 @@ struct FlipGate2WitnessTests {
         let record = try ShiftCommands.create(
             in: context,
             workDate: Self.day,
+            calendars: [],
             shiftPeriod: .dinner,
             cashTipsCents: 4_200,
             creditTipsCents: 7_350,
@@ -100,7 +101,7 @@ struct FlipGate2WitnessTests {
         _ = authoritativeAccount()
         let context = try context()
         let record = try ShiftCommands.create(
-            in: context, workDate: Self.day, cashTipsCents: 4_200, hoursWorked: 6.5
+            in: context, workDate: Self.day, calendars: [], cashTipsCents: 4_200, hoursWorked: 6.5
         )
         let originalID = record.id
 
@@ -130,7 +131,7 @@ struct FlipGate2WitnessTests {
         let userID = authoritativeAccount()
         let context = try context()
         let record = try ShiftCommands.create(
-            in: context, workDate: Self.day, cashTipsCents: 4_200, hoursWorked: 6.5
+            in: context, workDate: Self.day, calendars: [], cashTipsCents: 4_200, hoursWorked: 6.5
         )
         let id = record.id
 
@@ -157,6 +158,7 @@ struct FlipGate2WitnessTests {
         let context = try context()
         let record = try ShiftCommands.create(
             in: context, workDate: Self.day,
+            calendars: [],
             cashTipsCents: 4_200, creditTipsCents: 7_350, hoursWorked: 6.5
         )
         let id = record.id

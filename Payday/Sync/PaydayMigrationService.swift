@@ -122,7 +122,7 @@ final class PaydayMigrationService {
         let localTips = try context.fetch(FetchDescriptor<TipEntry>())
             .map { RemoteTipEntry(entry: $0, userID: userID) }
         let localPaychecks = try context.fetch(FetchDescriptor<PaycheckRecord>())
-            .map { RemotePaycheckRecord(record: $0, userID: userID) }
+            .map { RemotePaycheckRecord(record: $0, userID: userID, calendars: policyStore.policies.calendars) }
         let repository = PaydayRemoteRepository(client: client)
         let localSettings = RemoteUserSettings(
             userID: userID,

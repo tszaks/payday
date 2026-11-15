@@ -12,11 +12,14 @@ my %allow = (
   # `?? .current` when there is no calendar policy at all, which is a first
   # launch before the migration. PolicyStore then freezes the device zone into
   # a policy, so this is unreachable afterwards.
-  "Payday/Earnings/ShiftInputAdapter.swift" => 1,
   "Payday/Earnings/EarningsStore.swift"     => 1,
-  # Draft PREVIEW only, pre-save, never a stored or valued figure. Was 2
-  # until the legacy TipEntry arm was deleted; the one left is "today".
-  "Payday/Earnings/ShiftDraftPreview.swift" => 1,
+  # One is that same first-launch fallback, moved here from
+  # ShiftInputAdapter when the adapter began reading work days through
+  # StoredDay. The other three are the PHONE's zone as the default for a
+  # picker's day (`stored(picked:)`, `shown`) and for the repair of rows the
+  # phone wrote (`repaired`); none of them is read by `civilDay`, the
+  # engine's reading. ShiftDraftPreview's "today" moved here too.
+  "Payday/Earnings/StoredDay.swift"         => 4,
 );
 
 my @files;

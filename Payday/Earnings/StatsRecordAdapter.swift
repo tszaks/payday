@@ -30,23 +30,40 @@ enum StatsRecordAdapter {
     /// `TipEntry` directly measured against an empty history post-flip --
     /// the widget's pace baseline did exactly that, which is why this
     /// adapter is the only door.
-    static func tipRecords(from records: [ShiftRecord]) -> [TipRecord] {
+    ///
+    /// `StatsEngine` reads every row's `date` on one calendar, in
+    /// `payrollTimeZone`, so a row's date is its stored day's own civil day
+    /// (`StoredDay`, from `calendars`) as it starts in that zone. A row of an
+    /// older policy or of a job in another zone is stored at its own zone's
+    /// midnight, which that one calendar can name as the day before.
+    static func tipRecords(
+        from records: [ShiftRecord],
+        calendars: [PayrollCalendarPolicy],
+        payrollTimeZone: TimeZone
+    ) -> [TipRecord] {
+        let storedDay = StoredDay(.workDay, calendars: calendars)
         var out: [TipRecord] = []
         out.reserveCapacity(records.count * 2)
         for record in records {
-            out.append(contentsOf: rows(for: record))
+            let day = storedDay.start(of: record.workDate, job: record.jobName, in: payrollTimeZone)
+            out.append(contentsOf: rows(for: record, day: day))
         }
         return out
     }
 
     /// The same rows, for one job's shifts only: the scope a figure beside
     /// the pace reads, so the pace cannot count another job's shifts.
-    static func tipRecords(from records: [ShiftRecord], job: JobScope) -> [TipRecord] {
-        tipRecords(from: records.filter { job.includes($0.jobName) })
+    static func tipRecords(
+        from records: [ShiftRecord],
+        job: JobScope,
+        calendars: [PayrollCalendarPolicy],
+        payrollTimeZone: TimeZone
+    ) -> [TipRecord] {
+        tipRecords(from: records.filter { job.includes($0.jobName) }, calendars: calendars, payrollTimeZone: payrollTimeZone)
     }
 
-    /// One record's rows.
-    private static func rows(for record: ShiftRecord) -> [TipRecord] {
+    /// One record's rows, dated `day`.
+    private static func rows(for record: ShiftRecord, day: Date) -> [TipRecord] {
         // Read RAW, deliberately, and this is a retraction of what this
         // function did when it was written.
         //
@@ -117,7 +134,7 @@ enum StatsRecordAdapter {
         for (index, pair) in kinds.enumerated() {
             let ownsShiftLevelValues = index == 0
             rows.append(TipRecord(
-                date: record.workDate,
+                date: day,
                 amountCents: pair.1,
                 kind: pair.0,
                 recordedAt: record.recordedAt,

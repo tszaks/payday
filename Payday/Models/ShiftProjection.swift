@@ -89,7 +89,10 @@ enum ShiftProjection {
     ///    keeps the CSV note field byte-identical: a two-kind shift gives
     ///    "N; N" on both sides and a one-kind shift gives "N". Put the note on
     ///    one row only and the exported string diverges.
-    static func rows(for shift: ShiftRecord) -> [ProjectedShiftRow] {
+    ///
+    /// `day` is the date every row carries: the shift's stored day as the
+    /// reader's one calendar names it (`StoredDay.start(of:job:in:)`).
+    static func rows(for shift: ShiftRecord, day: Date) -> [ProjectedShiftRow] {
         let hasCash = shift.cashTipsCents != 0
         let hasCredit = shift.creditTipsCents != 0
 
@@ -101,7 +104,7 @@ enum ShiftProjection {
             let carriesDetail = kind == detailKind
             return ProjectedShiftRow(
                 id: rowID(shiftID: shift.id, kind: kind),
-                date: shift.workDate,
+                date: day,
                 amountCents: amountCents,
                 kind: kind,
                 // Rule 3: on every row.
@@ -138,7 +141,9 @@ enum ShiftProjection {
         return result
     }
 
-    static func rows(for shifts: [ShiftRecord]) -> [ProjectedShiftRow] {
-        shifts.flatMap { rows(for: $0) }
+    /// Every shift's rows, each dated by its stored day's own civil day as
+    /// it starts in `zone`, the zone the reader reads every row in.
+    static func rows(for shifts: [ShiftRecord], storedDay: StoredDay, in zone: TimeZone) -> [ProjectedShiftRow] {
+        shifts.flatMap { rows(for: $0, day: storedDay.start(of: $0.workDate, job: $0.jobName, in: zone)) }
     }
 }

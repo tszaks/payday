@@ -32,17 +32,6 @@ private struct DaySelection: Identifiable {
 /// they already hold, so this enum is the one place either of them has to
 /// change.
 enum CalendarEarnings {
-    /// The grouping calendar, which is NOT the grid's calendar: the grid needs
-    /// the user's week start for its layout, and a shift grouping must not.
-    /// The payroll zone is frozen here for the same reason the engine freezes
-    /// it — a device that travels must not re-date a shift.
-    static func groupingCalendar(payrollTimeZone: TimeZone) -> Calendar {
-        var calendar = Calendar.current
-        calendar.timeZone = payrollTimeZone
-        return calendar
-    }
-
-
     /// One snapshot over every shift, valued with the user's OWN rate and
     /// workweek history, effective dates intact.
     ///
@@ -322,7 +311,7 @@ struct CalendarMonthFacts: SnapshotFacts {
         guard isTotalBasis(priorFigure), let priorCents = priorFigure.cents else { return nil }
         let windowLabel = inProgress
             ? "\(prior.firstDay.shortLabel)–\(windowEnd.day)"
-            : prior.firstDay.date(in: zone).formatted(.dateTime.month(.wide))
+            : prior.firstDay.date(in: zone).formatted(Date.FormatStyle(timeZone: zone).month(.wide))
         return MonthDelta(cents: currentCents - priorCents, windowLabel: windowLabel)
     }
 
@@ -476,7 +465,8 @@ struct CalendarView: View {
                                     monthMaxCents: facts.brightestTileCents,
                                     isCurrentMonth: resolvedCalendar.isDate(day, equalTo: displayedMonth, toGranularity: .month),
                                     isToday: resolvedCalendar.isDateInToday(day),
-                                    isFuture: CivilDay(day, in: resolvedCalendar.timeZone) > todayCivil
+                                    isFuture: CivilDay(day, in: resolvedCalendar.timeZone) > todayCivil,
+                                    zone: resolvedCalendar.timeZone
                                 )
                             }
                             .buttonStyle(PressableButtonStyle())
@@ -733,11 +723,14 @@ struct DayCell: View {
     /// After today, in the payroll zone. A day that has not happened renders
     /// quiet unless a logged shift says otherwise.
     let isFuture: Bool
+    /// The payroll zone `day` is a midnight in, so the phone's own zone never
+    /// renames it.
+    let zone: TimeZone
 
     @Environment(\.colorScheme) private var colorScheme
 
-    private var dayNumber: Int {
-        Calendar.current.component(.day, from: day)
+    static func dayNumber(_ day: Date, in zone: TimeZone) -> Int {
+        CivilDay(day, in: zone).day
     }
 
     /// The day's own figure, only for a day of the displayed month.
@@ -790,7 +783,7 @@ struct DayCell: View {
     }
 
     private var dayNumberLabel: some View {
-        Text("\(dayNumber)")
+        Text("\(Self.dayNumber(day, in: zone))")
             .font(.system(.callout, design: .rounded))
             .fontWeight(hasTips || isToday ? .bold : .regular)
             .foregroundStyle(
@@ -810,13 +803,13 @@ struct DayCell: View {
     /// worked for nothing, a day the engine could not answer for, and a day
     /// that has not arrived yet.
     private var accessibilityLabel: String {
-        Self.label(day: day, tile: tile, isCurrentMonth: isCurrentMonth, isFuture: isFuture)
+        Self.label(day: day, tile: tile, isCurrentMonth: isCurrentMonth, isFuture: isFuture, zone: zone)
     }
 
     /// The VoiceOver text, on a static seam so the upcoming/no-shifts/
     /// amount-unavailable states are assertable without rendering a view.
-    static func label(day: Date, tile: CalendarDayTile?, isCurrentMonth: Bool, isFuture: Bool) -> String {
-        let dateText = day.formatted(.dateTime.month(.wide).day())
+    static func label(day: Date, tile: CalendarDayTile?, isCurrentMonth: Bool, isFuture: Bool, zone: TimeZone) -> String {
+        let dateText = day.formatted(Date.FormatStyle(timeZone: zone).month(.wide).day())
         // A day that has not arrived is upcoming, not "no shifts" — and only
         // a logged shift, which is real data, says otherwise.
         if isFuture, tile?.hasShifts != true {

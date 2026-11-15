@@ -93,7 +93,9 @@ enum DashboardEarnings {
             records: records,
             paychecks: paychecks,
             cardTipsPaidAtClose: cardTipsPaidAtClose,
-            job: JobScope.picked(nil, jobCount: policies.jobs.count)
+            job: JobScope.picked(nil, jobCount: policies.jobs.count),
+            calendars: policies.calendars,
+            payrollTimeZone: payrollTimeZone
         )
     }
 
@@ -128,7 +130,12 @@ enum DashboardEarnings {
                 records: records,
                 paychecks: paychecks,
                 cardTipsPaidAtClose: cardTipsPaidAtClose,
-                job: .job(job.tag)
+                job: .job(job.tag),
+                calendars: policies.calendars,
+                // The zone this job's facts read in (`facts(for:)`).
+                payrollTimeZone: job.tag.map {
+                    PolicyStore.calculator(forJob: $0, policies: policies, primarySchedule: nil).payrollTimeZone
+                } ?? payrollTimeZone
             )
         }
     }
@@ -155,6 +162,7 @@ enum DashboardEarnings {
             return DashboardFacts(
                 snapshot: dataset.snapshot,
                 allShiftRecords: dataset.shiftRecordDays,
+                calendars: policies.calendars,
                 allTipRecords: dataset.tipRecords,
                 withholdingModel: dataset.withholdingModel,
                 cardTipsPaidAtClose: dataset.cardTipsPaidAtClose,
@@ -193,13 +201,15 @@ enum DashboardEarnings {
         records: [ShiftRecord],
         paychecks: [PaycheckRecord],
         cardTipsPaidAtClose: Bool,
-        job: JobScope
+        job: JobScope,
+        calendars: [PayrollCalendarPolicy],
+        payrollTimeZone: TimeZone
     ) -> Dataset {
         let jobRecords = records.filter { job.includes($0.jobName) }
         return Dataset(
             snapshot: snapshot,
             shiftRecordDays: jobRecords,
-            tipRecords: StatsRecordAdapter.tipRecords(from: jobRecords),
+            tipRecords: StatsRecordAdapter.tipRecords(from: jobRecords, calendars: calendars, payrollTimeZone: payrollTimeZone),
             withholdingModel: WithholdingModelAdapter.model(from: paychecks.filter { job.includes($0.jobName) }),
             cardTipsPaidAtClose: cardTipsPaidAtClose,
             job: job

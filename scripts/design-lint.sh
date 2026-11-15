@@ -777,8 +777,9 @@ fi
 #     `LegacySnapshotBridge` (allowlisted for 0) fails, and adding a second to
 #     `ShiftInputAdapter` (allowlisted for 1) fails.
 #
-#     The list ratchets DOWN. When `ShiftDraftPreview` moves off
-#     `Calendar.current`, lower its number; do not leave slack.
+#     The list ratchets DOWN: a file that stops reaching the device zone
+#     leaves it, as `ShiftDraftPreview` and `ShiftInputAdapter` did when their
+#     days moved to `StoredDay`. Do not leave slack.
 DEVICE_ZONE=$(perl scripts/lint-device-zone.pl 2>&1)
 DEVICE_ZONE_STATUS=$?
 if [ "$DEVICE_ZONE_STATUS" -ne 0 ]; then

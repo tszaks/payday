@@ -43,11 +43,15 @@ extension View {
     /// The wage caveat is unchanged and still deliberate: a duplicate adds
     /// hours to the workweek, so a copy that pushes the week past the
     /// overtime threshold is priced differently from its source, by rule.
+    ///
+    /// `calendars` is every calendar policy, so the copy lands on the
+    /// source's own work day (`StoredDay`).
     func shiftContextMenu(
         record: ShiftRecord,
         sheetTarget: Binding<TipEntrySheetTarget?>,
         undoState: UndoDeleteToastState,
-        context: ModelContext
+        context: ModelContext,
+        calendars: [PayrollCalendarPolicy]
     ) -> some View {
         contextMenu {
             Button {
@@ -56,7 +60,7 @@ extension View {
                 Label("Edit", systemImage: "pencil")
             }
             Button {
-                duplicateShift(record, into: context)
+                duplicateShift(record, into: context, calendars: calendars)
             } label: {
                 Label("Duplicate", systemImage: "plus.square.on.square")
             }
@@ -77,11 +81,13 @@ extension View {
 /// so the haptic fires only on success -- the legacy sibling fired it
 /// unconditionally after a `try?` and buzzed success on a failed duplicate.
 @MainActor
-private func duplicateShift(_ record: ShiftRecord, into context: ModelContext) {
+private func duplicateShift(_ record: ShiftRecord, into context: ModelContext, calendars: [PayrollCalendarPolicy]) {
     do {
         _ = try ShiftCommands.create(
             in: context,
-            workDate: record.workDate,
+            // `create` takes the day as a picker holds it.
+            workDate: StoredDay(.workDay, calendars: calendars).shown(record.workDate, job: record.jobName),
+            calendars: calendars,
             shiftPeriod: record.shiftPeriod,
             cashTipsCents: record.cashTipsCents,
             creditTipsCents: record.creditTipsCents,

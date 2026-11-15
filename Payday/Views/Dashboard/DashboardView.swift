@@ -105,8 +105,9 @@ struct DashboardFacts: SnapshotFacts {
     /// un-persistable.
     let shiftRecordDays: [ShiftRecord]
     /// Calendar days that hold 2+ shifts — a "double" — so a row can label
-    /// itself "Today · Lunch" / "Today · Dinner" only when it needs to.
-    let multiShiftDays: Set<Date>
+    /// itself "Today · Lunch" / "Today · Dinner" only when it needs to. Each
+    /// is a stored day's own civil day (`StoredDay.civilDay`).
+    let multiShiftDays: Set<CivilDay>
     let paceDeltaCents: Int?
     /// How many prior periods back the pace line. 1 means it's still a
     /// single-period comparison and the copy says "last period" instead of
@@ -193,8 +194,14 @@ struct DashboardFacts: SnapshotFacts {
         /// therefore got a different deterministic id from the two and its
         /// valuation lookup missed (see `DashboardEarnings`).
         allShiftRecords: [ShiftRecord],
+        /// `PolicyStore.policies.calendars`, every job's: a row's work day is
+        /// its stored day's own civil day (`StoredDay`), which a row of an
+        /// older policy or another job's zone does not start at in
+        /// `payrollTimeZone`.
+        calendars: [PayrollCalendarPolicy],
         /// The `StatsEngine` rows, from `DashboardEarnings.Dataset
-        /// .tipRecords` — already flattened by `StatsRecordAdapter`. NOT
+        /// .tipRecords` — already flattened by `StatsRecordAdapter`, and
+        /// dated in this struct's `payrollTimeZone`. NOT
         /// defaulted and never derived here: the old `flatMap(\.items)` over
         /// a legacy grouping read a flipped account as a person with no
         /// history, so the pace line and tonight's reveal silently vanished.
@@ -236,17 +243,23 @@ struct DashboardFacts: SnapshotFacts {
         // type header for the final-day shifts the old entry-date filter
         // dropped.
         let currentRange = Self.range(of: period, in: payrollTimeZone)
+        // A row's work day as this screen's one calendar reads it: the start
+        // of its stored day's own civil day in the payroll zone.
+        let storedDay = StoredDay(.workDay, calendars: calendars)
+        func workDay(_ record: ShiftRecord) -> Date {
+            storedDay.start(of: record.workDate, job: record.jobName, in: payrollTimeZone)
+        }
         // Membership by civil work day, which is the engine's rule.
         let periodRecords = allShiftRecords.filter {
-            job.includes($0.jobName) && currentRange.contains(CivilDay($0.workDate, in: payrollTimeZone))
+            job.includes($0.jobName) && currentRange.contains(storedDay.civilDay($0.workDate, job: $0.jobName))
         }
         // `@Query` delivers records unordered — insertion order, which
         // presented oldest-first. The list's order is `ShiftDays`'s: newest
         // day first, lunch before dinner inside a day, earliest closeout as
         // the tie-break.
         shiftRecordDays = periodRecords.sorted { lhs, rhs in
-            let lhsDay = calendar.startOfDay(for: lhs.workDate)
-            let rhsDay = calendar.startOfDay(for: rhs.workDate)
+            let lhsDay = workDay(lhs)
+            let rhsDay = workDay(rhs)
             if lhsDay != rhsDay { return lhsDay > rhsDay }
             let lhsRank = ShiftDays.periodRank(lhs.shiftPeriod)
             let rhsRank = ShiftDays.periodRank(rhs.shiftPeriod)
@@ -258,9 +271,9 @@ struct DashboardFacts: SnapshotFacts {
         shiftCount = periodRecords.count
         // Days that hold more than one shift — the emergent doubles, counted
         // on the same grid-calendar day the sort and the row labels use.
-        var dayCounts: [Date: Int] = [:]
+        var dayCounts: [CivilDay: Int] = [:]
         for record in periodRecords {
-            dayCounts[calendar.startOfDay(for: record.workDate), default: 0] += 1
+            dayCounts[storedDay.civilDay(record.workDate, job: record.jobName), default: 0] += 1
         }
         multiShiftDays = Set(dayCounts.filter { $0.value >= 2 }.keys)
 
@@ -470,7 +483,7 @@ struct DashboardFacts: SnapshotFacts {
         // agreeing. `.unavailable` prints no line at all rather than an echo
         // with a placeholder where the money goes.
         // ONE latest closeout today, carrying the two facts the reveal needs.
-        let todayRecords = periodRecords.filter { calendar.isDateInToday($0.workDate) }
+        let todayRecords = periodRecords.filter { calendar.isDateInToday(workDay($0)) }
         let latestToday: (shiftID: UUID, shiftPeriod: ShiftPeriod?)?
         if let latest = todayRecords.max(by: { ($0.recordedAt ?? $0.workDate) < ($1.recordedAt ?? $1.workDate) }) {
             latestToday = (latest.id, latest.shiftPeriod)
@@ -1365,21 +1378,24 @@ struct DashboardView: View {
         for record: ShiftRecord,
         facts: DashboardFacts
     ) -> some View {
-        Button {
+        let storedDay = StoredDay(.workDay, calendars: policyStore.policies.calendars)
+        return Button {
             sheetTarget = .editShift(record)
         } label: {
             ShiftDayRow(facts: ShiftDayRowFacts(
                 snapshot: facts.snapshot,
                 shiftID: record.id,
-                day: record.workDate,
+                day: storedDay.shown(record.workDate, job: record.jobName),
                 period: record.shiftPeriod,
-                dayHasMultipleShifts: facts.multiShiftDays.contains(record.workDate)
+                dayHasMultipleShifts: facts.multiShiftDays.contains(storedDay.civilDay(record.workDate, job: record.jobName))
             ))
             .padding(.vertical, PaydaySpacing.p12)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .shiftContextMenu(record: record, sheetTarget: $sheetTarget, undoState: undoState, context: modelContext)
+        .shiftContextMenu(
+            record: record, sheetTarget: $sheetTarget, undoState: undoState, context: modelContext,
+            calendars: policyStore.policies.calendars)
     }
 
     /// Deliberately NOT ContentUnavailableView any more: its intrinsic height

@@ -88,7 +88,10 @@ struct DayDetailShiftFactsTests {
 
         for record in facts.shiftRecords {
             let row = facts.rowFacts(for: record, shiftCount: 2, note: nil)
-            #expect(row.day == record.workDate, "row \(record.id) day")
+            // The row's day is what its label formats on the phone's
+            // calendar: the start, there, of the record's own civil day.
+            #expect(CivilDay(row.day, in: .current) == CivilDay(record.workDate, in: Self.zone), "row \(record.id) day")
+            #expect(row.day == Calendar.current.startOfDay(for: row.day), "row \(record.id) day start")
             #expect(row.period == record.shiftPeriod, "row \(record.id) period")
             #expect(row.dayHasMultipleShifts)
             #expect(row.amount.cents != nil, "row \(record.id) valued")

@@ -171,10 +171,18 @@ enum ShiftCommands {
 
     // MARK: - Commands
 
+    /// - Parameters:
+    ///   - workDate: the day picked on the phone's calendar, at any time of
+    ///     that day.
+    ///   - calendars: every calendar policy (`CompensationPolicies
+    ///     .calendars`), which decide the zone the day is stored in.
+    ///   - phoneTimeZone: the picker's zone, which names the day and "today".
+    ///     A parameter so a test can state the phone's zone.
     @discardableResult
     static func create(
         in context: ModelContext,
         workDate: Date,
+        calendars: [PayrollCalendarPolicy],
         shiftPeriod: ShiftPeriod? = nil,
         cashTipsCents: Int = 0,
         creditTipsCents: Int = 0,
@@ -189,7 +197,8 @@ enum ShiftCommands {
         jobName: String? = nil,
         receiptMetrics: ShiftReceiptMetrics? = nil,
         note: String? = nil,
-        recordedAt: Date = .now
+        recordedAt: Date = .now,
+        phoneTimeZone: TimeZone = .current
     ) throws -> ShiftRecord {
         guard hasSomethingToSave(
             cashTipsCents: cashTipsCents,
@@ -199,10 +208,11 @@ enum ShiftCommands {
             tipShareInCents: tipShareInCents
         ) else { throw Failure.nothingToSave }
 
-        // Clamped to today. A caller may pass an unclamped date, but a shift
-        // can never be logged for the future, and the day is the payroll day
-        // rather than an instant.
-        let day = Calendar.current.startOfDay(for: min(workDate, .now))
+        // Clamped to today on the phone's calendar. A caller may pass an
+        // unclamped date, but a shift can never be logged for the future, and
+        // the day is the payroll day rather than an instant.
+        let day = StoredDay(.workDay, calendars: calendars)
+            .stored(picked: min(workDate, .now), job: jobName, phoneTimeZone: phoneTimeZone)
 
         return try perform(in: context) {
             let record = ShiftRecord(
