@@ -9,6 +9,7 @@ struct RootView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.scenePhase) private var scenePhase
     @State private var lockController = AppLockController()
+    @State private var lockWindow = AppLockWindow()
     @State private var hasEvaluatedInitialLock = false
     @State private var onboardingViewModel = PaydayOnboardingViewModel()
     @Query private var paycheckRecords: [PaycheckRecord]
@@ -23,7 +24,7 @@ struct RootView: View {
                 // Two questions, in this order, and nothing else:
                 //
                 //   1. Signed in?  No  -> the welcome flow, ending at sign-in.
-                //   2. Unlocked?   No  -> the lock screen.
+                //   2. Unlocked?   No  -> the lock screen, over the app.
                 //   Otherwise -> the app (or the pay-schedule step, once).
                 //
                 // The lock check used to sit OUT here, ahead of the gate, which
@@ -35,28 +36,42 @@ struct RootView: View {
                 // real data from it still requires the account holder's Apple
                 // ID, which is a stronger gate than the local one.
                 PaydayCloudGate(onboardingViewModel: onboardingViewModel) {
-                    // The lock REPLACES the app rather than covering it. A
-                    // sheet the app has open is presented above this whole
-                    // view, so a lock layered here would leave that sheet,
-                    // and any amount on it, readable on top of the lock.
-                    if lockController.isLocked {
-                        LockGateView(lockController: lockController)
-                    } else if scheduleStore.schedule != nil {
-                        MainTabView()
-                    } else {
-                        FirstRunSetupView()
+                    Group {
+                        if scheduleStore.schedule != nil {
+                            MainTabView()
+                        } else {
+                            FirstRunSetupView()
+                        }
                     }
+                    // The lock goes up in a window of its own above the app,
+                    // not in this view tree. A sheet the app has open is
+                    // presented above this whole view, so a lock layered here
+                    // would leave that sheet, and any amount on it, readable
+                    // on top of the lock; and replacing the app with the lock
+                    // would throw the sheet away. See AppLockWindow.
+                    .appLockWindow(lockWindow, lockController: lockController)
                 }
             }
         }
         .onChange(of: scenePhase) { _, newPhase in
             switch newPhase {
+            case .inactive:
+                // On the way out, the lock's window gets ready while the
+                // scene can still draw it. See AppLockWindow.
+                lockWindow.standBy()
             case .background:
                 lockController.armIfEnabled(preferencesStore)
+                // Now, not on the later update that the lock's own observer
+                // waits for: the system takes the app switcher's snapshot as
+                // the scene goes to the background, and it must show the lock.
+                lockWindow.update()
             case .active:
+                // Back without having left: nothing armed, so the window that
+                // stood by goes.
+                lockWindow.update()
                 SmartNudgeScheduler.reschedule(preferencesStore: preferencesStore, shiftRecords: shiftRecords)
                 PaydayPushScheduler.reschedule(preferencesStore: preferencesStore, schedule: scheduleStore.schedule, shiftRecords: shiftRecords, paycheckRecords: paycheckRecords)
-            default:
+            @unknown default:
                 break
             }
         }
