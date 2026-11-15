@@ -203,7 +203,10 @@ struct PeriodCheckComparison: Equatable {
     /// Whether any credit tips were logged. With none, the period is almost
     /// certainly pre-cash/credit legacy data, so the comparison names the
     /// total rather than claiming a full card-tip overpay.
-    let usesCreditOnly: Bool
+    let hasCreditTips: Bool
+    /// Whether card tips are paid on the check (Settings → Payroll). When
+    /// they are paid at close, the expected figure is gratuity alone.
+    let cardTipsOnCheck: Bool
 
     var isShort: Bool { deltaCents < 0 }
 
@@ -261,6 +264,7 @@ struct PeriodCheckComparison: Equatable {
         )
         guard let delta = reconciliation.tipEarningsDeltaCents else { return nil }
         deltaCents = delta
-        usesCreditOnly = components.voluntaryCreditCents > 0
+        hasCreditTips = components.voluntaryCreditCents > 0
+        self.cardTipsOnCheck = cardTipsOnCheck
     }
 }

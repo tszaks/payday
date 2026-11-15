@@ -6,7 +6,7 @@ import SwiftData
 /// ## The identity this struct exists to make unbreakable
 ///
 /// `total` is `snapshot.day(thatDay)` and `shifts` is that same result's
-/// `shiftIDs`, in the engine's canonical order. So the hero is not a number
+/// `shiftIDs`, lunch first. So the hero is not a number
 /// that agrees with the rows — it is the SUM of exactly the rows listed, by
 /// construction, because both sides name the same selection. Each row then
 /// renders `snapshot.valuation(id)`, that shift's own slice of the same
@@ -26,7 +26,7 @@ import SwiftData
 /// own helper proves the helper, and that is exactly how a screen came to
 /// disagree with the test that was supposed to pin it.
 struct DayDetailFacts: SnapshotFacts {
-    /// Exactly the shifts the day result selected, in the engine's order.
+    /// Exactly the shifts the day result selected, lunch first (`listOrder`).
     ///
     /// A live `[ShiftRecord]` rather than a projection, because these rows ARE
     /// the edit and delete targets: `ProjectedShiftRow` is deliberately
@@ -72,11 +72,31 @@ struct DayDetailFacts: SnapshotFacts {
         let byID = Dictionary(records.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         if let dayResult = resolvedSnapshot?.day(civilDay) {
             total = .earnedIncome(dayResult)
-            shiftRecords = dayResult.shiftIDs.compactMap { byID[$0] }
+            shiftRecords = dayResult.shiftIDs.compactMap { byID[$0] }.sorted(by: Self.listOrder)
         } else {
             total = .unavailable()
-            shiftRecords = records.filter { calendar.isDate($0.workDate, inSameDayAs: date) }
+            shiftRecords = records.filter { calendar.isDate($0.workDate, inSameDayAs: date) }.sorted(by: Self.listOrder)
         }
+    }
+
+    /// Lunch, then dinner, then untagged, then the time the shift was
+    /// recorded, then id: the order the ledger allocates a workweek in.
+    /// The day result's `shiftIDs` sort by id within a day, so on a double
+    /// day they would put dinner above lunch whenever its id sorts first.
+    private static func listOrder(_ lhs: ShiftRecord, _ rhs: ShiftRecord) -> Bool {
+        func key(_ record: ShiftRecord) -> (Int, Double, String) {
+            let periodRank = switch record.shiftPeriod {
+            case .lunch: ShiftPeriodTag.lunch.rank
+            case .dinner: ShiftPeriodTag.dinner.rank
+            case nil: Int.max
+            }
+            return (
+                periodRank,
+                record.recordedAt?.timeIntervalSinceReferenceDate ?? -.greatestFiniteMagnitude,
+                record.id.uuidString
+            )
+        }
+        return key(lhs) < key(rhs)
     }
 
     /// The row's facts need three scalars, not a representation.

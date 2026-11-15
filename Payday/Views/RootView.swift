@@ -33,6 +33,10 @@ struct RootView: View {
                 // real data from it still requires the account holder's Apple
                 // ID, which is a stronger gate than the local one.
                 PaydayCloudGate(onboardingViewModel: onboardingViewModel) {
+                    // The lock REPLACES the app rather than covering it. A
+                    // sheet the app has open is presented above this whole
+                    // view, so a lock layered here would leave that sheet,
+                    // and any amount on it, readable on top of the lock.
                     if lockController.isLocked {
                         LockGateView(lockController: lockController)
                     } else if scheduleStore.schedule != nil {

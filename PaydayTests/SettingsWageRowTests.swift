@@ -90,6 +90,52 @@ struct SettingsWageRowTests {
         #expect(PayrollSettingsSection.rateDisplay(PayrollSettingsSection.rateCents(fromDigits: "0")) == "Not set")
     }
 
+    /// The wage field writes once, when editing ends. The field is capped at
+    /// four digits, so changing $15.00 to $20.00 means deleting every digit
+    /// first: an empty field is a step in an edit far more often than a
+    /// decision to turn the wage off, and turning it off removes the dated
+    /// history, so it is asked about rather than done.
+    @Test("the wage field's commit: a new rate applies once, an unchanged one writes nothing, emptying a rate asks first")
+    @MainActor
+    func wageCommitRule() {
+        #expect(PayrollSettingsSection.wageCommit(draftDigits: "2000", storedCents: 1_500) == .apply(2_000))
+        #expect(PayrollSettingsSection.wageCommit(draftDigits: "1500", storedCents: nil) == .apply(1_500))
+
+        #expect(PayrollSettingsSection.wageCommit(draftDigits: "1500", storedCents: 1_500) == .nothing)
+        #expect(PayrollSettingsSection.wageCommit(draftDigits: "0020", storedCents: 20) == .nothing)
+
+        for empty in ["", "0", "0000"] {
+            #expect(PayrollSettingsSection.wageCommit(draftDigits: empty, storedCents: 1_500) == .confirmRemoval)
+            #expect(PayrollSettingsSection.wageCommit(draftDigits: empty, storedCents: nil) == .nothing)
+        }
+    }
+
+    /// The damage the one commit prevents, at the store: a rate history made
+    /// the way Settings makes it (a rate, then "Rate changed on…"), and one
+    /// edit from the current rate to another. Only the latest policy moves;
+    /// the shifts before the change keep the rate they were paid at.
+    @Test("one committed wage edit rewrites only the latest rate and keeps the dated history")
+    @MainActor
+    func oneCommittedEditKeepsHistory() throws {
+        let store = PolicyStore(defaults: freshDefaults())
+        store.applyRateEdit(hourlyRateCents: 1_200)
+        store.applyRateChange(hourlyRateCents: 1_500, effectiveFrom: day(2026, 6, 1))
+        let original = try #require(store.policies.rates.first { $0.effectiveFrom == .distantPast })
+
+        let commit = PayrollSettingsSection.wageCommit(draftDigits: "2000", storedCents: store.currentHourlyRateCents)
+        guard case .apply(let cents) = commit else {
+            Issue.record("expected one rate to apply, got \(commit)")
+            return
+        }
+        store.applyRateEdit(hourlyRateCents: cents)
+
+        #expect(store.policies.rates.count == 2)
+        #expect(store.policies.rates.contains(original))
+        #expect(store.policies.rate(on: day(2026, 5, 31)) == original)
+        #expect(store.policies.latestRate?.effectiveFrom == day(2026, 6, 1))
+        #expect(store.currentHourlyRateCents == 2_000)
+    }
+
     /// The display/editor pairing, pinned. `currentHourlyRateCents` is
     /// `latestRate` (newest policy on file) while `policies.rate(on:)` is the
     /// effective-dated lookup, and the row uses the former because

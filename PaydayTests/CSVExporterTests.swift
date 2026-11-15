@@ -539,6 +539,33 @@ extension CSVExporterTests {
         #expect(Self.cell(csv, column: "Period") == "2026-07-06 to 2026-07-19")
     }
 
+    /// After a payroll zone change the calculator knows only the latest zone,
+    /// while the engine valued each shift on the day its own zone named. The
+    /// Date cell follows the engine, or the export would disagree with the
+    /// wage columns beside it.
+    @Test("Date is the engine's work day when the shift was valued")
+    func dateIsTheValuationsWorkDay() {
+        let losAngeles = TimeZone(identifier: "America/Los_Angeles")!
+        // Logged at New York midnight on Jul 15, which is Jul 14 in Los Angeles.
+        let record = ShiftRecord(workDate: Self.midnight(2026, 7, 15, in: PaydayTestZone.newYork), cashTipsCents: 5_000)
+        let calculator = PayPeriodCalculator(
+            payrollTimeZone: losAngeles,
+            schedule: PaySchedule(frequency: .biweekly, anchorPeriodEnd: Self.midnight(2026, 7, 19, in: losAngeles), firstWeekday: 2)
+        )
+        let valuation = ShiftValuation(
+            id: record.id,
+            workDay: CivilDay(year: 2026, month: 7, day: 15),
+            ratePolicyID: nil, calendarPolicyID: nil, workweekStart: nil, minutesWorked: nil,
+            wage: .unavailable(.rateNotSet),
+            components: EarningsComponents(voluntaryCashCents: 5_000)
+        )
+        let valued = CSVExporter.export(records: [record], paycheckRecords: [], calculator: calculator, valuations: [record.id: valuation])
+        #expect(Self.cell(valued, column: "Date") == "2026-07-15")
+        // With no valuation the latest zone is all the export has.
+        let unvalued = CSVExporter.export(records: [record], paycheckRecords: [], calculator: calculator, valuations: [:])
+        #expect(Self.cell(unvalued, column: "Date") == "2026-07-14")
+    }
+
     @Test("a note containing a bare carriage return is quoted")
     func noteWithCarriageReturnIsQuoted() {
         let records = [ShiftRecord(workDate: date(2026, 7, 8), cashTipsCents: 5_000, note: "slow\rnight")]

@@ -1,8 +1,9 @@
 import SwiftUI
 
-/// Full-screen cover shown whenever AppLockController.isLocked is true.
-/// Triggers Face ID/Touch ID automatically on appear; the button is a
-/// manual retry, not the primary path. Composed like Apple's own locked
+/// Shown in place of the signed-in content whenever
+/// AppLockController.isLocked is true. Triggers Face ID/Touch ID
+/// automatically once each time the app comes to the front; the button is
+/// a manual retry, not the primary path. Composed like Apple's own locked
 /// surfaces (a locked note, a hidden album): the app's mark carrying
 /// identity, the state named plainly, one line saying why the lock
 /// exists, one action. The mark breathes in once on appear — a single
@@ -10,6 +11,7 @@ import SwiftUI
 struct LockGateView: View {
     let lockController: AppLockController
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
     @State private var hasAppeared = false
 
     var body: some View {
@@ -56,11 +58,18 @@ struct LockGateView: View {
                 hasAppeared = true
             }
         }
-        .task {
-            #if DEBUG
-            if ProcessInfo.processInfo.arguments.contains("-DebugForceLock") { return }
-            #endif
-            await lockController.unlock()
+        // Both: the gate can go up while the scene is already active (a cold
+        // launch), or while it is in the background and only later active.
+        .task { await unlockAutomatically(sceneIsActive: scenePhase == .active) }
+        .onChange(of: scenePhase) { _, newPhase in
+            Task { await unlockAutomatically(sceneIsActive: newPhase == .active) }
         }
+    }
+
+    private func unlockAutomatically(sceneIsActive: Bool) async {
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-DebugForceLock") { return }
+        #endif
+        await lockController.unlockAutomatically(sceneIsActive: sceneIsActive)
     }
 }

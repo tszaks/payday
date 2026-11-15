@@ -21,12 +21,30 @@ returns void language sql as $$
   insert into results (name, ok, detail) values (p_name, coalesce(p_ok, false), p_detail);
 $$;
 
+-- Calls an RPC as the given account and hands the outcome rows back as jsonb
+-- (role `authenticated` cannot write this session's temp tables).
+create function pg_temp.rpc_as(p_uid uuid, p_sql text)
+returns jsonb language plpgsql as $$
+declare v jsonb;
+begin
+  perform set_config('request.jwt.claim.sub', p_uid::text, true);
+  set local role authenticated;
+  execute 'select jsonb_agg(to_jsonb(t)) from (' || p_sql || ') t' into v;
+  reset role;
+  return coalesce(v, '[]'::jsonb);
+end;
+$$;
+
 delete from auth.users where id in (
   '61000000-0000-4000-8000-000000000001',
-  '61000000-0000-4000-8000-000000000002');
+  '61000000-0000-4000-8000-000000000002',
+  '61000000-0000-4000-8000-000000000003',
+  '61000000-0000-4000-8000-000000000004');
 insert into auth.users (id, email) values
   ('61000000-0000-4000-8000-000000000001', 'payday-s11-a@test.invalid'),
-  ('61000000-0000-4000-8000-000000000002', 'payday-s11-b@test.invalid');
+  ('61000000-0000-4000-8000-000000000002', 'payday-s11-b@test.invalid'),
+  ('61000000-0000-4000-8000-000000000003', 'payday-s11-c@test.invalid'),
+  ('61000000-0000-4000-8000-000000000004', 'payday-s11-d@test.invalid');
 
 -- Seeded directly rather than through the write RPC, because these are READ
 -- functions and the fixture needs a NULL recorded_at, which the write path
@@ -177,6 +195,164 @@ select pg_temp.expect('theLookupNeverReturnsMoreThanOneRow',
      'aaaaaaaa-0000-4000-8000-000000000002')) <= 1);
 
 -- ===========================================================================
+-- The summary's shift totals, over the same rows the listing returns
+-- ===========================================================================
+
+-- Account C logs its nights the way the current app does: through
+-- upsert_shifts, which writes public.shifts and never public.tip_entries.
+select pg_temp.rpc_as('61000000-0000-4000-8000-000000000003', $s$
+  select * from public.upsert_shifts($j$[
+    {"id":"dddddddd-0000-4000-8000-0000000000c1","work_date":"2026-10-01",
+     "cash_tips_cents":2000,"credit_tips_cents":6000,"tip_out_cents":1500,
+     "tip_share_in_cents":3000,"sales_cents":40000,"hours_worked":5.5,
+     "receipt_metrics":{"earningsSchemaVersion":2,"gratuityFeesCents":400}},
+    {"id":"dddddddd-0000-4000-8000-0000000000c2","work_date":"2026-10-03",
+     "cash_tips_cents":1000,"hours_worked":4},
+    {"id":"dddddddd-0000-4000-8000-0000000000c3","work_date":"2026-10-05",
+     "cash_tips_cents":9000},
+    {"id":"dddddddd-0000-4000-8000-0000000000c4","work_date":"2026-09-30",
+     "cash_tips_cents":500},
+    {"id":"dddddddd-0000-4000-8000-0000000000c5","work_date":"2026-10-06",
+     "credit_tips_cents":700}
+  ]$j$::jsonb)
+$s$);
+
+select pg_temp.rpc_as('61000000-0000-4000-8000-000000000003', $s$
+  select * from public.soft_delete_shifts($j$[
+    {"id":"dddddddd-0000-4000-8000-0000000000c3","deleted_at":"2026-10-06T00:00:00Z"}
+  ]$j$::jsonb)
+$s$);
+
+-- Another account's night inside C's range.
+select pg_temp.rpc_as('61000000-0000-4000-8000-000000000002', $s$
+  select * from public.upsert_shifts($j$[
+    {"id":"dddddddd-0000-4000-8000-0000000000b1","work_date":"2026-10-02",
+     "cash_tips_cents":7777}
+  ]$j$::jsonb)
+$s$);
+
+-- Paychecks: one ending in the range, one after it, one tombstoned.
+insert into public.paycheck_records
+  (id, user_id, period_start, period_end, paid_tips_cents, gross_pay_cents,
+   net_pay_cents, taxes_cents, client_updated_at, deleted_at)
+values
+  ('dddddddd-0000-4000-8000-0000000000e1', '61000000-0000-4000-8000-000000000003',
+   '2026-09-21', '2026-10-04', 1000, 50000, 40000, 8000, now(), null),
+  ('dddddddd-0000-4000-8000-0000000000e2', '61000000-0000-4000-8000-000000000003',
+   '2026-10-05', '2026-10-18', 2000, 60000, 48000, 9000, now(), null),
+  ('dddddddd-0000-4000-8000-0000000000e3', '61000000-0000-4000-8000-000000000003',
+   '2026-09-21', '2026-10-04', 3000, 70000, 56000, 10000, now(), now());
+
+-- The fault this guards: the totals were read from tip_entries alone, so a
+-- night the current app logged was missing from count and every total.
+select pg_temp.expect('theSummaryCountsShiftsTheCurrentAppWrites',
+  (select (s -> 'count')::bigint = 2
+          and (s -> 'tip_entry_count')::bigint = 0
+          and (s -> 'cash_voluntary_tips_cents')::bigint = 3000
+          and (s -> 'credit_voluntary_tips_cents')::bigint = 6000
+          and (s -> 'gratuity_cents')::bigint = 400
+          and (s -> 'tip_out_cents')::bigint = 1500
+          and (s -> 'sales_cents')::bigint = 40000
+          and (s -> 'hours_worked')::numeric = 9.5
+     from (select public.payday_agent_summary('61000000-0000-4000-8000-000000000003',
+             '2026-10-01', '2026-10-05') -> 'shifts' as s) q),
+  (select (public.payday_agent_summary('61000000-0000-4000-8000-000000000003',
+             '2026-10-01', '2026-10-05') -> 'shifts')::text));
+
+-- 2000 + 6000 + 400 gratuity + 3000 share - 1500 tip-out, plus 1000.
+select pg_temp.expect('theSummaryNetIncludesTheShareAndGrossAddsTheTipOutBack',
+  (select (s -> 'net_tip_earnings_cents')::bigint = 10900
+          and (s -> 'gross_tip_earnings_cents')::bigint = 12400
+          and (s -> 'tip_share_in_cents')::bigint = 3000
+     from (select public.payday_agent_summary('61000000-0000-4000-8000-000000000003',
+             '2026-10-01', '2026-10-05') -> 'shifts' as s) q),
+  (select (public.payday_agent_summary('61000000-0000-4000-8000-000000000003',
+             '2026-10-01', '2026-10-05') -> 'shifts')::text));
+
+select pg_temp.expect('aDeletedShiftIsNotInTheSummary',
+  (public.payday_agent_summary('61000000-0000-4000-8000-000000000003',
+     '2026-10-05', '2026-10-05') #>> '{shifts,count}')::bigint = 0
+  and (public.payday_agent_summary('61000000-0000-4000-8000-000000000003')
+     #>> '{shifts,count}')::bigint = 4,
+  (public.payday_agent_summary('61000000-0000-4000-8000-000000000003') -> 'shifts')::text);
+
+select pg_temp.expect('theSummaryDateBoundsAreInclusiveOnWorkDate',
+  (public.payday_agent_summary('61000000-0000-4000-8000-000000000003',
+     '2026-09-30', '2026-09-30') #>> '{shifts,count}')::bigint = 1
+  and (public.payday_agent_summary('61000000-0000-4000-8000-000000000003',
+     '2026-10-06', '2026-10-06') #>> '{shifts,count}')::bigint = 1
+  and (public.payday_agent_summary('61000000-0000-4000-8000-000000000003',
+     '2026-09-30', '2026-10-06') #>> '{shifts,count}')::bigint = 4,
+  '');
+
+-- One response must not answer "how many, how much" differently from the
+-- listing it sits beside: same rows, same deleted rule, same date column.
+select pg_temp.expect('theSummaryAgreesWithTheListingOverARange',
+  (select (s -> 'count')::bigint = l.n
+          and (s -> 'net_tip_earnings_cents')::bigint = l.net
+          and (s -> 'tip_out_cents')::bigint = l.tip_out
+     from (select public.payday_agent_summary('61000000-0000-4000-8000-000000000003',
+             '2026-09-30', '2026-10-05') -> 'shifts' as s) q,
+          (select count(*) as n, sum(non_wage_earnings_cents) as net,
+                  sum(coalesce(tip_out_cents, 0)) as tip_out
+             from public.payday_agent_recent_shifts('61000000-0000-4000-8000-000000000003',
+               '2026-09-30', '2026-10-05', 201)) l),
+  '');
+
+select pg_temp.expect('theSummaryAgreesWithTheListingOverTheWholeAccount',
+  (select (s -> 'count')::bigint = l.n
+          and (s -> 'net_tip_earnings_cents')::bigint = l.net
+     from (select public.payday_agent_summary('61000000-0000-4000-8000-000000000003')
+             -> 'shifts' as s) q,
+          (select count(*) as n, sum(non_wage_earnings_cents) as net
+             from public.payday_agent_recent_shifts('61000000-0000-4000-8000-000000000003',
+               null, null, 201)) l),
+  '');
+
+select pg_temp.expect('anotherAccountsShiftIsNeverInTheSummary',
+  (public.payday_agent_summary('61000000-0000-4000-8000-000000000003',
+     '2026-10-02', '2026-10-02') #>> '{shifts,count}')::bigint = 0
+  and (public.payday_agent_summary('61000000-0000-4000-8000-000000000002',
+     '2026-10-01', '2026-10-05') #>> '{shifts,cash_voluntary_tips_cents}')::bigint = 7777,
+  '');
+
+-- Account D's night was logged on a 1.0 build as two legacy rows and then
+-- converted. With one receipt and every detail on one row there is no rule
+-- to disagree about, so the totals are the ones the legacy rows gave, and
+-- tip_entry_count still counts those rows.
+insert into public.tip_entries
+  (id, user_id, shift_id, work_date, amount_cents, kind, tip_out_cents,
+   sales_cents, hours_worked, receipt_metrics, client_updated_at)
+values
+  ('dddddddd-0000-4000-8000-0000000000a1', '61000000-0000-4000-8000-000000000004',
+   'dddddddd-0000-4000-8000-0000000000d1', '2026-10-01', 3000, 'cash',
+   null, null, null, null, '2026-10-01 23:00:00+00'),
+  ('dddddddd-0000-4000-8000-0000000000a2', '61000000-0000-4000-8000-000000000004',
+   'dddddddd-0000-4000-8000-0000000000d1', '2026-10-01', 7000, 'credit',
+   1000, 50000, 6, '{"earningsSchemaVersion": 2, "gratuityFeesCents": 500}',
+   '2026-10-01 23:00:00+00');
+select private.derive_shifts('61000000-0000-4000-8000-000000000004',
+  array['dddddddd-0000-4000-8000-0000000000d1'::uuid]);
+
+select pg_temp.expect('aConvertedLegacyShiftSumsAsItsLegacyRowsDid',
+  (public.payday_agent_summary('61000000-0000-4000-8000-000000000004') -> 'shifts')
+    - 'tip_share_in_cents'
+  = '{"count": 1, "tip_entry_count": 2, "cash_voluntary_tips_cents": 3000,
+      "credit_voluntary_tips_cents": 7000, "gratuity_cents": 500,
+      "gross_tip_earnings_cents": 10500, "tip_out_cents": 1000,
+      "net_tip_earnings_cents": 9500, "sales_cents": 50000,
+      "hours_worked": 6}'::jsonb,
+  (public.payday_agent_summary('61000000-0000-4000-8000-000000000004') -> 'shifts')::text);
+
+select pg_temp.expect('thePaycheckTotalsCountLivePaychecksByPeriodEnd',
+  public.payday_agent_summary('61000000-0000-4000-8000-000000000003',
+    '2026-10-01', '2026-10-05') -> 'paychecks'
+  = '{"count": 1, "paid_tips_cents": 1000, "gross_pay_cents": 50000,
+      "net_pay_cents": 40000, "taxes_cents": 8000}'::jsonb,
+  (public.payday_agent_summary('61000000-0000-4000-8000-000000000003',
+    '2026-10-01', '2026-10-05') -> 'paychecks')::text);
+
+-- ===========================================================================
 -- Grants: these are admin-path functions, reached with the service role.
 -- ===========================================================================
 
@@ -190,9 +366,17 @@ select pg_temp.expect('neitherReadFunctionIsReachableByAClient',
   and not has_function_privilege('authenticated',
     'public.payday_agent_shift_by_id(uuid,uuid)', 'execute'));
 
+select pg_temp.expect('theSummaryIsReachableByTheServiceRoleOnly',
+  not has_function_privilege('anon',
+    'public.payday_agent_summary(uuid,date,date)', 'execute')
+  and not has_function_privilege('authenticated',
+    'public.payday_agent_summary(uuid,date,date)', 'execute')
+  and has_function_privilege('service_role',
+    'public.payday_agent_summary(uuid,date,date)', 'execute'));
+
 select pg_temp.expect('theSuiteRanEveryAssertion',
-  (select count(*) from results) = 16,
-  'ran ' || (select count(*) from results)::text || ' of 16');
+  (select count(*) from results) = 26,
+  'ran ' || (select count(*) from results)::text || ' of 26');
 
 select seq, case when ok then 'PASS' else 'FAIL' end as result, name, detail
 from results order by seq;
@@ -210,4 +394,6 @@ $$;
 
 delete from auth.users where id in (
   '61000000-0000-4000-8000-000000000001',
-  '61000000-0000-4000-8000-000000000002');
+  '61000000-0000-4000-8000-000000000002',
+  '61000000-0000-4000-8000-000000000003',
+  '61000000-0000-4000-8000-000000000004');

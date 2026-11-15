@@ -243,8 +243,13 @@ enum CSVExporter {
         let zone = calculator.payrollTimeZone
         let periodField = "\(isoDate(period.start, in: zone)) to \(isoDate(period.end, in: zone))"
 
+        // The engine's own work day when it valued the shift: it reads the
+        // day in the payroll zone in effect FOR that shift, which the latest
+        // zone is not after a payroll zone change.
+        let dateField = valuation.map(\.workDay.iso) ?? isoDate(day, in: zone)
+
         var fields = [
-            isoDate(day, in: zone),
+            dateField,
             shiftField,
             dollars(cashCents),
             dollars(creditCents),

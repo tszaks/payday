@@ -26,7 +26,9 @@ struct PaydayRemoteRepository {
     private let batchSize = 500
     private let tipColumns = "id,user_id,shift_id,work_date,amount_cents,kind,note,recorded_at,is_double,hours_worked,tip_out_cents,sales_cents,shift_period,clock_in,clock_out,server_count,receipt_metrics,client_updated_at,deleted_at,updated_at"
     private let paycheckColumns = "id,user_id,period_start,period_end,paid_tips_cents,note,hourly_rate_cents,owed_tips_cents,gross_pay_cents,net_pay_cents,regular_wages_cents,overtime_wages_cents,gratuity_cents,taxes_cents,job_name,client_updated_at,deleted_at,updated_at"
-    private let settingsColumns = "user_id,first_name,base_hourly_wage_cents,pay_frequency,anchor_period_end,pay_delay_days,first_weekday,smart_nudge_enabled,payday_reminder_enabled,card_tips_paid_at_close,move_ledger,client_updated_at,updated_at"
+    /// Every column `RemoteUserSettings` decodes. A column missing here is
+    /// never sent by the server, so its field silently decodes as nil.
+    static let settingsColumns = "user_id,first_name,base_hourly_wage_cents,pay_frequency,anchor_period_end,pay_delay_days,first_weekday,smart_nudge_enabled,payday_reminder_enabled,card_tips_paid_at_close,move_ledger,compensation_policies,client_updated_at,updated_at"
     private let shiftColumns = "id,user_id,work_date,shift_period,cash_tips_cents,credit_tips_cents,tip_out_cents,sales_cents,hours_worked,clock_in,clock_out,server_count,tip_share_in_cents,role_name,job_name,receipt_metrics,note,recorded_at,client_updated_at,source,legacy_entry_ids,native_modified_at,deleted_at,deleted_reason,gratuity_fees_cents,non_wage_earnings_cents,version,updated_at"
 
     func importTips(_ rows: [RemoteTipEntry]) async throws {
@@ -96,7 +98,7 @@ struct PaydayRemoteRepository {
         let rows = try await fetchAllRows(userID: userID)
         let settings: RemoteUserSettings = try await client
             .from("user_settings")
-            .select(settingsColumns)
+            .select(Self.settingsColumns)
             .eq("user_id", value: userID)
             .single()
             .execute()
@@ -491,7 +493,7 @@ struct PaydayRemoteRepository {
     private func fetchSettings(userID: UUID, updatedAfter: String?) async throws -> RemoteUserSettings? {
         var query = client
             .from("user_settings")
-            .select(settingsColumns)
+            .select(Self.settingsColumns)
             .eq("user_id", value: userID)
         if let updatedAfter {
             query = query.gt("updated_at", value: updatedAfter)
@@ -1625,7 +1627,9 @@ final class PaydaySyncService {
     ///    forces exactly one write, with the clock left where it was.
     ///
     /// Leaving the clock alone is what keeps that forced write recoverable
-    /// rather than destructive: it does not win a future conflict, and a
+    /// rather than destructive: it does not win a future conflict. A device
+    /// holding real policies that reads those defaults back keeps its own and
+    /// sets the same flag to send them back (see `apply`), and a
     /// device with a genuinely newer clock re-uploads on its next pass,
     /// because its own checkpoint will then disagree with the value this
     /// write left on the server.
@@ -1649,28 +1653,16 @@ final class PaydaySyncService {
         policyStore: PolicyStore,
         force: Bool = false
     ) {
-        guard let timestamp = PaydayRemoteDate.parseInstant(settings.clientUpdatedAt),
-              force || PaydaySettingsSyncClock.modifiedAt < timestamp
-        else { return }
+        guard let timestamp = PaydayRemoteDate.parseInstant(settings.clientUpdatedAt) else { return }
+        // Read before the writes below: each store setter touches the clock.
+        let remoteIsNewer = PaydaySettingsSyncClock.modifiedAt < timestamp
+        guard force || remoteIsNewer else { return }
         preferencesStore.firstName = settings.firstName
         preferencesStore.baseHourlyWageCents = settings.baseHourlyWageCents
         preferencesStore.isSmartNudgeEnabled = settings.smartNudgeEnabled
         preferencesStore.isPaydayReminderEnabled = settings.paydayReminderEnabled
         if let cardTipsPaidAtClose = settings.cardTipsPaidAtClose {
             preferencesStore.isCardTipsPaidAtClose = cardTipsPaidAtClose
-        }
-        if let frequencyRaw = settings.payFrequency,
-           let frequency = PayFrequency(rawValue: frequencyRaw),
-           let anchorRaw = settings.anchorPeriodEnd,
-           let anchor = PaydayRemoteDate.parseDay(anchorRaw) {
-            scheduleStore.schedule = PaySchedule(
-                frequency: frequency,
-                anchorPeriodEnd: anchor,
-                payDelayDays: settings.payDelayDays,
-                firstWeekday: settings.firstWeekday
-            )
-        } else {
-            scheduleStore.schedule = nil
         }
         moveLedgerStore.replaceFromSupabase(settings.moveLedger.compactMapValues(PaydayRemoteDate.parseInstant))
         // Compensation policies are the one setting this device must NOT
@@ -1684,7 +1676,39 @@ final class PaydaySyncService {
         // is indistinguishable from a freshly migrated device that has not
         // uploaded yet, so both nil and empty leave the local copy alone.
         if let remotePolicies = settings.compensationPolicies, !remotePolicies.isEmpty {
-            policyStore.replaceFromSupabase(remotePolicies)
+            // Untouched defaults must not replace policies a person built.
+            // A real edit on another phone (a raise, a wage turned off)
+            // advances its settings clock, so that row is strictly newer and
+            // wins here as every other setting does. An adoption upload
+            // leaves the clock where it was, so a row that holds only
+            // adoption defaults at a clock no newer than this phone's is
+            // another phone's first launch, not a decision: this phone keeps
+            // its real policies and uploads them on its next pass, which
+            // repairs the server copy.
+            if remoteIsNewer
+                || !remotePolicies.isAdoptionDefaultsOnly
+                || policyStore.policies.isAdoptionDefaultsOnly {
+                policyStore.replaceFromSupabase(remotePolicies)
+            } else {
+                policyStore.requestPolicyUpload()
+            }
+        }
+        // After the policies, because they hold the payroll zone and the
+        // anchor is a civil day in that zone: read with the phone's calendar
+        // it would be a different instant on a phone in another zone, and
+        // every period would move with it.
+        if let frequencyRaw = settings.payFrequency,
+           let frequency = PayFrequency(rawValue: frequencyRaw),
+           let anchorRaw = settings.anchorPeriodEnd,
+           let anchor = PayScheduleAnchor.stored(wireDay: anchorRaw, payrollTimeZone: policyStore.payrollTimeZone) {
+            scheduleStore.schedule = PaySchedule(
+                frequency: frequency,
+                anchorPeriodEnd: anchor,
+                payDelayDays: settings.payDelayDays,
+                firstWeekday: settings.firstWeekday
+            )
+        } else {
+            scheduleStore.schedule = nil
         }
         PaydaySettingsSyncClock.acceptRemoteTimestamp(timestamp)
     }

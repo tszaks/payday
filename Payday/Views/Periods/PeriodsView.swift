@@ -56,7 +56,7 @@ struct PeriodsPageFacts: SnapshotFacts {
 
     // MARK: Money, from the engine
 
-    /// `snapshot.yearToDate(year:)`. The old figure summed
+    /// `snapshot.yearToDate(year:asOf:)`, through today. The old figure summed
     /// `StatsEngine.nightlyTotals` (which is `nonWageEarnings`) and added
     /// `PeriodIncome.wages` on top, with the year filter taken in
     /// `Calendar.current` rather than the frozen payroll zone.
@@ -126,7 +126,10 @@ struct PeriodsPageFacts: SnapshotFacts {
 
         let currentYear = calendar.component(.year, from: now)
         year = currentYear
-        let yearResult = snapshot?.yearToDate(year: currentYear, job: job)
+        // To date means to today: the snapshot itself is built with no cutoff,
+        // so a shift logged ahead for a later day would otherwise count now.
+        let yearResult = snapshot?.yearToDate(
+            year: currentYear, asOf: CivilDay(now, in: payrollTimeZone), job: job)
         yearToDate = yearResult.map(EarningsFigure.earnedIncome) ?? .unavailable()
         hasYearToDate = (yearResult?.completeness.totalShifts ?? 0) > 0
         yearToDateShiftCountText = CompletenessCopy.shiftCount(yearResult?.completeness.totalShifts ?? 0)

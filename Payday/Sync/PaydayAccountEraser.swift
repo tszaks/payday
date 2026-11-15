@@ -1,5 +1,6 @@
 import Foundation
 import SwiftData
+import UserNotifications
 
 /// Wipes everything Payday keeps on this device.
 ///
@@ -96,6 +97,24 @@ enum PaydayAccountEraser {
         // the deleted account's sign-out and lock policy. The registration
         // itself is cleared by PaydaySyncState.forget in the caller.
         PaydayAuthorizationState.reset()
+
+        // A pending alert would still fire for the deleted account, and a
+        // delivered one keeps its figure in Notification Center. The payday
+        // identifiers carry each job's id, so they are found by prefix, the
+        // way `PaydayPushScheduler` clears its own.
+        let center = UNUserNotificationCenter.current()
+        center.removePendingNotificationRequests(withIdentifiers: [SmartNudgeScheduler.notificationIdentifier])
+        center.removeDeliveredNotifications(withIdentifiers: [SmartNudgeScheduler.notificationIdentifier])
+        Task {
+            let pending = await center.pendingNotificationRequests()
+                .map(\.identifier)
+                .filter(PaydayPushScheduler.isPaydayIdentifier)
+            center.removePendingNotificationRequests(withIdentifiers: pending)
+            let delivered = await center.deliveredNotifications()
+                .map(\.request.identifier)
+                .filter(PaydayPushScheduler.isPaydayIdentifier)
+            center.removeDeliveredNotifications(withIdentifiers: delivered)
+        }
 
         // Nothing to clear here for the shift cache: every durable fact about
         // it lives in the sync checkpoint, and this function's one caller

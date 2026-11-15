@@ -606,6 +606,13 @@ final class PolicyStore {
         defaults.removeObject(forKey: Self.awaitingUploadKey)
     }
 
+    /// The server holds something other than these policies and they must
+    /// win: the next sync uploads them. Like an adoption, this does not
+    /// touch the settings clock (see `PaydaySyncService.settingsNeedUpload`).
+    func requestPolicyUpload() {
+        defaults.set(true, forKey: Self.awaitingUploadKey)
+    }
+
     // MARK: Persistence
 
     /// Posts `didChange` on the main thread. Mirrors

@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import OSLog
 
 struct RemoteTipEntry: Codable, Equatable, Sendable {
     let id: UUID
@@ -346,7 +347,7 @@ struct RemoteUserSettings: Codable, Sendable {
     let clientUpdatedAt: String
     let serverUpdatedAt: String?
 
-    enum CodingKeys: String, CodingKey {
+    enum CodingKeys: String, CodingKey, CaseIterable {
         case userID = "user_id"
         case firstName = "first_name"
         case baseHourlyWageCents = "base_hourly_wage_cents"
@@ -363,6 +364,41 @@ struct RemoteUserSettings: Codable, Sendable {
         case serverUpdatedAt = "updated_at"
     }
 
+    private static let logger = Logger(subsystem: "com.szakacsmedia.payday", category: "SupabaseSync")
+
+    /// Written out only so `compensation_policies` can fail on its own. No
+    /// shipped build has read that column back, so a stored value is not
+    /// proven to decode; one that does not reads as nil, which leaves this
+    /// device's policies alone, rather than failing the whole row and with
+    /// it every sync pass. Every other field decodes as the synthesized
+    /// decoder would.
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        userID = try container.decode(UUID.self, forKey: .userID)
+        firstName = try container.decodeIfPresent(String.self, forKey: .firstName)
+        baseHourlyWageCents = try container.decodeIfPresent(Int.self, forKey: .baseHourlyWageCents)
+        payFrequency = try container.decodeIfPresent(String.self, forKey: .payFrequency)
+        anchorPeriodEnd = try container.decodeIfPresent(String.self, forKey: .anchorPeriodEnd)
+        payDelayDays = try container.decodeIfPresent(Int.self, forKey: .payDelayDays)
+        firstWeekday = try container.decodeIfPresent(Int.self, forKey: .firstWeekday)
+        smartNudgeEnabled = try container.decode(Bool.self, forKey: .smartNudgeEnabled)
+        paydayReminderEnabled = try container.decode(Bool.self, forKey: .paydayReminderEnabled)
+        moveLedger = try container.decode([String: String].self, forKey: .moveLedger)
+        cardTipsPaidAtClose = try container.decodeIfPresent(Bool.self, forKey: .cardTipsPaidAtClose)
+        do {
+            compensationPolicies = try container.decodeIfPresent(
+                CompensationPolicies.self, forKey: .compensationPolicies)
+        } catch {
+            // The type only: the payload is a person's pay history.
+            Self.logger.error(
+                "Settings compensation_policies did not decode; local policies kept. type=\(String(describing: type(of: error)), privacy: .public)"
+            )
+            compensationPolicies = nil
+        }
+        clientUpdatedAt = try container.decode(String.self, forKey: .clientUpdatedAt)
+        serverUpdatedAt = try container.decodeIfPresent(String.self, forKey: .serverUpdatedAt)
+    }
+
     @MainActor
     init(
         userID: UUID,
@@ -376,7 +412,12 @@ struct RemoteUserSettings: Codable, Sendable {
         self.firstName = preferencesStore.firstName
         self.baseHourlyWageCents = preferencesStore.baseHourlyWageCents
         self.payFrequency = schedule?.frequency.rawValue
-        self.anchorPeriodEnd = schedule.map { PaydayRemoteDate.day($0.anchorPeriodEnd) }
+        // The anchor is a midnight in the payroll zone, so that is the zone
+        // that names its day; the phone's calendar would name the day before
+        // on a phone west of it.
+        self.anchorPeriodEnd = schedule.map {
+            PayScheduleAnchor.wireDay(stored: $0.anchorPeriodEnd, payrollTimeZone: policyStore.payrollTimeZone)
+        }
         self.payDelayDays = schedule?.payDelayDays
         self.firstWeekday = schedule?.firstWeekday
         self.smartNudgeEnabled = preferencesStore.isSmartNudgeEnabled

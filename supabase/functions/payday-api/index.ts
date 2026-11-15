@@ -1435,12 +1435,12 @@ async function summary(
 /**
  * The engine's own answer for the range, read from the uploaded snapshot.
  *
- * ADDITIVE ON PURPOSE. `shifts` and `paychecks` above are unchanged, so no
- * existing consumer breaks. They are also still computed by
- * `payday_agent_summary`, which has NO WAGE CONCEPT -- it answers "how much
- * this period" with tips only, which is why the app and the API disagree
- * today by construction. This field is how a caller gets the figure the
- * Dashboard shows. PR 8 deletes the other one.
+ * ADDITIVE ON PURPOSE. `shifts` and `paychecks` above keep their keys, so no
+ * existing consumer breaks. They are computed by `payday_agent_summary`,
+ * which has NO WAGE CONCEPT -- `shifts` sums the stored tip-side figures of
+ * the rows `/v1/shifts` lists, which is why it and the app disagree by
+ * construction. This field is how a caller gets the figure the Dashboard
+ * shows.
  *
  * NO MONEY MATH HERE, and the distinction is exact: the server sums
  * precomputed per-day integers over the requested range. It applies no
@@ -2469,7 +2469,7 @@ const tools = [
   {
     name: "get_summary",
     description:
-      "Return Payday earnings and paycheck totals for an optional date range.",
+      "Return Payday totals for an optional inclusive date range. shifts: the stored tip-side totals of the shifts list_shifts returns, by work_date, no wages (count, tip_entry_count, cash_voluntary_tips_cents, credit_voluntary_tips_cents, gratuity_cents, tip_share_in_cents, gross_tip_earnings_cents, tip_out_cents, net_tip_earnings_cents, sales_cents, hours_worked). paychecks: paycheck totals by period_end. earnings: the wage-inclusive figure the app shows.",
     inputSchema: {
       type: "object",
       properties: dateRangeProperties,
@@ -3029,6 +3029,8 @@ function openAPISpec(origin: string): JsonObject {
         get: {
           security,
           summary: "Get earnings summary",
+          description:
+            "Totals for an optional inclusive date range. `shifts` sums the stored tip-side figures of the shifts `/v1/shifts` lists, by `work_date`, with no wages: `count`, `tip_entry_count` (legacy rows those shifts were converted from), `cash_voluntary_tips_cents`, `credit_voluntary_tips_cents`, `gratuity_cents`, `tip_share_in_cents`, `gross_tip_earnings_cents` (net plus tip-out), `tip_out_cents`, `net_tip_earnings_cents`, `sales_cents`, `hours_worked`. `paychecks` sums paycheck records by `period_end`. `earnings` is the wage-inclusive figure the app shows.",
           parameters: [{
             name: "start_date",
             in: "query",

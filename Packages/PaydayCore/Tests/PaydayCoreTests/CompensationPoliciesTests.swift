@@ -205,6 +205,62 @@ struct CompensationPoliciesTests {
         #expect(confirmedRun.completeness.state == .complete)
     }
 
+    // MARK: Adoption defaults
+
+    @Test("Nothing, or only what the migrations adopt, is adoption defaults")
+    func adoptionOutputsAreDefaultsOnly() {
+        let zone = TimeZone(identifier: "America/Chicago")!
+        let calendar = PolicyMigration.frozenCalendarPolicy(workweekStartWeekday: 1, payrollTimeZone: zone)
+        #expect(CompensationPolicies.empty.isAdoptionDefaultsOnly)
+        // No legacy wage: the calendar alone.
+        #expect(CompensationPolicies(calendars: [calendar]).isAdoptionDefaultsOnly)
+        // A legacy wage, with and without shifts to date it from.
+        for earliest in [Self.monday, nil] {
+            let rate = PolicyMigration.assumedRatePolicy(hourlyRateCents: 1_750, earliestShiftDay: earliest)
+            #expect(CompensationPolicies(rates: [rate], calendars: [calendar]).isAdoptionDefaultsOnly)
+        }
+    }
+
+    @Test("Anything a person authored is not adoption defaults")
+    func authoredPoliciesAreNotDefaultsOnly() {
+        let zone = TimeZone(identifier: "America/Chicago")!
+        let calendar = PolicyMigration.frozenCalendarPolicy(workweekStartWeekday: 1, payrollTimeZone: zone)
+        let assumed = PolicyMigration.assumedRatePolicy(hourlyRateCents: 1_750, earliestShiftDay: nil)
+        func with(_ change: (inout PayrollCalendarPolicy) -> Void) -> CompensationPolicies {
+            var changed = calendar
+            change(&changed)
+            return CompensationPolicies(rates: [assumed], calendars: [changed])
+        }
+        let authored: [(String, CompensationPolicies)] = [
+            ("a confirmed rate", CompensationPolicies(
+                rates: [Self.rate(1_750, from: .distantPast)], calendars: [calendar])),
+            ("a role rate", CompensationPolicies(rates: [PayRatePolicy(
+                id: UUID(), effectiveFrom: .distantPast, hourlyRateCents: 900,
+                provenance: .assumedFromLegacySetting, roleName: "Bar")], calendars: [calendar])),
+            ("a job-tagged rate", CompensationPolicies(rates: [PayRatePolicy(
+                id: UUID(), effectiveFrom: .distantPast, hourlyRateCents: 900,
+                provenance: .assumedFromLegacySetting, jobName: "Cafe")], calendars: [calendar])),
+            ("two rates", CompensationPolicies(
+                rates: [assumed, PolicyMigration.assumedRatePolicy(hourlyRateCents: 1_750, earliestShiftDay: Self.monday)],
+                calendars: [calendar])),
+            ("a job", CompensationPolicies(rates: [assumed], calendars: [calendar], jobs: [
+                JobPolicy(id: UUID(), name: "Bistro", schedule: nil, isPrimary: true),
+                JobPolicy(id: UUID(), name: "Cafe", schedule: nil, isPrimary: false),
+            ])),
+            ("two calendars", CompensationPolicies(rates: [assumed], calendars: [
+                calendar, PolicyMigration.frozenCalendarPolicy(workweekStartWeekday: 2, payrollTimeZone: zone),
+            ])),
+            ("a later effectiveFrom", with { $0.effectiveFrom = Self.monday }),
+            ("a job-tagged calendar", with { $0.jobName = "Cafe" }),
+            ("daily overtime", with { $0.dailyOvertimeThresholdMinutes = 480 }),
+            ("a changed threshold", with { $0.overtimeThresholdMinutes = 2_280 }),
+            ("a changed multiplier", with { $0.overtimeMultiplierHundredths = 200 }),
+        ]
+        for (label, policies) in authored {
+            #expect(!policies.isAdoptionDefaultsOnly, "\(label) read as adoption defaults")
+        }
+    }
+
     // MARK: Boundary snapping
 
     @Test("A chosen date snaps forward to the next workweek start under the previous policy")

@@ -44,6 +44,32 @@ public struct CompensationPolicies: Hashable, Codable, Sendable {
     /// job list and nothing else is still a state worth adopting from sync.
     public var isEmpty: Bool { rates.isEmpty && calendars.isEmpty && jobs.isEmpty }
 
+    /// Nothing a person authored: at most the frozen calendar and the one
+    /// assumed rate that the two `PolicyMigration` adoptions create, or
+    /// nothing at all. A confirmed rate, a second rate, a role or job rate, a
+    /// job, a second or later-starting calendar, or any changed overtime rule
+    /// is authored.
+    ///
+    /// Sync needs the difference. An adoption does not move the settings
+    /// clock, so a phone can upload its untouched defaults without a newer
+    /// clock, and another phone holding real rate history must not take
+    /// those defaults in place of its own.
+    public var isAdoptionDefaultsOnly: Bool {
+        jobs.isEmpty
+            && rates.count <= 1
+            && rates.allSatisfy {
+                $0.provenance == .assumedFromLegacySetting && $0.roleName == nil && $0.jobName == nil
+            }
+            && calendars.count <= 1
+            && calendars.allSatisfy {
+                $0.effectiveFrom == .distantPast
+                    && $0.jobName == nil
+                    && $0.dailyOvertimeThresholdMinutes == nil
+                    && $0.overtimeThresholdMinutes == 2400
+                    && $0.overtimeMultiplierHundredths == 150
+            }
+    }
+
     private enum CodingKeys: String, CodingKey { case version, rates, calendars, jobs }
 
     /// A payload with no `version` is read as version 1 (the shape shipped

@@ -40,8 +40,9 @@ struct SettingsView: View {
 
     init(schedule: PaySchedule) {
         _frequency = State(initialValue: schedule.frequency)
-        _periodEndDate = State(initialValue: schedule.anchorPeriodEnd)
-        _mostRecentPayday = State(initialValue: Calendar.current.date(byAdding: .day, value: schedule.resolvedPayDelayDays, to: schedule.anchorPeriodEnd) ?? schedule.anchorPeriodEnd)
+        let periodEnd = PayScheduleAnchor.shown(stored: schedule.anchorPeriodEnd, payrollTimeZone: PolicyStore.storedPayrollTimeZone())
+        _periodEndDate = State(initialValue: periodEnd)
+        _mostRecentPayday = State(initialValue: Calendar.current.date(byAdding: .day, value: schedule.resolvedPayDelayDays, to: periodEnd) ?? periodEnd)
         _firstWeekday = State(initialValue: schedule.resolvedFirstWeekday)
         _firstName = State(initialValue: "")
     }
@@ -276,12 +277,14 @@ struct SettingsView: View {
 
         scheduleStore.schedule = PaySchedule(
             frequency: frequency,
-            anchorPeriodEnd: normalizedPeriodEnd,
+            anchorPeriodEnd: PayScheduleAnchor.stored(picked: normalizedPeriodEnd, payrollTimeZone: policyStore.payrollTimeZone),
             payDelayDays: delayDays,
             firstWeekday: firstWeekday
         )
-        // Period boundaries move the widget's numbers too.
+        // Period boundaries move the widget's numbers too, and the payday
+        // alert's date.
         PaydayWidgetRefresh.request()
+        PaydayPushScheduler.reschedule(preferencesStore: preferencesStore, schedule: scheduleStore.schedule, shiftRecords: shiftRecords, paycheckRecords: paycheckRecords)
     }
 
     private var appearanceBinding: Binding<AppAppearance> {

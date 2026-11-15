@@ -235,6 +235,10 @@ enum PaydayPushScheduler {
     /// over every shift. With two or more, each job gets its own pair on its
     /// own calendar, over its own shifts and checks: the primary keeps
     /// `payday-moment` / `payday-stub-nudge`, any other job adds `-<jobID>`.
+    ///
+    /// With no primary schedule there is no payday to announce, so the
+    /// primary and every job on "same as primary" get nothing. Only a job
+    /// with a schedule of its own keeps its pair.
     nonisolated static func pendingRequests(
         now: Date,
         policies: CompensationPolicies,
@@ -244,14 +248,15 @@ enum PaydayPushScheduler {
         isReminderEnabled: Bool,
         calendar: Calendar = .current
     ) -> [PendingRequest] {
-        struct Lane { let tag: String?; let scope: JobScope; let suffix: String }
+        struct Lane { let tag: String?; let scope: JobScope; let suffix: String; let hasOwnSchedule: Bool }
         let lanes: [Lane] = policies.jobs.count < 2
-            ? [Lane(tag: nil, scope: .all, suffix: "")]
+            ? [Lane(tag: nil, scope: .all, suffix: "", hasOwnSchedule: false)]
             : policies.jobs.map { job in
-                Lane(tag: job.tag, scope: .job(job.tag), suffix: job.isPrimary ? "" : "-\(job.id.uuidString)")
+                Lane(tag: job.tag, scope: .job(job.tag), suffix: job.isPrimary ? "" : "-\(job.id.uuidString)",
+                     hasOwnSchedule: !job.isPrimary && job.schedule != nil)
             }
         var requests: [PendingRequest] = []
-        for lane in lanes {
+        for lane in lanes where primarySchedule != nil || lane.hasOwnSchedule {
             let calculator = PolicyStore.calculator(forJob: lane.tag, policies: policies, primarySchedule: primarySchedule)
             let zone = calculator.payrollTimeZone
             let checks = paycheckRecords.filter { lane.scope.includes($0.jobName) }
@@ -295,6 +300,8 @@ enum PaydayPushScheduler {
     ///   - payrollTimeZone: the FROZEN payroll zone
     ///     (`policies.payrollTimeZone`), which is the zone the shifts are
     ///     grouped in and the zone the period boundaries were laid out in.
+    ///   - calendar: the phone's calendar. The 9 AM is read in its zone, on
+    ///     the payroll zone's civil payday.
     nonisolated static func decision(
         now: Date,
         calculator: PayPeriodCalculator,
@@ -372,11 +379,12 @@ enum PaydayPushScheduler {
         calendar: Calendar,
         qualifies: (PayPeriod) -> Bool = { _ in true }
     ) -> (PayPeriod, Date)? {
-        var cal = calendar
-        cal.timeZone = .current
+        // The DAY is the payroll zone's civil payday; the HOUR is the phone's,
+        // because the alert is a wall-clock reminder for the person holding it.
+        let zone = calculator.payrollTimeZone
         func moment(_ period: PayPeriod) -> Date? {
-            guard let day = cal.date(byAdding: .day, value: offsetDays, to: calculator.payDate(for: period)) else { return nil }
-            return cal.date(bySettingHour: fireHour, minute: 0, second: 0, of: day)
+            let day = CivilDay(calculator.payDate(for: period), in: zone).adding(days: offsetDays)
+            return calendar.date(bySettingHour: fireHour, minute: 0, second: 0, of: day.date(in: calendar.timeZone))
         }
 
         let current = calculator.period(containing: now)
@@ -388,7 +396,8 @@ enum PaydayPushScheduler {
 
         return newestFirst.reversed().first { period, _ in
             qualifies(period) && !paycheckRecords.contains {
-                cal.isDate($0.periodStart, inSameDayAs: period.start) && cal.isDate($0.periodEnd, inSameDayAs: period.end)
+                CivilDay($0.periodStart, in: zone) == CivilDay(period.start, in: zone)
+                    && CivilDay($0.periodEnd, in: zone) == CivilDay(period.end, in: zone)
             }
         }
     }

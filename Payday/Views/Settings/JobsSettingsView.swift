@@ -83,6 +83,7 @@ struct JobsSettingsView: View {
                     jobID: job.id, to: renameText, policyStore: policyStore,
                     shifts: shiftRecords, paychecks: paycheckRecords, in: modelContext) }
             }
+            .disabled(!Self.renameIsAllowed(renameText, for: job, among: jobs))
         } message: { _ in
             Text("Every shift and paycheck with this job moves to the new name.")
         }
@@ -169,6 +170,16 @@ struct JobsSettingsView: View {
     static func nameIsTaken(_ name: String, existing: [String], primaryName: String?) -> Bool {
         guard let key = ShiftRole.key(name) else { return false }
         return existing.contains { ShiftRole.key($0) == key } || ShiftRole.key(primaryName) == key
+    }
+
+    /// Whether the rename alert's Save is on: a name that is not blank and
+    /// that no OTHER job has, by the add sheet's rule. The job's own name,
+    /// in any letter case, is allowed. `renamingJob` changes nothing for a
+    /// refused name, and an alert that closes on nothing looks like a lost
+    /// rename.
+    static func renameIsAllowed(_ name: String, for job: JobPolicy, among jobs: [JobPolicy]) -> Bool {
+        ShiftRole.normalized(name) != nil
+            && !nameIsTaken(name, existing: jobs.filter { $0.id != job.id }.map(\.name), primaryName: nil)
     }
 
     /// The Settings > Payroll row's trailing text: "1 job" until a second
@@ -277,8 +288,11 @@ struct JobDetailView: View {
 
     let jobID: UUID
 
+    /// The wage field's draft, written once when editing ends, by the same
+    /// rule as Settings > Payroll's "Hourly wage" row.
     @State private var wageDigitsText = ""
     @FocusState private var isWageFieldFocused: Bool
+    @State private var isConfirmingWageRemoval = false
     @State private var workweekStartWeekday = 1
     @State private var hasLoaded = false
 
@@ -290,6 +304,11 @@ struct JobDetailView: View {
     private var zone: TimeZone { policyStore.payrollTimeZone(forJob: tag) }
     private var today: CivilDay { CivilDay(.now, in: zone) }
     private var rateCents: Int? { policyStore.currentHourlyRateCents(forJob: tag) }
+    private var storedWageDigits: String { rateCents.map(String.init) ?? "" }
+    /// The draft while the field has focus, the stored wage otherwise.
+    private var wageRowCents: Int? {
+        isWageFieldFocused ? PayrollSettingsSection.rateCents(fromDigits: wageDigitsText) : rateCents
+    }
 
     var body: some View {
         Form {
@@ -299,8 +318,8 @@ struct JobDetailView: View {
                         .foregroundStyle(PaydayColor.textPrimary)
                     Spacer()
                     ZStack(alignment: .trailing) {
-                        Text(PayrollSettingsSection.rateDisplay(rateCents))
-                            .foregroundStyle(rateCents == nil ? PaydayColor.textSecondary : PaydayColor.textPrimary)
+                        Text(PayrollSettingsSection.rateDisplay(wageRowCents))
+                            .foregroundStyle(wageRowCents == nil ? PaydayColor.textSecondary : PaydayColor.textPrimary)
                             .monospacedDigit()
                             .accessibilityHidden(true)
                         TextField("", text: $wageDigitsText)
@@ -310,11 +329,22 @@ struct JobDetailView: View {
                             .opacity(0.01)
                             .frame(maxWidth: 90)
                             .accessibilityLabel("Hourly wage")
-                            .accessibilityValue(PayrollSettingsSection.rateDisplay(rateCents))
+                            .accessibilityValue(PayrollSettingsSection.rateDisplay(wageRowCents))
                     }
                 }
                 .contentShape(Rectangle())
                 .onTapGesture { isWageFieldFocused = true }
+                .onChange(of: isWageFieldFocused) { _, isFocused in
+                    // Each edit starts from the stored wage as it is now.
+                    if isFocused { wageDigitsText = storedWageDigits } else { commitWageDraft(canAsk: true) }
+                }
+                .onDisappear {
+                    if isWageFieldFocused { commitWageDraft(canAsk: false) }
+                }
+                .wageRemovalConfirmation(isPresented: $isConfirmingWageRemoval, storedCents: rateCents) {
+                    guard tag != nil else { return }
+                    policyStore.applyRateEdit(hourlyRateCents: nil, job: tag)
+                }
 
                 Picker("Workweek starts", selection: $workweekStartWeekday) {
                     ForEach(1...7, id: \.self) { day in
@@ -357,10 +387,6 @@ struct JobDetailView: View {
         .onChange(of: wageDigitsText) { _, newValue in
             let filtered = String(newValue.filter(\.isNumber).prefix(PayrollSettingsSection.maxWageDigits))
             if filtered != newValue { wageDigitsText = filtered }
-            let cents = PayrollSettingsSection.rateCents(fromDigits: filtered)
-            // Opening the screen writes the field; that is not an edit.
-            guard hasLoaded, tag != nil, cents != rateCents else { return }
-            policyStore.applyRateEdit(hourlyRateCents: cents, job: tag)
         }
         .onChange(of: workweekStartWeekday) { oldValue, newValue in
             guard hasLoaded, oldValue != newValue, tag != nil else { return }
@@ -416,8 +442,24 @@ struct JobDetailView: View {
         )
     }
 
+    /// The wage's one write, when the field loses focus or this screen goes
+    /// away with it focused (Back, or Settings closed). A screen that is
+    /// going away (`canAsk` false) cannot show the confirmation, so an
+    /// emptied field keeps the stored wage there, and the draft goes back
+    /// to it so a late focus change asks nothing.
+    private func commitWageDraft(canAsk: Bool) {
+        guard tag != nil else { return }
+        switch PayrollSettingsSection.wageCommit(draftDigits: wageDigitsText, storedCents: rateCents) {
+        case .nothing:
+            break
+        case .apply(let cents):
+            policyStore.applyRateEdit(hourlyRateCents: cents, job: tag)
+        case .confirmRemoval:
+            if canAsk { isConfirmingWageRemoval = true } else { wageDigitsText = storedWageDigits }
+        }
+    }
+
     private func load() {
-        wageDigitsText = rateCents.map(String.init) ?? ""
         workweekStartWeekday = jobPolicies.latestCalendar?.workweekStartWeekday
             ?? policyStore.policies.latestCalendar?.workweekStartWeekday
             ?? Calendar.current.firstWeekday
