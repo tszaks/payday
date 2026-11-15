@@ -198,7 +198,7 @@ struct PeriodDetailFacts: SnapshotFacts {
         // RECORDED against an unreadable dataset is not "no paycheck": say
         // which half is missing, in `EarningsUnavailable`'s own words, rather
         // than describing a check the person already entered as expected.
-        let payDateText = payDate.formatted(.dateTime.month(.abbreviated).day())
+        let payDateText = payDate.formatted(Date.FormatStyle(timeZone: payrollTimeZone).month(.abbreviated).day())
         if periodResult == nil {
             noPaycheckCaption = resolvedPaycheck == nil
                 ? "Expected on \(payDateText)"
@@ -291,7 +291,7 @@ struct PeriodDetailView: View {
         }
         .contentMargins(.bottom, 88, for: .scrollContent)
         .background(PaydayColor.background)
-        .navigationTitle(periodTitle)
+        .navigationTitle(Self.periodTitle(period: period, now: .now, in: jobCalculator.payrollTimeZone))
         .navigationBarTitleDisplayMode(.inline)
         .sheet(item: $sheetTarget) { target in
             LogTipSheet(target: target).paydayAppearance()
@@ -509,14 +509,14 @@ struct PeriodDetailView: View {
     /// into the nav title instead frees that space for the payday/rate line.
     /// The year only shows when the period crosses into one other than the
     /// current one — most periods live entirely inside a single year.
-    private var periodTitle: String {
-        let currentYear = Calendar.current.component(.year, from: Date())
-        let endYear = Calendar.current.component(.year, from: period.end)
-        let start = period.start.formatted(.dateTime.month(.abbreviated).day())
+    static func periodTitle(period: PayPeriod, now: Date, in zone: TimeZone) -> String {
+        let currentYear = CivilDay(now, in: zone).year
+        let endYear = CivilDay(period.end, in: zone).year
         if endYear != currentYear {
-            return "\(start) – \(period.end.formatted(.dateTime.month(.abbreviated).day().year()))"
+            let style = Date.FormatStyle(timeZone: zone).month(.abbreviated).day()
+            return "\(period.start.formatted(style)) – \(period.end.formatted(style.year()))"
         }
-        return "\(start) – \(period.end.formatted(.dateTime.month(.abbreviated).day()))"
+        return period.rangeText(in: zone)
     }
 }
 

@@ -162,8 +162,14 @@ struct DayDetailSheet: View {
     /// Always "Wed, Jul 15" — weekday abbrev, month, day. Never collapsed
     /// to "Today" / bare "Wednesday", which reads fine in a list of shifts but not as a
     /// sheet title naming one specific day.
-    private var titleText: String {
-        date.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day())
+    static func titleText(for date: Date, in zone: TimeZone) -> String {
+        date.formatted(Date.FormatStyle(timeZone: zone).weekday(.abbreviated).month(.abbreviated).day())
+    }
+
+    /// The date the Log Shift sheet opens on. Its picker shows the phone's
+    /// calendar, so the tapped payroll day moves across as the same civil day.
+    static func defaultLogDate(for date: Date, in zone: TimeZone) -> Date {
+        CivilDay(date, in: zone).date(in: .current)
     }
 
     var body: some View {
@@ -207,7 +213,7 @@ struct DayDetailSheet: View {
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
             .background(PaydayColor.background)
-            .navigationTitle(titleText)
+            .navigationTitle(Self.titleText(for: date, in: policyStore.payrollTimeZone))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -215,7 +221,7 @@ struct DayDetailSheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button {
-                        sheetTarget = .new(defaultDate: date)
+                        sheetTarget = .new(defaultDate: Self.defaultLogDate(for: date, in: policyStore.payrollTimeZone))
                     } label: {
                         Image(systemName: "plus")
                     }
