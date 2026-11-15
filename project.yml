@@ -138,9 +138,9 @@ targets:
       # widget, openingFailed is set, and the Lock Screen renders
       # "Couldn't load" while the app is perfectly healthy.
       - path: Payday/Models/ShiftRecord.swift
-      # The widget compiles ShiftDetails, which is generic over
-      # LegacyShiftRow, so the protocol has to be in this target too or that
-      # file no longer compiles here. ShiftProjection comes with it because
+      # The widget compiles StatsEngine, whose TipRecord.init(entry:) is
+      # generic over LegacyShiftRow, so the protocol has to be in this target
+      # too or that file no longer compiles here. ShiftProjection comes with it because
       # the widget reads shifts through the same projection the app does --
       # two surfaces resolving a shift differently is the whole class of bug
       # that sharing it removes.
@@ -194,12 +194,7 @@ targets:
       # compiles StatsEngine, so it needs it too or the build fails with
       # "cannot find 'NumberWords' in scope".
       - path: Payday/Utilities/NumberWords.swift
-      - path: Payday/Utilities/WageEstimate.swift
-      # WageEstimate and PeriodIncome are thin wrappers over
-      # CompensationLedger, and the bridge is how they reach it.
-      - path: Payday/Utilities/LegacyLedgerBridge.swift
       - path: Payday/Utilities/ShiftDays.swift
-      - path: Payday/Utilities/ShiftDetails.swift
       - path: Payday/Utilities/ShiftReceiptMetrics.swift
       - path: Payday/Utilities/AppGroup.swift
       # The widget renders in its own process and never traverses RootView,

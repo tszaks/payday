@@ -18,7 +18,7 @@ Log a shift in under ten seconds, see whether tonight was a good night, and know
 ## What it does
 
 - **Logs a shift fast.** Cash and credit tips, hours, and the rate you worked at. After you save, one line tells you how the night compared: "$34 above your Friday average."
-- **Tracks the pay period.** A pace line shows where you stand against last period and what the period is on track to total.
+- **Tracks the pay period.** A pace line shows where you stand against your usual pace at this point in a period.
 - **Predicts your paycheck.** Payday already knows your credit tips for the period, so it tells you what the tips line on your stub should read. Enter the real number and it checks the two.
 - **Keeps your records.** Best night, best weekday, best period, averages per shift, and your true hourly rate once tips are counted.
 - **Lives in the OS.** Home Screen and Lock Screen widgets, a Control Center control, a Live Activity while you are on shift, and Siri and Shortcuts actions for logging tips and asking for your period total.
@@ -55,7 +55,7 @@ Requirements: Xcode 26 or newer, iOS 26 SDK, and [XcodeGen](https://github.com/y
 brew install xcodegen
 
 # The Debug config reads a gitignored secrets file. An empty key is fine:
-# Insights falls back to its on-device summary.
+# the pay-stub scan then reads the stub on the device.
 echo 'OPENAI_API_KEY =' > Secrets.local.xcconfig
 
 xcodegen generate

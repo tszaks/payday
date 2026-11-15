@@ -1,4 +1,5 @@
 import Foundation
+import SwiftData
 import Testing
 @testable import Payday
 
@@ -63,17 +64,28 @@ struct ShiftReceiptMetricsTests {
     }
 
     @Test("the delete capture preserves receipt metrics")
-    func deleteCapturePreservesMetrics() {
-        let captured = ShiftCommands.DeletedShift(
-            id: UUID(), workDate: .now, shiftPeriod: .dinner,
-            cashTipsCents: 0, creditTipsCents: 2_400,
-            tipOutCents: nil, salesCents: nil, hoursWorked: nil,
-            clockIn: nil, clockOut: nil, serverCount: nil,
-            receiptMetrics: metrics, note: nil, recordedAt: nil,
-            source: .device, legacyEntryIDs: [], deletedAt: .now
+    @MainActor
+    func deleteCapturePreservesMetrics() throws {
+        // Delete and restore write the sync queues of whichever account the
+        // simulator has registered; this shift exists only in memory.
+        let savedAccount = SavedAccountRegistration()
+        defer { savedAccount.restore(forgetting: []) }
+        let container = try ModelContainer(
+            for: SharedModelContainer.schema,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+        )
+        let context = ModelContext(container)
+        context.autosaveEnabled = false
+        let record = try ShiftCommands.create(
+            in: context, workDate: .now, shiftPeriod: .dinner,
+            creditTipsCents: 2_400, receiptMetrics: metrics
         )
 
+        let captured = try ShiftCommands.delete(record, in: context)
         #expect(captured.receiptMetrics == metrics)
+
+        let restored = try ShiftCommands.restore(captured, in: context)
+        #expect(restored.receiptMetrics == metrics)
     }
 
     @Test("a partial rescan updates known values without erasing prior facts")

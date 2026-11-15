@@ -9,12 +9,16 @@ import Testing
 /// server's dataset and mine agreed" -- so every test here is about when
 /// that claim may be made and when it must be withdrawn, not about the
 /// number itself.
-@Suite("Dataset revision leg")
+@Suite("Dataset revision leg", .serialized)
 @MainActor
-struct DatasetRevisionLegTests {
+final class DatasetRevisionLegTests {
+    private let savedAccount = SavedAccountRegistration()
+    private var created: [UUID] = []
+    isolated deinit { savedAccount.restore(forgetting: created) }
 
     private func freshUser() -> UUID {
         let id = UUID()
+        created.append(id)
         PaydaySyncState.applySyncedDatasetRevision(nil, clean: false, for: id)
         return id
     }
@@ -116,6 +120,7 @@ struct DatasetRevisionLegTests {
             // Nothing registered in this run; register one so the real path
             // is still covered rather than silently skipped.
             let fresh = UUID()
+            created.append(fresh)
             guard PaydaySyncState.registerCurrentUser(fresh) else { return }
             await PaydaySyncService.applyDatasetRevisionLeg(userID: fresh, clean: true) { 3 }
             #expect(stored(fresh) == 3)

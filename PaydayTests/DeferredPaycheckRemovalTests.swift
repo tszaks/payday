@@ -8,13 +8,17 @@ import Testing
 /// expiry commits exactly once, and a kill before expiry commits nothing.
 @Suite("Deferred paycheck removal", .serialized)
 @MainActor
-struct DeferredPaycheckRemovalTests {
+final class DeferredPaycheckRemovalTests {
+    private let savedAccount = SavedAccountRegistration()
+    private var registered: [UUID] = []
+    isolated deinit { savedAccount.restore(forgetting: registered) }
 
     private func registeredAccount() -> UUID {
         if let existing = PaydaySyncState.registeredUserID {
             PaydaySyncState.forget(userID: existing)
         }
         let id = UUID()
+        registered.append(id)
         PaydaySyncState.forget(userID: id)
         _ = PaydaySyncState.registerCurrentUser(id)
         return id

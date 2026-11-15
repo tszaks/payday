@@ -42,8 +42,8 @@ enum ShiftBeliefLine {
         return ([dateLabel] + clauses).joined(separator: " · ")
     }
 
-    /// "Today" / "Yesterday" / "Jul 12" — the year is never shown, same
-    /// reasoning as ShiftDays.humanLabel: it's always this one.
+    /// "Today" / "Yesterday" / "Jul 12" — the year is never shown:
+    /// it's always this one.
     private static func dateLabel(for date: Date, calendar: Calendar, now: Date) -> String {
         if calendar.isDate(date, inSameDayAs: now) { return "Today" }
         if let yesterday = calendar.date(byAdding: .day, value: -1, to: now), calendar.isDate(date, inSameDayAs: yesterday) {

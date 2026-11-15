@@ -36,10 +36,19 @@ private func stub(
 /// names: credit tips with no tip-out give `auditableTipsLineCents` directly,
 /// and an all-valued `Completeness` is what makes the wage side auditable at
 /// all (`Expectation.hasAuditableWages`).
+/// The wage picture a test hands the audit: plain numbers, as the engine
+/// would report them for the period.
+private struct ComputedWages {
+    let regularCents: Int
+    let overtimeCents: Int
+    let hours: Double
+    let overtimeHours: Double
+}
+
 private func expectation(
     loggedCreditTipsCents: Int?,
     loggedGratuityCents: Int?,
-    computedWages: PeriodIncome.Wages?,
+    computedWages: ComputedWages?,
     computedOvertimeHours: Double?
 ) -> PaycheckReconciler.Expectation {
     // An overtime-hours figure with no wage cents behind it was reachable
@@ -83,7 +92,7 @@ private func findings(
     _ stub: PaycheckReconciler.Observation,
     loggedCreditTipsCents: Int? = nil,
     loggedGratuityCents: Int? = nil,
-    computedWages: PeriodIncome.Wages? = nil,
+    computedWages: ComputedWages? = nil,
     computedOvertimeHours: Double? = nil
 ) -> [PaycheckAudit.Finding] {
     PaycheckAudit.run(
@@ -310,7 +319,7 @@ struct PaycheckAuditGratuityVsLoggedTests {
 
 @Suite("PaycheckAudit wages-vs-computed")
 struct PaycheckAuditWagesVsComputedTests {
-    private let computed = PeriodIncome.Wages(regularCents: 40000, overtimeCents: 5000, hours: 45, overtimeHours: 5)
+    private let computed = ComputedWages(regularCents: 40000, overtimeCents: 5000, hours: 45, overtimeHours: 5)
 
     @Test("reconciles when stub wages exactly match the computed total")
     func exactMatchReconciles() {
@@ -410,7 +419,7 @@ struct PaycheckAuditOvertimeMissingTests {
 struct PaycheckAuditOrderingTests {
     @Test("findings come back in gross, net, tips, gratuity, wages, overtime order")
     func findingsAreOrdered() {
-        let computed = PeriodIncome.Wages(regularCents: 25000, overtimeCents: 0, hours: 45, overtimeHours: 5)
+        let computed = ComputedWages(regularCents: 25000, overtimeCents: 0, hours: 45, overtimeHours: 5)
         let result = findings(
             stub(tips: 10000, regular: 20000, gross: 40000, taxes: 5000, net: 30000),
             loggedCreditTipsCents: 9000,

@@ -138,31 +138,48 @@ struct UndoDeleteToastTests {
     /// Every field is set to a non-default value on purpose. A field left at
     /// its default would compare equal even if the capture dropped it, which
     /// is the same reason `ShiftCheckpointTests.fullyPopulated` exists.
+    ///
+    /// The field list is checked against the stored attributes SwiftData
+    /// itself reports for `ShiftRecord`, so an attribute added to the model
+    /// without a line here fails this test instead of being skipped by it.
     @Test("undo restores every stored field, not just the amounts")
     func undoRestoresEveryStoredField() throws {
         _ = registeredAccount()
         let context = try context()
 
-        var metrics = ShiftReceiptMetrics()
-        metrics.gratuityFeesCents = 2_500
-        metrics.netSalesCents = 88_000
-        metrics.guestCount = 41
-
-        let original = ShiftRecord(
-            workDate: Self.day,
-            shiftPeriod: .dinner,
-            cashTipsCents: 1_200,
-            creditTipsCents: 7_350,
-            tipOutCents: 1_100,
-            salesCents: 88_000,
-            hoursWorked: 6.5,
-            clockIn: Self.day.addingTimeInterval(43_200),
-            clockOut: Self.day.addingTimeInterval(66_600),
-            serverCount: 3,
-            receiptMetrics: metrics,
-            note: "double covered section 4",
-            recordedAt: Self.day.addingTimeInterval(3_600)
-        )
+        let id = UUID()
+        let sources: Set<UUID> = [UUID(), UUID()]
+        func populated() -> ShiftRecord {
+            var metrics = ShiftReceiptMetrics()
+            metrics.gratuityFeesCents = 2_500
+            metrics.netSalesCents = 88_000
+            metrics.guestCount = 41
+            return ShiftRecord(
+                id: id,
+                workDate: Self.day,
+                shiftPeriod: .dinner,
+                cashTipsCents: 1_200,
+                creditTipsCents: 7_350,
+                tipOutCents: 1_100,
+                salesCents: 88_000,
+                hoursWorked: 6.5,
+                clockIn: Self.day.addingTimeInterval(43_200),
+                clockOut: Self.day.addingTimeInterval(66_600),
+                serverCount: 3,
+                tipShareInCents: 1_800,
+                roleName: "Bar",
+                jobName: "Uptown",
+                receiptMetrics: metrics,
+                note: "double covered section 4",
+                recordedAt: Self.day.addingTimeInterval(3_600),
+                source: .migration,
+                legacyEntryIDs: sources
+            )
+        }
+        // A deleted model cannot be read back, so the expected values live on
+        // an identical record that never enters the store.
+        let expected = populated()
+        let original = populated()
         context.insert(original)
         try context.save()
 
@@ -172,24 +189,43 @@ struct UndoDeleteToastTests {
         state.undo(in: context)
 
         let restored = try #require(try context.fetch(FetchDescriptor<ShiftRecord>()).first)
-        #expect(restored.id == original.id)
-        #expect(restored.workDate == Self.day)
-        #expect(restored.cashTipsCents == 1_200)
-        #expect(restored.creditTipsCents == 7_350)
-        #expect(restored.note == "double covered section 4")
-        #expect(restored.recordedAt == Self.day.addingTimeInterval(3_600))
-        #expect(restored.hoursWorked == 6.5)
-        #expect(restored.tipOutCents == 1_100)
-        #expect(restored.salesCents == 88_000)
-        #expect(restored.shiftPeriod == .dinner)
-        #expect(restored.clockIn == Self.day.addingTimeInterval(43_200))
-        #expect(restored.clockOut == Self.day.addingTimeInterval(66_600))
-        #expect(restored.serverCount == 3)
-        // The money-bearing half of the receipt. Dropping this loses gratuity
-        // that the drawer, the period total and the paycheck all read.
-        #expect(restored.receiptMetrics?.gratuityFeesCents == 2_500)
-        #expect(restored.receiptMetrics?.netSalesCents == 88_000)
-        #expect(restored.receiptMetrics?.guestCount == 41)
+
+        // One line per stored attribute, by its SwiftData name.
+        let survives: [(String, (ShiftRecord, ShiftRecord) -> Bool)] = [
+            ("id", { $0.id == $1.id }),
+            ("workDate", { $0.workDate == $1.workDate }),
+            ("shiftPeriodRaw", { $0.shiftPeriod == $1.shiftPeriod }),
+            ("cashTipsCents", { $0.cashTipsCents == $1.cashTipsCents }),
+            ("creditTipsCents", { $0.creditTipsCents == $1.creditTipsCents }),
+            ("tipOutCents", { $0.tipOutCents == $1.tipOutCents }),
+            ("salesCents", { $0.salesCents == $1.salesCents }),
+            ("hoursWorked", { $0.hoursWorked == $1.hoursWorked }),
+            ("clockIn", { $0.clockIn == $1.clockIn }),
+            ("clockOut", { $0.clockOut == $1.clockOut }),
+            ("serverCount", { $0.serverCount == $1.serverCount }),
+            ("tipShareInCents", { $0.tipShareInCents == $1.tipShareInCents }),
+            ("roleName", { $0.roleName == $1.roleName }),
+            ("jobName", { $0.jobName == $1.jobName }),
+            // The money-bearing half of the receipt. Dropping this loses
+            // gratuity that the drawer, the period total and the paycheck read.
+            ("receiptMetricsJSON", { $0.receiptMetrics == $1.receiptMetrics }),
+            ("note", { $0.note == $1.note }),
+            ("recordedAt", { $0.recordedAt == $1.recordedAt }),
+            ("sourceRaw", { $0.source == $1.source }),
+            ("legacyEntryIDsRaw", { $0.legacyEntryIDs == $1.legacyEntryIDs })
+        ]
+        // The mutation clock is the one attribute a restore must NOT copy: a
+        // restore is a new write, and `ShiftRecord.modifiedAt` orders writes.
+        let notCopied: Set<String> = ["modifiedAt"]
+
+        let attributes = try #require(Schema([ShiftRecord.self]).entitiesByName["ShiftRecord"]).attributes
+        #expect(Set(survives.map(\.0)).union(notCopied) == Set(attributes.map(\.name)))
+
+        let defaults = ShiftRecord()
+        for (name, same) in survives {
+            #expect(!same(expected, defaults), "\(name) is at its default, so a dropped copy would go unseen")
+            #expect(same(restored, expected), "undo did not restore \(name)")
+        }
     }
 
     /// Undo with nothing pending must not clear another account's queue or

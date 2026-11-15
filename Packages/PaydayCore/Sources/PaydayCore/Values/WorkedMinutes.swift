@@ -21,9 +21,7 @@ public enum WorkedMinutes {
 
     /// The exact hours label every user-facing hours display uses: "6h 23m".
     /// Minutes are omitted only when they are exactly zero ("5h"), never
-    /// rounded away otherwise: a punch is literal. This is
-    /// `WageEstimate.hoursLabel` (the app helper) restated on minutes so the
-    /// two can never disagree once the app reads from the engine.
+    /// rounded away otherwise: a punch is literal.
     public static func hoursLabel(minutes totalMinutes: Int) -> String {
         let wholeHours = totalMinutes / 60
         let minutes = totalMinutes % 60

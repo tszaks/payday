@@ -2,7 +2,7 @@ import Combine
 import Foundation
 import SwiftUI
 
-/// When a screen that builds its own `LegacySnapshotBridge` snapshot has to
+/// When a screen that builds its own snapshot has to
 /// build the next one.
 ///
 /// ## Why this exists at all
@@ -17,8 +17,8 @@ import SwiftUI
 /// trigger of its own.
 ///
 /// Until PR 2 slice S7 lands, `earningsStore.snapshot` is empty on a real
-/// device and a wave-1 screen builds its own through `LegacySnapshotBridge`
-/// (see that type's header). MEASURED on the iPhone 17 Pro simulator,
+/// device and a wave-1 screen builds its own.
+/// MEASURED on the iPhone 17 Pro simulator,
 /// 2026-09-18: `LegacySnapshotBridge.snapshot(entries:)` costs **41.7 ms over
 /// 1,000 shifts, 113.2 ms over 3,000 and 307.4 ms over 10,000**, so it cannot
 /// run once per `body` evaluation — tapping the hero drawer would re-value
@@ -58,7 +58,7 @@ enum LegacySnapshotRevision {
 
 extension View {
     /// Bumps `revision` whenever anything `EarningsStore` rebuilds on fires,
-    /// so a screen holding a cached `LegacySnapshotBridge` snapshot knows the
+    /// so a screen holding a cached snapshot knows the
     /// cached one is stale.
     ///
     /// Replaces the `@State private var dataRevision` + single

@@ -467,7 +467,7 @@ struct LogTipSheet: View {
     /// rather than on a dictionary of zeros.
     ///
     /// Deliberately the same construction Dashboard's `valuedCents(in:)` uses,
-    /// over the same `LegacySnapshotBridge`-shaped dataset, because the two
+    /// over the same dataset, because the two
     /// have to produce the same comparison sentence for the same shift.
     private static func valuedCents(in snapshot: EarningsSnapshot?) -> [UUID: Int]? {
         guard let snapshot else { return nil }

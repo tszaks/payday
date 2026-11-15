@@ -72,8 +72,6 @@ struct ShiftProjectionTests {
         #expect(row.serverCount == 4)
         #expect(row.shiftPeriod == .dinner)
         #expect(row.receiptMetrics?.gratuityFeesCents == 1_200)
-        // 5000 voluntary + 1200 gratuity - 1000 tip-out.
-        #expect(row.netCents == 5_200)
     }
 
     /// A wage-only or gratuity-only shift is real, and the whole reason rule 1
@@ -183,17 +181,12 @@ struct ShiftProjectionTests {
         #expect(ids.count == 2)
     }
 
-    // MARK: - The projection carries the shift's own arithmetic
+    // MARK: - The projection carries the shift's own facts
 
-    /// The arithmetic the calendar depends on.
-    ///
-    /// For cash C, credit R, v2 gratuity G and tip-out T the shift nets
-    /// `C + R + G - T`, and the row-by-row `netCents` path must give
-    /// `(R + G - T) + C` — equal, with the tip-out subtracted exactly once.
-    /// The old two-row storage double-subtracted when a receipt payload was
-    /// duplicated onto both rows, which is what this fixture pins.
-    @Test("the projection's rows sum to the shift's net, tip-out subtracted once")
-    func projectionCarriesTheShiftsNet() {
+    /// The resolver reads one shift's tip-out, hours, period and gratuity off
+    /// its projected rows, the same as off the rows a legacy writer stored.
+    @Test("the resolver sees a projected shift's shift-level facts")
+    func resolverSeesTheProjectedShiftsFacts() {
         let workDay = Self.day(2026, 9, 9)
         let cash = 5_000, credit = 2_000, gratuity = 1_200, tipOut = 1_000
         let metrics = ShiftReceiptMetrics(earningsSchemaVersion: 2, gratuityFeesCents: gratuity)
@@ -210,11 +203,6 @@ struct ShiftProjectionTests {
         )
         let projected = ShiftProjection.rows(for: shift)
 
-        // The row-by-row path the calendar uses.
-        let projectedNet = projected.reduce(0) { $0 + $1.netCents }
-        #expect(projectedNet == cash + credit + gratuity - tipOut)
-
-        // And the resolver sees the shift-level facts.
         let details = ShiftDetails.resolve(from: projected)
         #expect(details.tipOutCents == tipOut)
         #expect(details.hoursWorked == 6.5)
@@ -222,10 +210,10 @@ struct ShiftProjectionTests {
         #expect(details.receiptMetrics?.gratuityFeesCents == gratuity)
     }
 
-    /// The cash-only variant of the same arithmetic, which is the shape the
-    /// naive suppression rule broke: suppress the credit row and the
-    /// shift-level fields have nowhere to live.
-    @Test("a cash-only shift still carries its own net and note")
+    /// The cash-only variant, which is the shape the naive suppression rule
+    /// broke: suppress the credit row and the shift-level fields have nowhere
+    /// to live.
+    @Test("a cash-only shift still carries its own note")
     func cashOnlyCarriesTheDetails() {
         let workDay = Self.day(2026, 9, 10)
         let metrics = ShiftReceiptMetrics(earningsSchemaVersion: 2, gratuityFeesCents: 1_200)
@@ -240,8 +228,6 @@ struct ShiftProjectionTests {
         )
 
         let projected = ShiftProjection.rows(for: shift)
-        let projectedNet = projected.reduce(0) { $0 + $1.netCents }
-        #expect(projectedNet == 5_000 + 1_200 - 1_000)
         #expect(projected.compactMap(\.note) == ["N"])
     }
 

@@ -7,7 +7,7 @@ import Sentry
 /// empty NOTHING starts: no SDK, no network, no disk. That is the whole
 /// mechanism by which Debug builds, unit tests and CI stay silent, and it
 /// needs no build flags to do it. `isConfigured` reads exactly like
-/// `InsightsService.isConfigured` does for the narration key.
+/// `PaycheckAIParser.isConfigured` does for the OpenAI key.
 ///
 /// A DSN is not a secret, which is worth stating because this repo treats the
 /// OpenAI key as one. A Sentry DSN is a write-only ingest key designed to be

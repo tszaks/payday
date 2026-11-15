@@ -51,12 +51,16 @@ struct ConversionBannerTests {
     /// The whole point. A pending conversion leaves the phase `.ready`, so
     /// every other leg of the sync keeps running.
     @Test("a pending conversion does not change the phase")
+    @MainActor
     func pendingConversionStaysReady() {
-        let phase = PaydayCloudState.Phase.ready(Self.report(pending: 12))
-        guard case .ready = phase else {
-            Issue.record("a pending conversion must leave the phase .ready")
-            return
-        }
+        #expect(PaydayCloudState.conversionBanner(for: .ready(Self.report(pending: 12)))
+            == PaydayConversionBanner(remainingGroupCount: 12))
+        #expect(PaydayCloudState.conversionBanner(for: .ready(Self.report(pending: 0))) == nil)
+        #expect(PaydayCloudState.conversionBanner(for: .ready(Self.report(pending: nil))) == nil)
+        #expect(PaydayCloudState.conversionBanner(for: .loading) == nil)
+        #expect(PaydayCloudState.conversionBanner(for: .signedOut) == nil)
+        #expect(PaydayCloudState.conversionBanner(for: .migrating) == nil)
+        #expect(PaydayCloudState.conversionBanner(for: .failed("offline")) == nil)
     }
 
     /// `0` means finished, so this is deliberately not `conversionPending != nil`.

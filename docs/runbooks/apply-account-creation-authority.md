@@ -1,7 +1,16 @@
 # Applying `20260920030000_stamp_authority_at_account_creation.sql`
 
-**Status: BLOCKED. DO NOT APPLY AS WRITTEN. The rollback does not exist on
-production.**
+**Status: APPLIED 2026-09-21 in its guarded form. This runbook is kept as a
+record.** `20260920030000` and `20260920040000` were pushed to production
+with `supabase db push --linked` (recorded in `docs/RELEASE_GATE.md`). The
+guard in `20260920030000` creates the `auth.users` trigger only where the
+migration role can also drop it. So the trigger exists only on a local
+cluster built by `scripts/db-test-cluster.sh`, which creates `auth.users`
+itself; it does not exist on production or in CI, and there
+`private.stamp_authority_for_new_account()` has no caller. New accounts get
+their authority on the read path instead (`20260920040000`, the
+`shift_migration_state` view). The flip branches and `ShiftWriter` named
+under "What this unblocks" were deleted in #137.
 
 ## 2026-09-20: the blocker, found at step 2 of this runbook
 

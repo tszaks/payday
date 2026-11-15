@@ -98,8 +98,28 @@ struct TipShareAndPayoutFactsTests {
         #expect(BreakdownRow.total(result).cents == 14_000)
 
         // No sales, no guest tips: the tip-percent tile has nothing to say.
-        let engine = StatsEngine(payrollTimeZone: Self.zone, records: StatsRecordAdapter.tipRecords(from: [record]))
-        #expect(engine.tipPercent(forNightAt: day) == nil)
+        // Five such shifts clear the Insights floor, so the grid is built.
+        let shifts = (5...9).map { date in
+            ShiftRecord(workDate: Self.at(2026, 10, date), shiftPeriod: .dinner,
+                        tipOutCents: 4_000, tipShareInCents: 18_000, recordedAt: Self.at(2026, 10, date))
+        }
+        let insights = try #require(
+            StatsEngine(payrollTimeZone: Self.zone, records: StatsRecordAdapter.tipRecords(from: shifts))
+                .insightsFacts(referenceDate: Self.at(2026, 10, 10))
+        )
+        #expect(!InsightsNumbersGrid.rows(for: insights, hourly: nil).joined().contains { $0.id == "tipPercent" })
+
+        // With sales logged the tile shows, and the share is not a guest tip.
+        let withSales = shifts.map { shift in
+            ShiftRecord(workDate: shift.workDate, shiftPeriod: .dinner, tipOutCents: 4_000,
+                        salesCents: 50_000, tipShareInCents: 18_000, recordedAt: shift.workDate)
+        }
+        let salesInsights = try #require(
+            StatsEngine(payrollTimeZone: Self.zone, records: StatsRecordAdapter.tipRecords(from: withSales))
+                .insightsFacts(referenceDate: Self.at(2026, 10, 10))
+        )
+        let tile = try #require(InsightsNumbersGrid.rows(for: salesInsights, hourly: nil).joined().first { $0.id == "tipPercent" })
+        #expect(tile.value == "0.0%")
     }
 
     @Test("no drawer row when nothing was received")

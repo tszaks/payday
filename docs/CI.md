@@ -160,7 +160,7 @@ suite; run `bash scripts/db-test-race.sh` (no argument) for that.
 
 ## Why the iOS job writes `Secrets.local.xcconfig`
 
-`project.yml` points the Debug configuration at `Secrets.local.xcconfig`, which is gitignored because it carries a local-only OpenAI key for Insights narration. On a clean checkout xcodegen fails with `Invalid config file "Secrets.local.xcconfig"`. The iOS job therefore writes a placeholder whose only line is `OPENAI_API_KEY =` before generating the project. That matches the committed Release config, so `InsightsService.isConfigured` is false on CI and the tests run the deterministic fallback path, never a live model call.
+`project.yml` points the Debug configuration at `Secrets.local.xcconfig`, which is gitignored because it carries a local-only OpenAI key for the pay stub reader. On a clean checkout xcodegen fails with `Invalid config file "Secrets.local.xcconfig"`. The iOS job therefore writes a placeholder whose only line is `OPENAI_API_KEY =` before generating the project. That matches the committed Release config, so `PaycheckAIParser.isConfigured` is false on CI and the tests never make a live model call.
 
 ## Wall-clock performance budgets are scaled on CI
 

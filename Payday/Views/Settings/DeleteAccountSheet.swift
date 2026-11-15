@@ -20,7 +20,6 @@ struct DeleteAccountSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
     @Environment(PayScheduleStore.self) private var scheduleStore
-    @Environment(InsightsStore.self) private var insightsStore
     @Environment(UserPreferencesStore.self) private var preferencesStore
     @Environment(MoveLedgerStore.self) private var moveLedgerStore
     @Environment(PolicyStore.self) private var policyStore
@@ -158,7 +157,6 @@ struct DeleteAccountSheet: View {
         let failure = await cloudState.deleteAccount(
             context: modelContext,
             scheduleStore: scheduleStore,
-            insightsStore: insightsStore,
             preferencesStore: preferencesStore,
             moveLedgerStore: moveLedgerStore,
             policyStore: policyStore

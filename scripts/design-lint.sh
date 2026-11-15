@@ -429,8 +429,6 @@ fi
 #      their only matches were comments that the rule strips. Two files that
 #      would otherwise have sat in an exemption list they never needed.
 MONEY_BOUNDARY_ALLOWLIST="
-Payday/Models/TipEntry.swift
-Payday/Models/LegacyShiftRow.swift
 Payday/Utilities/StatsEngine.swift
 "
 

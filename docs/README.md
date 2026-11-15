@@ -17,7 +17,7 @@ Start with the product and design documents to understand what Payday is. The en
 
 ## Releasing
 
-- [RELEASE_GATE.md](RELEASE_GATE.md): the pass/fail gate a release candidate must clear, with recorded evidence.
+- [RELEASE_GATE.md](RELEASE_GATE.md): the pass/fail gate recorded for the September 2026 PR 8 release candidate, with its evidence. Kept as a record.
 - [runbooks/](runbooks/): step-by-step procedures for production operations.
 
 ## Design notes

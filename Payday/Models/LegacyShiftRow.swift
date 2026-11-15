@@ -36,27 +36,6 @@ protocol LegacyShiftRow {
     var tipShareInCents: Int? { get }
     var receiptMetrics: ShiftReceiptMetrics? { get }
     var isDouble: Bool { get }
-
-    /// Declared rather than left to the extension because `CalendarView` sums
-    /// it row by row, so a conforming type is allowed to have its own.
-    var netCents: Int { get }
-}
-
-extension LegacyShiftRow {
-    /// This row's voluntary tips plus any canonical employee gratuity or fees,
-    /// minus any canonical tip-out.
-    ///
-    /// The same body as `TipEntry.netCents`, deliberately, because the whole
-    /// point of the projection is that the before and after sides agree to the
-    /// cent. Shift-level receipt data lives on exactly one projected row, so
-    /// summing this across a shift counts the gratuity and the tip-out once
-    /// each — which is also the fix for the calendar double-subtracting a
-    /// duplicated tip-out.
-    var netCents: Int {
-        (receiptMetrics?.employeeEarningsCents(fromStoredAmount: amountCents) ?? amountCents)
-            + (tipShareInCents ?? 0)
-            - (tipOutCents ?? 0)
-    }
 }
 
 extension TipEntry: LegacyShiftRow {

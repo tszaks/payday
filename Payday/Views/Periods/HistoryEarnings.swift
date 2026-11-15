@@ -14,7 +14,7 @@ import PaydayCore
 ///
 /// Everything here is selection and date math. No cents are added anywhere in
 /// this file: the figures come from `EarningsSnapshot` queries, and the one
-/// paycheck comparison delegates to `PredictedPaycheck`, the app's single
+/// paycheck comparison delegates to `PaycheckReconciler`, the app's single
 /// stub formula.
 enum HistoryEarnings {
     // MARK: - The snapshot

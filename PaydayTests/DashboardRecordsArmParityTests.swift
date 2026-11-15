@@ -272,18 +272,31 @@ struct DashboardRecordsArmParityTests {
             asOf: CivilDay(Self.at(2026, 10, 7, hour: 12), in: Self.zone)
         )
         let c = result.knownComponents
-
-        // Bound to locals first: the same expression inline trips the type
-        // checker's time budget, which is a compiler error rather than a
-        // test failure and reads as something else entirely.
-        let tips = c.voluntaryCashCents + c.voluntaryCreditCents
-        let gross = tips + c.gratuityFeesCents - c.tipOutCents
-        let wages = c.regularWagesCents + c.overtimeWagesCents
-
-        #expect(gross + wages == c.earnedIncomeCents,
-                "the drawer's rows must sum to the bottom line above them")
         #expect(c.earnedIncomeCents > 0, "a zero drawer reconciles trivially")
         #expect(c.tipOutCents > 0, "the fixture must exercise a tip-out, or the sign is untested")
+
+        // The rows the Dashboard draws, each against the engine's own
+        // component for the hero period.
+        let rows = facts.heroBreakdownRows
+        #expect(rows.map(\.label) == ["Cash tips", "Credit tips", "Wages", "Earned", "Tipped out"])
+        let byLabel = Dictionary(rows.map { ($0.label, $0.cents) }, uniquingKeysWith: { a, _ in a })
+        #expect(byLabel["Cash tips"] == c.voluntaryCashCents)
+        #expect(byLabel["Credit tips"] == c.voluntaryCreditCents)
+        #expect(byLabel["Wages"] == c.regularWagesCents)
+        let subtotal = try #require(byLabel["Earned"] ?? nil, "no subtotal row")
+        let tipOut = try #require(byLabel["Tipped out"] ?? nil, "no tip-out row")
+        #expect(tipOut == -c.tipOutCents, "Tipped out must SUBTRACT, or the bottom line is gross")
+
+        // The reconciliation a person reads down the drawer: the addends make
+        // the subtotal, and the subtotal minus the tip-out is the hero.
+        let addends = rows
+            .filter { $0.label != "Earned" && $0.label != "Tipped out" }
+            .compactMap(\.cents)
+            .reduce(0, +)
+        #expect(addends == subtotal, "the drawer's addends must make its subtotal")
+        #expect(subtotal + tipOut == facts.hero.cents,
+                "the drawer's rows must sum to the bottom line above them")
+        #expect(facts.heroBreakdownTotal.cents == facts.hero.cents)
     }
 
     /// **"Nothing after tax under 2 stubs."** The drawer's check rows keep

@@ -72,7 +72,7 @@ public enum MetricID: String, CaseIterable, Codable, Sendable {
 
     /// **Definition:** 0 when card tips are paid at close; otherwise
     /// max(0, (credit + tipShareIn > 0 ? credit + tipShareIn : cash + credit) - tipOut); the stub never
-    /// prints a negative tips line (today's `PredictedPaycheck.tipsLineCents`). Cash never runs
+    /// prints a negative tips line. Cash never runs
     /// through payroll, so cash only enters the line when no credit or tip share was logged at all.
     /// **Basis:** pay period.
     /// **Missing data:** none.

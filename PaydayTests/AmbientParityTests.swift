@@ -201,18 +201,14 @@ struct AmbientParityTests {
     func absencesAreDistinct() {
         // Conflating these would tell a user with a full history that they
         // had never set the app up.
-        let sentences = Set([
-            AmbientPeriodFigure.Absence.notAuthorized,
-            .noSchedule,
-            .unavailable
-        ].map { absence -> String in
-            switch absence {
-            case .notAuthorized: "Sign in to Payday first."
-            case .noSchedule: "Set up your pay schedule in Payday first."
-            case .unavailable: "Payday couldn't read your shifts right now."
-            }
-        })
-        #expect(sentences.count == 3)
+        let notAuthorized = AmbientPeriodFigure.spokenAnswer(for: .failure(.notAuthorized))
+        let noSchedule = AmbientPeriodFigure.spokenAnswer(for: .failure(.noSchedule))
+        let unavailable = AmbientPeriodFigure.spokenAnswer(for: .failure(.unavailable))
+
+        #expect(notAuthorized == "Sign in to Payday first.")
+        #expect(noSchedule == "Set up your pay schedule in Payday first.")
+        #expect(unavailable == "Payday couldn't read your shifts right now.")
+        #expect(Set([notAuthorized, noSchedule, unavailable]).count == 3)
     }
 
     /// Siri speaks the label rather than assuming "You've made". With a shift
@@ -227,14 +223,16 @@ struct AmbientParityTests {
         ])
         let schedule = PaySchedule(frequency: .biweekly, anchorPeriodEnd: Self.day(2026, 10, 4))
 
-        let completeFigure = AmbientPeriodFigure.answer(
+        let completeAnswer = AmbientPeriodFigure.answer(
             from: complete, schedule: schedule,
-            payrollTimeZone: Self.zone, now: Self.day(2026, 9, 29)).figure
-        let partialFigure = AmbientPeriodFigure.answer(
+            payrollTimeZone: Self.zone, now: Self.day(2026, 9, 29))
+        let partialAnswer = AmbientPeriodFigure.answer(
             from: partial, schedule: schedule,
-            payrollTimeZone: Self.zone, now: Self.day(2026, 9, 29)).figure
+            payrollTimeZone: Self.zone, now: Self.day(2026, 9, 29))
 
-        #expect(completeFigure.mayBeCalledATotal)
-        #expect(!partialFigure.mayBeCalledATotal)
+        #expect(AmbientPeriodFigure.spokenAnswer(for: .success(completeAnswer))
+            == "You've made $64.15 so far this pay period.")
+        #expect(AmbientPeriodFigure.spokenAnswer(for: .success(partialAnswer))
+            == "Known so far this pay period is $94.15.")
     }
 }

@@ -116,38 +116,93 @@ struct ScreenNumberParityTests {
     /// **The gate.** Each surface reports the same period total, and that
     /// total is the engine's.
     ///
-    /// Driven through the adapters the views construct, not through
+    /// Driven through the facts types the views construct, not through
     /// re-derived arithmetic, so a screen that reads the wrong query shows up
     /// here rather than agreeing with a test that made the same mistake.
-    @Test("Dashboard, History rows, period detail and Calendar agree")
+    @Test("Dashboard, History rows, period detail, Calendar and the ambient figure agree")
     func everySurfaceAgrees() throws {
         let comp = Self.policies()
         let records = Self.records()
-        let range = Self.range()
         let expected = Self.nightOneCents + Self.nightTwoCents
+        // After both nights and inside their pay period, so no surface's
+        // to-date clamp can leave one of them out.
+        let now = Self.at(2026, 10, 10, hour: 12)
+        let schedule = PaySchedule(
+            frequency: .biweekly, anchorPeriodEnd: Self.at(2026, 10, 11, hour: 0),
+            payDelayDays: 5, firstWeekday: 2
+        )
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = Self.zone
+        calendar.firstWeekday = 2
 
-        // Dashboard.
-        let dashboard = try #require(DashboardEarnings.build(
+        // Dashboard: the hero.
+        let dashboardBuild = DashboardEarnings.build(
             records: records, policies: comp, payrollTimeZone: Self.zone
-        ).snapshot).range(range).knownComponents.earnedIncomeCents
-
-        // History rows and period detail share `HistoryEarnings.build`.
-        let history = try #require(HistoryEarnings.build(
-            records: records, policies: comp,
+        )
+        let dashboard = DashboardFacts(
+            snapshot: dashboardBuild.snapshot,
+            allShiftRecords: dashboardBuild.shiftRecordDays,
+            allTipRecords: dashboardBuild.tipRecords,
+            withholdingModel: dashboardBuild.withholdingModel,
+            schedule: schedule,
+            now: now,
+            forcedPaydayPhase: nil,
+            dismissedClosedEnd: nil,
+            dismissedCheckEnd: nil,
             payrollTimeZone: Self.zone
-        ).snapshot).range(range).knownComponents.earnedIncomeCents
+        )
 
-        // Calendar.
-        let calendar = try #require(CalendarEarnings.snapshot(
+        // History: the period's row, and the detail that row opens. Both
+        // share `HistoryEarnings.build`.
+        let historyBuild = HistoryEarnings.build(
             records: records, policies: comp, payrollTimeZone: Self.zone
-        )).range(range).knownComponents.earnedIncomeCents
+        )
+        let page = PeriodsPageFacts(
+            snapshot: historyBuild.snapshot, paycheckRecords: [], schedule: schedule,
+            payrollTimeZone: Self.zone, now: now, calendar: calendar
+        )
+        let row = try #require(page.rows.first { $0.isCurrent })
+        #expect(row.period.start == Self.at(2026, 9, 28, hour: 0), "the fixture's own pay period")
+        let detail = PeriodDetailFacts(
+            snapshot: historyBuild.snapshot,
+            shiftRecordDays: historyBuild.shiftRecordDays,
+            paycheckRecords: [],
+            period: row.period,
+            schedule: schedule,
+            payrollTimeZone: Self.zone,
+            calendar: calendar
+        )
+
+        // Calendar: the month face. Both nights are October's, and nothing
+        // else is, so the month and the period hold the same shifts.
+        let month = CalendarMonthFacts(
+            snapshot: CalendarEarnings.snapshot(
+                records: records, policies: comp, payrollTimeZone: Self.zone
+            ),
+            displayedMonth: Self.nightOne,
+            calendar: calendar,
+            now: now
+        )
+
+        // The widget and Siri, over the app's own dataset. Their store reads
+        // the real shared container, so the snapshot is handed in.
+        let ambient = AmbientPeriodFigure.answer(
+            from: try #require(dashboardBuild.snapshot),
+            schedule: schedule,
+            payrollTimeZone: Self.zone,
+            now: now
+        )
 
         // Every surface against the literal — not merely against each other,
         // so all of them being wrong together still fails.
-        for (name, value) in [
-            ("dashboard", dashboard), ("history", history), ("calendar", calendar),
+        for (name, figure) in [
+            ("dashboard hero", dashboard.hero),
+            ("history row", row.earned),
+            ("period detail", detail.hero),
+            ("calendar month", month.monthFigure),
+            ("widget and Siri", ambient.figure),
         ] {
-            #expect(value == expected, "\(name) reported \(value), expected \(expected)")
+            #expect(figure.cents == expected, "\(name) reported \(figure.cents ?? -1), expected \(expected)")
         }
         #expect(expected > 0)
     }
@@ -168,10 +223,15 @@ struct ScreenNumberParityTests {
     @Test("the export reports the same money")
     func exportReportsTheSameMoney() throws {
         let calculator = PayPeriodCalculator(payrollTimeZone: Self.zone, schedule: .fallback)
+        let records = Self.records()
+        // Valued the way the History screen's export values its rows.
+        let snapshot = HistoryEarnings.build(
+            records: records, policies: Self.policies(), payrollTimeZone: Self.zone
+        ).snapshot
         let csv = CSVExporter.export(
-            records: Self.records(), paycheckRecords: [],
+            records: records, paycheckRecords: [],
             calculator: calculator,
-            valuations: [:]
+            valuations: CSVExporter.valuations(from: snapshot)
         )
         // Two shifts, so two rows under the header.
         #expect(csv.split(separator: "\n").count == 3)
@@ -184,5 +244,11 @@ struct ScreenNumberParityTests {
         let nets = lines.dropFirst()
             .map { String($0.split(separator: ",", omittingEmptySubsequences: false)[net]) }
         #expect(nets == ["230.00", "190.00"], "6000+20000-3000 and 4000+15000")
+
+        // The engine's figure per night, the same one the day sheet shows.
+        let earned = try #require(header.firstIndex(of: "Earned-Income"))
+        let earnedCells = lines.dropFirst()
+            .map { String($0.split(separator: ",", omittingEmptySubsequences: false)[earned]) }
+        #expect(earnedCells == ["374.00", "316.00"], "nightOneCents and nightTwoCents")
     }
 }

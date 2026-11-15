@@ -36,9 +36,9 @@ import Testing
 /// ShiftContextMenu, UndoDeleteToast, LogTipsIntent.
 ///
 /// The two assertions that make the rest meaningful are
-/// `unsavedMutationDoesNotPersist` (which fails if autosave is still on) and
-/// `theRealSharedContextHasAutosaveOff` (which fails if the shipped app's own
-/// context still autosaves).
+/// `unsavedMutationDoesNotPersist` (which fails if the reopen reads anything
+/// but disk) and `theRealSharedContextHasAutosaveOff` (which fails if the
+/// shipped app's own context still autosaves).
 @Suite("Persistence with autosave off", .serialized)
 @MainActor
 struct AutosaveOffPersistenceTests {
@@ -148,9 +148,15 @@ struct AutosaveOffPersistenceTests {
         #expect(stored.note == "edited")
     }
 
-    /// The other half of the claim, and the reason autosave had to go. An
-    /// unsaved mutation must NOT reach disk — otherwise "nothing was changed"
-    /// after a failure is a lie.
+    /// The control for every reopen above: a row that was never saved must
+    /// be absent after the reopen, or "survives a reopen" would be reading
+    /// memory rather than disk.
+    ///
+    /// It does not observe autosave itself. A throwaway context that had
+    /// autosave on still writes nothing within a second here (measured, on
+    /// a plain context and on a container's main context), so the flag is
+    /// asserted on the app's own context in
+    /// `theRealSharedContextHasAutosaveOff` instead.
     @Test("a mutation with no commit does not reach disk")
     func unsavedMutationDoesNotPersist() throws {
         let store = makeStore()
@@ -161,8 +167,7 @@ struct AutosaveOffPersistenceTests {
             // Bypassing the command boundary on purpose, which is what every
             // shipped write path used to do.
             context.insert(ShiftRecord(workDate: Self.day, cashTipsCents: 9_999))
-            // No save. With autosave ON this would land anyway, and the
-            // atomicity of every command above would be unenforceable.
+            // No save.
         }
 
         let reopened = try store.open()
@@ -173,9 +178,13 @@ struct AutosaveOffPersistenceTests {
     /// proves the BEHAVIOUR but not that the shipped app's context has it off.
     /// This closes that loop on the real container, so the whole suite cannot
     /// pass while the app itself still autosaves.
+    ///
+    /// It reads the flag as the app's launch left it. The tests run inside
+    /// the host app, so `PaydayApp.init` has already run, and nothing in this
+    /// target turns the flag off itself: a main context autosaves by default,
+    /// so this fails if the app stops making that call.
     @Test("the app's own shared context has autosave off")
     func theRealSharedContextHasAutosaveOff() {
-        SharedModelContainer.disableMainContextAutosave()
         #expect(!SharedModelContainer.shared.mainContext.autosaveEnabled)
     }
 

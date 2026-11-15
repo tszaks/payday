@@ -606,7 +606,7 @@ enum PayrollCalendar {
 /// set, so the facts cache keys on that. What is left here is genuinely
 /// presentational: which pay period is selected, which day it is, and which
 /// cards the person has dismissed. The pay-period GRID belongs in this half
-/// specifically because `LegacySnapshotBridge` supplies no
+/// specifically because the snapshot is built with no
 /// `EarningsInputs.schedule`, so the grid is not in the digest and moving it
 /// has to invalidate the facts some other way.
 private struct DashboardSelection: Hashable {

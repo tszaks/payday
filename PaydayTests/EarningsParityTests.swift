@@ -70,9 +70,8 @@ private func parityPolicies(
 /// hero and the rows name one selection of one allocation.
 ///
 /// This is the invariant PR 3's first cut broke: the hero moved onto the
-/// ledger's cumulative per-week allocation while each row kept calling
-/// `WageEstimate.cents(wageCentsPerHour:hours:)`, which rounds every shift
-/// independently. W1's two shifts on one day then read 2759 in the hero and
+/// ledger's cumulative per-week allocation while each row kept pricing its
+/// own `rate × hours`, which rounds every shift independently. W1's two shifts on one day then read 2759 in the hero and
 /// 1203 + 1557 = 2760 in the rows directly beneath it. A screen was a cent
 /// apart from itself.
 @Suite("A day's hero equals the sum of the shift rows it lists")
@@ -120,7 +119,9 @@ struct DayHeroEqualsItsRowsTests {
 
         // The row the person reads no longer uses the naive figure, which is
         // still 1557 for the same 5.5h shift on its own.
-        #expect(WageEstimate.cents(wageCentsPerHour: 283, hours: 5.5) == 1557)
+        #expect(CompensationLedger.roundCents(CompensationLedger.wageUnits(
+            rateCents: 283, minutes: WorkedMinutes.minutes(fromHours: 5.5), multiplierHundredths: 100
+        )) == 1557)
         #expect(facts.wagesByShiftID[shiftID(2)] != 1557)
 
         // And the invariant: hero == Σ rows, to the cent.
@@ -160,28 +161,6 @@ struct DayHeroEqualsItsRowsTests {
         #expect(facts.rowCents == [2000 + 1132, 3000 + 2547])
         #expect(facts.heroCents == rowSum(facts.rowCents))
         #expect(facts.heroCents == 2000 + 3000 + 3679)
-
-        // The same numbers the ledger gives the week's groups directly —
-        // the rows are projections of the same records, so the grouping and
-        // the sheet cannot disagree about which week a shift belongs to.
-        let weekShifts = ShiftDays.groupedByShift(
-            ShiftProjection.rows(for: records),
-            shiftID: \.shiftID, date: \.date, period: \.shiftPeriod,
-            calendar: payrollCalendar()
-        )
-        let weekWages = Dictionary(
-            uniqueKeysWithValues: zip(
-                weekShifts.map(\.shiftID),
-                LegacyLedgerBridge.wagesCentsPerShift(
-                    shiftGroups: weekShifts.map(\.items),
-                    rateCents: 283,
-                    payrollTimeZone: PaydayTestZone.payroll,
-                    workweekStartWeekday: 2
-                )
-            )
-        )
-        #expect(weekWages[shiftID(4)] == 1132)
-        #expect(weekWages[shiftID(5)] == 2547)
     }
 
     @Test("with no rate set no wage is fabricated, and the rows still sum to the hero")
@@ -235,10 +214,9 @@ struct DayHeroEqualsItsRowsTests {
 /// whole-dataset `EarningsSnapshot` and asks it twice — `range(month)` for the
 /// headline, `days(in: month)` for the tiles — so both sides select out of the
 /// same per-shift valuations, each allocated over its COMPLETE workweek. The
-/// old shape sliced the ledger per day for the tiles
-/// (`WageEstimate.centsSummedPerShift`, one `Dictionary(grouping: by: \.day)`
-/// bucket at a time) while the headline went through `PeriodIncome.wages` over
-/// the month's entries, so a month got the week's overtime and a single day
+/// old shape sliced the ledger per day for the tiles (one
+/// `Dictionary(grouping: by: \.day)` bucket at a time) while the headline was
+/// valued over the month's entries, so a month got the week's overtime and a single day
 /// never could: 19716 against 18585, 1131c apart on one screen.
 @Suite("A month equals the sum of its days")
 @MainActor
@@ -320,7 +298,11 @@ struct MonthEqualsSumOfItsDaysTests {
     @Test("MEASURED: the per-day tiles, and the naive per-shift rounding they replaced")
     func perDayTilesCarryTheWeeksOvertime() {
         let facts = octoberFacts()
-        let naive: [Int] = Self.w2Minutes.map { WageEstimate.cents(wageCentsPerHour: 283, hours: $0 / 60) ?? 0 }
+        let naive: [Int] = Self.w2Minutes.map { minutes in
+            CompensationLedger.roundCents(CompensationLedger.wageUnits(
+                rateCents: 283, minutes: WorkedMinutes.minutes(fromHours: minutes / 60), multiplierHundredths: 100
+            ))
+        }
         #expect(naive == [2901, 2759, 2972, 3255, 1698])
         let tiles: [Int] = facts.tiles.compactMap(\.figure.cents).filter { $0 > 0 }.sorted()
         // MEASURED 2026-09-18 on the real adapter. Each tile is 1000 of tips
@@ -389,7 +371,7 @@ struct MonthEqualsSumOfItsDaysTests {
 ///   purpose.
 ///
 /// Wave 0 moved the shift ROWS onto `EarningsSnapshot`, which buckets by the
-/// policy, while the hero stayed on `PeriodIncome`, which was handed the
+/// policy, while the hero stayed on a period-wage helper that was handed the
 /// grid's weekday. Set the two controls differently and one screen answered
 /// two different overtime allocations over the same shifts.
 @Suite("A screen's hero and its rows bucket overtime by one workweek")

@@ -7,7 +7,7 @@ import SwiftData
 /// or on demand from the Settings > Developer section.
 enum DebugSeeder {
     @MainActor
-    static func seedIfRequested(scheduleStore: PayScheduleStore, insightsStore: InsightsStore, preferencesStore: UserPreferencesStore) {
+    static func seedIfRequested(scheduleStore: PayScheduleStore, preferencesStore: UserPreferencesStore) {
         let arguments = ProcessInfo.processInfo.arguments
         if let index = arguments.firstIndex(of: "-Appearance"),
            arguments.count > index + 1,
@@ -15,16 +15,16 @@ enum DebugSeeder {
             preferencesStore.appearance = appearance
         }
         if arguments.contains("-SeedSampleData") {
-            seedSampleData(scheduleStore: scheduleStore, insightsStore: insightsStore)
+            seedSampleData(scheduleStore: scheduleStore)
         }
         if arguments.contains("-SeedColdStart") {
-            seedColdStartData(scheduleStore: scheduleStore, insightsStore: insightsStore)
+            seedColdStartData(scheduleStore: scheduleStore)
         }
         if arguments.contains("-SeedShowcase") {
-            seedShowcaseData(scheduleStore: scheduleStore, insightsStore: insightsStore, preferencesStore: preferencesStore)
+            seedShowcaseData(scheduleStore: scheduleStore, preferencesStore: preferencesStore)
         }
         if arguments.contains("-SeedTipsOnlyShowcase") {
-            seedShowcaseData(scheduleStore: scheduleStore, insightsStore: insightsStore, preferencesStore: preferencesStore, tipsOnly: true)
+            seedShowcaseData(scheduleStore: scheduleStore, preferencesStore: preferencesStore, tipsOnly: true)
         }
     }
 
@@ -41,11 +41,10 @@ enum DebugSeeder {
     /// only a date and what the shift paid, so QA can see that their
     /// Insights page reads as complete without the rest.
     @MainActor
-    static func seedShowcaseData(scheduleStore: PayScheduleStore, insightsStore: InsightsStore, preferencesStore: UserPreferencesStore, tipsOnly: Bool = false) {
+    static func seedShowcaseData(scheduleStore: PayScheduleStore, preferencesStore: UserPreferencesStore, tipsOnly: Bool = false) {
         let context = SharedModelContainer.shared.mainContext
         try? context.delete(model: ShiftRecord.self)
         try? context.delete(model: PaycheckRecord.self)
-        insightsStore.snapshot = nil
 
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: .now)
@@ -247,11 +246,10 @@ enum DebugSeeder {
     /// unlock line (see UnlockProgress) can be rendered honestly —
     /// -SeedSampleData is already past every gate and can't show them.
     @MainActor
-    static func seedColdStartData(scheduleStore: PayScheduleStore, insightsStore: InsightsStore) {
+    static func seedColdStartData(scheduleStore: PayScheduleStore) {
         let context = SharedModelContainer.shared.mainContext
         try? context.delete(model: ShiftRecord.self)
         try? context.delete(model: PaycheckRecord.self)
-        insightsStore.snapshot = nil
 
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: .now)
@@ -273,14 +271,13 @@ enum DebugSeeder {
     }
 
     @MainActor
-    static func seedSampleData(scheduleStore: PayScheduleStore, insightsStore: InsightsStore) {
+    static func seedSampleData(scheduleStore: PayScheduleStore) {
         let context = SharedModelContainer.shared.mainContext
 
         // Idempotent: reseeding always starts from a clean slate instead of
         // stacking duplicate entries on top of whatever was already there.
         try? context.delete(model: ShiftRecord.self)
         try? context.delete(model: PaycheckRecord.self)
-        insightsStore.snapshot = nil
 
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: .now)
@@ -448,14 +445,13 @@ enum DebugSeeder {
     }
 
     @MainActor
-    static func clearAll(scheduleStore: PayScheduleStore, insightsStore: InsightsStore, moveLedgerStore: MoveLedgerStore, policyStore: PolicyStore) {
+    static func clearAll(scheduleStore: PayScheduleStore, moveLedgerStore: MoveLedgerStore, policyStore: PolicyStore) {
         let context = SharedModelContainer.shared.mainContext
         try? context.delete(model: ShiftRecord.self)
         try? context.delete(model: PaycheckRecord.self)
         try? context.save()
         PaydayWidgetRefresh.request()
         scheduleStore.schedule = nil
-        insightsStore.snapshot = nil
         moveLedgerStore.reset()
         // Clearing the data has to clear the policies too, or the next seed
         // runs against a rate policy whose effectiveFrom sits after every

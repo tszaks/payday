@@ -38,7 +38,6 @@ enum PaydayAccountEraser {
     static func eraseLocalData(
         context: ModelContext,
         scheduleStore: PayScheduleStore,
-        insightsStore: InsightsStore,
         preferencesStore: UserPreferencesStore,
         moveLedgerStore: MoveLedgerStore,
         policyStore: PolicyStore
@@ -75,7 +74,7 @@ enum PaydayAccountEraser {
         _ = ShiftSessionStore.popPendingEnd()
 
         scheduleStore.schedule = nil
-        insightsStore.snapshot = nil
+        removeRetiredInsightsNarration()
         moveLedgerStore.reset()
         policyStore.reset()
 
@@ -140,5 +139,15 @@ enum PaydayAccountEraser {
         } catch let error as CocoaError where error.code == .fileNoSuchFile {
             return
         }
+    }
+
+    /// Builds that rendered an Insights narration cached the last one, prose
+    /// quoting the person's earnings, under this key. Nothing writes it any
+    /// more, but a device that ran one of those builds may still hold it, so
+    /// every launch and every account deletion removes it.
+    static let retiredInsightsNarrationKey = "com.szakacsmedia.payday.insightsSnapshot"
+
+    static func removeRetiredInsightsNarration(from defaults: UserDefaults = .standard) {
+        defaults.removeObject(forKey: retiredInsightsNarrationKey)
     }
 }

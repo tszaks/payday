@@ -26,13 +26,17 @@ import Testing
 /// once, here, instead of being re-argued per site.
 @Suite("Deletion queue atomicity", .serialized)
 @MainActor
-struct DeletionQueueAtomicityTests {
+final class DeletionQueueAtomicityTests {
+    private let savedAccount = SavedAccountRegistration()
+    private var registered: [UUID] = []
+    isolated deinit { savedAccount.restore(forgetting: registered) }
 
     private func registeredAccount() -> UUID {
         if let existing = PaydaySyncState.registeredUserID {
             PaydaySyncState.forget(userID: existing)
         }
         let id = UUID()
+        registered.append(id)
         PaydaySyncState.forget(userID: id)
         _ = PaydaySyncState.registerCurrentUser(id)
         return id
@@ -81,8 +85,9 @@ struct DeletionQueueAtomicityTests {
         #expect(PaydaySyncState.pendingShiftDeletions(for: userID).keys.contains(rowID))
     }
 
-    /// The correct ordering, asserted as the positive case: queue only after
-    /// the save has actually succeeded, and a failure leaves the queue clean.
+    /// The correct ordering, asserted as the positive case on the command
+    /// that owns it: `ShiftCommands.delete` queues only after the save has
+    /// actually succeeded, and a failed save leaves the queue clean.
     @Test("recording after a successful commit queues; after a failed one, nothing is queued")
     func recordingAfterTheCommitIsSafeInBothDirections() throws {
         let userID = registeredAccount()
@@ -96,20 +101,14 @@ struct DeletionQueueAtomicityTests {
         // be visible in the assertions below rather than masked by them.
         struct Boom: Error {}
         #expect(throws: Boom.self) {
-            try ShiftCommands.commit(in: context) {
-                context.delete(row)
-                throw Boom()
-            }
+            _ = try ShiftCommands.delete(row, in: context, saving: { _ in throw Boom() })
         }
         #expect(try context.fetch(FetchDescriptor<ShiftRecord>()).count == 1)
         #expect(PaydaySyncState.pendingShiftDeletions(for: userID).isEmpty)
 
-        // Now the succeeding direction, with the record AFTER the commit.
+        // Now the succeeding direction, through the same command.
         let survivor = try #require(try context.fetch(FetchDescriptor<ShiftRecord>()).first)
-        try ShiftCommands.commit(in: context) {
-            context.delete(survivor)
-        }
-        PaydaySyncState.recordShiftDeletion(rowID)
+        _ = try ShiftCommands.delete(survivor, in: context)
 
         #expect(try context.fetch(FetchDescriptor<ShiftRecord>()).isEmpty)
         #expect(PaydaySyncState.pendingShiftDeletions(for: userID).keys.contains(rowID))

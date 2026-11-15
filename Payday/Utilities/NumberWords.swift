@@ -30,10 +30,4 @@ enum NumberWords {
         else { return "\(count)" }
         return spelled
     }
-
-    /// "five shifts" / "one shift" — the one place prose pairs a spelled count
-    /// with its noun.
-    static func phrase(_ count: Int, singular: String, plural: String) -> String {
-        "\(spell(count)) \(count == 1 ? singular : plural)"
-    }
 }

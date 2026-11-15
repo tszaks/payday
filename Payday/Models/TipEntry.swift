@@ -158,14 +158,6 @@ final class TipEntry {
         set { shiftPeriodRaw = newValue?.rawValue }
     }
 
-    /// This row's voluntary tips plus any canonical employee gratuity/fees,
-    /// minus any canonical tip-out. Shift-level receipt data lives on only
-    /// one row, so summing `netCents` across a shift counts it exactly once.
-    var netCents: Int {
-        (receiptMetrics?.employeeEarningsCents(fromStoredAmount: amountCents) ?? amountCents)
-            - (tipOutCents ?? 0)
-    }
-
     init(
         id: UUID = UUID(),
         date: Date,

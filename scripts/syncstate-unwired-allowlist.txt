@@ -10,5 +10,4 @@
 # An entry whose symbol has GAINED a reader also fails. The list cannot
 # outlive its reason in either direction.
 
-knownTipEntryIDs               UNTRIAGED-LEGACY-ACCESSORS
-knownPaycheckIDs               UNTRIAGED-LEGACY-ACCESSORS
+shiftTombstones                UNDO-AFTER-FLUSH-LOSES-LEGACY-ROWS

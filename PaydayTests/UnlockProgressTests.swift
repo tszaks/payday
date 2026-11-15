@@ -11,7 +11,7 @@ private func date(_ year: Int, _ month: Int, _ day: Int) -> Date {
 }
 
 private func record(_ year: Int, _ month: Int, _ day: Int, cents: Int, kind: TipKind = .cash, hoursWorked: Double? = nil, salesCents: Int? = nil, shiftID: UUID? = nil) -> TipRecord {
-    TipRecord(date: date(year, month, day), amountCents: cents, kind: kind, isDouble: false, hoursWorked: hoursWorked, salesCents: salesCents, shiftID: shiftID)
+    TipRecord(date: date(year, month, day), amountCents: cents, kind: kind, hoursWorked: hoursWorked, salesCents: salesCents, shiftID: shiftID)
 }
 
 private func isWeekday(_ unlock: Unlock) -> Bool {
@@ -159,7 +159,7 @@ struct MatureAccountUnlockTests {
         var day = date(2026, 6, 29) // a Monday
         var records: [TipRecord] = []
         for _ in 0..<21 {
-            records.append(TipRecord(date: day, amountCents: 5000, kind: .cash, isDouble: false, hoursWorked: 5, salesCents: 20000))
+            records.append(TipRecord(date: day, amountCents: 5000, kind: .cash, hoursWorked: 5, salesCents: 20000))
             day = calendar.date(byAdding: .day, value: 1, to: day)!
         }
         let unlocks = UnlockProgress.nextUnlocks(records: records, asOf: date(2026, 7, 20), limit: 10)

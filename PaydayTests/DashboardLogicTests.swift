@@ -43,53 +43,6 @@ struct PeriodProgressTests {
     }
 }
 
-@Suite("Shift day grouping")
-struct ShiftDayGroupingTests {
-    struct Item: Equatable {
-        let date: Date
-        let cents: Int
-    }
-
-    @Test("same-day items merge into one group, newest day first")
-    func merges() {
-        let items = [
-            Item(date: date(2026, 7, 14), cents: 3200),
-            Item(date: date(2026, 7, 14), cents: 8600),
-            Item(date: date(2026, 7, 13), cents: 11200),
-        ]
-        let groups = ShiftDays.groupedByDay(items, date: \.date)
-        #expect(groups.count == 2)
-        #expect(groups[0].day == date(2026, 7, 14))
-        #expect(groups[0].items.count == 2)
-        #expect(groups[1].items.count == 1)
-    }
-
-    @Test("times within a day still group to that day")
-    func groupsAcrossTimes() {
-        let items = [
-            Item(date: date(2026, 7, 14, hour: 1), cents: 100),
-            Item(date: date(2026, 7, 14, hour: 23), cents: 200),
-        ]
-        let groups = ShiftDays.groupedByDay(items, date: \.date)
-        #expect(groups.count == 1)
-    }
-
-    @Test("human labels: today, yesterday, weekday, then dated")
-    func labels() {
-        let now = date(2026, 7, 14, hour: 20) // a Tuesday
-        // "Today", not "Tonight" — a shift is a whole day; a lunch logged
-        // at 2pm and read back at 8pm must not read "Tonight."
-        #expect(ShiftDays.humanLabel(for: date(2026, 7, 14), relativeTo: now) == "Today")
-        // A 2pm shift is still "Today", never "Tonight".
-        #expect(ShiftDays.humanLabel(for: date(2026, 7, 14, hour: 14), relativeTo: now) == "Today")
-        #expect(ShiftDays.humanLabel(for: date(2026, 7, 13), relativeTo: now) == "Yesterday")
-        #expect(ShiftDays.humanLabel(for: date(2026, 7, 10), relativeTo: now) == "Friday")
-        let older = ShiftDays.humanLabel(for: date(2026, 7, 3), relativeTo: now)
-        #expect(older.contains("Friday") && older.contains("3"))
-        #expect(!older.contains("2026"))
-    }
-}
-
 @Suite("Payday moment timing")
 struct PaydayMomentTests {
     // Weekly close on Sunday Jul 19, paid the following Friday (5-day lag).
