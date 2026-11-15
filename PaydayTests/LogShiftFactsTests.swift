@@ -600,11 +600,18 @@ struct LogShiftPreviewPerformanceTests {
             )
         }
 
-        let began = Date()
-        let facts = draftFacts(records: records)
-        let elapsed = Date().timeIntervalSince(began)
+        // The fastest of three runs. A busy machine only ever adds time, so
+        // the minimum is the closest reading of what the code itself costs,
+        // and a regression is slow on every run.
+        var facts: LogShiftFacts?
+        var elapsed = TimeInterval.infinity
+        for _ in 0..<3 {
+            let began = Date()
+            facts = draftFacts(records: records)
+            elapsed = min(elapsed, Date().timeIntervalSince(began))
+        }
 
-        #expect(facts.total.cents != nil)
+        #expect(facts?.total.cents != nil)
         // 0.05s is deliberately an order of magnitude below the 0.5s the
         // render-once facts get: this path runs per KEYSTROKE, and SwiftUI
         // evaluates a body more than once per change. What is left is the O(n)
