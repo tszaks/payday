@@ -821,7 +821,7 @@ struct PaycheckEntrySheet: View {
         let name = policyStore.policies.jobs.first { ShiftRole.key($0.tag) == ShiftRole.key(jobName) }?.name
             ?? jobName ?? "the primary job"
         let moved = savedPeriod
-        let range = "\(moved.start.formatted(.dateTime.month(.abbreviated).day())) – \(moved.end.formatted(.dateTime.month(.abbreviated).day()))"
+        let range = moved.rangeText(in: policyStore.payrollTimeZone(forJob: jobName))
         return "Saved to \(name)'s period \(range)."
     }
 

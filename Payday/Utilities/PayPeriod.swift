@@ -70,6 +70,13 @@ extension PaySchedule {
 struct PayPeriod: Hashable {
     let start: Date
     let end: Date
+
+    /// "Jul 5 – Jul 18". The boundaries are midnights in the zone the period
+    /// was made in, so they are read in it.
+    func rangeText(in zone: TimeZone) -> String {
+        let style = Date.FormatStyle(timeZone: zone).month(.abbreviated).day()
+        return "\(start.formatted(style)) – \(end.formatted(style))"
+    }
 }
 
 /// All pay-period date math lives here and nowhere else. Pure and stateless
