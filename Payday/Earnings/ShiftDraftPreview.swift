@@ -157,6 +157,20 @@ enum ShiftDraftPreview {
         return DayRange(start: start, end: start.adding(days: 6))
     }
 
+    /// Every instant that can fall on a day of `window` in SOME time zone: the
+    /// window's days read in GMT, widened by a whole day at each end. UTC
+    /// offsets run from -12 to +14 hours, so a day's instants in any zone sit
+    /// within fourteen hours of that day's GMT instants.
+    ///
+    /// It only narrows which records are READ. The window itself is still the
+    /// filter on each adapted input's own `workDay` in `snapshot`, so this can
+    /// keep a record the window then drops and can never drop one it keeps.
+    static func instants(covering window: DayRange) -> ClosedRange<Date> {
+        let day: TimeInterval = 86_400
+        return window.start.date(in: .gmt).addingTimeInterval(-day)
+            ... window.end.date(in: .gmt).addingTimeInterval(2 * day)
+    }
+
     /// There is deliberately no `asOf` parameter. The draft's own figure is
     /// never a period-to-date total, and a shift dated today can sit after
     /// `now` in the payroll zone; clamping would make the draft unselectable
@@ -193,7 +207,15 @@ enum ShiftDraftPreview {
         let window = windowed
             ? workweek(containing: draft.workDay, policies: policies.policies(forJob: draft.jobName))
             : nil
-        let adapted = ShiftInputAdapter.adapt(records, calendars: policies.calendars)
+        // Adapting reads every stored field of a record, and over a long
+        // history that read is the whole cost of a keystroke: MEASURED at
+        // 0.040s of 0.062s over 10,000 records. So the history is narrowed on
+        // the one field the window needs before anything else is read.
+        let nearby = window.map { window in
+            let instants = Self.instants(covering: window)
+            return records.filter { instants.contains($0.workDate) }
+        }
+        let adapted = ShiftInputAdapter.adapt(nearby ?? records, calendars: policies.calendars)
         let inputs = EarningsInputs(
             // Filtered on the input's OWN `workDay`, which the adapter
             // already resolved in the payroll zone of the calendar policy
@@ -207,7 +229,11 @@ enum ShiftDraftPreview {
             rates: policies.rates,
             calendars: policies.calendars,
             asOf: CivilDay.distantFuture,
-            unreadableReceiptShiftIDs: adapted.unreadableReceiptShiftIDs
+            // Over the WHOLE history either way: a receipt that will not
+            // decode is a fact about the dataset, not about this week.
+            unreadableReceiptShiftIDs: nearby == nil
+                ? adapted.unreadableReceiptShiftIDs
+                : records.filter(\.receiptPayloadIsUnreadable).map(\.id)
         )
         return try? EarningsSnapshot.build(inputs.substituting(draft))
     }
