@@ -24,6 +24,12 @@ GATE=docs/RELEASE_GATE.md
 LIST=scripts/syncstate-unwired-allowlist.txt
 FAIL=0
 
+# A moved or renamed input leaves every loop below with nothing to read, and
+# a lint that reads nothing passes.
+for input in "$STATE" "$GATE" "$LIST"; do
+  [ -f "$input" ] || { echo "[FAIL] $input is missing, so the wiring lint has nothing to check"; exit 1; }
+done
+
 # Production readers of one accessor, comments stripped. Outside $STATE a
 # reader names it as `PaydaySyncState.<symbol>`; inside $STATE only a call
 # counts. A bare name match would count the file's own stored fields of the
@@ -38,6 +44,19 @@ readers() {
       | grep -cE "(^|[^.[:alnum:]_]|Self\.|PaydaySyncState\.)${sym}[[:space:]]*\(")
   echo $((outside + inside))
 }
+
+accessors() {
+  grep -nE "^    (static (func|var)|private static)" "$STATE" \
+    | grep -v "private static" \
+    | sed -E 's/.*static (func|var) ([a-zA-Z_][a-zA-Z0-9_]*).*/\2/' | sort -u
+}
+
+# The same reason, one step later: the file is there but its declarations no
+# longer have the shape this lint looks for.
+if [ -z "$(accessors)" ]; then
+  echo "[FAIL] found no accessor in $STATE, so the wiring lint has nothing to check"
+  exit 1
+fi
 
 allowed_symbols=""
 while read -r sym marker _; do
@@ -67,9 +86,7 @@ while read -r sym; do
          FAIL=1;;
     esac
   fi
-done < <(grep -nE "^    (static (func|var)|private static)" "$STATE" \
-         | grep -v "private static" \
-         | sed -E 's/.*static (func|var) ([a-zA-Z_][a-zA-Z0-9_]*).*/\2/' | sort -u)
+done < <(accessors)
 
 [ "$FAIL" = "1" ] && { echo "=== PaydaySyncState wiring lint FAILED ==="; exit 1; }
 echo "[PASS] every PaydaySyncState accessor is read, or allowlisted against a live blocking condition"
